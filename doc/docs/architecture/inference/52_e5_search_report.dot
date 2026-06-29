@@ -4,25 +4,54 @@ digraph E5SearchReport {
     // ROADMAP_NOTE[phase3_14]:
     // Le rapport enrichit les résultats E5 locaux avec source_path, lignes,
     // chunk_index et extrait. Il rend le corpus local exploitable avant Qdrant.
+    // ROADMAP_NOTE[phase4_3]:
+    // Le garde-fou de score filtre les hits faibles avant rendu texte/JSON.
+    // Il ne change pas le format corpus et reste hors Scheduler/Qdrant.
 
     rankdir=TB;
-    node [shape=box, style=filled, fontname="Arial", fontsize=10];
-    edge [fontname="Arial", fontsize=9];
+    graph [
+        fontname="Arial",
+        fontsize=10,
+        labelloc="t",
+        label="E5 search report — rendu local avec garde-fou de score",
+        bgcolor="white",
+        pad=0.25,
+        nodesep=0.45,
+        ranksep=0.55
+    ];
+    node [shape=box, style="filled,rounded", fontname="Arial", fontsize=10, margin="0.09,0.06"];
+    edge [fontname="Arial", fontsize=9, color="#546e7a", arrowsize=0.8];
 
     subgraph cluster_input {
         label="Entrée recherche";
         color="#1565c0";
         bgcolor="#e3f2fd";
+        penwidth=1.4;
         node [fillcolor="#e3f2fd", color="#1565c0"];
+
         Results [label="E5CorpusSearchResults\nhits ranked", URL="50_e5_corpus.svg"];
         Hit [label="E5CorpusSearchHit\nscore + metadata", URL="50_e5_corpus.svg"];
+    }
+
+    subgraph cluster_guard {
+        label="Garde-fou Phase 4.3";
+        color="#ad1457";
+        bgcolor="#fce4ec";
+        penwidth=1.6;
+        node [fillcolor="#fce4ec", color="#ad1457"];
+
+        MinScore [label="--min-score FLOAT\nscore >= threshold", URL="57_e5_score_guard.svg"];
+        GuardDecision [shape=diamond, label="hit conservé ?\nscore >= min_score", URL="57_e5_score_guard.svg"];
+        Empty [label="hit_count: 0\naucun résultat utile", style="filled,rounded,dashed", URL="57_e5_score_guard.svg"];
     }
 
     subgraph cluster_report {
         label="Rapport Phase 3.14";
         color="#2e7d32";
         bgcolor="#e8f5e9";
+        penwidth=1.4;
         node [fillcolor="#e8f5e9", color="#2e7d32"];
+
         Config [label="E5SearchReportConfig\nexcerpt/full text"];
         SourceContext [label="E5SearchSourceContext\nsource_path + lines"];
         Excerpt [label="make_excerpt\nstable one-line excerpt"];
@@ -34,15 +63,32 @@ digraph E5SearchReport {
         label="CLI";
         color="#6d4c41";
         bgcolor="#efebe9";
+        penwidth=1.4;
         node [fillcolor="#efebe9", color="#6d4c41"];
-        SearchCli [label="search_e5_corpus.py\n--excerpt-chars / --full-text"];
+
+        SearchCli [label="search_e5_corpus.py\n--excerpt-chars / --full-text\n--min-score", URL="57_e5_score_guard.svg"];
         TextOut [label="text output\nhuman readable"];
         JsonOut [label="json output\nprogram readable"];
     }
 
-    Results -> Hit;
+    subgraph cluster_legend {
+        label="Légende";
+        color="#78909c";
+        bgcolor="#fafafa";
+        penwidth=1.0;
+        node [shape=note, style="filled", fillcolor="#fafafa", color="#78909c"];
+
+        LegendDefault [label="sans --min-score :\ntri score décroissant puis limit"];
+        LegendGuard [label="avec --min-score :\nfiltrage inclusif avant limit"];
+    }
+
+    Results -> Hit [label="ranked hits"];
+    Hit -> GuardDecision [label="score"];
+    MinScore -> GuardDecision [label="threshold optionnel"];
+    GuardDecision -> SourceContext [label="oui"];
+    GuardDecision -> Empty [label="non", style=dashed, color="#ad1457"];
+
     Config -> Report;
-    Hit -> SourceContext [label="metadata"];
     Hit -> Excerpt [label="text"];
     SourceContext -> ReportHit;
     Excerpt -> ReportHit;
@@ -51,9 +97,18 @@ digraph E5SearchReport {
     SearchCli -> TextOut;
     SearchCli -> JsonOut;
 
+    LegendDefault -> LegendGuard [style=invis];
+
     Nav_Inference [label="Inference", shape=plaintext, URL="40_inference.svg"];
     Nav_E5Corpus [label="E5 corpus", shape=plaintext, URL="50_e5_corpus.svg"];
     Nav_E5Sources [label="E5 sources", shape=plaintext, URL="51_e5_sources.svg"];
+    Nav_E5ScoreGuard [label="E5 score guard", shape=plaintext, URL="57_e5_score_guard.svg"];
 
-    { rank=sink; Nav_Inference; Nav_E5Corpus; Nav_E5Sources; }
+    { rank=sink; Nav_Inference; Nav_E5Corpus; Nav_E5Sources; Nav_E5ScoreGuard; }
+
+    // HTML_DETAIL[phase4_3]:
+    // title: Garde-fou de score dans le rapport de recherche E5
+    // summary: Le seuil minimal ne modifie pas les embeddings ni le corpus.
+    // detail: Le filtre est appliqué après le calcul complet des scores et avant le limit/rendu.
+    // ui_hint: Afficher ce bloc comme note contextuelle en bas du graphe dans une future page HTML.
 }

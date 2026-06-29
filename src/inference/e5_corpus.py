@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import json
-from contextlib import suppress
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
@@ -54,7 +54,6 @@ class E5CorpusDocument:
         metadata: Mapping[str, Any] | None = None,
     ) -> E5CorpusDocument:
         """Construit un document passage avec identifiant stable."""
-
         e5_text = ensure_e5_text(text, default_role="passage")
         if not e5_text.is_passage:
             raise ValueError("E5CorpusDocument.from_text expects a passage")
@@ -97,7 +96,6 @@ class E5CorpusEmbedding:
         result: OpenVINOEmbeddingPipelineResult,
     ) -> E5CorpusEmbedding:
         """Projette un résultat pipeline en embedding de corpus."""
-
         return cls(
             id=document.id,
             text=document.text.content,
@@ -111,7 +109,6 @@ class E5CorpusEmbedding:
 
     def to_json_dict(self) -> dict[str, Any]:
         """Convertit l'embedding vers JSON stable."""
-
         return {
             "id": self.id,
             "text": self.text,
@@ -126,7 +123,6 @@ class E5CorpusEmbedding:
     @classmethod
     def from_json_dict(cls, data: Mapping[str, Any]) -> E5CorpusEmbedding:
         """Reconstruit un embedding depuis JSON."""
-
         return cls(
             id=str(data["id"]),
             text=str(data["text"]),
@@ -160,24 +156,24 @@ class E5CorpusIndex:
             raise ValueError("E5CorpusIndex.tokenizer must not be empty")
         if self.dimension <= 0:
             raise ValueError("E5CorpusIndex.dimension must be positive")
+
         embeddings = tuple(self.embeddings)
         ids = [item.id for item in embeddings]
         if len(set(ids)) != len(ids):
             raise ValueError("E5CorpusIndex.embeddings ids must be unique")
         if any(item.dimension != self.dimension for item in embeddings):
             raise ValueError("E5CorpusIndex.embeddings dimensions must match index dimension")
+
         object.__setattr__(self, "embeddings", embeddings)
         object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
 
     @property
     def size(self) -> int:
         """Nombre de passages indexés."""
-
         return len(self.embeddings)
 
     def to_json_dict(self) -> dict[str, Any]:
         """Convertit l'index vers JSON stable."""
-
         return {
             "schema": self.schema,
             "model": self.model,
@@ -191,7 +187,6 @@ class E5CorpusIndex:
     @classmethod
     def from_json_dict(cls, data: Mapping[str, Any]) -> E5CorpusIndex:
         """Reconstruit un index depuis JSON."""
-
         schema = str(data.get("schema", ""))
         if schema != "missipy.e5.corpus.v1":
             raise ValueError(f"unsupported E5 corpus schema: {schema!r}")
@@ -225,7 +220,6 @@ class E5CorpusSearchHit:
 
     def to_json_dict(self) -> dict[str, Any]:
         """Convertit le hit vers JSON stable."""
-
         return {
             "rank": self.rank,
             "id": self.id,
@@ -256,12 +250,10 @@ class E5CorpusSearchResults:
     @property
     def best(self) -> E5CorpusSearchHit | None:
         """Meilleur résultat, ou None si l'index est vide."""
-
         return self.hits[0] if self.hits else None
 
     def to_json_dict(self) -> dict[str, Any]:
         """Convertit le résultat de recherche vers JSON stable."""
-
         return {
             "query": self.query.content,
             "prefixed_query": self.query.prefixed,
@@ -286,11 +278,11 @@ class E5CorpusBuilder:
         metadata: Mapping[str, Any] | None = None,
     ) -> E5CorpusIndex:
         """Vectorise les passages et renvoie un index local immuable."""
-
         documents = tuple(_to_document(item, index=index) for index, item in enumerate(passages, start=1))
         embeddings: list[E5CorpusEmbedding] = []
         model = backend = tokenizer = ""
         dimension = 0
+
         for document in documents:
             result = await self._pipeline.embed_text(document.text.prefixed)
             model = result.model
@@ -321,11 +313,14 @@ class E5CorpusSearcher:
         index: E5CorpusIndex,
         *,
         limit: int | None = None,
+        min_score: float | None = None,
     ) -> E5CorpusSearchResults:
         """Encode la query puis classe les embeddings persistés."""
-
         if limit is not None and limit <= 0:
             raise ValueError("limit must be positive or None")
+        if min_score is not None and not -1.0 <= min_score <= 1.0:
+            raise ValueError("min_score must be between -1.0 and 1.0 or None")
+
         query_text = ensure_e5_text(query, default_role="query")
         if not query_text.is_query:
             raise ValueError("search query must have role 'query'")
@@ -336,8 +331,12 @@ class E5CorpusSearcher:
             for item in index.embeddings
         ]
         scores.sort(key=lambda item: item[0], reverse=True)
+
+        if min_score is not None:
+            scores = [item for item in scores if item[0] >= min_score]
         if limit is not None:
             scores = scores[:limit]
+
         hits = tuple(
             E5CorpusSearchHit(
                 rank=rank,
@@ -349,6 +348,7 @@ class E5CorpusSearcher:
             )
             for rank, (score, item) in enumerate(scores, start=1)
         )
+
         return E5CorpusSearchResults(
             query=query_text,
             model=index.model,
@@ -365,11 +365,10 @@ class E5CorpusJsonStore:
     def write(self, index: E5CorpusIndex, path: str | Path, *, overwrite: bool = False) -> Path:
         """Écrit un index local dans un fichier JSON.
 
-        Cette méthode conserve le comportement historique direct. Pour les CLI
-        de build, préférer ``write_atomic`` afin de ne remplacer l'index final
-        qu'après sérialisation et validation complètes.
+        Cette méthode conserve le comportement historique direct. Pour les CLI de build,
+        préférer ``write_atomic`` afin de ne remplacer l'index final qu'après
+        sérialisation et validation complètes.
         """
-
         target = Path(path)
         _ensure_writable_target(target, overwrite=overwrite)
         target.write_text(_serialize_corpus_index(index), encoding="utf-8")
@@ -378,12 +377,11 @@ class E5CorpusJsonStore:
     def write_atomic(self, index: E5CorpusIndex, path: str | Path, *, overwrite: bool = False) -> Path:
         """Écrit un index avec remplacement atomique du fichier cible.
 
-        Le contenu est d'abord écrit dans un fichier temporaire situé dans le
-        même répertoire que la cible, puis relu via ``read`` pour valider que le
-        JSON correspond bien au corpus attendu. La cible n'est remplacée par
-        ``Path.replace`` que si cette validation réussit.
+        Le contenu est d'abord écrit dans un fichier temporaire situé dans le même
+        répertoire que la cible, puis relu via ``read`` pour valider que le JSON
+        correspond bien au corpus attendu. La cible n'est remplacée par ``Path.replace``
+        que si cette validation réussit.
         """
-
         target = Path(path)
         _ensure_writable_target(target, overwrite=overwrite)
         temp = atomic_temp_path(target)
@@ -404,14 +402,12 @@ class E5CorpusJsonStore:
 
     def read(self, path: str | Path) -> E5CorpusIndex:
         """Lit un index local depuis un fichier JSON."""
-
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         return E5CorpusIndex.from_json_dict(data)
 
 
 def atomic_temp_path(path: str | Path) -> Path:
     """Chemin temporaire stable utilisé pour un remplacement atomique."""
-
     target = Path(path)
     if not target.name:
         raise ValueError("atomic temp path target must have a filename")
@@ -433,9 +429,9 @@ def _ensure_writable_target(target: Path, *, overwrite: bool) -> None:
     if not target.parent.exists():
         raise FileNotFoundError(target.parent)
 
+
 def make_corpus_document_id(text: str, *, index: int | None = None) -> str:
     """Identifiant stable et lisible pour un passage."""
-
     digest = sha256(text.encode("utf-8")).hexdigest()[:12]
     if index is None:
         return f"doc-{digest}"

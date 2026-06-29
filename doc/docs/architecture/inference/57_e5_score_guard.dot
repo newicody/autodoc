@@ -1,0 +1,128 @@
+digraph E5ScoreGuard {
+    // ROADMAP_ID: inference.e5_score_guard
+    // ROADMAP_PARENT: inference/52_e5_search_report.dot
+    // ROADMAP_NOTE[phase4_3]:
+    // La recherche locale E5 peut maintenant refuser les résultats trop faibles
+    // via un seuil minimal optionnel, sans changer le format corpus.
+
+    rankdir=LR;
+    graph [
+        fontname="Arial",
+        fontsize=10,
+        labelloc="t",
+        label="Phase 4.3 — E5 local search score guard",
+        bgcolor="white",
+        pad=0.25,
+        nodesep=0.45,
+        ranksep=0.65
+    ];
+    node [shape=box, style="filled,rounded", fontname="Arial", fontsize=10, margin="0.09,0.06"];
+    edge [fontname="Arial", fontsize=9, color="#455a64", arrowsize=0.8];
+
+    subgraph cluster_cli {
+        label="CLI développeur";
+        color="#1565c0";
+        bgcolor="#e3f2fd";
+        penwidth=1.5;
+        node [fillcolor="#e3f2fd", color="#1565c0"];
+
+        Query [label="query utilisateur\nrole query:"];
+        Index [label="--index corpus.json\nmissipy.e5.corpus.v1", URL="50_e5_corpus.svg"];
+        Limit [label="--limit N"];
+        MinScore [label="--min-score FLOAT\noptionnel"];
+        Cli [label="search_e5_corpus.py\nvalidation arguments"];
+    }
+
+    subgraph cluster_engine {
+        label="Moteur local";
+        color="#2e7d32";
+        bgcolor="#e8f5e9";
+        penwidth=1.5;
+        node [fillcolor="#e8f5e9", color="#2e7d32"];
+
+        Searcher [label="E5CorpusSearcher.search\nmin_score=None par défaut", URL="50_e5_corpus.svg"];
+        EmbedQuery [label="embed query\nOpenVINO E5 local", URL="47_openvino_embedding_pipeline.svg"];
+        Scores [label="dot_product(query, passage)\nscore cosine-like"];
+        Sort [label="tri décroissant\nscore high -> low"];
+    }
+
+    subgraph cluster_guard {
+        label="Garde-fou inclusif";
+        color="#ad1457";
+        bgcolor="#fce4ec";
+        penwidth=1.7;
+        node [fillcolor="#fce4ec", color="#ad1457"];
+
+        RangeCheck [label="validation\n-1.0 <= min_score <= 1.0"];
+        Filter [shape=diamond, label="score >= min_score ?"];
+        Keep [label="conserver hit\nrank recalculé"];
+        Drop [label="rejeter hit faible\nnon rendu", style="filled,rounded,dashed"];
+    }
+
+    subgraph cluster_output {
+        label="Sorties";
+        color="#6d4c41";
+        bgcolor="#efebe9";
+        penwidth=1.5;
+        node [fillcolor="#efebe9", color="#6d4c41"];
+
+        ApplyLimit [label="appliquer limit\naprès filtrage"];
+        Report [label="E5SearchReport\nscore/source/lines/excerpt", URL="52_e5_search_report.svg"];
+        Json [label="JSON\nhit_count filtré"];
+        Text [label="texte\nhit_count filtré"];
+        Zero [label="hit_count: 0\naucun résultat utile", style="filled,rounded,dashed"];
+    }
+
+    subgraph cluster_scope {
+        label="Hors périmètre";
+        color="#78909c";
+        bgcolor="#fafafa";
+        penwidth=1.0;
+        node [shape=note, style="filled", fillcolor="#fafafa", color="#78909c"];
+
+        NoQdrant [label="pas de Qdrant"];
+        NoScheduler [label="pas de Scheduler"];
+        NoFormat [label="format corpus inchangé"];
+    }
+
+    Query -> Cli;
+    Index -> Cli;
+    Limit -> Cli;
+    MinScore -> Cli;
+    MinScore -> RangeCheck [label="si fourni"];
+    RangeCheck -> Cli [label="ok", color="#2e7d32"];
+    RangeCheck -> Cli [label="code 2 si invalide", style=dashed, color="#ad1457"];
+
+    Cli -> Searcher;
+    Searcher -> EmbedQuery [label="query only"];
+    Index -> Searcher [label="read persisted vectors"];
+    EmbedQuery -> Scores;
+    Searcher -> Scores [label="passage vectors"];
+    Scores -> Sort;
+    Sort -> Filter;
+    RangeCheck -> Filter [label="threshold"];
+    Filter -> Keep [label="oui", color="#2e7d32"];
+    Filter -> Drop [label="non", style=dashed, color="#ad1457"];
+    Keep -> ApplyLimit;
+    Drop -> Zero [style=dotted, label="si tous rejetés"];
+    ApplyLimit -> Report;
+    Report -> Text;
+    Report -> Json;
+
+    NoQdrant -> NoScheduler [style=invis];
+    NoScheduler -> NoFormat [style=invis];
+
+    Nav_Inference [label="Inference", shape=plaintext, URL="40_inference.svg"];
+    Nav_Corpus [label="E5 corpus", shape=plaintext, URL="50_e5_corpus.svg"];
+    Nav_Report [label="E5 search report", shape=plaintext, URL="52_e5_search_report.svg"];
+    Nav_SafeRebuild [label="E5 safe rebuild", shape=plaintext, URL="56_e5_safe_rebuild.svg"];
+
+    { rank=sink; Nav_Inference; Nav_Corpus; Nav_Report; Nav_SafeRebuild; }
+
+    // HTML_DETAIL[phase4_3]:
+    // title: Score guard
+    // summary: --min-score est un seuil inclusif appliqué avant --limit.
+    // technical: Le score reste le dot product des vecteurs normalisés existants.
+    // behavior: Aucun seuil par défaut pour préserver le comportement historique.
+    // ui_hint: Afficher threshold, hit_count filtré et raison du rejet dans une future UI HTML.
+}

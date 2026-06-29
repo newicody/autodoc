@@ -3,7 +3,7 @@ from __future__ import annotations
 from io import StringIO
 from types import SimpleNamespace
 
-from inference.e5_corpus_cli import run_build, run_search
+from inference.e5_corpus_cli import build_search_parser, run_build, run_search
 
 
 class FakePipeline:
@@ -33,7 +33,6 @@ def test_build_e5_corpus_cli_writes_index(tmp_path) -> None:
     out = StringIO()
     err = StringIO()
     path = tmp_path / "corpus.json"
-
     code = run_build(
         ["--output", str(path), "--passage", "arnaque vendeur", "--passage", "moteur diesel"],
         stdout=out,
@@ -49,31 +48,44 @@ def test_build_e5_corpus_cli_writes_index(tmp_path) -> None:
 
 def test_build_e5_corpus_cli_requires_passages(tmp_path) -> None:
     err = StringIO()
-
     code = run_build(["--output", str(tmp_path / "corpus.json")], stdout=StringIO(), stderr=err, builder=fake_builder)
 
     assert code == 2
     assert "at least one" in err.getvalue()
 
 
+def test_search_parser_accepts_min_score() -> None:
+    args = build_search_parser().parse_args(
+        [
+            "--index",
+            "/tmp/corpus.json",
+            "--min-score",
+            "0.82",
+            "query",
+        ]
+    )
+
+    assert args.min_score == 0.82
+
+
 def test_search_e5_corpus_cli_reads_index_and_ranks(tmp_path) -> None:
     corpus = tmp_path / "corpus.json"
+
     assert run_build(
         ["--output", str(corpus), "--passage", "moteur diesel", "--passage", "arnaque vendeur"],
         stdout=StringIO(),
         stderr=StringIO(),
         builder=fake_builder,
     ) == 0
+
     out = StringIO()
     err = StringIO()
-
     code = run_search(
         ["--index", str(corpus), "je me suis fait baiser"],
         stdout=out,
         stderr=err,
         builder=fake_builder,
     )
-
     assert code == 0
     assert err.getvalue() == ""
     assert "#1 score=1.00000000" in out.getvalue()
@@ -82,14 +94,15 @@ def test_search_e5_corpus_cli_reads_index_and_ranks(tmp_path) -> None:
 
 def test_search_e5_corpus_cli_json_and_limit(tmp_path) -> None:
     corpus = tmp_path / "corpus.json"
+
     assert run_build(
         ["--output", str(corpus), "--passage", "moteur diesel", "--passage", "arnaque vendeur"],
         stdout=StringIO(),
         stderr=StringIO(),
         builder=fake_builder,
     ) == 0
-    out = StringIO()
 
+    out = StringIO()
     code = run_search(
         ["--index", str(corpus), "--limit", "1", "--format", "json", "je me suis fait baiser"],
         stdout=out,
@@ -103,13 +116,78 @@ def test_search_e5_corpus_cli_json_and_limit(tmp_path) -> None:
     assert '"source":' in out.getvalue()
 
 
+def test_search_e5_corpus_cli_min_score_filters_text_hits(tmp_path) -> None:
+    corpus = tmp_path / "corpus.json"
+
+    assert run_build(
+        ["--output", str(corpus), "--passage", "moteur diesel", "--passage", "arnaque vendeur"],
+        stdout=StringIO(),
+        stderr=StringIO(),
+        builder=fake_builder,
+    ) == 0
+
+    out = StringIO()
+    err = StringIO()
+    code = run_search(
+        ["--index", str(corpus), "--min-score", "0.5", "je me suis fait baiser"],
+        stdout=out,
+        stderr=err,
+        builder=fake_builder,
+    )
+
+    assert code == 0
+    assert err.getvalue() == ""
+    text = out.getvalue()
+    assert "hit_count: 1" in text
+    assert "excerpt: arnaque vendeur" in text
+    assert "moteur diesel" not in text
+
+
+def test_search_e5_corpus_cli_min_score_filters_json_hits(tmp_path) -> None:
+    corpus = tmp_path / "corpus.json"
+
+    assert run_build(
+        ["--output", str(corpus), "--passage", "moteur diesel", "--passage", "arnaque vendeur"],
+        stdout=StringIO(),
+        stderr=StringIO(),
+        builder=fake_builder,
+    ) == 0
+
+    out = StringIO()
+    err = StringIO()
+    code = run_search(
+        ["--index", str(corpus), "--min-score", "0.5", "--format", "json", "je me suis fait baiser"],
+        stdout=out,
+        stderr=err,
+        builder=fake_builder,
+    )
+
+    assert code == 0
+    assert err.getvalue() == ""
+    assert '"hit_count": 1' in out.getvalue()
+    assert '"excerpt": "arnaque vendeur"' in out.getvalue()
+
+
+def test_search_e5_corpus_cli_rejects_invalid_min_score() -> None:
+    err = StringIO()
+    code = run_search(
+        ["--index", "/tmp/missing-corpus.json", "--min-score", "1.1", "query"],
+        stdout=StringIO(),
+        stderr=err,
+        builder=fake_builder,
+    )
+
+    assert code == 2
+    assert "--min-score must be between -1.0 and 1.0" in err.getvalue()
+
+
 def test_build_e5_corpus_cli_accepts_source_file(tmp_path) -> None:
     source = tmp_path / "notes.md"
     source.write_text("arnaque vendeur\n\nMoteur diesel", encoding="utf-8")
+
     corpus = tmp_path / "corpus.json"
     out = StringIO()
     err = StringIO()
-
     code = run_build(
         ["--output", str(corpus), "--source-file", str(source), "--chunk-chars", "20"],
         stdout=out,
@@ -127,7 +205,6 @@ def test_build_e5_corpus_cli_accepts_source_file(tmp_path) -> None:
 
 def test_build_e5_corpus_cli_rejects_invalid_chunk_options(tmp_path) -> None:
     err = StringIO()
-
     code = run_build(
         ["--output", str(tmp_path / "corpus.json"), "--source-dir", str(tmp_path), "--chunk-chars", "0"],
         stdout=StringIO(),
@@ -142,15 +219,17 @@ def test_build_e5_corpus_cli_rejects_invalid_chunk_options(tmp_path) -> None:
 def test_search_e5_corpus_cli_reports_source_context(tmp_path) -> None:
     source = tmp_path / "notes.md"
     source.write_text("arnaque vendeur\n\nMoteur diesel", encoding="utf-8")
+
     corpus = tmp_path / "corpus.json"
+
     assert run_build(
         ["--output", str(corpus), "--source-file", str(source), "--chunk-chars", "20"],
         stdout=StringIO(),
         stderr=StringIO(),
         builder=fake_builder,
     ) == 0
-    out = StringIO()
 
+    out = StringIO()
     code = run_search(
         ["--index", str(corpus), "--excerpt-chars", "12", "je me suis fait baiser"],
         stdout=out,
@@ -169,21 +248,21 @@ def test_search_e5_corpus_cli_reports_source_context(tmp_path) -> None:
 
 def test_search_e5_corpus_cli_rejects_invalid_excerpt_chars(tmp_path) -> None:
     corpus = tmp_path / "corpus.json"
+
     assert run_build(
         ["--output", str(corpus), "--passage", "arnaque vendeur"],
         stdout=StringIO(),
         stderr=StringIO(),
         builder=fake_builder,
     ) == 0
-    err = StringIO()
 
+    err = StringIO()
     code = run_search(
         ["--index", str(corpus), "--excerpt-chars", "0", "je me suis fait baiser"],
         stdout=StringIO(),
         stderr=err,
         builder=fake_builder,
     )
-
     assert code == 2
     assert "--excerpt-chars" in err.getvalue()
 
@@ -191,15 +270,16 @@ def test_search_e5_corpus_cli_rejects_invalid_excerpt_chars(tmp_path) -> None:
 def test_build_e5_corpus_cli_reuses_previous_index(tmp_path) -> None:
     corpus = tmp_path / "corpus.json"
     rebuilt = tmp_path / "rebuilt.json"
+
     assert run_build(
         ["--output", str(corpus), "--passage", "arnaque vendeur", "--passage", "moteur diesel"],
         stdout=StringIO(),
         stderr=StringIO(),
         builder=fake_builder,
     ) == 0
+
     out = StringIO()
     err = StringIO()
-
     code = run_build(
         [
             "--output",
@@ -229,7 +309,6 @@ def test_build_e5_corpus_cli_reports_and_removes_lock(tmp_path) -> None:
     corpus = tmp_path / "corpus.json"
     out = StringIO()
     err = StringIO()
-
     code = run_build(
         ["--output", str(corpus), "--passage", "arnaque vendeur"],
         stdout=out,
@@ -249,8 +328,8 @@ def test_build_e5_corpus_cli_rejects_existing_lock(tmp_path) -> None:
     corpus = tmp_path / "corpus.json"
     lock = tmp_path / ".corpus.json.lock"
     lock.write_text("busy\n", encoding="utf-8")
-    err = StringIO()
 
+    err = StringIO()
     code = run_build(
         ["--output", str(corpus), "--passage", "arnaque vendeur"],
         stdout=StringIO(),
@@ -267,7 +346,6 @@ def test_build_e5_corpus_cli_rejects_existing_lock(tmp_path) -> None:
 def test_build_e5_corpus_cli_can_disable_lock(tmp_path) -> None:
     corpus = tmp_path / "corpus.json"
     out = StringIO()
-
     code = run_build(
         ["--output", str(corpus), "--no-lock", "--passage", "arnaque vendeur"],
         stdout=out,

@@ -12,15 +12,15 @@ from typing import Protocol
 
 from .e5_corpus import E5CorpusBuilder, E5CorpusIndex, E5CorpusJsonStore, E5CorpusSearcher
 from .e5_corpus_lock import E5CorpusBuildLock
-from .e5_incremental import E5IncrementalCorpusBuilder, E5IncrementalBuildStats
-from .e5_search_report import E5SearchReport, E5SearchReportConfig
-from .e5_sources import SUPPORTED_E5_SOURCE_EXTENSIONS, load_e5_corpus_documents_from_sources
+from .e5_incremental import E5IncrementalBuildStats, E5IncrementalCorpusBuilder
 from .e5_pipeline import (
     MultilingualE5SmallPipelineBundle,
     MultilingualE5SmallPipelineConfig,
     build_multilingual_e5_small_pipeline,
 )
 from .e5_profile import MULTILINGUAL_E5_SMALL_ENV, MultilingualE5SmallLocalConfig
+from .e5_search_report import E5SearchReport, E5SearchReportConfig
+from .e5_sources import SUPPORTED_E5_SOURCE_EXTENSIONS, load_e5_corpus_documents_from_sources
 
 
 class E5CorpusPipelineBuilder(Protocol):
@@ -94,8 +94,8 @@ class E5CorpusBuildCliOutput:
 class E5CorpusSearchCliOutput:
     """Résumé stable de recherche dans un corpus local.
 
-    Depuis Phase 3.14, ce résumé délègue le rendu à E5SearchReport pour
-    afficher le contexte source lorsque le corpus vient de fichiers TXT/Markdown.
+    Depuis Phase 3.14, ce résumé délègue le rendu à E5SearchReport pour afficher
+    le contexte source lorsque le corpus vient de fichiers TXT/Markdown.
     """
 
     report: E5SearchReport
@@ -129,7 +129,6 @@ class E5CorpusSearchCliOutput:
 
 def build_build_parser() -> argparse.ArgumentParser:
     """Parser pour la construction d'un corpus local."""
-
     parser = argparse.ArgumentParser(
         prog="missipy-build-e5-corpus",
         description="Construit un corpus E5 local persistant à partir de passages.",
@@ -137,12 +136,31 @@ def build_build_parser() -> argparse.ArgumentParser:
     _add_common_model_args(parser)
     parser.add_argument("--passage", action="append", default=[], help="Passage à indexer. Peut être répété.")
     parser.add_argument("--passages-file", default=None, help="Fichier texte contenant un passage par ligne.")
-    parser.add_argument("--source-file", action="append", default=[], help="Fichier .md/.markdown/.txt à découper en passages. Peut être répété.")
-    parser.add_argument("--source-dir", action="append", default=[], help="Dossier contenant des sources .md/.markdown/.txt à indexer. Peut être répété.")
-    parser.add_argument("--source-extensions", default=",".join(SUPPORTED_E5_SOURCE_EXTENSIONS), help="Extensions source séparées par des virgules.")
+    parser.add_argument(
+        "--source-file",
+        action="append",
+        default=[],
+        help="Fichier .md/.markdown/.txt à découper en passages. Peut être répété.",
+    )
+    parser.add_argument(
+        "--source-dir",
+        action="append",
+        default=[],
+        help="Dossier contenant des sources .md/.markdown/.txt à indexer. Peut être répété.",
+    )
+    parser.add_argument(
+        "--source-extensions",
+        default=",".join(SUPPORTED_E5_SOURCE_EXTENSIONS),
+        help="Extensions source séparées par des virgules.",
+    )
     parser.add_argument("--no-recursive", action="store_true", help="Ne parcourt pas récursivement les --source-dir.")
     parser.add_argument("--chunk-chars", type=int, default=1200, help="Taille cible maximale des chunks source en caractères.")
-    parser.add_argument("--overlap-paragraphs", type=int, default=0, help="Nombre de paragraphes repris entre deux chunks.")
+    parser.add_argument(
+        "--overlap-paragraphs",
+        type=int,
+        default=0,
+        help="Nombre de paragraphes repris entre deux chunks.",
+    )
     parser.add_argument("--output", required=True, help="Fichier JSON de sortie du corpus local.")
     parser.add_argument("--reuse-index", default=None, help="Index JSON existant à réutiliser pour un build incrémental.")
     parser.add_argument("--overwrite", action="store_true", help="Autorise l'écrasement du fichier de sortie.")
@@ -153,7 +171,6 @@ def build_build_parser() -> argparse.ArgumentParser:
 
 def build_search_parser() -> argparse.ArgumentParser:
     """Parser pour la recherche dans un corpus local."""
-
     parser = argparse.ArgumentParser(
         prog="missipy-search-e5-corpus",
         description="Recherche dans un corpus E5 local déjà vectorisé.",
@@ -162,6 +179,12 @@ def build_search_parser() -> argparse.ArgumentParser:
     parser.add_argument("query", help="Requête utilisateur. Le rôle query est appliqué si absent.")
     parser.add_argument("--index", required=True, help="Fichier JSON du corpus local.")
     parser.add_argument("--limit", type=int, default=None, help="Nombre maximal de résultats.")
+    parser.add_argument(
+        "--min-score",
+        type=float,
+        default=None,
+        help="Score minimal inclusif requis pour conserver un résultat.",
+    )
     parser.add_argument("--format", choices=("text", "json"), default="text", help="Format de sortie CLI.")
     parser.add_argument("--excerpt-chars", type=int, default=280, help="Longueur maximale de l'extrait affiché par résultat.")
     parser.add_argument("--full-text", action="store_true", help="Inclut le texte complet du chunk dans la sortie.")
@@ -177,7 +200,6 @@ async def run_build_async(
     store: E5CorpusJsonStore | None = None,
 ) -> int:
     """Construit un corpus depuis la CLI."""
-
     args = build_build_parser().parse_args(list(argv))
     if args.max_length <= 0:
         stderr.write("--max-length must be positive\n")
@@ -188,6 +210,7 @@ async def run_build_async(
     if args.overlap_paragraphs < 0:
         stderr.write("--overlap-paragraphs must be zero or positive\n")
         return 2
+
     try:
         passages = _collect_passages(
             args.passage,
@@ -202,6 +225,7 @@ async def run_build_async(
     except OSError as exc:
         stderr.write(f"missipy-build-e5-corpus failed to read passages: {exc}\n")
         return 1
+
     if not passages:
         stderr.write("at least one --passage, --passages-file, --source-file or --source-dir entry is required\n")
         return 2
@@ -271,13 +295,15 @@ async def run_search_async(
     store: E5CorpusJsonStore | None = None,
 ) -> int:
     """Recherche dans un corpus depuis la CLI."""
-
     args = build_search_parser().parse_args(list(argv))
     if args.max_length <= 0:
         stderr.write("--max-length must be positive\n")
         return 2
     if args.limit is not None and args.limit <= 0:
         stderr.write("--limit must be positive\n")
+        return 2
+    if args.min_score is not None and not -1.0 <= args.min_score <= 1.0:
+        stderr.write("--min-score must be between -1.0 and 1.0\n")
         return 2
     if args.excerpt_chars <= 0:
         stderr.write("--excerpt-chars must be positive\n")
@@ -286,7 +312,12 @@ async def run_search_async(
     try:
         index: E5CorpusIndex = (store or E5CorpusJsonStore()).read(args.index)
         bundle = builder(_pipeline_config(args, cli_name="missipy-search-e5-corpus"))
-        results = await E5CorpusSearcher(bundle.pipeline).search(args.query, index, limit=args.limit)
+        results = await E5CorpusSearcher(bundle.pipeline).search(
+            args.query,
+            index,
+            limit=args.limit,
+            min_score=args.min_score,
+        )
     except Exception as exc:  # pragma: no cover - dépend des dépendances locales.
         stderr.write(f"missipy-search-e5-corpus failed: {exc}\n")
         return 1

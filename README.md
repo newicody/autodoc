@@ -6,7 +6,7 @@ L'objectif n'est pas de construire une application Python monolithique, mais un 
 
 ## État courant
 
-État de référence : **Phase 4.2 recherche E5 locale dev-ready sur corpus repo**.
+État de référence : **Phase 4.3 garde-fou de score pour recherche E5 locale**.
 
 Le prototype possède actuellement :
 
@@ -37,7 +37,8 @@ Le prototype possède actuellement :
 - un corpus local E5 persistant depuis passages ou sources TXT/Markdown ;
 - un rapport de recherche E5 avec score, source, lignes et extrait ;
 - un rebuild sûr du corpus E5 avec staging, validation optionnelle et promotion atomique ;
-- une procédure de recherche E5 locale dev-ready validée sur le corpus du repo.
+- une procédure de recherche E5 locale dev-ready validée sur le corpus du repo ;
+- un garde-fou `--min-score` pour filtrer les résultats E5 locaux trop faibles.
 
 OpenVINO est branché comme runtime générique à entrées brutes. Le choix du ou des modèles est décrit par profils déclaratifs : `embedding`, `generation` ou `raw`.
 
@@ -111,6 +112,9 @@ cd doc && make -f makefile
 - `doc/MODEL_E5_SOURCES_PHASE3_13.md` : ingestion TXT/Markdown vers corpus E5.
 - `doc/MODEL_E5_SEARCH_REPORT_PHASE3_14.md` : rapport de résultats avec contexte source.
 - `doc/CHANGELOG_PHASE4_2_E5_LOCAL_SEARCH.md` : procédure de recherche E5 locale dev-ready.
+- `doc/CHANGELOG_PHASE4_3_E5_SCORE_GUARD.md` : garde-fou de score minimal pour recherche E5 locale.
+- `doc/docs/architecture/inference/52_e5_search_report.dot` : rapport E5 enrichi avec lien vers le garde-fou de score.
+- `doc/docs/architecture/inference/57_e5_score_guard.dot` : détail Phase 4.3 du filtrage `--min-score`.
 - `doc/docs/architecture/*.dot` : roadmap DOT navigable ; les SVG sont générés par le makefile.
 
 ## Développement
@@ -462,3 +466,38 @@ Cette phase reste volontairement locale :
 - pas de nouveau backend ;
 - pas d'index ANN ;
 - pas de cache runtime supplémentaire.
+
+## Phase 4.3 — Garde-fou de score E5 local
+
+La Phase 4.3 ajoute un seuil minimal optionnel pour éviter de considérer comme exploitables les meilleurs résultats d'un corpus trop pauvre ou hors sujet.
+
+La recherche conserve le comportement historique par défaut : sans seuil, tous les hits classés par score peuvent être retournés dans la limite demandée.
+
+Avec `--min-score`, seuls les hits dont le score est supérieur ou égal au seuil sont conservés :
+
+```bash
+PYTHONPATH=src ./tools/search_e5_corpus.py \
+  --index /tmp/autodoc_e5_corpus.json \
+  --limit 5 \
+  --min-score 0.86 \
+  "rebuild sûr avec staging validation promotion"
+```
+
+Le seuil est inclusif et doit rester dans l'intervalle `[-1.0, 1.0]`.
+
+La sortie peut donc afficher :
+
+```text
+hit_count: 0
+```
+
+si aucun résultat ne franchit le seuil. Ce comportement est volontaire : il distingue un corpus interrogeable d'un corpus réellement utile pour la requête.
+
+Cette phase reste locale :
+
+- pas de Qdrant ;
+- pas de Scheduler ;
+- pas de changement du format `missipy.e5.corpus.v1` ;
+- pas d'index ANN ;
+- mise à jour des graphes DOT d'inférence uniquement ;
+- pas de SVG versionné.

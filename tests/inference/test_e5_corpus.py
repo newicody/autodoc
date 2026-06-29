@@ -8,10 +8,10 @@ import pytest
 from inference.e5_corpus import (
     E5CorpusBuilder,
     E5CorpusDocument,
-    E5CorpusJsonStore,
-    E5CorpusSearcher,
     E5CorpusEmbedding,
     E5CorpusIndex,
+    E5CorpusJsonStore,
+    E5CorpusSearcher,
     make_corpus_document_id,
 )
 from inference.e5_text import E5Text
@@ -50,6 +50,7 @@ def test_corpus_document_forces_passage_role() -> None:
     doc = E5CorpusDocument.from_text("arnaque vendeur", index=1)
 
     assert doc.text.prefixed == "passage: arnaque vendeur"
+
     with pytest.raises(ValueError, match="passage"):
         E5CorpusDocument.from_text(E5Text.query("mauvais"), index=1)
 
@@ -57,7 +58,6 @@ def test_corpus_document_forces_passage_role() -> None:
 def test_corpus_builder_embeds_passages_once() -> None:
     pipeline = FakePipeline()
     builder = E5CorpusBuilder(pipeline)
-
     index = asyncio.run(builder.build(["arnaque vendeur", "problème moteur"], metadata={"source": "test"}))
 
     assert index.size == 2
@@ -72,8 +72,8 @@ def test_corpus_builder_embeds_passages_once() -> None:
 def test_corpus_searcher_reuses_persisted_passage_embeddings() -> None:
     pipeline = FakePipeline()
     index = asyncio.run(E5CorpusBuilder(pipeline).build(["problème moteur", "arnaque vendeur", "autre doc"]))
-    pipeline.seen.clear()
 
+    pipeline.seen.clear()
     results = asyncio.run(E5CorpusSearcher(pipeline).search("je me suis fait baiser", index, limit=2))
 
     assert pipeline.seen == ["query: je me suis fait baiser"]
@@ -83,28 +83,83 @@ def test_corpus_searcher_reuses_persisted_passage_embeddings() -> None:
     assert results.best.score == 1.0
 
 
-def test_corpus_searcher_rejects_wrong_role_and_invalid_limit() -> None:
+def test_corpus_searcher_filters_hits_below_min_score() -> None:
+    pipeline = FakePipeline()
+    index = asyncio.run(E5CorpusBuilder(pipeline).build(["problème moteur", "arnaque vendeur", "autre doc"]))
+
+    results = asyncio.run(
+        E5CorpusSearcher(pipeline).search(
+            "je me suis fait baiser",
+            index,
+            min_score=0.5,
+        )
+    )
+
+    assert [hit.text for hit in results.hits] == ["arnaque vendeur"]
+    assert results.hits[0].rank == 1
+    assert results.hits[0].score == 1.0
+
+
+def test_corpus_searcher_keeps_hit_equal_to_min_score() -> None:
+    pipeline = FakePipeline()
+    index = asyncio.run(E5CorpusBuilder(pipeline).build(["arnaque vendeur", "moteur diesel"]))
+
+    results = asyncio.run(
+        E5CorpusSearcher(pipeline).search(
+            "je me suis fait baiser",
+            index,
+            min_score=1.0,
+        )
+    )
+
+    assert [hit.text for hit in results.hits] == ["arnaque vendeur"]
+
+
+def test_corpus_searcher_returns_empty_hits_when_min_score_filters_everything() -> None:
+    pipeline = FakePipeline()
+    index = asyncio.run(E5CorpusBuilder(pipeline).build(["moteur diesel", "autre doc"]))
+
+    results = asyncio.run(
+        E5CorpusSearcher(pipeline).search(
+            "je me suis fait baiser",
+            index,
+            min_score=0.5,
+        )
+    )
+
+    assert results.hits == ()
+    assert results.best is None
+
+
+def test_corpus_searcher_rejects_wrong_role_invalid_limit_and_invalid_min_score() -> None:
     pipeline = FakePipeline()
     index = asyncio.run(E5CorpusBuilder(pipeline).build(["passage OK"]))
     searcher = E5CorpusSearcher(pipeline)
 
     with pytest.raises(ValueError, match="query"):
         asyncio.run(searcher.search(E5Text.passage("document"), index))
+
     with pytest.raises(ValueError, match="limit"):
         asyncio.run(searcher.search("question", index, limit=0))
+
+    with pytest.raises(ValueError, match="min_score"):
+        asyncio.run(searcher.search("question", index, min_score=1.1))
 
 
 def test_corpus_json_store_roundtrip(tmp_path) -> None:
     index = asyncio.run(E5CorpusBuilder(FakePipeline()).build(["arnaque vendeur", "moteur diesel"]))
+
     store = E5CorpusJsonStore()
     path = tmp_path / "corpus.json"
-
     written = store.write(index, path)
+
     loaded = store.read(written)
 
     assert loaded.to_json_dict() == index.to_json_dict()
+
     with pytest.raises(FileExistsError):
         store.write(index, path)
+
     store.write(index, path, overwrite=True)
 
 
@@ -155,8 +210,10 @@ def test_corpus_json_store_atomic_roundtrip_and_overwrite(tmp_path) -> None:
     assert written == path
     assert store.read(path).to_json_dict() == index.to_json_dict()
     assert not (tmp_path / ".corpus.json.tmp").exists()
+
     with pytest.raises(FileExistsError):
         store.write_atomic(index, path)
+
     store.write_atomic(index, path, overwrite=True)
 
 
