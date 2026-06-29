@@ -1,61 +1,18 @@
-# Autodoc / MissiPy — Architecture logicielle Phase 2.6
+# Autodoc / MissiPy — Architecture logicielle Phase 2.6 auditée
 
-Ce document décrit l'état du projet après introduction de `ReplayReportFileWriter`.
+Ce document décrit l'état actuel du prototype après audit de cohérence Phase 2.6.
 
 La règle centrale reste inchangée : le Scheduler ne contient pas de logique métier. Il orchestre l'entrée des événements, délègue l'autorisation au `PolicyEngine`, route par `PriorityQueue` puis `Dispatcher`, et expose son activité via une observabilité passive.
 
-## Objectif Phase 2.6
+## Synthèse courte
 
-La Phase 2.6 ajoute le contrat du futur `OpenVINOBackend` sans importer le runtime OpenVINO. Le backend est testé avec un faux runtime injecté afin de verrouiller la forme, l'état et les erreurs avant l'intégration réelle.
+État courant : le prototype possède un micro-kernel coopératif testable, un contexte global événementiel, un chemin d'inférence fictif, un registre de backends, une observabilité minimale et une chaîne replay/export isolée.
 
-Flux ajouté :
-
-```text
-EventBus
-  -> EventRecorder
-  -> EventLogSnapshot
-  -> ReplayReader
-  -> ReplayPlan
-  -> ReplaySandbox
-  -> ReplaySandboxResult
-  -> ReplayScenarioRunner
-  -> ReplayReport
-  -> ReplayReportExporter
-  -> ReplayReportExport
-  -> ReplayReportFileWriter
-  -> ReplayReportWriteResult
-```
-
-Le `ReplayScenarioRunner` :
-
-- ne connaît pas le Scheduler ;
-- ne publie aucun `Event` ;
-- ne reconstruit pas `Request.reply` ;
-- exécute des scénarios dans `ReplaySandbox` ;
-- agrège plusieurs résultats dans `ReplayReport` ;
-- produit un rapport textuel déterministe sans horodatage runtime.
-
-Le `ReplayReportExporter` :
-
-- ne connaît pas le Scheduler ;
-- ne publie aucun `Event` ;
-- ne désérialise aucun payload ;
-- produit un export texte stable ;
-- produit un JSON compact avec `sort_keys=True` ;
-- retourne un `ReplayReportExport` immuable.
-
-Le `ReplayReportFileWriter` :
-
-- ne connaît pas le Scheduler ;
-- ne publie aucun `Event` ;
-- n'ajoute aucune extension implicite ;
-- ne crée aucun répertoire parent sans `create_parents=True` ;
-- n'écrase aucun fichier sans `overwrite=True` ;
-- retourne un `ReplayReportWriteResult` immuable avec `bytes_written` et `sha256`.
+OpenVINO n'est pas encore intégré. La classe `OpenVINOBackend` existe seulement comme contrat testé avec runtime injecté.
 
 ## Layer 0 — Hardware target
 
-Cible actuelle :
+Cible connue :
 
 - Intel i5-11400 ;
 - iGPU Intel, futur backend OpenVINO ;
@@ -136,11 +93,14 @@ Contrats disponibles :
 - `contracts.replay.EventLogSnapshot` ;
 - `contracts.replay.ReplayEvent` ;
 - `contracts.replay.ReplayPlan` ;
+- `contracts.replay.ReplaySandboxStep` ;
 - `contracts.replay.ReplaySandboxResult` ;
 - `contracts.replay.ReplayScenario` ;
 - `contracts.replay.ReplayScenarioResult` ;
 - `contracts.replay.ReplayReport` ;
-- `contracts.replay.ReplayReportExport`.
+- `contracts.replay.ReplayReportExport` ;
+- `contracts.replay.ReplayReportWriteResult` ;
+- `contracts.replay.ReplayBundleWriteResult`.
 
 Décision maintenue : un `Future` ne doit jamais être caché dans `payload`. Il reste dans `Event.request.reply` et ne doit jamais être enregistré dans le journal de replay.
 
@@ -225,6 +185,7 @@ Cible future :
 
 ```text
 OpenVINORuntime réel
+  -> Core
   -> CompiledModel
   -> InferRequestPool
   -> InferenceResult
@@ -295,7 +256,9 @@ Composants actifs :
 - `ReplayReportExporter` ;
 - `ReplayReportExport` ;
 - `ReplayReportFileWriter` ;
-- `ReplayReportWriteResult`.
+- `ReplayReportWriteResult` ;
+- `ReplayReportBundleWriter` ;
+- `ReplayBundleWriteResult`.
 
 Flux complet actuel :
 
@@ -314,6 +277,8 @@ EventBus.publish(Event)
   -> ReplayReportExport
   -> ReplayReportFileWriter
   -> ReplayReportWriteResult
+  -> ReplayReportBundleWriter
+  -> report.txt / report.json / manifest.json
 ```
 
 Garanties :
@@ -326,7 +291,7 @@ Garanties :
 - le texte de rapport est stable et comparable en test ;
 - le JSON de rapport est compact, trié et comparable en test ;
 - les écritures fichier sont explicites et refusent l'écrasement par défaut ;
-- les résultats d'écriture exposent un `sha256` stable du contenu UTF-8.
+- les bundles exposent un manifeste JSON déterministe avec empreintes SHA-256.
 
 ## Layer 10 — Test Harness
 
@@ -339,114 +304,22 @@ PYTHONPATH=src python3 src/main.py
 cd doc && make -f makefile
 ```
 
-État Phase 2.3 :
+État vérifié lors de l'audit Phase 2.6 :
 
 ```text
-47 passed
+63 passed
 main.py exit code: 0
 DOT_OK
 ```
 
-## Étape suivante probable
+## État stratégique avant OpenVINO
 
-Phase 2.4 pourrait ajouter un format de dossier de replay contrôlé, ou bien revenir vers le chemin d'inférence OpenVINO maintenant que l'observabilité/replay dispose d'un socle vérifiable.
+On est maintenant à l'étape juste avant l'intégration réelle d'OpenVINO.
 
+Avant de brancher le runtime réel, il faut décider la stratégie de modèles :
 
-## Phase 2.4 — Replay bundle contrôlé et navigation DOT
+- un modèle d'embedding pour contexte/RAG ;
+- un petit modèle de génération pour décisions textuelles ;
+- ou plusieurs backends enregistrés dans `BackendRegistry`.
 
-La couche observability produit maintenant un dossier de replay contrôlé.
-
-Flux ajouté :
-
-```text
-ReplayReport
-  -> ReplayReportExporter
-  -> ReplayReportExport
-  -> ReplayReportBundleWriter
-  -> report.txt
-  -> report.json
-  -> manifest.json
-  -> ReplayBundleWriteResult
-```
-
-Le bundle reste un artefact hors Scheduler vivant. Il sert à archiver, comparer
-et auditer un replay de manière déterministe.
-
-Règles :
-
-- aucun Event vivant ;
-- aucun `Request.reply` ;
-- aucun handler runtime ;
-- aucun chemin implicite ;
-- aucun overwrite implicite ;
-- manifeste JSON déterministe ;
-- empreintes SHA-256 pour chaque export.
-
-La roadmap DOT est aussi renforcée : les sous-graphes du scheduler manquants
-ont été ajoutés pour que les liens de zoom descente/remontée soient valides.
-Un test vérifie désormais que chaque URL SVG dans les DOT possède une source
-DOT correspondante.
-
-## Phase 2.5 — BackendRegistry minimal pour l'inférence
-
-La couche inference sépare maintenant explicitement trois responsabilités :
-
-```text
-InferenceRequestHandler
-  -> InferenceAdapter
-  -> BackendRegistry
-  -> InferenceBackend
-```
-
-Le `BackendRegistry` connaît la liste des backends disponibles et le backend par
-défaut. L'`InferenceAdapter` ne stocke plus directement les backends : il demande
-au registry de sélectionner le backend correspondant au modèle demandé.
-
-Garanties :
-
-- aucun changement dans le Scheduler ;
-- aucun changement dans le Dispatcher ;
-- aucun changement dans le ComponentProxy ;
-- aucun OpenVINO encore intégré ;
-- les doublons de noms de backends sont refusés ;
-- un modèle inconnu produit une erreur explicite ;
-- le snapshot du registry est immuable et exploitable par observability/policy.
-
-Cette phase prépare directement OpenVINO : il pourra être ajouté comme backend
-supplémentaire enregistré dans `BackendRegistry`, puis autorisé par `PolicyEngine`,
-sans modifier le chemin kernel.
-
-
-## Phase 2.6 — Contrat OpenVINOBackend sans runtime OpenVINO
-
-La couche inference possède maintenant une classe `OpenVINOBackend` contractuelle.
-Elle n'importe pas `openvino` et n'instancie aucun `CompiledModel`. Elle reçoit un
-runtime injecté compatible avec `OpenVINORuntime`, ce qui permet de tester le
-contrat sans dépendance externe.
-
-Flux préparé :
-
-```text
-InferenceRequestHandler
-  -> InferenceAdapter
-  -> BackendRegistry
-  -> OpenVINOBackend
-  -> OpenVINORuntime injecté
-  -> InferenceResult
-```
-
-Garanties :
-
-- aucun changement dans le Scheduler ;
-- aucun changement dans le Dispatcher ;
-- aucun changement dans le ComponentProxy ;
-- aucun import du runtime OpenVINO réel ;
-- configuration immuable `OpenVINOBackendConfig` ;
-- état observable `OpenVINOBackendState` ;
-- erreurs stables `OpenVINOBackendError` ;
-- tests avec faux runtime déterministe ;
-- possibilité d'enregistrer `OpenVINOBackend` dans `BackendRegistry` sans changer l'adapter.
-
-Cette étape est la dernière préparation structurelle avant l'intégration réelle
-d'OpenVINO. L'étape suivante pourra soit autoriser le modèle `openvino` dans
-`PolicyEngine`, soit brancher le runtime réel derrière `OpenVINORuntime`.
+La décision recommandée est de commencer par un backend OpenVINO d'embedding, parce qu'il est plus facile à valider, plus utile pour Qdrant et moins risqué qu'un modèle de génération complet.
