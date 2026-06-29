@@ -2,30 +2,38 @@ digraph Inference {
     rankdir=TB;
     node [shape=box, style=filled, fontname="Arial", fontsize=10];
 
-    // ROADMAP_NOTE[phase1_4]:
-    // Cette vue introduit le backend fictif d'inférence. Le but n'est pas de
-    // faire de l'IA, mais de verrouiller le contrat InferenceRequest /
-    // InferenceResult et le routage kernel avant OpenVINO.
+    // ROADMAP_NOTE[phase1_5]:
+    // Cette vue ajoute InferenceAdapter entre le handler et les backends.
+    // Le handler ne dépend plus de DummyInferenceBackend. OpenVINO pourra
+    // être ajouté comme backend enregistré dans l'adapter sans modifier
+    // Scheduler, Dispatcher ou ComponentProxy.
 
     subgraph cluster_contracts {
         label="Contracts";
         color="#455a64";
         bgcolor="#eceff1";
         node [fillcolor="#eceff1", color="#455a64"];
-        InferenceRequest [label="InferenceRequest\nprompt/context/model/metadata"];
-        InferenceResult [label="InferenceResult\ntext/confidence/backend/metadata"];
+        InferenceRequest [label="InferenceRequest
+prompt/context/model/metadata"];
+        InferenceResult [label="InferenceResult
+text/confidence/backend/metadata"];
         InferenceBackend [label="InferenceBackend Protocol"];
     }
 
     subgraph cluster_runtime {
-        label="Runtime Phase 1.4";
+        label="Runtime Phase 1.5";
         color="#f9a825";
         bgcolor="#fffde7";
         node [fillcolor="#fffde7", color="#f9a825"];
-        EventRequest [label="EventType.INFERENCE_REQUEST\nRequest.reply"];
+        EventRequest [label="EventType.INFERENCE_REQUEST
+Request.reply"];
         Handler [label="InferenceRequestHandler"];
-        Dummy [label="DummyInferenceBackend\ndeterministic"];
-        EventResult [label="EventType.INFERENCE_RESULT\nobservable"];
+        Adapter [label="InferenceAdapter
+backend membrane"];
+        Dummy [label="DummyInferenceBackend
+deterministic"];
+        EventResult [label="EventType.INFERENCE_RESULT
+observable"];
     }
 
     subgraph cluster_future {
@@ -48,17 +56,19 @@ digraph Inference {
     Scheduler -> Dispatcher [label="Queue"];
     Dispatcher -> Handler;
     Handler -> InferenceRequest [style=dotted, label="validate payload"];
-    Handler -> InferenceBackend [style=dotted, label="protocol"];
-    Handler -> Dummy [label="infer"];
+    Handler -> Adapter [label="infer(request)"];
+    Adapter -> InferenceBackend [style=dotted, label="protocol"];
+    Adapter -> Dummy [label="select dummy"];
     Dummy -> InferenceResult;
-    InferenceResult -> Handler;
+    InferenceResult -> Adapter;
+    Adapter -> Handler;
     Handler -> ComponentProxy [label="Request.reply", style=dashed];
     Handler -> EventResult [label="publish"];
     EventResult -> EventBus [style=dashed];
 
     OpenVINO -> CompiledModel [style=dashed];
     CompiledModel -> InferPool [style=dashed];
-    Handler -> OpenVINO [style=dashed, label="future replacement"];
+    Adapter -> OpenVINO [style=dashed, label="future registered backend"];
 
     Nav_Global [label="Global", shape=plaintext, URL="../00_global.svg"];
     Nav_Scheduler [label="Scheduler", shape=plaintext, URL="../scheduler/10_scheduler.svg"];

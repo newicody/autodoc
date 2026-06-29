@@ -5,6 +5,7 @@ from contextlib import suppress
 
 from context.handlers import ContextRequestHandler
 from contracts.event import EventType
+from inference.adapter import InferenceAdapter
 from inference.backend import DummyInferenceBackend
 from inference.handlers import InferenceRequestHandler
 from runtime.component import ComponentProxy
@@ -19,7 +20,7 @@ from .scheduler import Scheduler
 
 
 class Launcher:
-    """Assemble le kernel et démarre les composants Phase 1.4."""
+    """Assemble le kernel et démarre les composants Phase 1.5."""
 
     def __init__(self, context_interval: float = 1.0) -> None:
         self.registry = Registry()
@@ -28,6 +29,7 @@ class Launcher:
         self.queue = PriorityQueue()
         self.lifecycle = LifecycleManager()
         self.inference_backend = DummyInferenceBackend()
+        self.inference_adapter = InferenceAdapter(self.inference_backend)
         self.scheduler = Scheduler(
             self.queue,
             self.dispatcher,
@@ -74,5 +76,5 @@ class Launcher:
         )
         self.dispatcher.register(
             EventType.INFERENCE_REQUEST,
-            InferenceRequestHandler(self.inference_backend, self.event_bus),
+            InferenceRequestHandler(self.inference_adapter, self.event_bus),
         )

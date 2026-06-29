@@ -1,14 +1,11 @@
-# Manifest — Phase 1.4 changed files
+# Manifest — Phase 1.5 changed files
 
 ## Code
 
-- `src/contracts/inference.py`
-- `src/inference/__init__.py`
-- `src/inference/backend.py`
+- `src/inference/adapter.py`
 - `src/inference/handlers.py`
+- `src/inference/__init__.py`
 - `src/kernel/launcher.py`
-- `src/kernel/scheduler.py`
-- `src/kernel/context_engine.py`
 
 ## Tests
 
@@ -17,7 +14,7 @@
 ## Documentation
 
 - `doc/ARCHITECTURE_LAYERS.md`
-- `doc/CHANGELOG_PHASE1_4.md`
+- `doc/CHANGELOG_PHASE1_5.md`
 
 ## DOT roadmap
 
@@ -31,17 +28,13 @@ Aucun script de patch n'est inclus.
 
 ## Raison architecturale
 
-La Phase 1.4 introduit un backend d'inférence fictif pour valider le chemin :
+La Phase 1.5 ajoute `InferenceAdapter` comme membrane stable :
 
 ```text
-Event(INFERENCE_REQUEST)
-  -> Scheduler
-  -> PriorityQueue
-  -> Dispatcher
-  -> InferenceRequestHandler
-  -> DummyInferenceBackend
-  -> InferenceResult
-  -> Request.reply
+InferenceRequestHandler
+  -> InferenceAdapter
+  -> DummyInferenceBackend actuel
+  -> OpenVINOBackend futur
 ```
 
-OpenVINO reste futur et ne doit pas être branché directement au Scheduler.
+Le Scheduler, le Dispatcher et le ComponentProxy ne changent pas de rôle. OpenVINO pourra être ajouté derrière l'adapter sans coupler le noyau à un backend IA concret.

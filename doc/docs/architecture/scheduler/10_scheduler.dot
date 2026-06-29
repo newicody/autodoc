@@ -2,11 +2,11 @@ digraph Scheduler {
     rankdir=TB;
     node [shape=box, style=filled, fontname="Arial", fontsize=10];
 
-    // ROADMAP_NOTE[phase1_4]:
+    // ROADMAP_NOTE[phase1_5]:
     // Le Scheduler ne connaît toujours pas le backend d'inférence. Le Launcher
-    // enregistre InferenceRequestHandler dans le Dispatcher. Le flux
-    // INFERENCE_REQUEST passe par Queue -> Dispatcher, puis revient au
-    // ComponentProxy via Request.reply.
+    // enregistre InferenceRequestHandler dans le Dispatcher, et ce handler
+    // parle seulement à InferenceAdapter. L'adapter sélectionne le backend
+    // concret. Cette membrane prépare OpenVINO sans toucher au Scheduler.
 
     subgraph cluster_kernel {
         label="Micro Kernel (focus)";
@@ -37,12 +37,13 @@ digraph Scheduler {
     }
 
     subgraph cluster_inference {
-        label="Inference Phase 1.4";
+        label="Inference Phase 1.5";
         color="#f9a825";
         bgcolor="#fffde7";
         node [fillcolor="#fffde7", color="#f9a825"];
         InferenceRequest [label="INFERENCE_REQUEST\nRequest.reply", URL="../inference/40_inference.svg"];
         InferenceHandler [label="InferenceRequestHandler", URL="../inference/40_inference.svg"];
+        InferenceAdapter [label="InferenceAdapter", URL="../inference/40_inference.svg"];
         DummyBackend [label="DummyInferenceBackend", URL="../inference/40_inference.svg"];
         InferenceResult [label="INFERENCE_RESULT\nobservable", URL="../inference/40_inference.svg"];
     }
@@ -78,8 +79,10 @@ digraph Scheduler {
     Proxy -> InferenceRequest [label="yield Event"];
     InferenceRequest -> Scheduler [label="emit"];
     Dispatcher -> InferenceHandler;
-    InferenceHandler -> DummyBackend [label="infer"];
-    DummyBackend -> InferenceHandler [label="InferenceResult"];
+    InferenceHandler -> InferenceAdapter [label="infer"];
+    InferenceAdapter -> DummyBackend [label="select backend"];
+    DummyBackend -> InferenceAdapter [label="InferenceResult"];
+    InferenceAdapter -> InferenceHandler [label="InferenceResult"];
     InferenceHandler -> InferenceResult [label="publish"];
     InferenceResult -> EventBus [style=dashed];
     InferenceHandler -> Proxy [label="Request.reply", style=dashed];

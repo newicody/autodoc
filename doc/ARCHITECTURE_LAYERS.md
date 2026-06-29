@@ -1,21 +1,20 @@
-# Autodoc / MissiPy — Architecture logicielle Phase 1.4
+# Autodoc / MissiPy — Architecture logicielle Phase 1.5
 
-Ce document décrit l'état de développement après introduction du premier chemin d'inférence fictif.
+Ce document décrit l'état de développement après introduction de `InferenceAdapter`.
 
-La règle reste inchangée : le Scheduler ne contient pas d'IA, ne connaît pas OpenVINO et ne manipule pas directement les backends. Il route des événements.
+La règle reste inchangée : le Scheduler ne contient pas d'IA, ne connaît pas OpenVINO et ne manipule aucun backend d'inférence. Il route uniquement des événements.
 
-## Objectif Phase 1.4
+## Objectif Phase 1.5
 
-La Phase 1.4 ajoute un `DummyInferenceBackend` pour valider le contrat d'inférence avant OpenVINO.
+La Phase 1.5 ajoute une membrane stable entre le handler d'inférence et les backends concrets.
 
 Objectifs :
 
-- tester `InferenceRequest` / `InferenceResult` ;
-- tester `EventType.INFERENCE_REQUEST` ;
-- tester `EventType.INFERENCE_RESULT` observable ;
-- vérifier qu'un composant peut recevoir un résultat d'inférence via `Request.reply` ;
-- garder OpenVINO hors du Scheduler ;
-- préserver `EventBus` comme miroir d'observation.
+- éviter que `InferenceRequestHandler` dépende directement de `DummyInferenceBackend` ;
+- préparer l'ajout futur de `OpenVINOBackend` sans modifier le Scheduler ;
+- rendre la sélection de backend explicite et déterministe ;
+- refuser clairement un backend inconnu au lieu d'utiliser un fallback implicite ;
+- garder `DummyInferenceBackend` comme backend de test permanent.
 
 ## Layer 0 — Hardware target
 
@@ -78,7 +77,7 @@ Décision maintenue : un `Future` ne doit jamais être caché dans `payload`. Il
 
 ## Layer 3 — Context Fabric
 
-État Phase 1.4 : collecte événementielle active.
+État Phase 1.5 : collecte événementielle active.
 
 ```text
 Scheduler clock
@@ -112,9 +111,9 @@ Services prévus mais non branchés :
 
 Ces services seront des composants ou handlers pilotés par événements. Ils ne seront pas intégrés dans le Scheduler.
 
-## Layer 5 — Inference Phase 1.4
+## Layer 5 — Inference Phase 1.5
 
-État actuel : chemin fictif actif.
+État actuel : chemin fictif actif avec adapter.
 
 ```text
 Component
@@ -124,6 +123,7 @@ Component
   -> PriorityQueue
   -> Dispatcher
   -> InferenceRequestHandler
+  -> InferenceAdapter
   -> DummyInferenceBackend
   -> InferenceResult
   -> Request.reply
@@ -141,14 +141,14 @@ InferenceRequestHandler
 Cible future :
 
 ```text
-InferenceRequestHandler
+InferenceAdapter
   -> OpenVINOBackend
   -> CompiledModel
   -> InferRequestPool
   -> InferenceResult
 ```
 
-OpenVINO ne doit jamais être appelé directement par le Scheduler.
+OpenVINO ne doit jamais être appelé directement par le Scheduler, le Dispatcher ou le ComponentProxy.
 
 ## Layer 6 — Experts
 
@@ -228,16 +228,13 @@ Couverture actuelle :
 - composant qui plante : `ERROR` + kernel non bloqué ;
 - ContextEngine collecte via événements ;
 - DummyInferenceBackend déterministe ;
+- InferenceAdapter sélectionne un backend enregistré ;
+- InferenceAdapter refuse un backend inconnu ;
 - publication observable `INFERENCE_RESULT` ;
-- roundtrip composant -> inference handler -> backend -> composant.
+- roundtrip composant -> inference handler -> adapter -> backend -> composant.
 
 ## Prochaine étape logique
 
-Phase 1.5 : introduire un premier `PolicyEngine` minimal ou un `InferenceAdapter` plus explicite.
+Phase 1.6 : introduire un `PolicyEngine` minimal avant d'ajouter OpenVINO.
 
-Ordre conseillé :
-
-1. verrouiller `InferenceRequestHandler` ;
-2. ajouter `InferenceAdapter` si le backend doit devenir interchangeable ;
-3. seulement ensuite brancher `OpenVINOBackend` ;
-4. garder `DummyInferenceBackend` comme backend de test permanent.
+But : empêcher qu'un composant puisse demander n'importe quelle inférence, priorité ou destination sans validation explicite.
