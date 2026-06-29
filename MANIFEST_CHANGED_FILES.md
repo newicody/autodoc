@@ -1,36 +1,29 @@
-# Manifest — Phase 1.3 changed files
+# Manifest — Phase 1.3 sync
 
-Ce lot ne contient pas de script de patch et ne contient aucun SVG.
+Cette livraison synchronise réellement le Scheduler avec le package `src/context/` déjà présent dans le dépôt.
 
-## Fichiers ajoutés
-
-```text
-src/context/__init__.py
-src/context/builder.py
-src/context/collector.py
-src/context/engine.py
-src/context/handlers.py
-src/context/reducer.py
-```
+Elle ne change pas la roadmap DOT : les graphes décrivent déjà le chemin cible `Scheduler -> ContextEngine -> ContextCollector -> CONTEXT_REQUEST -> Dispatcher -> ContextRequestHandler`.
 
 ## Fichiers modifiés
 
 ```text
-src/kernel/context_engine.py
-src/kernel/lifecycle.py
 src/kernel/scheduler.py
 src/kernel/launcher.py
-src/runtime/component.py
+src/kernel/context_engine.py
 tests/context/test_context_engine.py
-
-doc/ARCHITECTURE_LAYERS.md
-doc/CHANGELOG_PHASE1_3.md
-doc/docs/architecture/context/20_context.dot
-doc/docs/architecture/scheduler/10_scheduler.dot
+doc/CHANGELOG_PHASE1_3_SYNC.md
 ```
 
-## Raison architecturale
+## Non modifié
 
-La Phase 1.3 extrait la logique de contexte hors du `kernel/` tout en conservant le `ContextEngine` comme brique fondamentale du micro-kernel.
+```text
+Aucun SVG.
+Aucun DOT.
+Aucun script de patch.
+Aucun fichier OpenVINO/Qdrant/SQLite.
+```
 
-Le Scheduler déclenche le contexte, mais ne contient pas la logique de collecte, réduction ou construction d'`InferenceContext`.
+## Raison
+
+Le dépôt contenait déjà `src/context/`, mais `src/kernel/scheduler.py` utilisait encore `kernel.context_engine`.
+Cette étape supprime la duplication active : `kernel/context_engine.py` devient un shim de compatibilité et le Scheduler utilise `context.engine.ContextEngine`.
