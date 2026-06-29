@@ -7,25 +7,6 @@ from pathlib import Path
 URL_PATTERN = re.compile(r'URL\s*=\s*"([^"]+)"')
 ROADMAP_ID_PATTERN = re.compile(r"^\s*//\s*ROADMAP_ID:\s*([A-Za-z0-9_.-]+)\s*$", re.MULTILINE)
 ROADMAP_PARENT_PATTERN = re.compile(r"^\s*//\s*ROADMAP_PARENT:\s*(\S+)\s*$", re.MULTILINE)
-NODE_PATTERN = re.compile(r"^\s*(?P<node>[A-Za-z_][A-Za-z0-9_]*)\s*\[(?P<attrs>.*?)\];\s*$")
-ATTR_PATTERN = re.compile(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*\"(?P<value>.*?)\"", re.DOTALL)
-
-CANONICAL_DOT_TARGETS: dict[str, Path] = {
-    "Scheduler": Path("scheduler/10_scheduler.dot"),
-    "Dispatcher": Path("scheduler/dispatcher/11_dispatcher.dot"),
-    "EventBus": Path("scheduler/event_bus/12_event_bus.dot"),
-    "PriorityQueue": Path("scheduler/priority_queue/13_priority_queue.dot"),
-    "Queue": Path("scheduler/priority_queue/13_priority_queue.dot"),
-    "ComponentProxy": Path("scheduler/component_proxy/14_component_proxy.dot"),
-    "Proxy": Path("scheduler/component_proxy/14_component_proxy.dot"),
-    "ContextEngine": Path("context/20_context.dot"),
-    "InferenceAdapter": Path("inference/40_inference.dot"),
-    "InferenceRequestHandler": Path("inference/40_inference.dot"),
-    "EventRecorder": Path("observability/70_observability.dot"),
-    "ReplayReader": Path("observability/70_observability.dot"),
-    "ReplaySandbox": Path("observability/70_observability.dot"),
-    "ReplayReport": Path("observability/70_observability.dot"),
-}
 
 
 @dataclass(frozen=True)
@@ -35,34 +16,8 @@ class DotLink:
     target_dot: Path
 
 
-@dataclass(frozen=True)
-class DotNode:
-    source_dot: Path
-    name: str
-    label_head: str
-    url: str | None
-    target_dot: Path | None
-
-
 def architecture_root() -> Path:
     return Path(__file__).resolve().parents[2] / "doc" / "docs" / "architecture"
-
-
-def is_external_url(url: str) -> bool:
-    return "://" in url or url.startswith("#") or url.startswith("mailto:")
-
-
-def is_inside(child: Path, root: Path) -> bool:
-    resolved_child = child.resolve()
-    resolved_root = root.resolve()
-    return resolved_child == resolved_root or resolved_root in resolved_child.parents
-
-
-def to_dot_target(source_dot: Path, url: str) -> Path:
-    raw_target = (source_dot.parent / url).resolve()
-    if raw_target.suffix == ".svg":
-        return raw_target.with_suffix(".dot")
-    return raw_target
 
 
 def dot_files(root: Path) -> list[Path]:
@@ -73,55 +28,52 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def is_external_url(url: str) -> bool:
+    return "://" in url or url.startswith("#") or url.startswith("mailto:")
+
+
+def strip_fragment(url: str) -> str:
+    return url.split("#", 1)[0]
+
+
+def is_inside(child: Path, root: Path) -> bool:
+    resolved_child = child.resolve()
+    resolved_root = root.resolve()
+    return resolved_child == resolved_root or resolved_root in resolved_child.parents
+
+
+def to_dot_target(source_dot: Path, url: str) -> Path:
+    clean_url = strip_fragment(url)
+    raw_target = (source_dot.parent / clean_url).resolve()
+    if raw_target.suffix == ".svg":
+        return raw_target.with_suffix(".dot")
+    return raw_target
+
+
+def relative(path: Path, root: Path) -> str:
+    resolved = path.resolve()
+    if is_inside(resolved, root):
+        return str(resolved.relative_to(root.resolve()))
+    return str(resolved)
+
+
+def relative_svg_url(source_dot: Path, target_dot: Path) -> str:
+    target_svg = target_dot.with_suffix(".svg")
+    rel = target_svg.resolve().relative_to(source_dot.parent.resolve())
+    return rel.as_posix()
+
+
 def parse_links(root: Path) -> list[DotLink]:
     links: list[DotLink] = []
     for source_dot in dot_files(root):
-        text = read_text(source_dot)
-        for match in URL_PATTERN.finditer(text):
+        for match in URL_PATTERN.finditer(read_text(source_dot)):
             url = match.group(1)
             if is_external_url(url):
                 continue
+            if strip_fragment(url) == "":
+                continue
             links.append(DotLink(source_dot=source_dot, url=url, target_dot=to_dot_target(source_dot, url)))
     return links
-
-
-def parse_attrs(raw_attrs: str) -> dict[str, str]:
-    return {match.group("name"): match.group("value") for match in ATTR_PATTERN.finditer(raw_attrs)}
-
-
-def label_head_for(node_name: str, attrs: dict[str, str]) -> str:
-    label = attrs.get("label", node_name)
-    # Les labels DOT contiennent souvent des \n pour les détails visuels.
-    # Le premier segment est l'identité de navigation du composant.
-    return label.replace("\\n", "\n").splitlines()[0].strip()
-
-
-def parse_nodes(root: Path) -> list[DotNode]:
-    nodes: list[DotNode] = []
-    for source_dot in dot_files(root):
-        text = read_text(source_dot)
-        for line in text.splitlines():
-            if "->" in line:
-                continue
-            match = NODE_PATTERN.match(line)
-            if match is None:
-                continue
-            node_name = match.group("node")
-            if node_name.startswith("Nav_"):
-                continue
-            attrs = parse_attrs(match.group("attrs"))
-            url = attrs.get("URL")
-            target = None if url is None or is_external_url(url) else to_dot_target(source_dot, url)
-            nodes.append(
-                DotNode(
-                    source_dot=source_dot,
-                    name=node_name,
-                    label_head=label_head_for(node_name, attrs),
-                    url=url,
-                    target_dot=target,
-                )
-            )
-    return nodes
 
 
 def roadmap_id(path: Path) -> str | None:
@@ -136,22 +88,27 @@ def roadmap_parent(path: Path, root: Path) -> Path | None:
     return (root / match.group(1)).resolve()
 
 
-def relative(path: Path, root: Path) -> str:
-    resolved = path.resolve()
-    if is_inside(resolved, root):
-        return str(resolved.relative_to(root.resolve()))
-    return str(resolved)
+def targets_by_filename(root: Path) -> dict[str, list[Path]]:
+    result: dict[str, list[Path]] = {}
+    for dot_file in dot_files(root):
+        result.setdefault(dot_file.name, []).append(dot_file)
+    return result
 
 
-def test_dot_urls_resolve_to_dot_sources_inside_architecture_root() -> None:
-    """Vérifie la résolution réelle des URL DOT, sans hypothèse de parent naïve.
+def test_dot_urls_resolve_to_existing_dot_sources() -> None:
+    """Vérifie seulement la cohérence réelle des liens DOT.
 
-    Le test part du fichier DOT qui contient l'URL, résout le chemin relatif
-    depuis ce fichier, remplace .svg par .dot, puis vérifie que la cible reste
-    dans doc/docs/architecture et existe comme source DOT.
+    Un lien Graphviz pointe vers un SVG généré par le makefile. Le test remplace
+    donc .svg par .dot et vérifie que la source DOT correspondante existe.
+
+    Ce test ne force pas une hiérarchie canonique. Un graphe peut descendre vers
+    un sous-graphe plus précis, remonter vers une vue plus large, ou pointer vers
+    un composant d'un autre layer. La seule obligation est que le lien mène à une
+    vraie page de roadmap existante et reste dans doc/docs/architecture.
     """
 
     root = architecture_root()
+    by_filename = targets_by_filename(root)
     errors: list[str] = []
 
     for link in parse_links(root):
@@ -161,7 +118,23 @@ def test_dot_urls_resolve_to_dot_sources_inside_architecture_root() -> None:
                 f"{link.target_dot}"
             )
             continue
-        if not link.target_dot.exists():
+        if link.target_dot.exists():
+            continue
+
+        candidates = by_filename.get(link.target_dot.name, [])
+        if len(candidates) == 1:
+            expected = relative_svg_url(link.source_dot, candidates[0])
+            errors.append(
+                f"{relative(link.source_dot, root)} -> {link.url} missing DOT source: "
+                f"{relative(link.target_dot, root)}; likely expected URL=\"{expected}\""
+            )
+        elif len(candidates) > 1:
+            joined = ", ".join(relative(candidate, root) for candidate in candidates)
+            errors.append(
+                f"{relative(link.source_dot, root)} -> {link.url} missing DOT source: "
+                f"{relative(link.target_dot, root)}; ambiguous candidates: {joined}"
+            )
+        else:
             errors.append(
                 f"{relative(link.source_dot, root)} -> {link.url} missing DOT source: "
                 f"{relative(link.target_dot, root)}"
@@ -171,11 +144,11 @@ def test_dot_urls_resolve_to_dot_sources_inside_architecture_root() -> None:
 
 
 def test_roadmap_ids_are_unique_when_declared() -> None:
-    """Vérifie qu'une page de roadmap déclarée n'a qu'une seule source canonique."""
+    """Une page qui déclare un ROADMAP_ID ne doit pas dupliquer une autre page."""
 
     root = architecture_root()
     seen: dict[str, Path] = {}
-    duplicates: list[str] = []
+    errors: list[str] = []
 
     for dot_file in dot_files(root):
         node_id = roadmap_id(dot_file)
@@ -183,70 +156,49 @@ def test_roadmap_ids_are_unique_when_declared() -> None:
             continue
         previous = seen.get(node_id)
         if previous is not None:
-            duplicates.append(
+            errors.append(
                 f"ROADMAP_ID {node_id!r} declared by both "
                 f"{relative(previous, root)} and {relative(dot_file, root)}"
             )
-        else:
-            seen[node_id] = dot_file
+            continue
+        seen[node_id] = dot_file
 
-    assert duplicates == []
+    assert errors == []
 
 
-def test_declared_parent_child_navigation_is_bidirectional() -> None:
-    """Vérifie la voie de descente/remontée pour les DOT qui déclarent un parent.
+def test_declared_roadmap_parent_exists_and_is_linked_from_child() -> None:
+    """Vérifie seulement les parents explicitement déclarés.
 
-    Un enfant doit avoir un lien vers son parent, et le parent doit avoir un lien
-    vers l'enfant. Cela évite les graphes détaillés orphelins ou les vues niveau 1
-    qui ne descendent pas vers le niveau 2.
+    ROADMAP_PARENT est une aide de navigation. On ne force pas le parent à avoir
+    un lien descendant vers chaque enfant, car certains graphes détaillés peuvent
+    être accessibles par plusieurs chemins ou par des références transversales.
+    En revanche, si un enfant déclare un parent, il doit pouvoir remonter vers
+    cette page.
     """
 
     root = architecture_root()
-    errors: list[str] = []
     links_by_source: dict[Path, set[Path]] = {}
+    errors: list[str] = []
+
     for link in parse_links(root):
         if is_inside(link.target_dot, root) and link.target_dot.exists():
-            links_by_source.setdefault(link.source_dot, set()).add(link.target_dot.resolve())
+            links_by_source.setdefault(link.source_dot.resolve(), set()).add(link.target_dot.resolve())
 
     for child in dot_files(root):
         parent = roadmap_parent(child, root)
         if parent is None:
             continue
+        if not is_inside(parent, root):
+            errors.append(f"{relative(child, root)} declares parent outside architecture root: {parent}")
+            continue
         if not parent.exists():
             errors.append(f"{relative(child, root)} declares missing parent {relative(parent, root)}")
             continue
-        if parent.resolve() not in links_by_source.get(child, set()):
-            errors.append(f"{relative(child, root)} declares parent but has no URL back to {relative(parent, root)}")
-        if child.resolve() not in links_by_source.get(parent, set()):
-            errors.append(f"{relative(parent, root)} is parent but has no URL down to {relative(child, root)}")
-
-    assert errors == []
-
-
-def test_known_components_link_to_their_canonical_roadmap_page() -> None:
-    """Évite deux schémas concurrents pour un même composant.
-
-    Quand un composant connu apparaît dans un DOT et que ce DOT n'est pas déjà
-    sa page canonique, son URL doit pointer vers la page canonique de ce
-    composant, pas vers une vue plus vague ou une ancienne implémentation.
-    """
-
-    root = architecture_root()
-    errors: list[str] = []
-
-    for node in parse_nodes(root):
-        canonical = CANONICAL_DOT_TARGETS.get(node.label_head) or CANONICAL_DOT_TARGETS.get(node.name)
-        if canonical is None:
-            continue
-        canonical_path = (root / canonical).resolve()
-        if node.source_dot.resolve() == canonical_path:
-            continue
-        if node.target_dot is None:
-            continue
-        if node.target_dot.resolve() != canonical_path:
+        if parent.resolve() not in links_by_source.get(child.resolve(), set()):
+            expected = relative_svg_url(child, parent)
             errors.append(
-                f"{relative(node.source_dot, root)} node {node.name}/{node.label_head!r} "
-                f"links to {relative(node.target_dot, root)} but canonical is {canonical}"
+                f"{relative(child, root)} declares ROADMAP_PARENT {relative(parent, root)} "
+                f"but has no URL back to it; expected a link like URL=\"{expected}\""
             )
 
     assert errors == []

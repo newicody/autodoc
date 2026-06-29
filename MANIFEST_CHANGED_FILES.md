@@ -1,28 +1,32 @@
-# Phase 2.4bis — Changed files
+# Manifest — Phase 2.4c
 
-## Tests
+## Fichiers modifiés
 
-- `tests/docs/test_dot_links.py`
+```text
+tests/docs/test_dot_links.py
 
-## DOT roadmap
+doc/CHANGELOG_PHASE2_4C.md
 
-- `doc/docs/architecture/00_global.dot`
-- `doc/docs/architecture/scheduler/10_scheduler.dot`
-- `doc/docs/architecture/scheduler/component_proxy/14_component_proxy.dot`
-- `doc/docs/architecture/scheduler/dispatcher/11_dispatcher.dot`
-- `doc/docs/architecture/scheduler/event_bus/12_event_bus.dot`
-- `doc/docs/architecture/scheduler/priority_queue/13_priority_queue.dot`
-- `doc/docs/architecture/observability/70_observability.dot`
-- `doc/docs/architecture/services/30_services.dot`
-- `doc/docs/architecture/experts/40_experts.dot`
-- `doc/docs/architecture/inference/40_inference.dot`
+doc/docs/architecture/context/20_context.dot
+doc/docs/architecture/context/21_collector.dot
+doc/docs/architecture/context/22_reducer.dot
+doc/docs/architecture/context/23_snapshot.dot
+doc/docs/architecture/context/24_decision_engine.dot
 
-## Documentation
+doc/docs/architecture/scheduler/11_dispatcher.dot
+doc/docs/architecture/scheduler/12_event_bus.dot
+doc/docs/architecture/scheduler/13_priority_queue.dot
+doc/docs/architecture/scheduler/14_component_proxy.dot
+```
 
-- `doc/CHANGELOG_PHASE2_4BIS.md`
+## Non modifié
 
-## Notes
+```text
+src/**
+*.svg
+makefile
+```
 
-No SVG files are included.
-No patch script is included.
-No runtime source file is modified.
+## Intention
+
+Corriger uniquement la cohérence de navigation DOT et le test associé.
