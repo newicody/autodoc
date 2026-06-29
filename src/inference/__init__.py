@@ -9,6 +9,11 @@ from .model_profile import (
     OpenVINOModelProfileRegistrySnapshot,
     SUPPORTED_OPENVINO_TASKS,
 )
+from .openvino_factory import (
+    OpenVINOBackendBuildResult,
+    OpenVINOBackendFactory,
+    OpenVINORuntimeFactory,
+)
 from .openvino_backend import (
     OpenVINOBackend,
     OpenVINOBackendConfig,
@@ -30,6 +35,9 @@ __all__ = [
     "DummyInferenceBackend",
     "InferenceAdapter",
     "InferenceRequestHandler",
+    "OpenVINOBackendBuildResult",
+    "OpenVINOBackendFactory",
+    "OpenVINORuntimeFactory",
     "OpenVINOBackend",
     "OpenVINOBackendConfig",
     "OpenVINOBackendError",

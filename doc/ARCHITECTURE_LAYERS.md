@@ -1,14 +1,14 @@
-# Autodoc / MissiPy — Architecture logicielle Phase 3.0
+# Autodoc / MissiPy — Architecture logicielle Phase 3.1
 
-Ce document décrit l'état actuel du prototype après ajout des profils déclaratifs de modèles OpenVINO en Phase 3.0.
+Ce document décrit l'état actuel du prototype après ajout de la factory de backends OpenVINO en Phase 3.1.
 
 La règle centrale reste inchangée : le Scheduler ne contient pas de logique métier. Il orchestre l'entrée des événements, délègue l'autorisation au `PolicyEngine`, route par `PriorityQueue` puis `Dispatcher`, et expose son activité via une observabilité passive.
 
 ## Synthèse courte
 
-État courant : le prototype possède un micro-kernel coopératif testable, un contexte global événementiel, un chemin d'inférence fictif, un registre de backends, une observabilité minimale, une chaîne replay/export isolée, un runtime OpenVINO optionnel et un registre déclaratif de profils modèles.
+État courant : le prototype possède un micro-kernel coopératif testable, un contexte global événementiel, un chemin d'inférence fictif, un registre de backends, une observabilité minimale, une chaîne replay/export isolée, un runtime OpenVINO optionnel, un registre déclaratif de profils modèles et une factory qui transforme explicitement un profil en backend enregistrable.
 
-OpenVINO est intégré sous forme de runtime réel optionnel isolé dans `src/inference/openvino_runtime.py`. La Phase 3.0 ajoute `OpenVINOModelProfileRegistry` pour décrire les modèles possibles sans les charger et sans forcer embedding ou génération.
+OpenVINO est intégré sous forme de runtime réel optionnel isolé dans `src/inference/openvino_runtime.py`. La Phase 3.0 ajoute `OpenVINOModelProfileRegistry` pour décrire les modèles possibles sans les charger. La Phase 3.1 ajoute `OpenVINOBackendFactory` pour construire et enregistrer explicitement un backend depuis un profil sélectionné.
 
 ## Layer 0 — Hardware target
 
@@ -171,19 +171,21 @@ InferenceRequestHandler
   -> EventBus.publish(Event(INFERENCE_RESULT, payload=InferenceResult))
 ```
 
-Préparation OpenVINO Phase 3.0 :
+Préparation OpenVINO Phase 3.1 :
 
 ```text
 OpenVINOModelProfileRegistry
   -> OpenVINOModelProfile
+  -> OpenVINOBackendFactory
   -> OpenVINOBackendConfig
   -> OpenVINOBackend
+  -> BackendRegistry.register()
   -> RealOpenVINORuntime optionnel
   -> Core / CompiledModel
   -> InferenceResult
 ```
 
-Le registre de profils ne remplace pas `BackendRegistry` : il décrit les modèles possibles, tandis que `BackendRegistry` contient les backends exécutables réellement enregistrés.
+Le registre de profils ne remplace pas `BackendRegistry` : il décrit les modèles possibles. La factory est le pont explicite entre les deux. `BackendRegistry` contient seulement les backends exécutables réellement enregistrés.
 
 État actuel du runtime réel :
 
@@ -199,7 +201,7 @@ RealOpenVINORuntime
 
 OpenVINO ne doit jamais être appelé directement par le Scheduler, le Dispatcher ou le ComponentProxy. `OpenVINOBackend` n'importe toujours pas `openvino` : seul `RealOpenVINORuntime` est autorisé à le faire.
 
-Limite volontaire : aucun tokenizer et aucun modèle local ne sont encore intégrés. Le choix est seulement déclaratif via profils `embedding`, `generation` ou `raw`. Le runtime réel attend toujours des entrées brutes dans `InferenceRequest.context["inputs"]` ou `InferenceRequest.metadata["inputs"]`.
+Limite volontaire : aucun tokenizer et aucun modèle local ne sont encore intégrés. Le choix est déclaratif via profils `embedding`, `generation` ou `raw`, puis activé explicitement par la factory. Le runtime réel attend toujours des entrées brutes dans `InferenceRequest.context["inputs"]` ou `InferenceRequest.metadata["inputs"]`.
 
 ## Layer 6 — Experts
 

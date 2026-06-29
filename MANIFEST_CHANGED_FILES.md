@@ -1,52 +1,30 @@
-# Phase 3.0 — Fichiers modifiés
+# Manifest — Phase 3.1 Backend factory
 
-## Code
+Changed files only. No generated SVG. No patch script.
 
-```text
-src/inference/model_profile.py
-src/inference/__init__.py
-```
+## Runtime / source
+
+- `src/inference/openvino_factory.py`
+- `src/inference/__init__.py`
 
 ## Tests
 
-```text
-tests/inference/test_openvino_model_profile.py
-pytest.ini
-```
+- `tests/inference/test_openvino_backend_factory.py`
 
 ## Documentation
 
-```text
-README.md
-doc/ARCHITECTURE_LAYERS.md
-doc/OPENVINO_MODEL_STRATEGY.md
-doc/MODEL_PROFILES_PHASE3_0.md
-doc/CHANGELOG_PHASE3_0_MODEL_PROFILES.md
-```
+- `README.md`
+- `doc/ARCHITECTURE_LAYERS.md`
+- `doc/OPENVINO_MODEL_STRATEGY.md`
+- `doc/MODEL_PROFILES_PHASE3_0.md`
+- `doc/MODEL_FACTORY_PHASE3_1.md`
+- `doc/CHANGELOG_PHASE3_1_BACKEND_FACTORY.md`
+- `doc/docs/architecture/inference/40_inference.dot`
+- `doc/docs/architecture/inference/41_openvino_backend.dot`
+- `doc/docs/architecture/inference/43_openvino_profiles.dot`
+- `doc/docs/architecture/tests/80_tests.dot`
 
-## Roadmap DOT
+## Reports
 
-```text
-doc/docs/architecture/00_global.dot
-doc/docs/architecture/inference/40_inference.dot
-doc/docs/architecture/inference/41_openvino_backend.dot
-doc/docs/architecture/inference/42_openvino_runtime.dot
-doc/docs/architecture/inference/43_openvino_profiles.dot
-doc/docs/architecture/tests/80_tests.dot
-```
-
-## Rapports
-
-```text
-MANIFEST_CHANGED_FILES.md
-PHASE3_0_TEST_REPORT.md
-```
-
-## Exclusions volontaires
-
-```text
-*.svg
-__pycache__/
-.pytest_cache/
-patch scripts
-```
+- `PHASE3_1_TEST_REPORT.md`
+- `MANIFEST_CHANGED_FILES.md`

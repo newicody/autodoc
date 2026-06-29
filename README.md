@@ -6,7 +6,7 @@ L'objectif n'est pas de construire une application Python monolithique, mais un 
 
 ## État courant
 
-État de référence : **Phase 3.0 OpenVINO model profiles**.
+État de référence : **Phase 3.1 OpenVINO backend factory**.
 
 Le prototype possède actuellement :
 
@@ -23,9 +23,10 @@ Le prototype possède actuellement :
 - un `BackendRegistry` ;
 - un contrat `OpenVINOBackend` ;
 - un `RealOpenVINORuntime` optionnel, isolé dans `src/inference/openvino_runtime.py`, sans modèle imposé ;
-- un `OpenVINOModelProfileRegistry` déclaratif pour préparer un ou plusieurs modèles sans les charger.
+- un `OpenVINOModelProfileRegistry` déclaratif pour préparer un ou plusieurs modèles sans les charger ;
+- un `OpenVINOBackendFactory` qui transforme explicitement un profil en backend enregistrable.
 
-OpenVINO est branché comme runtime générique à entrées brutes. Le choix du ou des modèles est maintenant décrit par profils déclaratifs : `embedding`, `generation` ou `raw`. Aucun tokenizer, post-processing ou modèle précis n’est encore imposé.
+OpenVINO est branché comme runtime générique à entrées brutes. Le choix du ou des modèles est décrit par profils déclaratifs : `embedding`, `generation` ou `raw`. La Phase 3.1 ajoute le pont contrôlé entre profil et `BackendRegistry`, sans tokenizer, post-processing ou modèle précis imposé.
 
 ## Règle d'architecture
 
@@ -73,6 +74,7 @@ cd doc && make -f makefile
 - `doc/PROJECT_REVIEW_PHASE2_6.md` : audit du modèle actuel.
 - `doc/OPENVINO_MODEL_STRATEGY.md` : stratégie proposée avant choix du ou des modèles OpenVINO.
 - `doc/MODEL_PROFILES_PHASE3_0.md` : contrat des profils déclaratifs OpenVINO.
+- `doc/MODEL_FACTORY_PHASE3_1.md` : construction contrôlée de backends depuis les profils.
 - `doc/docs/architecture/*.dot` : roadmap DOT navigable ; les SVG sont générés par le makefile.
 
 ## Développement

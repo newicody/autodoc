@@ -82,3 +82,26 @@ Le `Scheduler`, le `Dispatcher`, le `ComponentProxy`, le `InferenceRequestHandle
 La recommandation reste : commencer par `embedding` avant `generation`, mais le code ne force pas cette décision.
 
 `embedding` est plus simple à valider et plus utile pour la future base de connaissance/Qdrant. `generation` demandera une phase séparée pour tokenizer, detokenizer, stratégie KV-cache et tests de stabilité.
+
+## Extension Phase 3.1 — Factory de backend
+
+La Phase 3.1 ajoute le pont manquant :
+
+```text
+OpenVINOModelProfile
+  -> OpenVINOBackendFactory
+  -> OpenVINOBackend
+  -> BackendRegistry
+```
+
+Le profil reste déclaratif. La factory décide seulement de construire un backend depuis un profil explicite et un runtime injecté.
+
+Cette séparation évite de confondre :
+
+```text
+modèle connu     = profil dans OpenVINOModelProfileRegistry
+modèle actif     = backend enregistré dans BackendRegistry
+modèle exécuté   = InferenceRequest.model sélectionné par InferenceAdapter
+```
+
+Aucun tokenizer n'est encore ajouté ici.

@@ -142,3 +142,29 @@ Avant d'intégrer OpenVINO réel, il faut savoir :
 - format de sortie attendu.
 
 Sans ces informations, il faut rester sur le runtime brut et les profils déclaratifs Phase 3.0, sans ajouter de tokenizer ou de post-traitement spécifique.
+
+## Phase 3.1 — Activation explicite par factory
+
+La Phase 3.1 ajoute :
+
+```text
+OpenVINOBackendFactory
+```
+
+Elle ne choisit toujours pas le modèle, mais elle rend possible l'activation contrôlée d'un profil :
+
+```text
+OpenVINOModelProfileRegistry.select("openvino.embedding")
+  -> OpenVINOBackendFactory.build_and_register(...)
+  -> BackendRegistry
+```
+
+Cela permet de préparer plusieurs profils sans enregistrer tous les backends au démarrage.
+
+La décision d'architecture devient donc :
+
+```text
+profil déclaré != backend actif
+```
+
+Un modèle n'est actif que si la configuration de lancement ou une décision explicite demande sa construction.
