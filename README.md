@@ -6,7 +6,7 @@ L'objectif n'est pas de construire une application Python monolithique, mais un 
 
 ## État courant
 
-État de référence : **Phase 3.1 OpenVINO backend factory**.
+État de référence : **Phase 3.3 embedding raw IO**.
 
 Le prototype possède actuellement :
 
@@ -25,9 +25,10 @@ Le prototype possède actuellement :
 - un `RealOpenVINORuntime` optionnel, isolé dans `src/inference/openvino_runtime.py`, sans modèle imposé ;
 - un `OpenVINOModelProfileRegistry` déclaratif pour préparer un ou plusieurs modèles sans les charger ;
 - un `OpenVINOBackendFactory` qui transforme explicitement un profil en backend enregistrable ;
-- un `OpenVINOEmbeddingProfileConfig` configurable, sans modèle local imposé.
+- un `OpenVINOEmbeddingProfileConfig` configurable, sans modèle local imposé ;
+- un contrat embedding raw pour `input_ids` / `attention_mask` et sortie vecteur.
 
-OpenVINO est branché comme runtime générique à entrées brutes. Le choix du ou des modèles est décrit par profils déclaratifs : `embedding`, `generation` ou `raw`. La Phase 3.1 ajoute le pont contrôlé entre profil et `BackendRegistry`, sans tokenizer, post-processing ou modèle précis imposé. La Phase 3.2 ajoute une configuration spécialisée pour déclarer un profil `openvino.embedding` local, toujours sans chemin en dur ni chargement automatique.
+OpenVINO est branché comme runtime générique à entrées brutes. Le choix du ou des modèles est décrit par profils déclaratifs : `embedding`, `generation` ou `raw`. La Phase 3.1 ajoute le pont contrôlé entre profil et `BackendRegistry`, sans tokenizer, post-processing ou modèle précis imposé. La Phase 3.2 ajoute une configuration spécialisée pour déclarer un profil `openvino.embedding` local, toujours sans chemin en dur ni chargement automatique. La Phase 3.3 ajoute la couche IO raw : tokens déjà préparés -> `InferenceRequest.context["inputs"]` -> sortie brute -> vecteur embedding stable.
 
 ## Règle d'architecture
 
@@ -77,6 +78,7 @@ cd doc && make -f makefile
 - `doc/MODEL_PROFILES_PHASE3_0.md` : contrat des profils déclaratifs OpenVINO.
 - `doc/MODEL_FACTORY_PHASE3_1.md` : construction contrôlée de backends depuis les profils.
 - `doc/MODEL_EMBEDDING_PROFILE_PHASE3_2.md` : configuration déclarative d’un profil embedding OpenVINO.
+- `doc/MODEL_EMBEDDING_RAW_PHASE3_3.md` : contrat IO raw pour entrées tokenisées et sortie vecteur.
 - `doc/docs/architecture/*.dot` : roadmap DOT navigable ; les SVG sont générés par le makefile.
 
 ## Développement

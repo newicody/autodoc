@@ -1,44 +1,33 @@
-# Phase 3.2 — Changed files only
+# Manifest — Phase 3.3 — Embedding raw IO
 
-## Added
+Changed files only. No SVG. No patch script.
 
-```text
-src/inference/embedding_profile.py
-tests/inference/test_openvino_embedding_profile.py
-doc/MODEL_EMBEDDING_PROFILE_PHASE3_2.md
-doc/CHANGELOG_PHASE3_2_EMBEDDING_PROFILE.md
-doc/docs/architecture/inference/44_openvino_embedding_profile.dot
-PHASE3_2_TEST_REPORT.md
-```
+## Runtime / inference
 
-## Modified
+- `src/inference/embedding_raw.py`
+- `src/inference/__init__.py`
 
-```text
-src/inference/__init__.py
-README.md
-doc/ARCHITECTURE_LAYERS.md
-doc/OPENVINO_MODEL_STRATEGY.md
-doc/MODEL_PROFILES_PHASE3_0.md
-doc/MODEL_FACTORY_PHASE3_1.md
-doc/docs/architecture/inference/40_inference.dot
-doc/docs/architecture/inference/43_openvino_profiles.dot
-doc/docs/architecture/tests/80_tests.dot
-```
+## Tests
 
-## Not included
+- `tests/inference/test_openvino_embedding_raw.py`
 
-```text
-no SVG
-no patch script
-no __pycache__
-no runtime model file
-```
+## Documentation
 
-## Validation
+- `README.md`
+- `doc/ARCHITECTURE_LAYERS.md`
+- `doc/OPENVINO_MODEL_STRATEGY.md`
+- `doc/MODEL_EMBEDDING_PROFILE_PHASE3_2.md`
+- `doc/MODEL_EMBEDDING_RAW_PHASE3_3.md`
+- `doc/CHANGELOG_PHASE3_3_EMBEDDING_RAW.md`
 
-```text
-compileall OK
-91 passed in 1.00s
-main.py exit code: 0
-DOT_OK
-```
+## Roadmap DOT sources
+
+- `doc/docs/architecture/inference/40_inference.dot`
+- `doc/docs/architecture/inference/44_openvino_embedding_profile.dot`
+- `doc/docs/architecture/inference/45_openvino_embedding_raw.dot`
+- `doc/docs/architecture/tests/80_tests.dot`
+
+## Reports
+
+- `PHASE3_3_TEST_REPORT.md`
+- `MANIFEST_CHANGED_FILES.md`

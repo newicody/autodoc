@@ -147,3 +147,8 @@ Le Scheduler ne change pas.
 On confirme la recommandation : commencer par `embedding` avant `generation`.
 Mais le code reste multi-profils : il n'empêche pas d'ajouter ensuite
 `openvino.generation` ou plusieurs profils embedding concurrents.
+
+
+## Extension Phase 3.3
+
+Le profil embedding décrit le modèle possible. La Phase 3.3 ajoute ensuite la couche `OpenVINOEmbeddingRawInputs` et `OpenVINOEmbeddingOutputAdapter` pour transporter les tokens déjà préparés et transformer une sortie brute en vecteur. Le tokenizer réel reste volontairement hors de cette phase.

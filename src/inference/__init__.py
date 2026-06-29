@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from .adapter import InferenceAdapter
 from .backend import DummyInferenceBackend
+from .embedding_raw import (
+    OpenVINOEmbeddingOutputAdapter,
+    OpenVINOEmbeddingOutputConfig,
+    OpenVINOEmbeddingRawInputs,
+    OpenVINOEmbeddingVector,
+)
 from .embedding_profile import (
     DEFAULT_EMBEDDING_INPUT_NAMES,
     DEFAULT_EMBEDDING_OUTPUT_NAMES,
@@ -40,6 +46,10 @@ __all__ = [
     "DEFAULT_EMBEDDING_INPUT_NAMES",
     "DEFAULT_EMBEDDING_OUTPUT_NAMES",
     "SUPPORTED_EMBEDDING_POOLING",
+    "OpenVINOEmbeddingOutputAdapter",
+    "OpenVINOEmbeddingOutputConfig",
+    "OpenVINOEmbeddingRawInputs",
+    "OpenVINOEmbeddingVector",
     "OpenVINOEmbeddingProfileConfig",
     "register_openvino_embedding_profile",
     "BackendRegistry",

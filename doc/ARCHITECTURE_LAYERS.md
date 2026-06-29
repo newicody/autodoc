@@ -1,14 +1,14 @@
-# Autodoc / MissiPy — Architecture logicielle Phase 3.2
+# Autodoc / MissiPy — Architecture logicielle Phase 3.3
 
-Ce document décrit l'état actuel du prototype après ajout du profil embedding OpenVINO configurable en Phase 3.2.
+Ce document décrit l'état actuel du prototype après ajout du contrat embedding raw en Phase 3.3.
 
 La règle centrale reste inchangée : le Scheduler ne contient pas de logique métier. Il orchestre l'entrée des événements, délègue l'autorisation au `PolicyEngine`, route par `PriorityQueue` puis `Dispatcher`, et expose son activité via une observabilité passive.
 
 ## Synthèse courte
 
-État courant : le prototype possède un micro-kernel coopératif testable, un contexte global événementiel, un chemin d'inférence fictif, un registre de backends, une observabilité minimale, une chaîne replay/export isolée, un runtime OpenVINO optionnel, un registre déclaratif de profils modèles et une factory qui transforme explicitement un profil en backend enregistrable, et une configuration spécialisée pour déclarer un profil `openvino.embedding` sans modèle imposé.
+État courant : le prototype possède un micro-kernel coopératif testable, un contexte global événementiel, un chemin d'inférence fictif, un registre de backends, une observabilité minimale, une chaîne replay/export isolée, un runtime OpenVINO optionnel, un registre déclaratif de profils modèles et une factory qui transforme explicitement un profil en backend enregistrable, et une configuration spécialisée pour déclarer un profil `openvino.embedding` sans modèle imposé, et une couche IO raw pour tokens déjà préparés et vecteurs embedding stables.
 
-OpenVINO est intégré sous forme de runtime réel optionnel isolé dans `src/inference/openvino_runtime.py`. La Phase 3.0 ajoute `OpenVINOModelProfileRegistry` pour décrire les modèles possibles sans les charger. La Phase 3.1 ajoute `OpenVINOBackendFactory` pour construire et enregistrer explicitement un backend depuis un profil sélectionné. La Phase 3.2 ajoute `OpenVINOEmbeddingProfileConfig` pour décrire un modèle d'embedding local configurable sans tokenizer ni chemin en dur.
+OpenVINO est intégré sous forme de runtime réel optionnel isolé dans `src/inference/openvino_runtime.py`. La Phase 3.0 ajoute `OpenVINOModelProfileRegistry` pour décrire les modèles possibles sans les charger. La Phase 3.1 ajoute `OpenVINOBackendFactory` pour construire et enregistrer explicitement un backend depuis un profil sélectionné. La Phase 3.2 ajoute `OpenVINOEmbeddingProfileConfig` pour décrire un modèle d'embedding local configurable sans tokenizer ni chemin en dur. La Phase 3.3 ajoute `OpenVINOEmbeddingRawInputs` et `OpenVINOEmbeddingOutputAdapter` pour séparer tokens, inférence brute et vecteur final.
 
 ## Layer 0 — Hardware target
 
@@ -177,6 +177,7 @@ Préparation OpenVINO Phase 3.1 :
 OpenVINOModelProfileRegistry
   -> OpenVINOModelProfile
   -> OpenVINOEmbeddingProfileConfig optionnel
+  -> OpenVINOEmbeddingRawInputs optionnel
   -> OpenVINOBackendFactory
   -> OpenVINOBackendConfig
   -> OpenVINOBackend
@@ -202,7 +203,7 @@ RealOpenVINORuntime
 
 OpenVINO ne doit jamais être appelé directement par le Scheduler, le Dispatcher ou le ComponentProxy. `OpenVINOBackend` n'importe toujours pas `openvino` : seul `RealOpenVINORuntime` est autorisé à le faire.
 
-Limite volontaire : aucun tokenizer et aucun modèle local ne sont encore intégrés. Le choix est déclaratif via profils `embedding`, `generation` ou `raw`, puis activé explicitement par la factory. La Phase 3.2 fournit seulement un format configurable pour un profil embedding local. Le runtime réel attend toujours des entrées brutes dans `InferenceRequest.context["inputs"]` ou `InferenceRequest.metadata["inputs"]`.
+Limite volontaire : aucun tokenizer et aucun modèle local ne sont encore intégrés. Le choix est déclaratif via profils `embedding`, `generation` ou `raw`, puis activé explicitement par la factory. La Phase 3.2 fournit un format configurable pour un profil embedding local. La Phase 3.3 fournit le contrat raw pour transporter `input_ids`, `attention_mask`, `token_type_ids` optionnel et pour transformer une sortie brute en `OpenVINOEmbeddingVector`. Le runtime réel attend toujours des entrées brutes dans `InferenceRequest.context["inputs"]` ou `InferenceRequest.metadata["inputs"]`.
 
 ## Layer 6 — Experts
 

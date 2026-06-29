@@ -199,3 +199,8 @@ La stratégie reste prudente : on sait maintenant représenter un profil embeddi
 local, mais le runtime OpenVINO réel reste raw-input. La prochaine difficulté
 n'est pas le Scheduler : c'est le pré-traitement texte -> tenseurs, puis le
 post-traitement sortie modèle -> vecteur normalisé.
+
+
+## Phase 3.3 — Embedding raw IO
+
+La stratégie reste : embedding d’abord, génération ensuite. La Phase 3.3 ne choisit toujours pas BGE-M3, E5 ou MiniLM ; elle ajoute seulement le contrat qui permet de tester un modèle embedding déjà tokenisé. Cela évite de confondre le tokenizer, le runtime OpenVINO et le post-traitement du vecteur.

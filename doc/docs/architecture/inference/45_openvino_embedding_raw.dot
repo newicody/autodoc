@@ -1,0 +1,83 @@
+digraph OpenVINOEmbeddingRaw {
+    // ROADMAP_ID: inference.openvino_embedding_raw
+    // ROADMAP_PARENT: inference/44_openvino_embedding_profile.dot
+    // ROADMAP_NOTE[phase3_3]:
+    // Cette page décrit la couche IO raw embedding. Elle ne tokenise pas, ne
+    // choisit pas le modèle et ne branche pas Qdrant. Elle stabilise seulement
+    // le passage tokens -> inputs OpenVINO et sortie brute -> vecteur.
+
+    rankdir=TB;
+    splines=ortho;
+
+    graph [fontname="Arial", fontsize=11];
+    node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10];
+    edge [fontname="Arial", fontsize=9, arrowsize=0.7];
+
+    subgraph cluster_inputs {
+        label="Entrées déjà tokenisées";
+        color="#2e7d32";
+        bgcolor="#e8f5e9";
+        node [fillcolor="#e8f5e9", color="#2e7d32"];
+
+        RawInputs [label="OpenVINOEmbeddingRawInputs\ninput_ids / attention_mask / token_type_ids?"];
+        ShapeChecks [label="shape checks\n2D rectangular + same shape"];
+        ToInputs [label="to_openvino_inputs()\nprofile input names"];
+        ToRequest [label="to_inference_request()\ncontext['inputs']"];
+    }
+
+    subgraph cluster_runtime_bridge {
+        label="Pont runtime brut";
+        color="#6d4c41";
+        bgcolor="#efebe9";
+        node [fillcolor="#efebe9", color="#6d4c41"];
+
+        Request [label="InferenceRequest\nraw inputs", URL="40_inference.svg"];
+        Runtime [label="RealOpenVINORuntime\ncompiled_model(inputs)", URL="42_openvino_runtime.svg"];
+        RawOutputs [label="raw OpenVINO outputs\nmapping / vector / tensor-like"];
+    }
+
+    subgraph cluster_outputs {
+        label="Sortie vecteur";
+        color="#00838f";
+        bgcolor="#e0f7fa";
+        node [fillcolor="#e0f7fa", color="#00838f"];
+
+        OutputConfig [label="OpenVINOEmbeddingOutputConfig\noutput_names / pooling / normalize"];
+        OutputAdapter [label="OpenVINOEmbeddingOutputAdapter\nextract(raw_outputs)"];
+        Pooling [label="pooling\nmodel / none / cls / mean"];
+        Vector [label="OpenVINOEmbeddingVector\nvalues / dimension / l2_norm"];
+    }
+
+    subgraph cluster_not_here {
+        label="Toujours hors phase";
+        color="#b71c1c";
+        bgcolor="#ffebee";
+        node [fillcolor="#ffebee", color="#b71c1c"];
+
+        NoTokenizer [label="pas de tokenizer"];
+        NoQdrant [label="pas de Qdrant"];
+        NoModelChoice [label="pas de BGE/E5/MiniLM imposé"];
+    }
+
+    RawInputs -> ShapeChecks;
+    RawInputs -> ToInputs;
+    RawInputs -> ToRequest;
+    ToRequest -> Request;
+    Request -> Runtime [style=dashed, label="backend active later"];
+    Runtime -> RawOutputs [style=dashed];
+    RawOutputs -> OutputAdapter;
+    OutputConfig -> OutputAdapter;
+    OutputAdapter -> Pooling;
+    Pooling -> Vector;
+
+    RawInputs -> NoTokenizer [style=dotted];
+    OutputAdapter -> NoQdrant [style=dotted];
+    RawInputs -> NoModelChoice [style=dotted];
+
+    Nav_EmbeddingProfile [label="Embedding profile", shape=plaintext, URL="44_openvino_embedding_profile.svg"];
+    Nav_Profiles [label="OpenVINO profiles", shape=plaintext, URL="43_openvino_profiles.svg"];
+    Nav_Inference [label="Inference", shape=plaintext, URL="40_inference.svg"];
+    Nav_Global [label="Global", shape=plaintext, URL="../00_global.svg"];
+
+    { rank=sink; Nav_EmbeddingProfile; Nav_Profiles; Nav_Inference; Nav_Global; }
+}
