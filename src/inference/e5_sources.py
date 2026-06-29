@@ -11,6 +11,19 @@ from .e5_corpus import E5CorpusDocument
 from .e5_text import E5Text
 
 SUPPORTED_E5_SOURCE_EXTENSIONS: tuple[str, ...] = (".md", ".markdown", ".txt")
+DEFAULT_E5_EXCLUDED_DIR_NAMES: tuple[str, ...] = (
+    ".git",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+    ".venv",
+    "venv",
+    "build",
+    "dist",
+)
+DEFAULT_E5_EXCLUDED_FILE_SUFFIXES: tuple[str, ...] = (".pyc", ".pyo", ".svg")
 
 
 def _empty_mapping() -> Mapping[str, Any]:
@@ -19,6 +32,28 @@ def _empty_mapping() -> Mapping[str, Any]:
 
 def _freeze_mapping(value: Mapping[str, Any]) -> Mapping[str, Any]:
     return MappingProxyType(dict(value))
+
+
+@dataclass(frozen=True, slots=True)
+class E5SourceDiscoveryConfig:
+    """Configuration déterministe de découverte des sources E5 locales."""
+
+    extensions: Sequence[str] = SUPPORTED_E5_SOURCE_EXTENSIONS
+    recursive: bool = True
+    excluded_dir_names: Sequence[str] = DEFAULT_E5_EXCLUDED_DIR_NAMES
+    excluded_file_suffixes: Sequence[str] = DEFAULT_E5_EXCLUDED_FILE_SUFFIXES
+
+    @property
+    def normalized_extensions(self) -> frozenset[str]:
+        return _normalize_extensions(self.extensions)
+
+    @property
+    def normalized_excluded_dir_names(self) -> frozenset[str]:
+        return _normalize_dir_names(self.excluded_dir_names)
+
+    @property
+    def normalized_excluded_file_suffixes(self) -> frozenset[str]:
+        return _normalize_suffixes(self.excluded_file_suffixes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,7 +74,6 @@ class E5SourceDocument:
     @property
     def source_id(self) -> str:
         """Identifiant stable court du fichier source."""
-
         digest = sha256(self.path.encode("utf-8")).hexdigest()[:12]
         return f"source-{digest}"
 
@@ -72,7 +106,6 @@ class E5TextChunk:
 
     def to_corpus_document(self) -> E5CorpusDocument:
         """Convertit le chunk en document passage pour E5CorpusBuilder."""
-
         metadata = {
             "source_path": self.source_path,
             "chunk_index": self.chunk_index,
@@ -92,21 +125,41 @@ def discover_e5_source_files(
     *,
     extensions: Sequence[str] = SUPPORTED_E5_SOURCE_EXTENSIONS,
     recursive: bool = True,
+    excluded_dir_names: Sequence[str] = DEFAULT_E5_EXCLUDED_DIR_NAMES,
+    excluded_file_suffixes: Sequence[str] = DEFAULT_E5_EXCLUDED_FILE_SUFFIXES,
 ) -> tuple[Path, ...]:
     """Découvre les fichiers texte indexables avec ordre stable."""
+    config = E5SourceDiscoveryConfig(
+        extensions=extensions,
+        recursive=recursive,
+        excluded_dir_names=excluded_dir_names,
+        excluded_file_suffixes=excluded_file_suffixes,
+    )
+    normalized_extensions = config.normalized_extensions
+    normalized_excluded_dir_names = config.normalized_excluded_dir_names
+    normalized_excluded_file_suffixes = config.normalized_excluded_file_suffixes
 
-    normalized_extensions = _normalize_extensions(extensions)
     files: set[Path] = set()
     for raw_path in paths:
         path = Path(raw_path)
         if path.is_file():
-            if path.suffix.lower() in normalized_extensions:
+            if _is_supported_source(
+                path,
+                normalized_extensions,
+                normalized_excluded_dir_names,
+                normalized_excluded_file_suffixes,
+            ):
                 files.add(path.resolve())
             continue
         if path.is_dir():
-            pattern = "**/*" if recursive else "*"
+            pattern = "**/*" if config.recursive else "*"
             for candidate in path.glob(pattern):
-                if candidate.is_file() and candidate.suffix.lower() in normalized_extensions:
+                if candidate.is_file() and _is_supported_source(
+                    candidate,
+                    normalized_extensions,
+                    normalized_excluded_dir_names,
+                    normalized_excluded_file_suffixes,
+                ):
                     files.add(candidate.resolve())
             continue
         raise FileNotFoundError(path)
@@ -119,10 +172,17 @@ def load_e5_source_documents(
     extensions: Sequence[str] = SUPPORTED_E5_SOURCE_EXTENSIONS,
     recursive: bool = True,
     root: str | Path | None = None,
+    excluded_dir_names: Sequence[str] = DEFAULT_E5_EXCLUDED_DIR_NAMES,
+    excluded_file_suffixes: Sequence[str] = DEFAULT_E5_EXCLUDED_FILE_SUFFIXES,
 ) -> tuple[E5SourceDocument, ...]:
     """Charge des fichiers Markdown/TXT en documents sources."""
-
-    files = discover_e5_source_files(paths, extensions=extensions, recursive=recursive)
+    files = discover_e5_source_files(
+        paths,
+        extensions=extensions,
+        recursive=recursive,
+        excluded_dir_names=excluded_dir_names,
+        excluded_file_suffixes=excluded_file_suffixes,
+    )
     base = Path(root).resolve() if root is not None else None
     documents: list[E5SourceDocument] = []
     for path in files:
@@ -151,16 +211,13 @@ def chunk_e5_source_document(
     overlap_paragraphs: int = 0,
 ) -> tuple[E5TextChunk, ...]:
     """Découpe un document source en chunks déterministes par paragraphes."""
-
     if max_chars <= 0:
         raise ValueError("max_chars must be positive")
     if overlap_paragraphs < 0:
         raise ValueError("overlap_paragraphs must be zero or positive")
-
     paragraphs = _paragraphs(document.text)
     if not paragraphs:
         return ()
-
     chunks: list[E5TextChunk] = []
     position = 0
     while position < len(paragraphs):
@@ -178,7 +235,6 @@ def chunk_e5_source_document(
                 )
             position += 1
             continue
-
         window: list[_Paragraph] = [paragraph]
         cursor = position + 1
         while cursor < len(paragraphs):
@@ -187,7 +243,6 @@ def chunk_e5_source_document(
                 break
             window.append(paragraphs[cursor])
             cursor += 1
-
         chunks.append(_make_chunk(document, tuple(window), chunk_index=len(chunks) + 1))
         if cursor >= len(paragraphs):
             break
@@ -195,8 +250,8 @@ def chunk_e5_source_document(
         if next_position <= position:
             next_position = position + 1
         position = next_position
-
     return tuple(chunks)
+
 
 def chunk_e5_sources(
     documents: Sequence[E5SourceDocument],
@@ -205,7 +260,6 @@ def chunk_e5_sources(
     overlap_paragraphs: int = 0,
 ) -> tuple[E5TextChunk, ...]:
     """Découpe plusieurs sources en chunks dans un ordre déterministe."""
-
     chunks: list[E5TextChunk] = []
     for document in documents:
         chunks.extend(chunk_e5_source_document(document, max_chars=max_chars, overlap_paragraphs=overlap_paragraphs))
@@ -220,10 +274,18 @@ def load_e5_corpus_documents_from_sources(
     root: str | Path | None = None,
     max_chars: int = 1200,
     overlap_paragraphs: int = 0,
+    excluded_dir_names: Sequence[str] = DEFAULT_E5_EXCLUDED_DIR_NAMES,
+    excluded_file_suffixes: Sequence[str] = DEFAULT_E5_EXCLUDED_FILE_SUFFIXES,
 ) -> tuple[E5CorpusDocument, ...]:
     """Charge, découpe et convertit des sources locales en passages de corpus."""
-
-    sources = load_e5_source_documents(paths, extensions=extensions, recursive=recursive, root=root)
+    sources = load_e5_source_documents(
+        paths,
+        extensions=extensions,
+        recursive=recursive,
+        root=root,
+        excluded_dir_names=excluded_dir_names,
+        excluded_file_suffixes=excluded_file_suffixes,
+    )
     return tuple(
         chunk.to_corpus_document()
         for chunk in chunk_e5_sources(sources, max_chars=max_chars, overlap_paragraphs=overlap_paragraphs)
@@ -249,6 +311,48 @@ def _normalize_extensions(extensions: Sequence[str]) -> frozenset[str]:
     if not normalized:
         raise ValueError("at least one extension is required")
     return frozenset(normalized)
+
+
+def _normalize_dir_names(names: Sequence[str]) -> frozenset[str]:
+    return frozenset(item.strip() for item in names if item.strip())
+
+
+def _normalize_suffixes(suffixes: Sequence[str]) -> frozenset[str]:
+    normalized = []
+    for suffix in suffixes:
+        item = suffix.strip().lower()
+        if not item:
+            continue
+        if "." not in item:
+            item = f".{item}"
+        normalized.append(item)
+    return frozenset(normalized)
+
+
+def _is_supported_source(
+    path: Path,
+    extensions: frozenset[str],
+    excluded_dir_names: frozenset[str],
+    excluded_file_suffixes: frozenset[str],
+) -> bool:
+    if _has_excluded_parent(path, excluded_dir_names):
+        return False
+    if _has_excluded_suffix(path, excluded_file_suffixes):
+        return False
+    return path.suffix.lower() in extensions
+
+
+def _has_excluded_parent(path: Path, excluded_dir_names: frozenset[str]) -> bool:
+    if not excluded_dir_names:
+        return False
+    return any(part in excluded_dir_names for part in path.parts[:-1])
+
+
+def _has_excluded_suffix(path: Path, excluded_file_suffixes: frozenset[str]) -> bool:
+    if not excluded_file_suffixes:
+        return False
+    name = path.name.lower()
+    return any(name.endswith(suffix) for suffix in excluded_file_suffixes)
 
 
 def _stable_path(path: Path, *, base: Path | None) -> str:

@@ -1,0 +1,134 @@
+digraph E5SourceHygiene {
+  // ROADMAP_ID: inference.e5_source_hygiene
+  // ROADMAP_PARENT: inference/51_e5_sources.dot
+  // ROADMAP_NOTE[phase4_4]:
+  // Hygiène déterministe de découverte des sources avant lecture, chunking et
+  // construction du corpus local E5.
+
+  rankdir=LR;
+  graph [
+    fontname="Arial",
+    fontsize=10,
+    labelloc="t",
+    label="Phase 4.4 — E5 source hygiene",
+    bgcolor="white",
+    pad=0.25,
+    nodesep=0.45,
+    ranksep=0.75
+  ];
+  node [shape=box, style="filled,rounded", fontname="Arial", fontsize=10, margin="0.09,0.06"];
+  edge [fontname="Arial", fontsize=9, color="#455a64", arrowsize=0.8];
+
+  subgraph cluster_input {
+    label="Entrées développeur";
+    color="#1565c0";
+    bgcolor="#e3f2fd";
+    penwidth=1.5;
+    node [fillcolor="#e3f2fd", color="#1565c0"];
+    SourceDir [label="--source-dir .\ndossier repo"];
+    SourceFile [label="--source-file note.md\nfichier explicite"];
+    Extensions [label="--source-extensions\n.md,.markdown,.txt"];
+  }
+
+  subgraph cluster_config {
+    label="Configuration centrale";
+    color="#6a1b9a";
+    bgcolor="#f3e5f5";
+    penwidth=1.5;
+    node [fillcolor="#f3e5f5", color="#6a1b9a"];
+    Config [label="E5SourceDiscoveryConfig\nstdlib dataclass frozen"];
+    DirDefaults [label="DEFAULT_E5_EXCLUDED_DIR_NAMES\n.git, caches, venv, build, dist"];
+    SuffixDefaults [label="DEFAULT_E5_EXCLUDED_FILE_SUFFIXES\n.pyc, .pyo, .svg"];
+    Normalize [label="normalisation\ntrim + lower + dot prefix"];
+  }
+
+  subgraph cluster_filter {
+    label="Filtrage avant lecture";
+    color="#ad1457";
+    bgcolor="#fce4ec";
+    penwidth=1.7;
+    node [fillcolor="#fce4ec", color="#ad1457"];
+    Candidate [label="candidate path\nPath.glob stable"];
+    ParentCheck [shape=diamond, label="parent dir\nexcluded ?"];
+    SuffixCheck [shape=diamond, label="file suffix\nexcluded ?"];
+    ExtensionCheck [shape=diamond, label="extension\nsupported ?"];
+    Reject [label="reject\nno read_text", style="filled,rounded,dashed"];
+    Keep [label="keep\nresolved path"];
+  }
+
+  subgraph cluster_pipeline {
+    label="Pipeline inchangé";
+    color="#2e7d32";
+    bgcolor="#e8f5e9";
+    penwidth=1.5;
+    node [fillcolor="#e8f5e9", color="#2e7d32"];
+    Read [label="read_text UTF-8\nerrors=replace"];
+    SourceDoc [label="E5SourceDocument\nsource_hash + bytes"];
+    Chunk [label="E5TextChunk\nline ranges"];
+    CorpusDoc [label="E5CorpusDocument\npassage metadata", URL="50_e5_corpus.svg"];
+  }
+
+  subgraph cluster_consumers {
+    label="Consommateurs";
+    color="#6d4c41";
+    bgcolor="#efebe9";
+    penwidth=1.5;
+    node [fillcolor="#efebe9", color="#6d4c41"];
+    Build [label="build_e5_corpus.py", URL="50_e5_corpus.svg"];
+    Rebuild [label="rebuild_e5_corpus.py", URL="56_e5_safe_rebuild.svg"];
+    SearchQuality [label="corpus moins bruité\nmeilleurs diagnostics", URL="57_e5_score_guard.svg"];
+  }
+
+  subgraph cluster_scope {
+    label="Hors périmètre";
+    color="#78909c";
+    bgcolor="#fafafa";
+    penwidth=1.0;
+    node [shape=note, style="filled", fillcolor="#fafafa", color="#78909c"];
+    NoScheduler [label="pas de Scheduler"];
+    NoQdrant [label="pas de Qdrant"];
+    NoFormat [label="format corpus inchangé"];
+    NoSvg [label="pas de SVG versionné"];
+  }
+
+  SourceDir -> Candidate;
+  SourceFile -> Candidate;
+  Extensions -> Config;
+  DirDefaults -> Config;
+  SuffixDefaults -> Config;
+  Config -> Normalize;
+  Normalize -> ParentCheck;
+  Candidate -> ParentCheck;
+  ParentCheck -> Reject [label="oui", style=dashed, color="#ad1457"];
+  ParentCheck -> SuffixCheck [label="non", color="#2e7d32"];
+  SuffixCheck -> Reject [label="oui", style=dashed, color="#ad1457"];
+  SuffixCheck -> ExtensionCheck [label="non", color="#2e7d32"];
+  ExtensionCheck -> Reject [label="non", style=dashed, color="#ad1457"];
+  ExtensionCheck -> Keep [label="oui", color="#2e7d32"];
+  Keep -> Read;
+  Read -> SourceDoc;
+  SourceDoc -> Chunk;
+  Chunk -> CorpusDoc;
+  CorpusDoc -> Build;
+  CorpusDoc -> Rebuild;
+  Build -> SearchQuality;
+  Rebuild -> SearchQuality;
+  NoScheduler -> NoQdrant [style=invis];
+  NoQdrant -> NoFormat [style=invis];
+  NoFormat -> NoSvg [style=invis];
+
+  Nav_Inference [label="Inference", shape=plaintext, URL="40_inference.svg"];
+  Nav_Sources [label="E5 sources", shape=plaintext, URL="51_e5_sources.svg"];
+  Nav_Corpus [label="E5 corpus", shape=plaintext, URL="50_e5_corpus.svg"];
+  Nav_SafeRebuild [label="Safe rebuild", shape=plaintext, URL="56_e5_safe_rebuild.svg"];
+  Nav_ScoreGuard [label="Score guard", shape=plaintext, URL="57_e5_score_guard.svg"];
+  { rank=sink; Nav_Inference; Nav_Sources; Nav_Corpus; Nav_SafeRebuild; Nav_ScoreGuard; }
+
+  // HTML_DETAIL[phase4_4]:
+  // title: Source hygiene
+  // summary: Les sources parasites sont exclues avant lecture et hash.
+  // technical: Le filtrage est centralisé dans e5_sources.py et partagé par build/rebuild.
+  // data: excluded_dirs=.git,__pycache__,.pytest_cache,.mypy_cache,.ruff_cache,.tox,.venv,venv,build,dist
+  // data: excluded_suffixes=.pyc,.pyo,.svg
+  // ui_hint: Rendre les exclusions actives pliables et afficher les chemins rejetés plus tard.
+}
