@@ -1,12 +1,12 @@
-# Autodoc / MissiPy — Architecture logicielle Phase 2.3
+# Autodoc / MissiPy — Architecture logicielle Phase 2.6
 
 Ce document décrit l'état du projet après introduction de `ReplayReportFileWriter`.
 
 La règle centrale reste inchangée : le Scheduler ne contient pas de logique métier. Il orchestre l'entrée des événements, délègue l'autorisation au `PolicyEngine`, route par `PriorityQueue` puis `Dispatcher`, et expose son activité via une observabilité passive.
 
-## Objectif Phase 2.3
+## Objectif Phase 2.6
 
-La Phase 2.3 ajoute une écriture contrôlée des exports replay vers fichiers texte/JSON explicites, sans brancher le replay au Scheduler vivant.
+La Phase 2.6 ajoute le contrat du futur `OpenVINOBackend` sans importer le runtime OpenVINO. Le backend est testé avec un faux runtime injecté afin de verrouiller la forme, l'état et les erreurs avant l'intégration réelle.
 
 Flux ajouté :
 
@@ -184,7 +184,7 @@ Ces services seront des composants ou handlers pilotés par événements. Ils ne
 
 ## Layer 5 — Inference
 
-État actuel : chemin fictif actif avec adapter, policy et télémétrie de kernel.
+État actuel : chemin fictif actif avec adapter, registry, policy et télémétrie de kernel. La forme du futur backend OpenVINO existe aussi, mais elle utilise encore un runtime injecté de test.
 
 ```text
 Component
@@ -196,6 +196,7 @@ Component
   -> Dispatcher
   -> InferenceRequestHandler
   -> InferenceAdapter
+  -> BackendRegistry
   -> DummyInferenceBackend
   -> InferenceResult
   -> Request.reply
@@ -210,17 +211,26 @@ InferenceRequestHandler
   -> EventBus.publish(Event(INFERENCE_RESULT, payload=InferenceResult))
 ```
 
-Cible future :
+Préparation OpenVINO Phase 2.6 :
 
 ```text
 InferenceAdapter
+  -> BackendRegistry
   -> OpenVINOBackend
+  -> OpenVINORuntime injecté
+  -> InferenceResult
+```
+
+Cible future :
+
+```text
+OpenVINORuntime réel
   -> CompiledModel
   -> InferRequestPool
   -> InferenceResult
 ```
 
-OpenVINO ne doit jamais être appelé directement par le Scheduler, le Dispatcher ou le ComponentProxy.
+OpenVINO ne doit jamais être appelé directement par le Scheduler, le Dispatcher ou le ComponentProxy. En Phase 2.6, `OpenVINOBackend` n'importe pas encore `openvino` : il valide seulement le contrat backend et la frontière d'injection du runtime.
 
 ## Layer 6 — Experts
 
@@ -405,3 +415,38 @@ Garanties :
 Cette phase prépare directement OpenVINO : il pourra être ajouté comme backend
 supplémentaire enregistré dans `BackendRegistry`, puis autorisé par `PolicyEngine`,
 sans modifier le chemin kernel.
+
+
+## Phase 2.6 — Contrat OpenVINOBackend sans runtime OpenVINO
+
+La couche inference possède maintenant une classe `OpenVINOBackend` contractuelle.
+Elle n'importe pas `openvino` et n'instancie aucun `CompiledModel`. Elle reçoit un
+runtime injecté compatible avec `OpenVINORuntime`, ce qui permet de tester le
+contrat sans dépendance externe.
+
+Flux préparé :
+
+```text
+InferenceRequestHandler
+  -> InferenceAdapter
+  -> BackendRegistry
+  -> OpenVINOBackend
+  -> OpenVINORuntime injecté
+  -> InferenceResult
+```
+
+Garanties :
+
+- aucun changement dans le Scheduler ;
+- aucun changement dans le Dispatcher ;
+- aucun changement dans le ComponentProxy ;
+- aucun import du runtime OpenVINO réel ;
+- configuration immuable `OpenVINOBackendConfig` ;
+- état observable `OpenVINOBackendState` ;
+- erreurs stables `OpenVINOBackendError` ;
+- tests avec faux runtime déterministe ;
+- possibilité d'enregistrer `OpenVINOBackend` dans `BackendRegistry` sans changer l'adapter.
+
+Cette étape est la dernière préparation structurelle avant l'intégration réelle
+d'OpenVINO. L'étape suivante pourra soit autoriser le modèle `openvino` dans
+`PolicyEngine`, soit brancher le runtime réel derrière `OpenVINORuntime`.

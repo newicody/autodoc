@@ -1,31 +1,32 @@
-# MANIFEST — Phase 2.5 changed files
+# Manifest — Phase 2.6
 
-## Runtime / inference
+## Objet
 
-- `src/inference/registry.py`
-- `src/inference/adapter.py`
-- `src/inference/__init__.py`
-- `src/kernel/launcher.py`
+Contrat `OpenVINOBackend` sans runtime OpenVINO réel.
 
-## Tests
+Cette phase prépare directement l'intégration OpenVINO, mais n'importe pas encore
+`openvino` et ne modifie pas le Scheduler, le Dispatcher ou le ComponentProxy.
 
-- `tests/inference/test_backend_registry.py`
-- `tests/inference/test_dummy_inference.py`
+## Fichiers modifiés
 
-## Documentation
+```text
+src/inference/openvino_backend.py
+src/inference/__init__.py
+tests/inference/test_openvino_backend_contract.py
 
-- `doc/ARCHITECTURE_LAYERS.md`
-- `doc/CHANGELOG_PHASE2_5.md`
+doc/ARCHITECTURE_LAYERS.md
+doc/CHANGELOG_PHASE2_6.md
 
-## Roadmap DOT
-
-- `doc/docs/architecture/00_global.dot`
-- `doc/docs/architecture/inference/40_inference.dot`
-- `doc/docs/architecture/tests/80_tests.dot`
+doc/docs/architecture/inference/40_inference.dot
+doc/docs/architecture/inference/41_openvino_backend.dot
+doc/docs/architecture/tests/80_tests.dot
+```
 
 ## Non inclus
 
-- Aucun `.svg`
-- Aucun script de patch
-- Aucun changement OpenVINO
-- Aucun changement Qdrant / SQLite
+```text
+aucun SVG
+aucun script de patch
+aucun fichier runtime OpenVINO réel
+aucune modification Scheduler/Dispatcher/ComponentProxy
+```
