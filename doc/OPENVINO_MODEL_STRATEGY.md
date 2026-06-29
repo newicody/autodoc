@@ -12,9 +12,9 @@ InferenceRequestHandler
   -> OpenVINORuntime injecté
 ```
 
-Mais aucun runtime OpenVINO réel n'est encore branché.
+Le runtime OpenVINO réel est maintenant isolé dans `src/inference/openvino_runtime.py`, mais il reste générique et raw-input only.
 
-Le choix du premier modèle n'est pas encore fait. C'est normal : il vaut mieux choisir la stratégie avant d'ajouter la dépendance `openvino`.
+Le choix du premier modèle n'est pas encore fait. C'est volontaire : on a branché la capacité technique d'exécuter OpenVINO sans imposer embedding, génération ou tokenizer.
 
 ## Options possibles
 
@@ -99,29 +99,29 @@ openvino.generation
 
 Le `BackendRegistry` permet déjà cette séparation.
 
-## Prochaine étape technique
+## État technique Phase 2.9
 
-Créer un runtime réel minimal :
+Le runtime réel minimal existe :
 
 ```text
 src/inference/openvino_runtime.py
 ```
 
-Avec une classe :
+Avec :
 
 ```text
 RealOpenVINORuntime
 ```
 
-Responsabilités :
+Responsabilités actuelles :
 
 - importer `openvino` uniquement dans ce fichier ;
 - charger un modèle depuis `OpenVINOBackendConfig.model_path` ;
 - compiler le modèle sur `config.device` ;
-- exécuter une inférence ;
-- convertir le résultat en `InferenceResult`.
+- exécuter une inférence à partir d'entrées brutes ;
+- retourner un `InferenceResult` générique.
 
-Le Scheduler, le Dispatcher, le ComponentProxy, le Handler et l'Adapter ne doivent pas changer.
+Le Scheduler, le Dispatcher, le ComponentProxy, le Handler et l'Adapter n'ont pas changé.
 
 ## Condition avant intégration réelle
 
@@ -133,4 +133,4 @@ Avant d'intégrer OpenVINO réel, il faut savoir :
 - format d'entrée attendu ;
 - format de sortie attendu.
 
-Sans ces informations, il faut rester sur le contrat Phase 2.6.
+Sans ces informations, il faut rester sur le runtime brut Phase 2.9 et ne pas ajouter de tokenizer ou de post-traitement spécifique.

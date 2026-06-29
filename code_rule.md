@@ -100,3 +100,33 @@ Cette approche permet d'adapter dynamiquement les priorités, les ressources et 
 - Le Scheduler construit un `GlobalContext` qui influence les décisions d'exécution sans casser le déterminisme.
 - La Queue est le chemin de commande déterministe.
 - L'EventBus est le chemin d'observation et ne commande pas les composants.
+
+## État actuel du modèle après Phase 2.6
+
+La philosophie initiale reste valide, mais le modèle s'est précisé.
+
+Le Scheduler n'est plus décrit comme un interprète monolithique : il orchestre une chaîne explicite.
+
+```text
+Scheduler.emit()
+  -> PolicyEngine.decide()
+  -> PriorityQueue
+  -> Scheduler.run()
+  -> Dispatcher
+  -> Handler
+```
+
+L'`EventBus` ne commande pas les composants. Il reste le canal d'observation pour la télémétrie, le recorder et le replay.
+
+Le chemin d'inférence ne dépend pas d'OpenVINO directement :
+
+```text
+InferenceRequestHandler
+  -> InferenceAdapter
+  -> BackendRegistry
+  -> InferenceBackend
+```
+
+Le backend OpenVINO existe actuellement comme contrat sans runtime réel. Il ne doit pas importer `openvino` tant que la stratégie de modèles n'est pas décidée.
+
+Règle ajoutée : aucun backend d'inférence ne doit être ajouté par défaut implicite. Tout backend réel doit être enregistré explicitement dans `BackendRegistry` et autorisé explicitement par `PolicyEngine`.

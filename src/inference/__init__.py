@@ -10,6 +10,12 @@ from .openvino_backend import (
     OpenVINOBackendState,
     OpenVINORuntime,
 )
+from .openvino_runtime import (
+    RealOpenVINORuntime,
+    RealOpenVINORuntimeError,
+    RealOpenVINORuntimeState,
+    RealOpenVINORuntimeUnavailable,
+)
 from .registry import BackendRegistry, BackendRegistrySnapshot
 
 __all__ = [
@@ -23,4 +29,8 @@ __all__ = [
     "OpenVINOBackendError",
     "OpenVINOBackendState",
     "OpenVINORuntime",
+    "RealOpenVINORuntime",
+    "RealOpenVINORuntimeError",
+    "RealOpenVINORuntimeState",
+    "RealOpenVINORuntimeUnavailable",
 ]

@@ -108,7 +108,9 @@ class OpenVINOBackend:
             metadata=MappingProxyType(
                 {
                     "runtime": type(self._runtime).__name__,
-                    "has_real_openvino": False,
+                    "has_real_openvino": bool(
+                        getattr(self._runtime, "is_real_openvino_runtime", False)
+                    ),
                 }
             ),
         )

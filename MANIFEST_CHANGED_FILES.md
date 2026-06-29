@@ -1,32 +1,34 @@
-# Manifest — Phase 2.6
+# Manifest — Phase 2.9 — RealOpenVINORuntime isolé
 
-## Objet
+## Runtime / inference
 
-Contrat `OpenVINOBackend` sans runtime OpenVINO réel.
+- `src/inference/openvino_runtime.py`
+  - ajoute `RealOpenVINORuntime`, import OpenVINO isolé, cache de modèles compilés, état observable et erreurs stables.
+- `src/inference/openvino_backend.py`
+  - expose dans `state().metadata` si le runtime injecté est un vrai runtime OpenVINO.
+- `src/inference/__init__.py`
+  - exporte les nouveaux symboles du runtime.
 
-Cette phase prépare directement l'intégration OpenVINO, mais n'importe pas encore
-`openvino` et ne modifie pas le Scheduler, le Dispatcher ou le ComponentProxy.
+## Tests
 
-## Fichiers modifiés
+- `tests/inference/test_openvino_runtime.py`
+  - vérifie le runtime avec faux module OpenVINO injecté ;
+  - vérifie le cache de `CompiledModel` ;
+  - vérifie l'erreur si aucune entrée brute n'est fournie ;
+  - vérifie le cas OpenVINO non installé.
 
-```text
-src/inference/openvino_backend.py
-src/inference/__init__.py
-tests/inference/test_openvino_backend_contract.py
+## Documentation
 
-doc/ARCHITECTURE_LAYERS.md
-doc/CHANGELOG_PHASE2_6.md
+- `README.md`
+- `doc/ARCHITECTURE_LAYERS.md`
+- `doc/OPENVINO_MODEL_STRATEGY.md`
+- `doc/CHANGELOG_PHASE2_9_OPENVINO_RUNTIME.md`
 
-doc/docs/architecture/inference/40_inference.dot
-doc/docs/architecture/inference/41_openvino_backend.dot
-doc/docs/architecture/tests/80_tests.dot
-```
+## Roadmap DOT
 
-## Non inclus
+- `doc/docs/architecture/inference/40_inference.dot`
+- `doc/docs/architecture/inference/41_openvino_backend.dot`
+- `doc/docs/architecture/inference/42_openvino_runtime.dot`
+- `doc/docs/architecture/tests/80_tests.dot`
 
-```text
-aucun SVG
-aucun script de patch
-aucun fichier runtime OpenVINO réel
-aucune modification Scheduler/Dispatcher/ComponentProxy
-```
+Aucun SVG n'est inclus. Les SVG restent générés localement par le makefile.
