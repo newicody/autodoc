@@ -204,3 +204,17 @@ post-traitement sortie modèle -> vecteur normalisé.
 ## Phase 3.3 — Embedding raw IO
 
 La stratégie reste : embedding d’abord, génération ensuite. La Phase 3.3 ne choisit toujours pas BGE-M3, E5 ou MiniLM ; elle ajoute seulement le contrat qui permet de tester un modèle embedding déjà tokenisé. Cela évite de confondre le tokenizer, le runtime OpenVINO et le post-traitement du vecteur.
+
+
+## Phase 3.4 — Contrat tokenizer injectable
+
+La Phase 3.4 ajoute le contrat manquant entre texte et entrées raw :
+
+```text
+TokenizationRequest
+  -> TextTokenizer
+  -> TokenizationResult
+  -> OpenVINOEmbeddingRawInputs
+```
+
+Ce contrat ne choisit toujours pas Hugging Face, SentencePiece, BGE-M3, E5 ou MiniLM. Il permet seulement de préparer l’endroit exact où un tokenizer concret sera injecté plus tard. Le choix d’implémentation peut donc rester expérimental sans modifier `Scheduler`, `InferenceAdapter`, `OpenVINOBackend` ou `RealOpenVINORuntime`.

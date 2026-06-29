@@ -40,6 +40,17 @@ from .openvino_runtime import (
     RealOpenVINORuntimeState,
     RealOpenVINORuntimeUnavailable,
 )
+
+from .tokenizer_contract import (
+    SUPPORTED_TOKENIZER_PADDING,
+    SUPPORTED_TOKENIZER_TRUNCATION,
+    TextTokenizer,
+    TokenizationRequest,
+    TokenizationResult,
+    TokenizerConfig,
+    TokenizerRegistry,
+    TokenizerRegistrySnapshot,
+)
 from .registry import BackendRegistry, BackendRegistrySnapshot
 
 __all__ = [
@@ -66,6 +77,14 @@ __all__ = [
     "OpenVINOBackendState",
     "OpenVINORuntime",
     "SUPPORTED_OPENVINO_TASKS",
+    "SUPPORTED_TOKENIZER_PADDING",
+    "SUPPORTED_TOKENIZER_TRUNCATION",
+    "TextTokenizer",
+    "TokenizationRequest",
+    "TokenizationResult",
+    "TokenizerConfig",
+    "TokenizerRegistry",
+    "TokenizerRegistrySnapshot",
     "OpenVINOModelProfileRegistrySnapshot",
     "OpenVINOModelProfileRegistry",
     "OpenVINOModelProfile",
