@@ -474,3 +474,21 @@ Cette couche est volontairement hors Scheduler. Elle permet de valider la logiqu
 La couche inference dispose maintenant d’un chargeur de sources locales (`e5_sources.py`) capable de découvrir des fichiers `.md`, `.markdown` et `.txt`, de les découper en chunks de passages et de produire des `E5CorpusDocument` enrichis en métadonnées.
 
 Cette brique reste hors Scheduler et hors Qdrant : elle prépare le futur Knowledge Manager en validant d’abord la chaîne locale fichier -> chunk -> embedding -> corpus JSON.
+
+## Phase 3.15 — Corpus E5 incrémental
+
+Le corpus local E5 peut maintenant être reconstruit en réutilisant les embeddings inchangés.
+
+Flux :
+
+```text
+sources TXT/Markdown
+  -> chunks déterministes
+  -> document_hash
+  -> ancien E5CorpusIndex optionnel
+  -> E5IncrementalCorpusBuilder
+  -> reuse ou embed
+  -> nouveau E5CorpusIndex
+```
+
+La règle d'invalidation est déterministe : elle ne dépend pas des timestamps mais de l'identifiant du document et de son texte préfixé E5. Cette couche reste hors Scheduler et prépare les futurs `upsert/delete` Qdrant.

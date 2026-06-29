@@ -134,7 +134,11 @@ def load_e5_source_documents(
             E5SourceDocument(
                 path=source_path,
                 text=text,
-                metadata={"source_extension": path.suffix.lower()},
+                metadata={
+                    "source_extension": path.suffix.lower(),
+                    "source_hash": sha256(text.encode("utf-8")).hexdigest(),
+                    "source_bytes": len(text.encode("utf-8")),
+                },
             )
         )
     return tuple(documents)
@@ -316,7 +320,11 @@ def _make_chunk_from_text(
         chunk_index=chunk_index,
         start_line=start_line,
         end_line=end_line,
-        metadata={"source_id": document.source_id, **dict(document.metadata)},
+        metadata={
+            "source_id": document.source_id,
+            "chunk_hash": sha256(text.encode("utf-8")).hexdigest(),
+            **dict(document.metadata),
+        },
     )
 
 

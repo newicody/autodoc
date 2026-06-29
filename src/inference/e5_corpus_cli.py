@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .e5_corpus import E5CorpusBuilder, E5CorpusIndex, E5CorpusJsonStore, E5CorpusSearcher
+from .e5_incremental import E5IncrementalCorpusBuilder, E5IncrementalBuildStats
 from .e5_search_report import E5SearchReport, E5SearchReportConfig
 from .e5_sources import SUPPORTED_E5_SOURCE_EXTENSIONS, load_e5_corpus_documents_from_sources
 from .e5_pipeline import (
@@ -38,9 +39,12 @@ class E5CorpusBuildCliOutput:
     tokenizer: str
     dimension: int
     size: int
+    reused_count: int | None = None
+    embedded_count: int | None = None
+    removed_count: int | None = None
 
     def to_json_dict(self) -> dict[str, object]:
-        return {
+        data: dict[str, object] = {
             "output": self.output,
             "model": self.model,
             "backend": self.backend,
@@ -48,18 +52,30 @@ class E5CorpusBuildCliOutput:
             "dimension": self.dimension,
             "size": self.size,
         }
+        if self.reused_count is not None:
+            data["reused_count"] = self.reused_count
+        if self.embedded_count is not None:
+            data["embedded_count"] = self.embedded_count
+        if self.removed_count is not None:
+            data["removed_count"] = self.removed_count
+        return data
 
     def to_text(self) -> str:
-        return "\n".join(
-            (
-                f"output: {self.output}",
-                f"model: {self.model}",
-                f"backend: {self.backend}",
-                f"tokenizer: {self.tokenizer}",
-                f"dimension: {self.dimension}",
-                f"size: {self.size}",
-            )
-        )
+        lines = [
+            f"output: {self.output}",
+            f"model: {self.model}",
+            f"backend: {self.backend}",
+            f"tokenizer: {self.tokenizer}",
+            f"dimension: {self.dimension}",
+            f"size: {self.size}",
+        ]
+        if self.reused_count is not None:
+            lines.append(f"reused_count: {self.reused_count}")
+        if self.embedded_count is not None:
+            lines.append(f"embedded_count: {self.embedded_count}")
+        if self.removed_count is not None:
+            lines.append(f"removed_count: {self.removed_count}")
+        return "\n".join(lines)
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +132,7 @@ def build_build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--chunk-chars", type=int, default=1200, help="Taille cible maximale des chunks source en caractères.")
     parser.add_argument("--overlap-paragraphs", type=int, default=0, help="Nombre de paragraphes repris entre deux chunks.")
     parser.add_argument("--output", required=True, help="Fichier JSON de sortie du corpus local.")
+    parser.add_argument("--reuse-index", default=None, help="Index JSON existant à réutiliser pour un build incrémental.")
     parser.add_argument("--overwrite", action="store_true", help="Autorise l'écrasement du fichier de sortie.")
     parser.add_argument("--format", choices=("text", "json"), default="text", help="Format de sortie CLI.")
     return parser
@@ -177,9 +194,21 @@ async def run_build_async(
         return 2
 
     try:
+        json_store = store or E5CorpusJsonStore()
         bundle = builder(_pipeline_config(args, cli_name="missipy-build-e5-corpus"))
-        index = await E5CorpusBuilder(bundle.pipeline).build(passages, metadata={"builder": "missipy-build-e5-corpus"})
-        path = (store or E5CorpusJsonStore()).write(index, args.output, overwrite=args.overwrite)
+        stats: E5IncrementalBuildStats | None = None
+        if args.reuse_index is not None:
+            previous_index = json_store.read(args.reuse_index)
+            incremental = await E5IncrementalCorpusBuilder(bundle.pipeline).build(
+                passages,
+                previous_index=previous_index,
+                metadata={"builder": "missipy-build-e5-corpus"},
+            )
+            index = incremental.index
+            stats = incremental.stats
+        else:
+            index = await E5CorpusBuilder(bundle.pipeline).build(passages, metadata={"builder": "missipy-build-e5-corpus"})
+        path = json_store.write(index, args.output, overwrite=args.overwrite)
     except Exception as exc:  # pragma: no cover - dépend des dépendances locales.
         stderr.write(f"missipy-build-e5-corpus failed: {exc}\n")
         return 1
@@ -191,6 +220,9 @@ async def run_build_async(
         tokenizer=index.tokenizer,
         dimension=index.dimension,
         size=index.size,
+        reused_count=stats.reused_count if stats is not None else None,
+        embedded_count=stats.embedded_count if stats is not None else None,
+        removed_count=stats.removed_count if stats is not None else None,
     )
     _write_output(stdout, args.format, output.to_json_dict(), output.to_text())
     return 0

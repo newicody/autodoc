@@ -87,6 +87,16 @@ from .e5_sources import (
     load_e5_source_documents,
 )
 
+
+from .e5_incremental import (
+    E5IncrementalBuildResult,
+    E5IncrementalBuildStats,
+    E5IncrementalCorpusBuilder,
+    embedding_matches_document,
+    make_e5_document_hash,
+    reuse_embedding,
+)
+
 from .e5_corpus import (
     E5CorpusBuilder,
     E5CorpusDocument,
@@ -225,6 +235,12 @@ __all__ = [
     "E5CorpusSearchHit",
     "E5CorpusSearchResults",
     "make_corpus_document_id",
+    "E5IncrementalBuildResult",
+    "E5IncrementalBuildStats",
+    "E5IncrementalCorpusBuilder",
+    "embedding_matches_document",
+    "make_e5_document_hash",
+    "reuse_embedding",
     "DEFAULT_EMBEDDING_INPUT_NAMES",
     "DEFAULT_EMBEDDING_OUTPUT_NAMES",
     "DeterministicTokenizer",

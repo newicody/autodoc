@@ -6,7 +6,7 @@ L'objectif n'est pas de construire une application Python monolithique, mais un 
 
 ## État courant
 
-État de référence : **Phase 3.14 rapport de résultats E5 avec contexte source**.
+État de référence : **Phase 3.15 corpus E5 incrémental par hash**.
 
 Le prototype possède actuellement :
 
@@ -225,7 +225,7 @@ Rechercher dedans :
   "je me suis fait baiser"
 ```
 
-Cette couche reste un banc de test local avant Qdrant : elle ne fait pas encore d'index ANN, de filtrage avancé ou de mise à jour incrémentale.
+Cette couche reste un banc de test local avant Qdrant : elle ne fait pas encore d'index ANN ou de filtrage avancé. La mise à jour incrémentale arrive en Phase 3.15 via `--reuse-index`.
 
 ## Phase 3.13 — Indexer un dossier TXT/Markdown
 
@@ -276,3 +276,28 @@ Pour inclure le chunk complet :
 ```
 
 Cette étape reste locale et déterministe : elle ne remplace pas Qdrant, elle prépare le format de résultat exploitable.
+
+
+## Phase 3.15 — Reconstruire un corpus sans tout recalculer
+
+La Phase 3.15 ajoute un build incrémental par hash. Quand un ancien index est fourni, les chunks inchangés réutilisent leur embedding existant. Seuls les chunks nouveaux ou modifiés sont recalculés.
+
+```bash
+./tools/build_e5_corpus.py \
+  --model-dir /home/eric/model/openvino/multilingual-e5-small \
+  --source-dir /data/notes \
+  --chunk-chars 1200 \
+  --reuse-index /tmp/e5_corpus.json \
+  --output /tmp/e5_corpus.next.json \
+  --overwrite
+```
+
+La sortie indique :
+
+```text
+reused_count: chunks repris depuis l'ancien index
+embedded_count: chunks recalculés
+removed_count: chunks disparus depuis l'ancien index
+```
+
+Le schéma JSON reste `missipy.e5.corpus.v1`; les hash sont stockés dans les métadonnées pour préserver la compatibilité.

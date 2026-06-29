@@ -1,39 +1,38 @@
-# MANIFEST — Phase 3.14 E5 search report
+# MANIFEST_CHANGED_FILES — Phase 3.15
 
-Fichiers ajoutés ou modifiés uniquement.
+## Code
 
-## Ajoutés
+- `src/inference/e5_incremental.py`
+- `src/inference/e5_corpus_cli.py`
+- `src/inference/e5_sources.py`
+- `src/inference/__init__.py`
 
-```text
-src/inference/e5_search_report.py
-tests/inference/test_e5_search_report.py
-doc/MODEL_E5_SEARCH_REPORT_PHASE3_14.md
-doc/CHANGELOG_PHASE3_14_E5_SEARCH_REPORT.md
-doc/docs/architecture/inference/52_e5_search_report.dot
-PHASE3_14_TEST_REPORT.md
-MANIFEST_CHANGED_FILES.md
-```
+## Tests
 
-## Modifiés
+- `tests/inference/test_e5_incremental.py`
+- `tests/inference/test_e5_corpus_cli.py`
 
-```text
-src/inference/__init__.py
-src/inference/e5_corpus_cli.py
-tests/inference/test_e5_corpus_cli.py
-README.md
-doc/ARCHITECTURE_LAYERS.md
-doc/docs/architecture/inference/40_inference.dot
-doc/docs/architecture/inference/50_e5_corpus.dot
-doc/docs/architecture/tests/80_tests.dot
-```
+## Documentation
 
-## Non inclus
+- `README.md`
+- `doc/ARCHITECTURE_LAYERS.md`
+- `doc/CHANGELOG_PHASE3_15_E5_INCREMENTAL.md`
+- `doc/MODEL_E5_INCREMENTAL_PHASE3_15.md`
 
-```text
-aucun .svg
-aucun __pycache__
-aucun .pytest_cache
-aucun script de patch
-aucun changement Scheduler
-aucun Qdrant
-```
+## Architecture DOT
+
+- `doc/docs/architecture/inference/40_inference.dot`
+- `doc/docs/architecture/inference/50_e5_corpus.dot`
+- `doc/docs/architecture/inference/53_e5_incremental.dot`
+- `doc/docs/architecture/tests/80_tests.dot`
+
+## Rapports
+
+- `MANIFEST_CHANGED_FILES.md`
+- `PHASE3_15_TEST_REPORT.md`
+
+## Exclusions volontaires
+
+- Aucun `.svg`
+- Aucun script de patch
+- Aucun fichier `__pycache__`

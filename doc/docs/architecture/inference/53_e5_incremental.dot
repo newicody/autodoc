@@ -1,0 +1,68 @@
+digraph E5IncrementalCorpus {
+    // ROADMAP_ID: inference.e5_incremental
+    // ROADMAP_PARENT: inference/50_e5_corpus.dot
+    // ROADMAP_NOTE[phase3_15]:
+    // Le corpus local peut maintenant être reconstruit par hash stable. Les
+    // chunks inchangés réutilisent leur embedding, seuls les chunks nouveaux
+    // ou modifiés repassent dans OpenVINO. Cette étape prépare les futurs
+    // upsert/delete Qdrant sans introduire Qdrant dans le prototype local.
+
+    rankdir=TB;
+    node [shape=box, style=filled, fontname="Arial", fontsize=10];
+    edge [fontname="Arial", fontsize=9];
+
+    subgraph cluster_inputs {
+        label="Entrées incrémentales";
+        color="#1565c0";
+        bgcolor="#e3f2fd";
+        node [fillcolor="#e3f2fd", color="#1565c0"];
+        Sources [label="TXT/Markdown sources", URL="51_e5_sources.svg"];
+        Chunks [label="E5TextChunk\nsource_hash + chunk_hash", URL="51_e5_sources.svg"];
+        Documents [label="E5CorpusDocument\nid + passage", URL="50_e5_corpus.svg"];
+        PreviousIndex [label="previous E5CorpusIndex\n--reuse-index", URL="50_e5_corpus.svg"];
+    }
+
+    subgraph cluster_incremental {
+        label="Phase 3.15";
+        color="#2e7d32";
+        bgcolor="#e8f5e9";
+        node [fillcolor="#e8f5e9", color="#2e7d32"];
+        DocumentHash [label="make_e5_document_hash\nid + prefixed text"];
+        Matcher [label="embedding_matches_document\nreuse decision"];
+        Builder [label="E5IncrementalCorpusBuilder\nreuse or embed"];
+        Stats [label="E5IncrementalBuildStats\nreused/embedded/removed"];
+        Result [label="E5IncrementalBuildResult\nindex + stats"];
+    }
+
+    subgraph cluster_outputs {
+        label="Sortie";
+        color="#6d4c41";
+        bgcolor="#efebe9";
+        node [fillcolor="#efebe9", color="#6d4c41"];
+        Pipeline [label="OpenVINOEmbeddingPipeline\nonly for changed chunks", URL="47_openvino_embedding_pipeline.svg"];
+        ReusedEmbedding [label="reuse_embedding\nvector preserved"];
+        NewIndex [label="new E5CorpusIndex\nmissipy.e5.corpus.v1", URL="50_e5_corpus.svg"];
+        Store [label="E5CorpusJsonStore\nwrite JSON", URL="50_e5_corpus.svg"];
+    }
+
+    Sources -> Chunks;
+    Chunks -> Documents;
+    Documents -> DocumentHash;
+    PreviousIndex -> Matcher;
+    DocumentHash -> Matcher;
+    Matcher -> Builder [label="changed? yes/no"];
+    Builder -> ReusedEmbedding [label="unchanged"];
+    Builder -> Pipeline [label="new/changed"];
+    Pipeline -> NewIndex;
+    ReusedEmbedding -> NewIndex;
+    Builder -> Stats;
+    NewIndex -> Result;
+    Stats -> Result;
+    Result -> Store;
+
+    Nav_Inference [label="Inference", shape=plaintext, URL="40_inference.svg"];
+    Nav_Corpus [label="E5 corpus", shape=plaintext, URL="50_e5_corpus.svg"];
+    Nav_Sources [label="E5 sources", shape=plaintext, URL="51_e5_sources.svg"];
+
+    { rank=sink; Nav_Inference; Nav_Corpus; Nav_Sources; }
+}

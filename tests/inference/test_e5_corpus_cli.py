@@ -186,3 +186,40 @@ def test_search_e5_corpus_cli_rejects_invalid_excerpt_chars(tmp_path) -> None:
 
     assert code == 2
     assert "--excerpt-chars" in err.getvalue()
+
+
+def test_build_e5_corpus_cli_reuses_previous_index(tmp_path) -> None:
+    corpus = tmp_path / "corpus.json"
+    rebuilt = tmp_path / "rebuilt.json"
+    assert run_build(
+        ["--output", str(corpus), "--passage", "arnaque vendeur", "--passage", "moteur diesel"],
+        stdout=StringIO(),
+        stderr=StringIO(),
+        builder=fake_builder,
+    ) == 0
+    out = StringIO()
+    err = StringIO()
+
+    code = run_build(
+        [
+            "--output",
+            str(rebuilt),
+            "--reuse-index",
+            str(corpus),
+            "--passage",
+            "arnaque vendeur",
+            "--passage",
+            "moteur diesel",
+        ],
+        stdout=out,
+        stderr=err,
+        builder=fake_builder,
+    )
+
+    assert code == 0
+    assert err.getvalue() == ""
+    text = out.getvalue()
+    assert "reused_count: 2" in text
+    assert "embedded_count: 0" in text
+    assert "removed_count: 0" in text
+    assert "embedding_reused" in rebuilt.read_text(encoding="utf-8")
