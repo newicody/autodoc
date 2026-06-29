@@ -12,7 +12,12 @@ class Handler(Protocol):
 
 
 class Dispatcher:
-    """Route un Event vers son handler et publie une copie observable."""
+    """Route un Event vers son handler et publie une copie observable.
+
+    Le Dispatcher résout toujours les Request. Un événement sans handler ne
+    bloque donc jamais un composant : il reçoit une réponse explicite
+    `handled=False`.
+    """
 
     def __init__(self, event_bus: EventBus) -> None:
         self.handlers: dict[EventType, Handler] = {}
@@ -24,18 +29,31 @@ class Dispatcher:
     async def dispatch(self, event: Event) -> Any:
         await self.event_bus.publish(event)
         handler = self.handlers.get(event.type)
-        result: Any = None
 
         try:
-            if handler is not None:
+            if handler is None:
+                result: Any = {
+                    "ok": True,
+                    "handled": False,
+                    "event": event.type.name,
+                    "source": event.source,
+                }
+            else:
                 result = await handler.handle(event)
 
-            if event.request and event.request.reply and not event.request.reply.done():
-                event.request.reply.set_result(result)
-
+            self._resolve_request(event, result)
             return result
 
         except BaseException as exc:
-            if event.request and event.request.reply and not event.request.reply.done():
-                event.request.reply.set_exception(exc)
+            self._reject_request(event, exc)
             raise
+
+    @staticmethod
+    def _resolve_request(event: Event, result: Any) -> None:
+        if event.request and event.request.reply and not event.request.reply.done():
+            event.request.reply.set_result(result)
+
+    @staticmethod
+    def _reject_request(event: Event, exc: BaseException) -> None:
+        if event.request and event.request.reply and not event.request.reply.done():
+            event.request.reply.set_exception(exc)

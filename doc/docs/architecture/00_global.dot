@@ -21,18 +21,18 @@ digraph Global {
     }
 
     subgraph cluster_L1 {
-        label="Layer 1 — MissiPy Micro-Kernel";
+        label="Layer 1 — MissiPy Micro-Kernel Phase 1.1";
         color="#512da8";
         bgcolor="#ede7f6";
         node [fillcolor="#ede7f6", color="#512da8"];
         Launcher   [URL="scheduler/10_scheduler.svg", tooltip="Zoom Scheduler"];
         Registry   [URL="scheduler/10_scheduler.svg", tooltip="Registry"];
-        Proxy      [label="ComponentProxy", URL="scheduler/10_scheduler.svg", tooltip="Runtime proxy"];
+        Proxy      [label="ComponentProxy\nstateful", URL="scheduler/10_scheduler.svg", tooltip="Runtime proxy"];
         Scheduler  [URL="scheduler/10_scheduler.svg", tooltip="Zoom Scheduler"];
-        Queue      [label="PriorityQueue", URL="scheduler/10_scheduler.svg"];
-        Dispatcher [URL="scheduler/10_scheduler.svg"];
+        Queue      [label="PriorityQueue\nFIFO same priority", URL="scheduler/10_scheduler.svg"];
+        Dispatcher [label="Dispatcher\nno handler = no block", URL="scheduler/10_scheduler.svg"];
         EventBus   [label="EventBus\nobservation only", URL="scheduler/10_scheduler.svg"];
-        Lifecycle  [URL="scheduler/10_scheduler.svg"];
+        Lifecycle  [label="LifecycleManager\nComponentState", URL="scheduler/10_scheduler.svg"];
     }
 
     subgraph cluster_L2 {
@@ -40,10 +40,11 @@ digraph Global {
         color="#455a64";
         bgcolor="#eceff1";
         node [fillcolor="#eceff1", color="#455a64"];
-        EventContract     [label="Event + Request"];
+        EventContract     [label="Event + Request\nuuid id"];
+        LifecycleContract [label="ComponentState"];
         ComponentContract [label="Component"];
         ContextContract   [label="ContextSnapshot"];
-        InferenceContract [label="InferenceRequest\nInferenceResult"];
+        InferenceContract [label="InferenceRequest\nInferenceResult future"];
     }
 
     subgraph cluster_L3 {
@@ -51,7 +52,7 @@ digraph Global {
         color="#ef6c00";
         bgcolor="#fff3e0";
         node [fillcolor="#fff3e0", color="#ef6c00"];
-        ContextEngine [label="ContextEngine\nPhase 1 fast path", URL="context/20_context.svg"];
+        ContextEngine [label="ContextEngine\nPhase 1.1 fast path", URL="context/20_context.svg"];
         Collector     [label="Collector\nfuture", URL="context/20_context.svg"];
         Reducer       [label="Reducer\nfuture", URL="context/20_context.svg"];
         Snapshot      [label="GlobalContextSnapshot", URL="context/20_context.svg"];
@@ -119,17 +120,31 @@ digraph Global {
         Watchdog  [URL="observability/70_observability.svg"];
     }
 
-    // Boot Phase 1
+    subgraph cluster_L10 {
+        label="Layer 10 — Test Harness Phase 1.1";
+        color="#1565c0";
+        bgcolor="#e3f2fd";
+        node [fillcolor="#e3f2fd", color="#1565c0"];
+        Pytest [label="pytest suite\n7 tests", URL="tests/80_tests.svg"];
+        CompileAll [label="compileall"];
+        DotRender [label="Graphviz render"];
+    }
+
+    // Boot Phase 1.1
     Launcher -> Registry;
     Registry -> Proxy;
     Proxy -> Scheduler [label="emit(Event)"];
     Scheduler -> Queue [label="put(priority, event)"];
-    Queue -> Dispatcher [label="get()"];
+    Queue -> Dispatcher [label="get(), FIFO if same priority"];
     Dispatcher -> Lifecycle [label="handler"];
     Dispatcher -> EventBus [label="publish copy"];
     Dispatcher -> Proxy [label="Request.reply", style=dashed];
 
-    // Context Phase 1
+    // Lifecycle Phase 1.1
+    Lifecycle -> LifecycleContract [style=dotted];
+    Proxy -> LifecycleContract [style=dotted];
+
+    // Context Phase 1.1
     Scheduler -> ContextEngine [label="clock tick"];
     ContextEngine -> Registry [label="all()"];
     ContextEngine -> Proxy [label="context() fast path"];
@@ -152,6 +167,14 @@ digraph Global {
     EventBus -> Replay [style=dashed];
     Metrics -> Dashboard [style=dashed];
     Watchdog -> Scheduler [style=dashed];
+
+    // Test coverage
+    Pytest -> EventContract [style=dotted];
+    Pytest -> Dispatcher [style=dotted];
+    Pytest -> Proxy [style=dotted];
+    Pytest -> ContextEngine [style=dotted];
+    CompileAll -> Scheduler [style=dotted];
+    DotRender -> Scheduler [style=dotted];
 
     // Future services/backends
     EventBus -> Router [style=dashed, label="future events"];

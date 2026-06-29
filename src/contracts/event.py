@@ -9,7 +9,7 @@ from typing import Any, Mapping
 
 
 class EventType(Enum):
-    """Types d'événements connus du micro-kernel Phase 1."""
+    """Types d'événements connus du micro-kernel Phase 1.1."""
 
     # Cycle de vie
     LOAD = auto()
@@ -34,9 +34,9 @@ class EventType(Enum):
 class Request:
     """Canal de réponse optionnel pour un Event.
 
-    Phase 1 : le Future reste local au processus Python.
-    Phase cible : ce champ pourra être remplacé par reply_to/correlation_id
-    pour du multi-processus ou du replay déterministe.
+    Le Future est explicitement séparé du payload. Cela évite de polluer
+    le contenu métier et permet au Dispatcher de résoudre proprement les
+    appels coopératifs du ComponentProxy.
     """
 
     reply: asyncio.Future[Any] | None = field(default=None, repr=False, compare=False)

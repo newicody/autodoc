@@ -14,14 +14,21 @@ from runtime.loader import load_components
 
 
 class Launcher:
-    """Assemble le kernel Phase 1 et démarre les composants."""
+    """Assemble le kernel Phase 1.1 et démarre les composants."""
 
-    def __init__(self) -> None:
+    def __init__(self, context_interval: float = 1.0) -> None:
         self.registry = Registry()
         self.event_bus = EventBus()
         self.dispatcher = Dispatcher(self.event_bus)
         self.queue = PriorityQueue()
-        self.scheduler = Scheduler(self.queue, self.dispatcher, self.event_bus, self.registry)
+        self.lifecycle = LifecycleManager()
+        self.scheduler = Scheduler(
+            self.queue,
+            self.dispatcher,
+            self.event_bus,
+            self.registry,
+            context_interval=context_interval,
+        )
         self._proxies: list[ComponentProxy] = []
 
     async def boot(self, run_forever: bool = False) -> None:
@@ -31,7 +38,7 @@ class Launcher:
             self.registry.register(proxy.name, proxy)
             self._proxies.append(proxy)
 
-        LifecycleManager.register_handlers(self.dispatcher)
+        self.lifecycle.register_handlers(self.dispatcher)
 
         scheduler_task = asyncio.create_task(self.scheduler.run(), name="missipy-scheduler")
         try:

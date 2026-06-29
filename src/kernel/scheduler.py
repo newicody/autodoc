@@ -15,6 +15,8 @@ from .registry import Registry
 class Scheduler(SchedulerContract):
     """Interpréteur central du micro-kernel coopératif."""
 
+    SHUTDOWN_PRIORITY = 1_000_000
+
     def __init__(
         self,
         queue: PriorityQueue,
@@ -31,6 +33,10 @@ class Scheduler(SchedulerContract):
         self.context_engine = ContextEngine(registry, event_bus)
         self._running = False
         self._clock_task: asyncio.Task[None] | None = None
+
+    @property
+    def running(self) -> bool:
+        return self._running
 
     async def emit(self, event: Event) -> None:
         await self.queue.put(event.priority, event)
@@ -56,7 +62,14 @@ class Scheduler(SchedulerContract):
             await self._finalize()
 
     async def shutdown(self) -> None:
-        await self.emit(Event(EventType.SHUTDOWN, source="kernel", dest="scheduler", priority=999))
+        await self.emit(
+            Event(
+                EventType.SHUTDOWN,
+                source="kernel",
+                dest="scheduler",
+                priority=self.SHUTDOWN_PRIORITY,
+            )
+        )
 
     async def _clock(self) -> None:
         while self._running:

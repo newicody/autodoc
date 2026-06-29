@@ -12,10 +12,11 @@ digraph Scheduler {
         color="#6a1b9a";
         bgcolor="#f3e5f5";
         node [fillcolor="#f3e5f5", color="#6a1b9a"];
-        Main     [label="main.py"];
-        Launcher [label="Launcher.boot()"];
-        Loader   [label="load_components()"];
-        Registry [label="Registry"];
+        Main      [label="main.py"];
+        Launcher  [label="Launcher.boot()"];
+        Loader    [label="load_components()"];
+        Registry  [label="Registry"];
+        Lifecycle [label="LifecycleManager\nstate table"];
     }
 
     subgraph cluster_runtime {
@@ -24,7 +25,7 @@ digraph Scheduler {
         bgcolor="#e8f5e9";
         node [fillcolor="#e8f5e9", color="#388e3c"];
         RealComponent [label="DummyExpert\nComponent"];
-        Proxy         [label="ComponentProxy"];
+        Proxy         [label="ComponentProxy\nComponentState"];
         TickGen       [label="tick() async generator"];
     }
 
@@ -34,11 +35,12 @@ digraph Scheduler {
         bgcolor="#ede7f6";
         node [fillcolor="#ede7f6", color="#512da8"];
         Scheduler [label="Scheduler.run()", URL="../00_global.svg", tooltip="Retour global"];
-        Queue     [label="PriorityQueue"];
-        Dispatcher;
+        Queue     [label="PriorityQueue\nseq tie-breaker"];
+        Dispatcher [label="Dispatcher\nno handler = result"];
         Handler   [label="Lifecycle/Tick Handler"];
         EventBus  [label="EventBus\nobservation only"];
         Clock     [label="Context clock"];
+        Shutdown  [label="SHUTDOWN\nclean finalization"];
     }
 
     subgraph cluster_reply {
@@ -46,28 +48,40 @@ digraph Scheduler {
         color="#455a64";
         bgcolor="#eceff1";
         node [fillcolor="#eceff1", color="#455a64"];
-        Event   [label="Event"];
-        Request [label="Request(reply=Future)"];
-        Reply   [label="Future.set_result(...)"];
+        Event   [label="Event\nimmutable uuid"];
+        Request [label="Request(reply=Future)\nnot payload"];
+        Reply   [label="Future.set_result(...)\nFuture.set_exception(...)"];
     }
 
     subgraph cluster_context {
-        label="Context Phase 1";
+        label="Context Phase 1.1";
         color="#ef6c00";
         bgcolor="#fff3e0";
         node [fillcolor="#fff3e0", color="#ef6c00"];
-        ContextEngine [URL="../context/20_context.svg"];
+        ContextEngine [label="ContextEngine\nfast path", URL="../context/20_context.svg"];
         Snapshot      [label="GlobalContextSnapshot", URL="../context/20_context.svg"];
+    }
+
+    subgraph cluster_tests {
+        label="Tests Phase 1.1";
+        color="#1565c0";
+        bgcolor="#e3f2fd";
+        node [fillcolor="#e3f2fd", color="#1565c0"];
+        TestDispatcher [label="test_dispatcher\nunhandled event"];
+        TestProxy      [label="test_component_proxy\nroundtrip/error"];
+        TestContext    [label="test_context_engine"];
     }
 
     Main -> Launcher;
     Launcher -> Loader;
     Loader -> RealComponent;
     Launcher -> Registry;
+    Launcher -> Lifecycle;
     Registry -> Proxy;
     Proxy -> RealComponent;
     Launcher -> Scheduler [label="create_task"];
     Launcher -> Proxy [label="start()"];
+    Lifecycle -> Handler [label="register handlers"];
 
     Proxy -> TickGen [label="__anext__ / asend"];
     TickGen -> Event [label="yield Event"];
@@ -78,6 +92,7 @@ digraph Scheduler {
     Dispatcher -> Handler;
     Dispatcher -> EventBus [label="publish copy"];
     Handler -> Reply [label="result"];
+    Dispatcher -> Reply [label="default if no handler", style=dotted];
     Reply -> Proxy [label="await future", style=dashed];
     Proxy -> TickGen [label="asend(result)", style=dashed];
 
@@ -86,8 +101,15 @@ digraph Scheduler {
     ContextEngine -> Registry [label="all()"];
     ContextEngine -> Proxy [label="context()"];
     ContextEngine -> Snapshot;
+    Scheduler -> Shutdown [label="shutdown()"];
+
+    TestDispatcher -> Dispatcher [style=dotted];
+    TestProxy -> Proxy [style=dotted];
+    TestProxy -> Scheduler [style=dotted];
+    TestContext -> ContextEngine [style=dotted];
 
     Nav_Global [label="Global", shape=plaintext, URL="../00_global.svg"];
     Nav_Context [label="Context", shape=plaintext, URL="../context/20_context.svg"];
-    { rank=sink; Nav_Global; Nav_Context; }
+    Nav_Tests [label="Tests", shape=plaintext, URL="../tests/80_tests.svg"];
+    { rank=sink; Nav_Global; Nav_Context; Nav_Tests; }
 }
