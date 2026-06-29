@@ -1,12 +1,12 @@
-# Autodoc / MissiPy — Architecture logicielle Phase 2.2
+# Autodoc / MissiPy — Architecture logicielle Phase 2.3
 
-Ce document décrit l'état du projet après introduction de `ReplayReportExporter`.
+Ce document décrit l'état du projet après introduction de `ReplayReportFileWriter`.
 
 La règle centrale reste inchangée : le Scheduler ne contient pas de logique métier. Il orchestre l'entrée des événements, délègue l'autorisation au `PolicyEngine`, route par `PriorityQueue` puis `Dispatcher`, et expose son activité via une observabilité passive.
 
-## Objectif Phase 2.2
+## Objectif Phase 2.3
 
-La Phase 2.2 transforme le replay isolé en outil de comparaison déterministe.
+La Phase 2.3 ajoute une écriture contrôlée des exports replay vers fichiers texte/JSON explicites, sans brancher le replay au Scheduler vivant.
 
 Flux ajouté :
 
@@ -22,6 +22,8 @@ EventBus
   -> ReplayReport
   -> ReplayReportExporter
   -> ReplayReportExport
+  -> ReplayReportFileWriter
+  -> ReplayReportWriteResult
 ```
 
 Le `ReplayScenarioRunner` :
@@ -41,6 +43,15 @@ Le `ReplayReportExporter` :
 - produit un export texte stable ;
 - produit un JSON compact avec `sort_keys=True` ;
 - retourne un `ReplayReportExport` immuable.
+
+Le `ReplayReportFileWriter` :
+
+- ne connaît pas le Scheduler ;
+- ne publie aucun `Event` ;
+- n'ajoute aucune extension implicite ;
+- ne crée aucun répertoire parent sans `create_parents=True` ;
+- n'écrase aucun fichier sans `overwrite=True` ;
+- retourne un `ReplayReportWriteResult` immuable avec `bytes_written` et `sha256`.
 
 ## Layer 0 — Hardware target
 
@@ -272,7 +283,9 @@ Composants actifs :
 - `ReplayScenarioRunner` ;
 - `ReplayReport` ;
 - `ReplayReportExporter` ;
-- `ReplayReportExport`.
+- `ReplayReportExport` ;
+- `ReplayReportFileWriter` ;
+- `ReplayReportWriteResult`.
 
 Flux complet actuel :
 
@@ -289,6 +302,8 @@ EventBus.publish(Event)
   -> ReplayReport
   -> ReplayReportExporter
   -> ReplayReportExport
+  -> ReplayReportFileWriter
+  -> ReplayReportWriteResult
 ```
 
 Garanties :
@@ -299,7 +314,9 @@ Garanties :
 - `SHUTDOWN` reste refusé par défaut dans le sandbox ;
 - les rapports ne contiennent pas d'horodatage runtime ;
 - le texte de rapport est stable et comparable en test ;
-- le JSON de rapport est compact, trié et comparable en test.
+- le JSON de rapport est compact, trié et comparable en test ;
+- les écritures fichier sont explicites et refusent l'écrasement par défaut ;
+- les résultats d'écriture exposent un `sha256` stable du contenu UTF-8.
 
 ## Layer 10 — Test Harness
 
@@ -312,14 +329,14 @@ PYTHONPATH=src python3 src/main.py
 cd doc && make -f makefile
 ```
 
-État Phase 2.2 :
+État Phase 2.3 :
 
 ```text
-42 passed
+47 passed
 main.py exit code: 0
 DOT_OK
 ```
 
 ## Étape suivante probable
 
-Phase 2.3 devrait ajouter une écriture contrôlée de ces exports vers fichiers texte/JSON, sans encore brancher le replay au Scheduler vivant.
+Phase 2.4 pourrait ajouter un format de dossier de replay contrôlé, ou bien revenir vers le chemin d'inférence OpenVINO maintenant que l'observabilité/replay dispose d'un socle vérifiable.

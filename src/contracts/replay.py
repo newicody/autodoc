@@ -296,3 +296,30 @@ class ReplayReportExport:
             raise ValueError("ReplayReportExport.format must not be empty")
         if not self.media_type:
             raise ValueError("ReplayReportExport.media_type must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayReportWriteResult:
+    """Résultat immuable d'une écriture contrôlée d'export replay.
+
+    Le résultat décrit uniquement l'effet fichier obtenu. Il ne contient aucun
+    handle ouvert, aucun flux vivant et aucune référence au Scheduler.
+    """
+
+    path: str
+    format: str
+    media_type: str
+    bytes_written: int
+    sha256: str
+
+    def __post_init__(self) -> None:
+        if not self.path:
+            raise ValueError("ReplayReportWriteResult.path must not be empty")
+        if not self.format:
+            raise ValueError("ReplayReportWriteResult.format must not be empty")
+        if not self.media_type:
+            raise ValueError("ReplayReportWriteResult.media_type must not be empty")
+        if self.bytes_written < 0:
+            raise ValueError("ReplayReportWriteResult.bytes_written must not be negative")
+        if len(self.sha256) != 64:
+            raise ValueError("ReplayReportWriteResult.sha256 must be a sha256 hex digest")
