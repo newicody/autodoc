@@ -3,6 +3,12 @@ from __future__ import annotations
 from .adapter import InferenceAdapter
 from .backend import DummyInferenceBackend
 from .handlers import InferenceRequestHandler
+from .model_profile import (
+    OpenVINOModelProfile,
+    OpenVINOModelProfileRegistry,
+    OpenVINOModelProfileRegistrySnapshot,
+    SUPPORTED_OPENVINO_TASKS,
+)
 from .openvino_backend import (
     OpenVINOBackend,
     OpenVINOBackendConfig,
@@ -29,6 +35,10 @@ __all__ = [
     "OpenVINOBackendError",
     "OpenVINOBackendState",
     "OpenVINORuntime",
+    "SUPPORTED_OPENVINO_TASKS",
+    "OpenVINOModelProfileRegistrySnapshot",
+    "OpenVINOModelProfileRegistry",
+    "OpenVINOModelProfile",
     "RealOpenVINORuntime",
     "RealOpenVINORuntimeError",
     "RealOpenVINORuntimeState",

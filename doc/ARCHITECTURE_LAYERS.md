@@ -1,14 +1,14 @@
-# Autodoc / MissiPy — Architecture logicielle Phase 2.9
+# Autodoc / MissiPy — Architecture logicielle Phase 3.0
 
-Ce document décrit l'état actuel du prototype après intégration isolée de RealOpenVINORuntime en Phase 2.9.
+Ce document décrit l'état actuel du prototype après ajout des profils déclaratifs de modèles OpenVINO en Phase 3.0.
 
 La règle centrale reste inchangée : le Scheduler ne contient pas de logique métier. Il orchestre l'entrée des événements, délègue l'autorisation au `PolicyEngine`, route par `PriorityQueue` puis `Dispatcher`, et expose son activité via une observabilité passive.
 
 ## Synthèse courte
 
-État courant : le prototype possède un micro-kernel coopératif testable, un contexte global événementiel, un chemin d'inférence fictif, un registre de backends, une observabilité minimale et une chaîne replay/export isolée.
+État courant : le prototype possède un micro-kernel coopératif testable, un contexte global événementiel, un chemin d'inférence fictif, un registre de backends, une observabilité minimale, une chaîne replay/export isolée, un runtime OpenVINO optionnel et un registre déclaratif de profils modèles.
 
-OpenVINO est maintenant intégré sous forme de runtime réel optionnel isolé dans `src/inference/openvino_runtime.py`. Aucun modèle n'est encore imposé et le runtime attend des entrées OpenVINO brutes.
+OpenVINO est intégré sous forme de runtime réel optionnel isolé dans `src/inference/openvino_runtime.py`. La Phase 3.0 ajoute `OpenVINOModelProfileRegistry` pour décrire les modèles possibles sans les charger et sans forcer embedding ou génération.
 
 ## Layer 0 — Hardware target
 
@@ -171,16 +171,19 @@ InferenceRequestHandler
   -> EventBus.publish(Event(INFERENCE_RESULT, payload=InferenceResult))
 ```
 
-Préparation OpenVINO Phase 2.9 :
+Préparation OpenVINO Phase 3.0 :
 
 ```text
-InferenceAdapter
-  -> BackendRegistry
+OpenVINOModelProfileRegistry
+  -> OpenVINOModelProfile
+  -> OpenVINOBackendConfig
   -> OpenVINOBackend
   -> RealOpenVINORuntime optionnel
   -> Core / CompiledModel
   -> InferenceResult
 ```
+
+Le registre de profils ne remplace pas `BackendRegistry` : il décrit les modèles possibles, tandis que `BackendRegistry` contient les backends exécutables réellement enregistrés.
 
 État actuel du runtime réel :
 
@@ -196,7 +199,7 @@ RealOpenVINORuntime
 
 OpenVINO ne doit jamais être appelé directement par le Scheduler, le Dispatcher ou le ComponentProxy. `OpenVINOBackend` n'importe toujours pas `openvino` : seul `RealOpenVINORuntime` est autorisé à le faire.
 
-Limite volontaire : aucun tokenizer et aucun choix de modèle ne sont encore intégrés. Le runtime réel attend des entrées brutes dans `InferenceRequest.context["inputs"]` ou `InferenceRequest.metadata["inputs"]`.
+Limite volontaire : aucun tokenizer et aucun modèle local ne sont encore intégrés. Le choix est seulement déclaratif via profils `embedding`, `generation` ou `raw`. Le runtime réel attend toujours des entrées brutes dans `InferenceRequest.context["inputs"]` ou `InferenceRequest.metadata["inputs"]`.
 
 ## Layer 6 — Experts
 
@@ -309,25 +312,27 @@ PYTHONPATH=src python3 src/main.py
 cd doc && make -f makefile
 ```
 
-État vérifié lors de l'audit Phase 2.6 :
+État vérifié après Phase 3.0 :
 
 ```text
-63 passed
+78 passed
 main.py exit code: 0
 DOT_OK
 ```
 
-## État stratégique avant OpenVINO
+## État stratégique OpenVINO après Phase 3.0
 
-On est maintenant à l'étape juste avant l'intégration réelle d'OpenVINO.
+OpenVINO réel est techniquement isolé, mais le choix du modèle reste volontairement séparé.
 
-Avant de brancher le runtime réel, il faut décider la stratégie de modèles :
+La Phase 3.0 permet maintenant de décrire :
 
-- un modèle d'embedding pour contexte/RAG ;
-- un petit modèle de génération pour décisions textuelles ;
-- ou plusieurs backends enregistrés dans `BackendRegistry`.
+- un profil `openvino.embedding` pour contexte/RAG ;
+- un profil `openvino.generation` pour génération de texte ;
+- un profil `openvino.raw` pour tests bas niveau.
 
-La décision recommandée est de commencer par un backend OpenVINO d'embedding, parce qu'il est plus facile à valider, plus utile pour Qdrant et moins risqué qu'un modèle de génération complet.
+La décision recommandée reste de commencer par un profil embedding, parce qu'il est plus facile à valider, plus utile pour Qdrant et moins risqué qu'un modèle de génération complet.
+
+La prochaine étape fonctionnelle logique sera de construire le backend exécutable à partir d'un profil choisi, puis seulement ensuite d'ajouter le pré-traitement spécifique au type de modèle.
 
 
 ## Phase 2.8 rule-audit correction
