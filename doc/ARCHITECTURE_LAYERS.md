@@ -1,20 +1,21 @@
-# Autodoc / MissiPy — Architecture logicielle Phase 1.5
+# Autodoc / MissiPy — Architecture logicielle Phase 1.6
 
-Ce document décrit l'état de développement après introduction de `InferenceAdapter`.
+Ce document décrit l'état de développement après introduction de `PolicyEngine`.
 
-La règle reste inchangée : le Scheduler ne contient pas d'IA, ne connaît pas OpenVINO et ne manipule aucun backend d'inférence. Il route uniquement des événements.
+La règle reste inchangée : le Scheduler ne contient pas de logique métier. Il orchestre, mais délègue maintenant explicitement l'autorisation des événements à une politique kernel minimale.
 
-## Objectif Phase 1.5
+## Objectif Phase 1.6
 
-La Phase 1.5 ajoute une membrane stable entre le handler d'inférence et les backends concrets.
+La Phase 1.6 ajoute une barrière déterministe avant l'entrée en `PriorityQueue`.
 
 Objectifs :
 
-- éviter que `InferenceRequestHandler` dépende directement de `DummyInferenceBackend` ;
-- préparer l'ajout futur de `OpenVINOBackend` sans modifier le Scheduler ;
-- rendre la sélection de backend explicite et déterministe ;
-- refuser clairement un backend inconnu au lieu d'utiliser un fallback implicite ;
-- garder `DummyInferenceBackend` comme backend de test permanent.
+- empêcher un composant de demander un `SHUTDOWN` ;
+- empêcher des priorités hors budget kernel ;
+- empêcher des destinations non autorisées ;
+- empêcher une demande d'inférence vers un modèle/backend non autorisé ;
+- retourner un refus explicite via `Request.reply` sans bloquer le composant ;
+- publier une copie observable `POLICY_DENIED` sur l'`EventBus`.
 
 ## Layer 0 — Hardware target
 
@@ -34,6 +35,7 @@ Composants actifs :
 
 - `Launcher` ;
 - `Scheduler` ;
+- `PolicyEngine` ;
 - `PriorityQueue` ;
 - `Dispatcher` ;
 - `EventBus` ;
@@ -41,13 +43,14 @@ Composants actifs :
 - `LifecycleManager` ;
 - `ComponentProxy`.
 
-Flux d'exécution :
+Flux d'exécution autorisé :
 
 ```text
 Component.tick()
   -> yield Event
   -> ComponentProxy
   -> Scheduler.emit()
+  -> PolicyEngine.decide()
   -> PriorityQueue
   -> Scheduler.run()
   -> Dispatcher.dispatch()
@@ -57,7 +60,21 @@ Component.tick()
   -> tick().asend(result)
 ```
 
-Règle importante : `EventBus` reste un miroir d'observation. Le chemin de commande est `Scheduler -> PriorityQueue -> Dispatcher`.
+Flux refusé :
+
+```text
+Component.tick()
+  -> yield Event interdit
+  -> ComponentProxy
+  -> Scheduler.emit()
+  -> PolicyEngine.decide() == denied
+  -> EventBus.publish(POLICY_DENIED)
+  -> Request.reply = Decision(allowed=False)
+  -> ComponentProxy
+  -> tick().asend(Decision)
+```
+
+Règle importante : `EventBus` reste un miroir d'observation. Le chemin de commande est `Scheduler -> PolicyEngine -> PriorityQueue -> Dispatcher`.
 
 ## Layer 2 — Contracts
 
@@ -71,13 +88,14 @@ Contrats disponibles :
 - `contracts.lifecycle.ComponentState` ;
 - `contracts.inference.InferenceRequest` ;
 - `contracts.inference.InferenceResult` ;
-- `contracts.inference.InferenceBackend`.
+- `contracts.inference.InferenceBackend` ;
+- `contracts.policy.Decision`.
 
 Décision maintenue : un `Future` ne doit jamais être caché dans `payload`. Il doit rester dans `Event.request.reply`.
 
 ## Layer 3 — Context Fabric
 
-État Phase 1.5 : collecte événementielle active.
+État Phase 1.6 : collecte événementielle active.
 
 ```text
 Scheduler clock
@@ -85,6 +103,7 @@ Scheduler clock
   -> ContextCollector
   -> Event(CONTEXT_REQUEST + Request.reply)
   -> Scheduler.emit()
+  -> PolicyEngine.decide()
   -> PriorityQueue
   -> Dispatcher
   -> ContextRequestHandler
@@ -111,15 +130,16 @@ Services prévus mais non branchés :
 
 Ces services seront des composants ou handlers pilotés par événements. Ils ne seront pas intégrés dans le Scheduler.
 
-## Layer 5 — Inference Phase 1.5
+## Layer 5 — Inference Phase 1.6
 
-État actuel : chemin fictif actif avec adapter.
+État actuel : chemin fictif actif avec adapter et politique.
 
 ```text
 Component
   -> yield Event(INFERENCE_REQUEST, payload=InferenceRequest)
   -> ComponentProxy
   -> Scheduler.emit()
+  -> PolicyEngine.decide()
   -> PriorityQueue
   -> Dispatcher
   -> InferenceRequestHandler
@@ -131,7 +151,16 @@ Component
   -> tick().asend(InferenceResult)
 ```
 
-Un événement observable est aussi publié :
+Si le modèle demandé n'est pas autorisé :
+
+```text
+PolicyEngine
+  -> Decision(allowed=False, rule="inference.model.denied")
+  -> EventBus.publish(POLICY_DENIED)
+  -> Request.reply
+```
+
+Un événement observable est aussi publié après succès :
 
 ```text
 InferenceRequestHandler
@@ -212,9 +241,9 @@ Observability écoute l'EventBus mais ne commande pas le kernel.
 Commandes de validation :
 
 ```bash
-python3 -m compileall -q src tests
-pytest -q
-python3 src/main.py
+PYTHONPATH=src python3 -m compileall -q src tests
+PYTHONPATH=src pytest -q
+PYTHONPATH=src python3 src/main.py
 cd doc && make -f makefile
 ```
 
@@ -231,10 +260,13 @@ Couverture actuelle :
 - InferenceAdapter sélectionne un backend enregistré ;
 - InferenceAdapter refuse un backend inconnu ;
 - publication observable `INFERENCE_RESULT` ;
-- roundtrip composant -> inference handler -> adapter -> backend -> composant.
+- roundtrip composant -> inference handler -> adapter -> backend -> composant ;
+- PolicyEngine autorise/refuse les événements structuraux ;
+- Scheduler publie `POLICY_DENIED` sans queueing ;
+- ComponentProxy reçoit une `Decision` explicite lors d'un refus.
 
 ## Prochaine étape logique
 
-Phase 1.6 : introduire un `PolicyEngine` minimal avant d'ajouter OpenVINO.
+Phase 1.7 : préparer une télémétrie kernel minimale.
 
-But : empêcher qu'un composant puisse demander n'importe quelle inférence, priorité ou destination sans validation explicite.
+But : observer proprement les décisions de policy, les événements traités, les refus, les latences et les compteurs de queue avant de brancher OpenVINO.

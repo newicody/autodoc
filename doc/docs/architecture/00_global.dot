@@ -9,11 +9,11 @@ digraph Global {
     node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10];
     edge [fontname="Arial", fontsize=9, arrowsize=0.7];
 
-    // ROADMAP_NOTE[phase1_5]:
-    // Le Layer 5 ajoute maintenant InferenceAdapter comme membrane stable
-    // entre InferenceRequestHandler et les backends. Le handler ne connaît
-    // plus DummyInferenceBackend directement. OpenVINO pourra remplacer ou
-    // rejoindre le backend fictif sans modifier Scheduler ni Dispatcher.
+    // ROADMAP_NOTE[phase1_6]:
+    // Le Layer 1 ajoute PolicyEngine comme barrière kernel avant l’entrée
+    // en PriorityQueue. Le Scheduler délègue l’autorisation mais ne contient
+    // pas la logique de règle. Un refus publie POLICY_DENIED sur EventBus et
+    // résout Request.reply avec une Decision immuable.
 
     subgraph cluster_L0 {
         label="Layer 0 — Hardware target";
@@ -27,7 +27,7 @@ digraph Global {
     }
 
     subgraph cluster_L1 {
-        label="Layer 1 — MissiPy Micro-Kernel Phase 1.5";
+        label="Layer 1 — MissiPy Micro-Kernel Phase 1.6";
         color="#512da8";
         bgcolor="#ede7f6";
         node [fillcolor="#ede7f6", color="#512da8"];
@@ -35,6 +35,7 @@ digraph Global {
         Registry [URL="scheduler/10_scheduler.svg", tooltip="Registry"];
         Proxy [label="ComponentProxy\nstateful", URL="scheduler/10_scheduler.svg", tooltip="Runtime proxy"];
         Scheduler [URL="scheduler/10_scheduler.svg", tooltip="Zoom Scheduler"];
+        Policy [label="PolicyEngine\npre-queue gate", URL="scheduler/10_scheduler.svg"];
         Queue [label="PriorityQueue\nFIFO same priority", URL="scheduler/10_scheduler.svg"];
         Dispatcher [label="Dispatcher\nno handler = no block", URL="scheduler/10_scheduler.svg"];
         EventBus [label="EventBus\nobservation only", URL="scheduler/10_scheduler.svg"];
@@ -51,6 +52,7 @@ digraph Global {
         ComponentContract [label="Component"];
         ContextContract [label="ContextSnapshot"];
         InferenceContract [label="InferenceRequest\nInferenceResult"];
+        PolicyContract [label="Decision\nallowed / denied"];
     }
 
     subgraph cluster_L3 {
@@ -80,7 +82,7 @@ digraph Global {
     }
 
     subgraph cluster_L5 {
-        label="Layer 5 — Inference Phase 1.5";
+        label="Layer 5 — Inference Phase 1.6";
         color="#f9a825";
         bgcolor="#fffde7";
         node [fillcolor="#fffde7", color="#f9a825"];
@@ -130,7 +132,7 @@ digraph Global {
     }
 
     subgraph cluster_L10 {
-        label="Layer 10 — Test Harness Phase 1.5";
+        label="Layer 10 — Test Harness Phase 1.6";
         color="#1565c0";
         bgcolor="#e3f2fd";
         node [fillcolor="#e3f2fd", color="#1565c0"];
@@ -142,7 +144,10 @@ digraph Global {
     Launcher -> Registry;
     Registry -> Proxy;
     Proxy -> Scheduler [label="emit(Event)"];
-    Scheduler -> Queue [label="put(priority, event)"];
+    Scheduler -> Policy [label="decide(Event)"];
+    Policy -> Queue [label="allowed -> put(priority, event)"];
+    Policy -> EventBus [label="denied -> POLICY_DENIED", style=dashed];
+    Policy -> Proxy [label="denied -> Decision", style=dashed];
     Queue -> Dispatcher [label="get(), FIFO if same priority"];
     Dispatcher -> Lifecycle [label="handler"];
     Dispatcher -> EventBus [label="publish copy"];
@@ -161,6 +166,7 @@ digraph Global {
     InferenceCtx -> Decision [style=dashed, label="future"];
 
     Scheduler -> EventContract [style=dotted];
+    Policy -> PolicyContract [style=dotted];
     Proxy -> ComponentContract [style=dotted];
     ContextEngine -> ContextContract [style=dotted];
     InferenceHandler -> InferenceContract [style=dotted];
@@ -189,6 +195,7 @@ digraph Global {
     Pytest -> Proxy [style=dotted];
     Pytest -> ContextEngine [style=dotted];
     Pytest -> InferenceHandler [style=dotted];
+    Pytest -> Policy [style=dotted];
     CompileAll -> Scheduler [style=dotted];
     DotRender -> Scheduler [style=dotted];
 

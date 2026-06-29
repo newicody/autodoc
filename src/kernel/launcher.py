@@ -8,6 +8,7 @@ from contracts.event import EventType
 from inference.adapter import InferenceAdapter
 from inference.backend import DummyInferenceBackend
 from inference.handlers import InferenceRequestHandler
+from policy.engine import PolicyEngine
 from runtime.component import ComponentProxy
 from runtime.loader import load_components
 
@@ -28,6 +29,7 @@ class Launcher:
         self.dispatcher = Dispatcher(self.event_bus)
         self.queue = PriorityQueue()
         self.lifecycle = LifecycleManager()
+        self.policy_engine = PolicyEngine()
         self.inference_backend = DummyInferenceBackend()
         self.inference_adapter = InferenceAdapter(self.inference_backend)
         self.scheduler = Scheduler(
@@ -36,6 +38,7 @@ class Launcher:
             self.event_bus,
             self.registry,
             context_interval=context_interval,
+            policy_engine=self.policy_engine,
         )
         self._proxies: list[ComponentProxy] = []
 

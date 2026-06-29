@@ -28,6 +28,9 @@ class EventType(Enum):
     INFERENCE_REQUEST = auto()
     INFERENCE_RESULT = auto()
 
+    # Politique kernel
+    POLICY_DENIED = auto()
+
     # Système
     SHUTDOWN = auto()
 

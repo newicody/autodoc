@@ -38,7 +38,7 @@ class UnknownEventComponent(Component):
 
     async def tick(self) -> AsyncGenerator[Event, Any]:
         self.result = yield Event(
-            EventType.INFERENCE_REQUEST,
+            EventType.INFERENCE_RESULT,
             source=self.name,
             payload="future",
         )
@@ -108,7 +108,7 @@ async def test_unknown_event_returns_explicit_unhandled_result() -> None:
 
     assert component.result["ok"] is True
     assert component.result["handled"] is False
-    assert component.result["event"] == "INFERENCE_REQUEST"
+    assert component.result["event"] == "INFERENCE_RESULT"
     assert proxy.state is ComponentState.STOPPED
 
 

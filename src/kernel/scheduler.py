@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 
-from contracts.event import Event, EventType
-from contracts.scheduler import SchedulerContract
 from context.engine import ContextEngine
+from contracts.event import Event, EventType
+from contracts.policy import Decision
+from contracts.scheduler import SchedulerContract
+from policy.engine import PolicyEngine
 
 from .dispatcher import Dispatcher
 from .event_bus import EventBus
@@ -17,8 +19,8 @@ class Scheduler(SchedulerContract):
     """Interpréteur central du micro-kernel coopératif.
 
     Le Scheduler ne contient aucune logique métier. Il orchestre la queue,
-    déclenche le contexte global, délègue au Dispatcher et arrête proprement
-    les tâches internes.
+    délègue les décisions d'autorisation au PolicyEngine, déclenche le contexte
+    global, délègue au Dispatcher et arrête proprement les tâches internes.
     """
 
     SHUTDOWN_PRIORITY = 1_000_000
@@ -30,13 +32,15 @@ class Scheduler(SchedulerContract):
         event_bus: EventBus,
         registry: Registry,
         context_interval: float = 1.0,
+        policy_engine: PolicyEngine | None = None,
     ) -> None:
         self.queue = queue
         self.dispatcher = dispatcher
         self.event_bus = event_bus
         self.registry = registry
         self.context_interval = context_interval
-        self.context_engine = ContextEngine(registry, self.emit, event_bus)
+        self.policy_engine = policy_engine or PolicyEngine()
+        self.context_engine = ContextEngine(registry, self, event_bus)
         self._running = False
         self._clock_task: asyncio.Task[None] | None = None
 
@@ -45,7 +49,12 @@ class Scheduler(SchedulerContract):
         return self._running
 
     async def emit(self, event: Event) -> None:
-        await self.queue.put(event.priority, event)
+        decision = self.policy_engine.decide(event, self.registry.all().keys())
+        if decision.allowed:
+            await self.queue.put(event.priority, event)
+            return
+
+        await self._deny_event(event, decision)
 
     async def run(self) -> None:
         self._running = True
@@ -90,6 +99,19 @@ class Scheduler(SchedulerContract):
             self._clock_task.cancel()
             with suppress(asyncio.CancelledError):
                 await self._clock_task
+
+    async def _deny_event(self, event: Event, decision: Decision) -> None:
+        await self.event_bus.publish(
+            Event(
+                EventType.POLICY_DENIED,
+                source="policy.engine",
+                dest=event.source,
+                payload=decision,
+                priority=event.priority,
+                correlation_id=event.id,
+            )
+        )
+        self._resolve_request(event, decision)
 
     @staticmethod
     def _resolve_request(event: Event, result: object) -> None:
