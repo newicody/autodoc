@@ -277,3 +277,22 @@ class ReplayReport:
                 f"handled={result.handled_count}"
             )
         return tuple(lines)
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayReportExport:
+    """Export immuable et déterministe d'un ReplayReport.
+
+    L'export contient uniquement du texte déjà sérialisé. Il ne référence pas le
+    Scheduler, ne contient aucun Event vivant et ne transporte aucun handler.
+    """
+
+    format: str
+    media_type: str
+    content: str
+
+    def __post_init__(self) -> None:
+        if not self.format:
+            raise ValueError("ReplayReportExport.format must not be empty")
+        if not self.media_type:
+            raise ValueError("ReplayReportExport.media_type must not be empty")

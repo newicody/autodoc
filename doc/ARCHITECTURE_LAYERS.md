@@ -1,12 +1,12 @@
-# Autodoc / MissiPy — Architecture logicielle Phase 2.1
+# Autodoc / MissiPy — Architecture logicielle Phase 2.2
 
-Ce document décrit l'état du projet après introduction de `ReplayScenarioRunner` et `ReplayReport`.
+Ce document décrit l'état du projet après introduction de `ReplayReportExporter`.
 
 La règle centrale reste inchangée : le Scheduler ne contient pas de logique métier. Il orchestre l'entrée des événements, délègue l'autorisation au `PolicyEngine`, route par `PriorityQueue` puis `Dispatcher`, et expose son activité via une observabilité passive.
 
-## Objectif Phase 2.1
+## Objectif Phase 2.2
 
-La Phase 2.1 transforme le replay isolé en outil de comparaison déterministe.
+La Phase 2.2 transforme le replay isolé en outil de comparaison déterministe.
 
 Flux ajouté :
 
@@ -20,6 +20,8 @@ EventBus
   -> ReplaySandboxResult
   -> ReplayScenarioRunner
   -> ReplayReport
+  -> ReplayReportExporter
+  -> ReplayReportExport
 ```
 
 Le `ReplayScenarioRunner` :
@@ -30,6 +32,15 @@ Le `ReplayScenarioRunner` :
 - exécute des scénarios dans `ReplaySandbox` ;
 - agrège plusieurs résultats dans `ReplayReport` ;
 - produit un rapport textuel déterministe sans horodatage runtime.
+
+Le `ReplayReportExporter` :
+
+- ne connaît pas le Scheduler ;
+- ne publie aucun `Event` ;
+- ne désérialise aucun payload ;
+- produit un export texte stable ;
+- produit un JSON compact avec `sort_keys=True` ;
+- retourne un `ReplayReportExport` immuable.
 
 ## Layer 0 — Hardware target
 
@@ -117,7 +128,8 @@ Contrats disponibles :
 - `contracts.replay.ReplaySandboxResult` ;
 - `contracts.replay.ReplayScenario` ;
 - `contracts.replay.ReplayScenarioResult` ;
-- `contracts.replay.ReplayReport`.
+- `contracts.replay.ReplayReport` ;
+- `contracts.replay.ReplayReportExport`.
 
 Décision maintenue : un `Future` ne doit jamais être caché dans `payload`. Il reste dans `Event.request.reply` et ne doit jamais être enregistré dans le journal de replay.
 
@@ -258,7 +270,9 @@ Composants actifs :
 - `ReplaySandboxResult` ;
 - `ReplayScenario` ;
 - `ReplayScenarioRunner` ;
-- `ReplayReport`.
+- `ReplayReport` ;
+- `ReplayReportExporter` ;
+- `ReplayReportExport`.
 
 Flux complet actuel :
 
@@ -273,6 +287,8 @@ EventBus.publish(Event)
   -> ReplaySandboxResult
   -> ReplayScenarioRunner
   -> ReplayReport
+  -> ReplayReportExporter
+  -> ReplayReportExport
 ```
 
 Garanties :
@@ -282,7 +298,8 @@ Garanties :
 - aucun payload n'est désérialisé automatiquement ;
 - `SHUTDOWN` reste refusé par défaut dans le sandbox ;
 - les rapports ne contiennent pas d'horodatage runtime ;
-- le texte de rapport est stable et comparable en test.
+- le texte de rapport est stable et comparable en test ;
+- le JSON de rapport est compact, trié et comparable en test.
 
 ## Layer 10 — Test Harness
 
@@ -295,14 +312,14 @@ PYTHONPATH=src python3 src/main.py
 cd doc && make -f makefile
 ```
 
-État Phase 2.1 :
+État Phase 2.2 :
 
 ```text
-39 passed
+42 passed
 main.py exit code: 0
 DOT_OK
 ```
 
 ## Étape suivante probable
 
-Phase 2.2 devrait ajouter une persistance de rapport ou un export contrôlé de replay, sans encore brancher le replay au Scheduler vivant.
+Phase 2.3 devrait ajouter une écriture contrôlée de ces exports vers fichiers texte/JSON, sans encore brancher le replay au Scheduler vivant.
