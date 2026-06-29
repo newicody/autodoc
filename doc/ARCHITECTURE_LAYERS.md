@@ -340,3 +340,39 @@ DOT_OK
 ## Étape suivante probable
 
 Phase 2.4 pourrait ajouter un format de dossier de replay contrôlé, ou bien revenir vers le chemin d'inférence OpenVINO maintenant que l'observabilité/replay dispose d'un socle vérifiable.
+
+
+## Phase 2.4 — Replay bundle contrôlé et navigation DOT
+
+La couche observability produit maintenant un dossier de replay contrôlé.
+
+Flux ajouté :
+
+```text
+ReplayReport
+  -> ReplayReportExporter
+  -> ReplayReportExport
+  -> ReplayReportBundleWriter
+  -> report.txt
+  -> report.json
+  -> manifest.json
+  -> ReplayBundleWriteResult
+```
+
+Le bundle reste un artefact hors Scheduler vivant. Il sert à archiver, comparer
+et auditer un replay de manière déterministe.
+
+Règles :
+
+- aucun Event vivant ;
+- aucun `Request.reply` ;
+- aucun handler runtime ;
+- aucun chemin implicite ;
+- aucun overwrite implicite ;
+- manifeste JSON déterministe ;
+- empreintes SHA-256 pour chaque export.
+
+La roadmap DOT est aussi renforcée : les sous-graphes du scheduler manquants
+ont été ajoutés pour que les liens de zoom descente/remontée soient valides.
+Un test vérifie désormais que chaque URL SVG dans les DOT possède une source
+DOT correspondante.

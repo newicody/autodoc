@@ -323,3 +323,44 @@ class ReplayReportWriteResult:
             raise ValueError("ReplayReportWriteResult.bytes_written must not be negative")
         if len(self.sha256) != 64:
             raise ValueError("ReplayReportWriteResult.sha256 must be a sha256 hex digest")
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayBundleWriteResult:
+    """Résultat immuable d'un dossier de replay contrôlé.
+
+    Un bundle regroupe plusieurs exports replay et un manifeste déterministe.
+    Il reste hors Scheduler vivant : c'est un artefact d'audit, de comparaison
+    et de future reproduction contrôlée.
+    """
+
+    directory: str
+    files: tuple[ReplayReportWriteResult, ...]
+    manifest: ReplayReportWriteResult
+
+    def __post_init__(self) -> None:
+        if not self.directory:
+            raise ValueError("ReplayBundleWriteResult.directory must not be empty")
+
+    @property
+    def file_count(self) -> int:
+        """Nombre d'exports métier, hors manifeste."""
+
+        return len(self.files)
+
+    @property
+    def total_bytes_written(self) -> int:
+        """Total octets écrits, manifeste inclus."""
+
+        return sum(file.bytes_written for file in self.files) + self.manifest.bytes_written
+
+    @property
+    def sha256_by_path(self) -> Mapping[str, str]:
+        """Index immuable chemin -> sha256 pour contrôle rapide."""
+
+        return MappingProxyType(
+            {
+                file.path: file.sha256
+                for file in (*self.files, self.manifest)
+            }
+        )
