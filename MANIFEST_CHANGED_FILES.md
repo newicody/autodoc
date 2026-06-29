@@ -1,37 +1,55 @@
-# Manifest — Phase 3.4 tokenizer contract
+# Manifest — Phase 3.5 embedding pipeline
 
-## Code
+## Runtime / source
 
-- `src/inference/tokenizer_contract.py`
-- `src/inference/__init__.py`
+```text
+src/inference/embedding_pipeline.py
+src/inference/openvino_runtime.py
+src/inference/__init__.py
+```
 
 ## Tests
 
-- `tests/inference/test_openvino_tokenizer_contract.py`
+```text
+tests/inference/test_openvino_embedding_pipeline.py
+tests/inference/test_openvino_runtime.py
+```
 
 ## Documentation
 
-- `README.md`
-- `doc/ARCHITECTURE_LAYERS.md`
-- `doc/OPENVINO_MODEL_STRATEGY.md`
-- `doc/MODEL_TOKENIZER_CONTRACT_PHASE3_4.md`
-- `doc/CHANGELOG_PHASE3_4_TOKENIZER_CONTRACT.md`
+```text
+README.md
+doc/ARCHITECTURE_LAYERS.md
+doc/OPENVINO_MODEL_STRATEGY.md
+doc/MODEL_TOKENIZER_CONTRACT_PHASE3_4.md
+doc/MODEL_EMBEDDING_PIPELINE_PHASE3_5.md
+doc/CHANGELOG_PHASE3_5_EMBEDDING_PIPELINE.md
+```
 
 ## Roadmap DOT
 
-- `doc/docs/architecture/inference/40_inference.dot`
-- `doc/docs/architecture/inference/45_openvino_embedding_raw.dot`
-- `doc/docs/architecture/inference/46_tokenizer_contract.dot`
-- `doc/docs/architecture/tests/80_tests.dot`
+```text
+doc/docs/architecture/inference/40_inference.dot
+doc/docs/architecture/inference/45_openvino_embedding_raw.dot
+doc/docs/architecture/inference/46_tokenizer_contract.dot
+doc/docs/architecture/inference/47_openvino_embedding_pipeline.dot
+doc/docs/architecture/tests/80_tests.dot
+```
 
-## Rapports
+## Reports
 
-- `MANIFEST_CHANGED_FILES.md`
-- `PHASE3_4_TEST_REPORT.md`
+```text
+MANIFEST_CHANGED_FILES.md
+PHASE3_5_TEST_REPORT.md
+```
 
 ## Exclusions volontaires
 
-- Aucun `.svg`
-- Aucun script de patch
-- Aucun fichier de cache Python
-- Aucun import OpenVINO supplémentaire
+```text
+aucun SVG
+aucun __pycache__
+aucun script de patch
+aucun modèle OpenVINO local
+aucun tokenizer concret
+aucun Qdrant
+```

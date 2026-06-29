@@ -1,14 +1,14 @@
-# Autodoc / MissiPy — Architecture logicielle Phase 3.4
+# Autodoc / MissiPy — Architecture logicielle Phase 3.5
 
-Ce document décrit l'état actuel du prototype après ajout du contrat tokenizer injectable en Phase 3.4.
+Ce document décrit l'état actuel du prototype après ajout du pipeline embedding abstrait en Phase 3.5.
 
 La règle centrale reste inchangée : le Scheduler ne contient pas de logique métier. Il orchestre l'entrée des événements, délègue l'autorisation au `PolicyEngine`, route par `PriorityQueue` puis `Dispatcher`, et expose son activité via une observabilité passive.
 
 ## Synthèse courte
 
-État courant : le prototype possède un micro-kernel coopératif testable, un contexte global événementiel, un chemin d'inférence fictif, un registre de backends, une observabilité minimale, une chaîne replay/export isolée, un runtime OpenVINO optionnel, un registre déclaratif de profils modèles et une factory qui transforme explicitement un profil en backend enregistrable, et une configuration spécialisée pour déclarer un profil `openvino.embedding` sans modèle imposé, une couche IO raw pour tokens déjà préparés et vecteurs embedding stables, et un contrat tokenizer injectable sans dépendance externe imposée.
+État courant : le prototype possède un micro-kernel coopératif testable, un contexte global événementiel, un chemin d'inférence fictif, un registre de backends, une observabilité minimale, une chaîne replay/export isolée, un runtime OpenVINO optionnel, un registre déclaratif de profils modèles et une factory qui transforme explicitement un profil en backend enregistrable, et une configuration spécialisée pour déclarer un profil `openvino.embedding` sans modèle imposé, une couche IO raw pour tokens déjà préparés et vecteurs embedding stables, un contrat tokenizer injectable sans dépendance externe imposée et un pipeline embedding abstrait qui assemble tokenizer, raw inputs, backend et output adapter.
 
-OpenVINO est intégré sous forme de runtime réel optionnel isolé dans `src/inference/openvino_runtime.py`. La Phase 3.0 ajoute `OpenVINOModelProfileRegistry` pour décrire les modèles possibles sans les charger. La Phase 3.1 ajoute `OpenVINOBackendFactory` pour construire et enregistrer explicitement un backend depuis un profil sélectionné. La Phase 3.2 ajoute `OpenVINOEmbeddingProfileConfig` pour décrire un modèle d'embedding local configurable sans tokenizer ni chemin en dur. La Phase 3.3 ajoute `OpenVINOEmbeddingRawInputs` et `OpenVINOEmbeddingOutputAdapter` pour séparer tokens, inférence brute et vecteur final. La Phase 3.4 ajoute `TokenizerConfig`, `TokenizationRequest`, `TokenizationResult`, `TextTokenizer` et `TokenizerRegistry` pour représenter texte -> tokens sans choisir Hugging Face, SentencePiece ou un tokenizer maison.
+OpenVINO est intégré sous forme de runtime réel optionnel isolé dans `src/inference/openvino_runtime.py`. La Phase 3.0 ajoute `OpenVINOModelProfileRegistry` pour décrire les modèles possibles sans les charger. La Phase 3.1 ajoute `OpenVINOBackendFactory` pour construire et enregistrer explicitement un backend depuis un profil sélectionné. La Phase 3.2 ajoute `OpenVINOEmbeddingProfileConfig` pour décrire un modèle d'embedding local configurable sans tokenizer ni chemin en dur. La Phase 3.3 ajoute `OpenVINOEmbeddingRawInputs` et `OpenVINOEmbeddingOutputAdapter` pour séparer tokens, inférence brute et vecteur final. La Phase 3.4 ajoute `TokenizerConfig`, `TokenizationRequest`, `TokenizationResult`, `TextTokenizer` et `TokenizerRegistry` pour représenter texte -> tokens sans choisir Hugging Face, SentencePiece ou un tokenizer maison. La Phase 3.5 ajoute `OpenVINOEmbeddingPipeline` pour assembler ce contrat avec les inputs bruts, `InferenceAdapter` et `OpenVINOEmbeddingOutputAdapter`.
 
 ## Layer 0 — Hardware target
 
@@ -185,7 +185,9 @@ OpenVINOModelProfileRegistry
   -> BackendRegistry.register()
   -> RealOpenVINORuntime optionnel
   -> Core / CompiledModel
-  -> InferenceResult
+  -> InferenceResult.metadata["raw_outputs"]
+  -> OpenVINOEmbeddingOutputAdapter
+  -> OpenVINOEmbeddingVector
 ```
 
 Le registre de profils ne remplace pas `BackendRegistry` : il décrit les modèles possibles. La factory est le pont explicite entre les deux. `BackendRegistry` contient seulement les backends exécutables réellement enregistrés.
@@ -204,7 +206,7 @@ RealOpenVINORuntime
 
 OpenVINO ne doit jamais être appelé directement par le Scheduler, le Dispatcher ou le ComponentProxy. `OpenVINOBackend` n'importe toujours pas `openvino` : seul `RealOpenVINORuntime` est autorisé à le faire.
 
-Limite volontaire : aucun tokenizer concret et aucun modèle local ne sont encore intégrés. Le choix est déclaratif via profils `embedding`, `generation` ou `raw`, puis activé explicitement par la factory. La Phase 3.2 fournit un format configurable pour un profil embedding local. La Phase 3.3 fournit le contrat raw pour transporter `input_ids`, `attention_mask`, `token_type_ids` optionnel et pour transformer une sortie brute en `OpenVINOEmbeddingVector`. La Phase 3.4 fournit le contrat tokenizer abstrait qui peut produire ces matrices sans imposer l’implémentation concrète. Le runtime réel attend toujours des entrées brutes dans `InferenceRequest.context["inputs"]` ou `InferenceRequest.metadata["inputs"]`.
+Limite volontaire : aucun tokenizer concret et aucun modèle local ne sont encore intégrés. Le choix est déclaratif via profils `embedding`, `generation` ou `raw`, puis activé explicitement par la factory. La Phase 3.2 fournit un format configurable pour un profil embedding local. La Phase 3.3 fournit le contrat raw pour transporter `input_ids`, `attention_mask`, `token_type_ids` optionnel et pour transformer une sortie brute en `OpenVINOEmbeddingVector`. La Phase 3.4 fournit le contrat tokenizer abstrait qui peut produire ces matrices sans imposer l’implémentation concrète. Le runtime réel attend toujours des entrées brutes dans `InferenceRequest.context["inputs"]` ou `InferenceRequest.metadata["inputs"]`. La Phase 3.5 exploite `InferenceResult.metadata["raw_outputs"]` pour post-traiter un vecteur embedding en chemin direct, hors Scheduler.
 
 ## Layer 6 — Experts
 

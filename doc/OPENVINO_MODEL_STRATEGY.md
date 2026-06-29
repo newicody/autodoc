@@ -218,3 +218,22 @@ TokenizationRequest
 ```
 
 Ce contrat ne choisit toujours pas Hugging Face, SentencePiece, BGE-M3, E5 ou MiniLM. Il permet seulement de préparer l’endroit exact où un tokenizer concret sera injecté plus tard. Le choix d’implémentation peut donc rester expérimental sans modifier `Scheduler`, `InferenceAdapter`, `OpenVINOBackend` ou `RealOpenVINORuntime`.
+
+
+## Phase 3.5 — Pipeline embedding abstrait
+
+La Phase 3.5 assemble les contrats préparés sans choisir de modèle concret :
+
+```text
+TokenizationRequest
+  -> TextTokenizer
+  -> TokenizationResult
+  -> OpenVINOEmbeddingRawInputs
+  -> InferenceAdapter
+  -> BackendRegistry
+  -> InferenceResult.metadata["raw_outputs"]
+  -> OpenVINOEmbeddingOutputAdapter
+  -> OpenVINOEmbeddingVector
+```
+
+Cette étape confirme que l'option embedding peut être branchée progressivement. Il reste à choisir plus tard l'implémentation concrète du tokenizer et le chemin réel du modèle local.

@@ -6,7 +6,7 @@ L'objectif n'est pas de construire une application Python monolithique, mais un 
 
 ## État courant
 
-État de référence : **Phase 3.4 tokenizer contract**.
+État de référence : **Phase 3.5 embedding pipeline**.
 
 Le prototype possède actuellement :
 
@@ -27,9 +27,10 @@ Le prototype possède actuellement :
 - un `OpenVINOBackendFactory` qui transforme explicitement un profil en backend enregistrable ;
 - un `OpenVINOEmbeddingProfileConfig` configurable, sans modèle local imposé ;
 - un contrat embedding raw pour `input_ids` / `attention_mask` et sortie vecteur ;
-- un contrat tokenizer injectable, sans dépendance Hugging Face imposée.
+- un contrat tokenizer injectable, sans dépendance Hugging Face imposée ;
+- un pipeline embedding abstrait qui assemble tokenizer, raw inputs, backend et output adapter sans modèle concret imposé.
 
-OpenVINO est branché comme runtime générique à entrées brutes. Le choix du ou des modèles est décrit par profils déclaratifs : `embedding`, `generation` ou `raw`. La Phase 3.1 ajoute le pont contrôlé entre profil et `BackendRegistry`, sans tokenizer, post-processing ou modèle précis imposé. La Phase 3.2 ajoute une configuration spécialisée pour déclarer un profil `openvino.embedding` local, toujours sans chemin en dur ni chargement automatique. La Phase 3.3 ajoute la couche IO raw : tokens déjà préparés -> `InferenceRequest.context["inputs"]` -> sortie brute -> vecteur embedding stable. La Phase 3.4 ajoute le contrat tokenizer : texte -> `TokenizationResult` -> `OpenVINOEmbeddingRawInputs`, sans tokenizer concret imposé.
+OpenVINO est branché comme runtime générique à entrées brutes. Le choix du ou des modèles est décrit par profils déclaratifs : `embedding`, `generation` ou `raw`. La Phase 3.1 ajoute le pont contrôlé entre profil et `BackendRegistry`, sans tokenizer, post-processing ou modèle précis imposé. La Phase 3.2 ajoute une configuration spécialisée pour déclarer un profil `openvino.embedding` local, toujours sans chemin en dur ni chargement automatique. La Phase 3.3 ajoute la couche IO raw : tokens déjà préparés -> `InferenceRequest.context["inputs"]` -> sortie brute -> vecteur embedding stable. La Phase 3.4 ajoute le contrat tokenizer : texte -> `TokenizationResult` -> `OpenVINOEmbeddingRawInputs`, sans tokenizer concret imposé. La Phase 3.5 assemble ces pièces dans un pipeline embedding abstrait mono-texte : tokenizer injectable -> raw inputs -> `InferenceAdapter` -> sorties brutes -> vecteur.
 
 ## Règle d'architecture
 
@@ -81,6 +82,7 @@ cd doc && make -f makefile
 - `doc/MODEL_EMBEDDING_PROFILE_PHASE3_2.md` : configuration déclarative d’un profil embedding OpenVINO.
 - `doc/MODEL_EMBEDDING_RAW_PHASE3_3.md` : contrat IO raw pour entrées tokenisées et sortie vecteur.
 - `doc/MODEL_TOKENIZER_CONTRACT_PHASE3_4.md` : contrat tokenizer injectable, sans dépendance externe imposée.
+- `doc/MODEL_EMBEDDING_PIPELINE_PHASE3_5.md` : pipeline embedding abstrait sans tokenizer concret ni Qdrant.
 - `doc/docs/architecture/*.dot` : roadmap DOT navigable ; les SVG sont générés par le makefile.
 
 ## Développement

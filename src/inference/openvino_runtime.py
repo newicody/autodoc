@@ -114,6 +114,7 @@ class RealOpenVINORuntime:
                     "input_kind": type(inputs).__name__,
                     "output_kind": type(raw_outputs).__name__,
                     "output_count": _output_count(raw_outputs),
+                    "raw_outputs": raw_outputs,
                     "runtime": type(self).__name__,
                 }
             ),

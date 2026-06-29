@@ -66,6 +66,7 @@ async def test_real_openvino_runtime_uses_injected_openvino_module() -> None:
     assert result.backend == "openvino"
     assert result.text == "openvino://GPU:openvino_model.xml"
     assert result.metadata["output_count"] == 1
+    assert result.metadata["raw_outputs"] == {"embedding": [1.0, 2.0, 3.0]}
     assert result.metadata["input_kind"] == "dict"
     assert ov_module.core.read_models == ["models/embed/openvino_model.xml"]
     assert ov_module.core.compile_calls == [("read:models/embed/openvino_model.xml", "GPU")]

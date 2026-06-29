@@ -88,3 +88,18 @@ TokenizationRequest
 ```
 
 La prochaine étape peut donc ajouter un pipeline d'embedding orchestrant ces pièces sans choisir immédiatement l'implémentation concrète du tokenizer.
+
+
+## Suite Phase 3.5
+
+La Phase 3.5 ajoute `OpenVINOEmbeddingPipeline`, qui consomme ce contrat tokenizer sans l'étendre :
+
+```text
+TextTokenizer
+  -> TokenizationResult
+  -> OpenVINOEmbeddingRawInputs
+  -> InferenceAdapter
+  -> OpenVINOEmbeddingVector
+```
+
+Le tokenizer reste injectable. Aucun tokenizer concret n'est ajouté.
