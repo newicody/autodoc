@@ -1,36 +1,41 @@
 from __future__ import annotations
-import time
-from typing import TYPE_CHECKING
-from contracts.context import GlobalContextSnapshot, InferenceContext
-from contracts.event import Event, EventType
 
-if TYPE_CHECKING:
-    from .scheduler import Scheduler
+import time
+from typing import Any
+
+from contracts.context import GlobalContextSnapshot, InferenceContext, freeze_mapping
+from contracts.event import Event, EventType
+from .event_bus import EventBus
+from .registry import Registry
+
 
 class ContextEngine:
-    def __init__(self, scheduler: Scheduler):
-        self.scheduler = scheduler
+    """Collecte Phase 1 du contexte global.
 
-    async def execute_tick(self):
-        # 1. Demande de contexte à tous les composants
-        # (via événement CONTEXT_REQUEST broadcast)
-        await self.scheduler.event_bus.publish(
-            Event(EventType.CONTEXT_REQUEST, source="scheduler", dest="*")
-        )
-        # 2. Les composants répondent via CONTEXT_REPLY (collectés par le bus)
-        # Dans cette version, on simule une collecte directe via les proxies
-        components = self.scheduler.registry.all()
-        contexts = {}
-        for name, proxy in components.items():
+    Mode actuel : collecte directe via Registry -> ComponentProxy.context().
+    Mode cible : CONTEXT_REQUEST -> CONTEXT_REPLY -> Collector -> Reducer.
+    """
+
+    def __init__(self, registry: Registry, event_bus: EventBus) -> None:
+        self.registry = registry
+        self.event_bus = event_bus
+        self.last_snapshot: GlobalContextSnapshot | None = None
+        self.last_inference_context: InferenceContext | None = None
+
+    async def execute_tick(self) -> GlobalContextSnapshot:
+        await self.event_bus.publish(Event(EventType.CONTEXT_REQUEST, source="scheduler", dest="*"))
+
+        contexts: dict[str, dict[str, Any]] = {}
+        for name, proxy in self.registry.all().items():
             contexts[name] = await proxy.context()
-        # 3. Réduction / Snapshot
-        snapshot = GlobalContextSnapshot(timestamp=time.time(), components=contexts)
-        # 4. Transformation en InferenceContext (simplifié)
-        inf_ctx = InferenceContext(
-            features={"load": 0.5},
-            priorities={name: 0 for name in contexts}
+
+        frozen_components = {name: freeze_mapping(ctx) for name, ctx in contexts.items()}
+        snapshot = GlobalContextSnapshot(timestamp=time.time(), components=freeze_mapping(frozen_components))
+        inference_context = InferenceContext(
+            features=freeze_mapping({"component_count": len(contexts)}),
+            priorities=freeze_mapping({name: 0 for name in contexts}),
         )
-        # 5. Application des décisions (exemple : ajustement des priorités)
-        for name in contexts:
-            # On pourrait modifier les priorités dans la queue
-            pass
+
+        self.last_snapshot = snapshot
+        self.last_inference_context = inference_context
+        return snapshot

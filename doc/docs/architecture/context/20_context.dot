@@ -1,46 +1,57 @@
 digraph Context {
     rankdir=TB;
-    node [shape=box, style=filled, fontname="Arial", fontsize=10];
+    splines=ortho;
 
-    subgraph cluster_context {
-        label="Context Fabric";
-        color="#ef6c00"; bgcolor="#fff3e0";
-        node [fillcolor="#fff3e0", color="#ef6c00"];
-        GET      [URL="collector/21_collector.svg"];
-        Collector[URL="collector/21_collector.svg"];
-        Reducer  [URL="reducer/22_reducer.svg"];
-        Snapshot [URL="snapshot/23_snapshot.svg"];
-        Inference[URL="snapshot/23_snapshot.svg"];
-        Adapter  [URL="decision_engine/24_decision_engine.svg"];
-        Decision [URL="decision_engine/24_decision_engine.svg"];
-    }
+    graph [fontname="Arial", fontsize=11];
+    node  [shape=box, style="rounded,filled", fontname="Arial", fontsize=10];
+    edge  [fontname="Arial", fontsize=9, arrowsize=0.7];
 
     Scheduler [fillcolor="#ede7f6", color="#512da8", URL="../scheduler/10_scheduler.svg"];
-    Proxy [fillcolor="#ede7f6", color="#512da8", URL="../scheduler/component_proxy/14_component_proxy.svg"];
-    Policy [fillcolor="#ede7f6", color="#512da8", URL="../scheduler/10_scheduler.svg"];
-    MCTS [fillcolor="#fffde7", color="#fbc02d", URL="../learning/60_learning.svg"];
-    OpenVINO [fillcolor="#fffde7", color="#fbc02d", URL="../learning/60_learning.svg"];
+    Registry  [fillcolor="#ede7f6", color="#512da8"];
+    Proxy     [label="ComponentProxy", fillcolor="#ede7f6", color="#512da8"];
 
-    // Edges
-    Scheduler -> GET [label="Tick"];          // Tick horloge
-    GET -> Proxy [label="context()"];         // Interroge Proxy
-    Proxy -> Collector;                       // Données brutes
-    Collector -> Reducer;                     // Agrégation
-    Reducer -> Snapshot;                      // Image immuable
-    Snapshot -> Inference;                    // Transformation
-    Inference -> Adapter;                     // Adaptation
-    Adapter -> Decision;                      // Décision
-    Decision -> Policy;                       // Influence Policy
-    Policy -> Scheduler [style=dashed];       // Ajuste Scheduler
-    Decision -> MCTS [style=dashed];          // Lance MCTS
-    Adapter -> OpenVINO;                      // Pilote OpenVINO
+    EventBus  [label="EventBus\nobservation only", fillcolor="#ede7f6", color="#512da8"];
 
-    // Navigation
+    subgraph cluster_current {
+        label="Phase 1 — fast path actuel";
+        color="#ef6c00";
+        bgcolor="#fff3e0";
+        node [fillcolor="#fff3e0", color="#ef6c00"];
+        ContextEngine [label="ContextEngine.execute_tick()"];
+        DirectCollect [label="Registry.all()\nproxy.context()"];
+        Snapshot [label="GlobalContextSnapshot"];
+        InferenceContext [label="InferenceContext"];
+    }
+
+    subgraph cluster_target {
+        label="Cible — event based";
+        color="#f9a825";
+        bgcolor="#fffde7";
+        node [fillcolor="#fffde7", color="#f9a825"];
+        ContextRequest [label="CONTEXT_REQUEST"];
+        ContextReply   [label="CONTEXT_REPLY"];
+        Collector;
+        Reducer;
+        DecisionEngine;
+    }
+
+    Scheduler -> ContextEngine [label="clock tick"];
+    ContextEngine -> EventBus [label="publish CONTEXT_REQUEST"];
+    ContextEngine -> Registry;
+    Registry -> Proxy;
+    Proxy -> DirectCollect [label="context()"];
+    DirectCollect -> Snapshot;
+    Snapshot -> InferenceContext;
+
+    ContextRequest -> Proxy [style=dashed, label="future"];
+    Proxy -> ContextReply [style=dashed, label="future"];
+    ContextReply -> Collector [style=dashed];
+    Collector -> Reducer [style=dashed];
+    Reducer -> Snapshot [style=dashed];
+    InferenceContext -> DecisionEngine [style=dashed, label="future"];
+    DecisionEngine -> Scheduler [style=dashed];
+
     Nav_Global [label="Global", shape=plaintext, URL="../00_global.svg"];
     Nav_Scheduler [label="Scheduler", shape=plaintext, URL="../scheduler/10_scheduler.svg"];
-    Nav_Collector [label="Collector", shape=plaintext, URL="collector/21_collector.svg"];
-    Nav_Reducer [label="Reducer", shape=plaintext, URL="reducer/22_reducer.svg"];
-    Nav_Snapshot [label="Snapshot", shape=plaintext, URL="snapshot/23_snapshot.svg"];
-    Nav_Decision [label="Decision Engine", shape=plaintext, URL="decision_engine/24_decision_engine.svg"];
-    { rank=sink; Nav_Global; Nav_Scheduler; Nav_Collector; Nav_Reducer; Nav_Snapshot; Nav_Decision; }
+    { rank=sink; Nav_Global; Nav_Scheduler; }
 }

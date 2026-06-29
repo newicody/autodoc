@@ -1,68 +1,93 @@
 digraph Scheduler {
     rankdir=TB;
-    node [shape=box, style=filled, fontname="Arial", fontsize=10];
+    compound=true;
+    splines=ortho;
 
-    subgraph cluster_kernel {
-        label="Micro Kernel (focus)";
-        color="#512da8"; bgcolor="#ede7f6";
+    graph [fontname="Arial", fontsize=11];
+    node  [shape=box, style="rounded,filled", fontname="Arial", fontsize=10];
+    edge  [fontname="Arial", fontsize=9, arrowsize=0.7];
+
+    subgraph cluster_boot {
+        label="Boot";
+        color="#6a1b9a";
+        bgcolor="#f3e5f5";
+        node [fillcolor="#f3e5f5", color="#6a1b9a"];
+        Main     [label="main.py"];
+        Launcher [label="Launcher.boot()"];
+        Loader   [label="load_components()"];
+        Registry [label="Registry"];
+    }
+
+    subgraph cluster_runtime {
+        label="Runtime";
+        color="#388e3c";
+        bgcolor="#e8f5e9";
+        node [fillcolor="#e8f5e9", color="#388e3c"];
+        RealComponent [label="DummyExpert\nComponent"];
+        Proxy         [label="ComponentProxy"];
+        TickGen       [label="tick() async generator"];
+    }
+
+    subgraph cluster_scheduler {
+        label="Scheduler core";
+        color="#512da8";
+        bgcolor="#ede7f6";
         node [fillcolor="#ede7f6", color="#512da8"];
-        Launcher [URL="../00_global.svg"];
-        Registry [URL="../00_global.svg"];
-        Proxy [URL="component_proxy/14_component_proxy.svg"];
-        Scheduler [URL="../00_global.svg"]; // lui-même, mais lien vers global
-        Dispatcher [URL="dispatcher/11_dispatcher.svg"];
-        Queue [URL="priority_queue/13_priority_queue.svg"];
-        EventBus [URL="event_bus/12_event_bus.svg"];
-        Policy [URL="../00_global.svg"];
-        Lifecycle [URL="../00_global.svg"];
+        Scheduler [label="Scheduler.run()", URL="../00_global.svg", tooltip="Retour global"];
+        Queue     [label="PriorityQueue"];
+        Dispatcher;
+        Handler   [label="Lifecycle/Tick Handler"];
+        EventBus  [label="EventBus\nobservation only"];
+        Clock     [label="Context clock"];
+    }
+
+    subgraph cluster_reply {
+        label="Request / Reply";
+        color="#455a64";
+        bgcolor="#eceff1";
+        node [fillcolor="#eceff1", color="#455a64"];
+        Event   [label="Event"];
+        Request [label="Request(reply=Future)"];
+        Reply   [label="Future.set_result(...)"];
     }
 
     subgraph cluster_context {
-        label="Context Fabric";
+        label="Context Phase 1";
         color="#ef6c00";
+        bgcolor="#fff3e0";
         node [fillcolor="#fff3e0", color="#ef6c00"];
-        GET [URL="../context/20_context.svg"];
-        Decision [URL="../context/decision_engine/24_decision_engine.svg"];
+        ContextEngine [URL="../context/20_context.svg"];
+        Snapshot      [label="GlobalContextSnapshot", URL="../context/20_context.svg"];
     }
 
-    subgraph cluster_experts {
-        label="Experts";
-        color="#388e3c";
-        node [fillcolor="#e8f5e9", color="#388e3c"];
-        ExpertGroup [label="Experts", shape=point, URL="../experts/40_experts.svg"];
-    }
+    Main -> Launcher;
+    Launcher -> Loader;
+    Loader -> RealComponent;
+    Launcher -> Registry;
+    Registry -> Proxy;
+    Proxy -> RealComponent;
+    Launcher -> Scheduler [label="create_task"];
+    Launcher -> Proxy [label="start()"];
 
-    subgraph cluster_validation {
-        label="Validation";
-        color="#7b1fa2";
-        node [fillcolor="#f3e5f5", color="#7b1fa2"];
-        ValidationGroup [label="Validation", shape=point, URL="../validation/50_validation.svg"];
-    }
+    Proxy -> TickGen [label="__anext__ / asend"];
+    TickGen -> Event [label="yield Event"];
+    Event -> Request [label="attach"];
+    Request -> Scheduler [label="emit"];
+    Scheduler -> Queue;
+    Queue -> Dispatcher;
+    Dispatcher -> Handler;
+    Dispatcher -> EventBus [label="publish copy"];
+    Handler -> Reply [label="result"];
+    Reply -> Proxy [label="await future", style=dashed];
+    Proxy -> TickGen [label="asend(result)", style=dashed];
 
-    // Edges
-    Launcher -> Registry;     // Launcher → Registry
-    Registry -> Proxy;        // Registry → Proxy
-    Proxy -> Scheduler [label="yield Event"]; // Proxy → Scheduler
-    Scheduler -> Queue;       // Scheduler → Queue
-    Queue -> Dispatcher;      // Queue → Dispatcher
-    Dispatcher -> EventBus;   // Dispatcher → EventBus
-    Policy -> Scheduler [style=dashed]; // Policy ajuste Scheduler
-    Lifecycle -> Scheduler [style=dotted]; // Lifecycle notifie
+    Scheduler -> Clock [label="background task"];
+    Clock -> ContextEngine [label="every interval"];
+    ContextEngine -> Registry [label="all()"];
+    ContextEngine -> Proxy [label="context()"];
+    ContextEngine -> Snapshot;
 
-    Scheduler -> GET [label="Tick"];    // Tick vers GET_CONTEXT_ALL
-    GET -> Proxy [label="context()"];   // GET interroge Proxy
-    Decision -> Policy [label="décisions"]; // Decision → Policy
-    Decision -> Scheduler [style=dashed];   // Decision → Scheduler
-
-    Proxy -> ExpertGroup [label="délègue"];       // Proxy → Experts
-    Proxy -> ValidationGroup [label="soumet"];    // Proxy → Validation
-    EventBus -> Logger [label="broadcast", style=dashed]; // EventBus → Logger
-
-    // Navigation
     Nav_Global [label="Global", shape=plaintext, URL="../00_global.svg"];
-    Nav_Dispatcher [label="Dispatcher", shape=plaintext, URL="dispatcher/11_dispatcher.svg"];
-    Nav_EventBus [label="EventBus", shape=plaintext, URL="event_bus/12_event_bus.svg"];
-    Nav_Queue [label="Priority Queue", shape=plaintext, URL="priority_queue/13_priority_queue.svg"];
-    Nav_Proxy [label="Component Proxy", shape=plaintext, URL="component_proxy/14_component_proxy.svg"];
-    { rank=sink; Nav_Global; Nav_Dispatcher; Nav_EventBus; Nav_Queue; Nav_Proxy; }
+    Nav_Context [label="Context", shape=plaintext, URL="../context/20_context.svg"];
+    { rank=sink; Nav_Global; Nav_Context; }
 }

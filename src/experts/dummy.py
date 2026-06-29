@@ -1,19 +1,28 @@
-#  experts/dummy.py
+from __future__ import annotations
+
+from typing import Any, AsyncGenerator
 
 from contracts.component import Component
 from contracts.event import Event, EventType
-from typing import AsyncGenerator, Any
+
 
 class DummyExpert(Component):
     name = "DummyExpert"
 
-    def tick(self) -> AsyncGenerator[Event, Any]:
-        # Exemple simple : émet un événement de type TICK
-        yield Event(EventType.TICK, source=self.name, payload="hello")
-        # On ne boucle pas ici pour simplifier, le STOP sera émis à la fin du générateur
+    def __init__(self) -> None:
+        self.counter = 0
+        self.last_result: Any = None
 
-    async def context(self) -> dict:
-        return {"status": "idle", "counter": 0}
+    async def tick(self) -> AsyncGenerator[Event, Any]:
+        self.last_result = yield Event(EventType.TICK, source=self.name, payload="hello")
+        self.counter += 1
 
-# Instance unique chargée par le loader
+    async def context(self) -> dict[str, Any]:
+        return {
+            "status": "idle",
+            "counter": self.counter,
+            "last_result": self.last_result,
+        }
+
+
 component = DummyExpert()

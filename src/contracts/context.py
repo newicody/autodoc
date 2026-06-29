@@ -1,16 +1,26 @@
-# contracts/context.py
 from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Dict, Any
+from types import MappingProxyType
+from typing import Any, Mapping
 
-@dataclass(frozen=True)
+
+def freeze_mapping(data: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Gel léger pour éviter les mutations accidentelles du snapshot."""
+    return MappingProxyType(dict(data))
+
+
+@dataclass(frozen=True, slots=True)
 class GlobalContextSnapshot:
-    """Image immuable de l’état de tous les composants à un instant T."""
-    timestamp: float
-    components: Dict[str, dict]  # nom -> état
+    """Image immuable de l'état observable des composants."""
 
-@dataclass(frozen=True)
+    timestamp: float
+    components: Mapping[str, Mapping[str, Any]]
+
+
+@dataclass(frozen=True, slots=True)
 class InferenceContext:
-    """Version transformée pour les décideurs (OpenVINO, MCTS, etc.)."""
-    features: Dict[str, Any]
-    priorities: Dict[str, int] = field(default_factory=dict)
+    """Projection du contexte global vers les décideurs/backends."""
+
+    features: Mapping[str, Any]
+    priorities: Mapping[str, int] = field(default_factory=dict)

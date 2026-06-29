@@ -1,22 +1,33 @@
-# kernel/lifecycle
+from __future__ import annotations
+
+from typing import Any
+
 from contracts.event import Event, EventType
 from .dispatcher import Dispatcher
 
+
 class LifecycleManager:
     @staticmethod
-    def register_handlers(dispatcher: Dispatcher):
-        dispatcher.register(EventType.LOAD, LoadHandler())
-        dispatcher.register(EventType.START, StartHandler())
-        dispatcher.register(EventType.STOP, StopHandler())
+    def register_handlers(dispatcher: Dispatcher) -> None:
+        dispatcher.register(EventType.LOAD, PrintHandler("LOAD"))
+        dispatcher.register(EventType.START, PrintHandler("START"))
+        dispatcher.register(EventType.STOP, PrintHandler("STOP"))
+        dispatcher.register(EventType.ERROR, PrintHandler("ERROR"))
+        dispatcher.register(EventType.TICK, TickHandler())
+        dispatcher.register(EventType.CONTEXT_REQUEST, PrintHandler("CONTEXT_REQUEST"))
+        dispatcher.register(EventType.CONTEXT_REPLY, PrintHandler("CONTEXT_REPLY"))
 
-class LoadHandler:
-    async def handle(self, event: Event):
-        print(f"[Lifecycle] LOAD: {event.source}")
 
-class StartHandler:
-    async def handle(self, event: Event):
-        print(f"[Lifecycle] START: {event.source}")
+class PrintHandler:
+    def __init__(self, label: str) -> None:
+        self.label = label
 
-class StopHandler:
-    async def handle(self, event: Event):
-        print(f"[Lifecycle] STOP: {event.source}")
+    async def handle(self, event: Event) -> Any:
+        print(f"[Lifecycle] {self.label}: {event.source} -> {event.dest} payload={event.payload!r}")
+        return {"ok": True, "event": self.label}
+
+
+class TickHandler:
+    async def handle(self, event: Event) -> Any:
+        print(f"[Tick] {event.source}: {event.payload!r}")
+        return {"ok": True, "handled": "TICK", "payload": event.payload}

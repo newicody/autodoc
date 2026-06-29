@@ -1,55 +1,86 @@
-# runtime/component.py
-
 from __future__ import annotations
+
 import asyncio
+from contextlib import suppress
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
+
 from contracts.component import Component
-from contracts.event import Event, EventType
+from contracts.event import Event, EventType, Request
 
 if TYPE_CHECKING:
     from kernel.scheduler import Scheduler
 
-class ComponentProxy:
-    """Encapsule un composant réel, intercepte les accès et notifie le Scheduler."""
-    def __init__(self, real: Component, scheduler: Scheduler):
-        self._real = real
-        self.name = real.__class__.__name__
-        self.scheduler = scheduler
-        self._tick_task = None
-        self._context_cache = {}
 
-    async def start(self):
-        # Émet LOAD puis lance la boucle tick
+class ComponentProxy:
+    """Isolation minimale autour d'un Component réel.
+
+    Le proxy est la seule surface visible par le kernel : il démarre le composant,
+    intercepte les Events, ajoute un canal de réponse et fournit le contexte.
+    """
+
+    def __init__(self, real: Component, scheduler: "Scheduler") -> None:
+        self._real = real
+        self.name = getattr(real, "name", real.__class__.__name__)
+        self.scheduler = scheduler
+        self._tick_task: asyncio.Task[None] | None = None
+        self._started = False
+        self._stopped = False
+
+    async def start(self) -> None:
+        if self._started:
+            return
+        self._started = True
         await self.scheduler.emit(Event(EventType.LOAD, source=self.name))
-        self._tick_task = asyncio.create_task(self._tick_loop())
+        self._tick_task = asyncio.create_task(self._tick_loop(), name=f"component:{self.name}")
         await self.scheduler.emit(Event(EventType.START, source=self.name))
 
-    async def _tick_loop(self):
-        """Boucle principale : exécute le générateur tick() du composant réel."""
-        gen = self._real.tick()
+    async def wait(self) -> None:
+        if self._tick_task is not None:
+            await self._tick_task
+
+    async def stop(self) -> None:
+        if self._tick_task is not None and not self._tick_task.done():
+            self._tick_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._tick_task
+
+    async def _tick_loop(self) -> None:
         try:
+            gen = self._real.tick()
             event = await gen.__anext__()
             while True:
-                # Envoie l'événement au Scheduler et récupère le résultat
                 result = await self._dispatch_event(event)
                 event = await gen.asend(result)
         except StopAsyncIteration:
-            await self.scheduler.emit(Event(EventType.STOP, source=self.name))
+            await self._emit_stop_once()
+        except asyncio.CancelledError:
+            await self._emit_stop_once()
+            raise
+        except BaseException as exc:
+            await self.scheduler.emit(
+                Event(
+                    EventType.ERROR,
+                    source=self.name,
+                    payload={"error": repr(exc)},
+                    priority=-100,
+                )
+            )
+            await self._emit_stop_once()
 
     async def _dispatch_event(self, event: Event) -> Any:
-        """Attache un Future à l'événement et attend la réponse du Scheduler."""
         loop = asyncio.get_running_loop()
-        future = loop.create_future()
-        event = Event(
-            type=event.type,
-            source=event.source,
-            dest=event.dest,
-            payload=(event.payload, future)  # astuce pour passer le future
-        )
-        await self.scheduler.emit(event)
-        return await future
+        future: asyncio.Future[Any] = loop.create_future()
+        timeout = event.request.timeout if event.request else 5.0
+        request = Request(reply=future, timeout=timeout)
+        outbound = replace(event, source=event.source or self.name, request=request)
+        await self.scheduler.emit(outbound)
+        return await asyncio.wait_for(future, timeout=timeout)
 
-    async def context(self) -> dict:
-        """Retourne l'état du composant (pour le Context Engine)."""
-        # On pourrait appeler self._real.context() directement
+    async def _emit_stop_once(self) -> None:
+        if not self._stopped:
+            self._stopped = True
+            await self.scheduler.emit(Event(EventType.STOP, source=self.name))
+
+    async def context(self) -> dict[str, Any]:
         return await self._real.context()

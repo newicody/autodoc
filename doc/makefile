@@ -1,6 +1,5 @@
-DOT=$(shell find docs/architecture -name "*.dot")
-
-SVG=$(DOT:.dot=.svg)
+DOT := $(shell find docs/architecture -name "*.dot")
+SVG := $(DOT:.dot=.svg)
 
 all: $(SVG)
 

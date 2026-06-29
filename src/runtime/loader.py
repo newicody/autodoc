@@ -1,17 +1,23 @@
-# runtime/loader.py
+from __future__ import annotations
+
 import importlib
 import pathlib
+
 from contracts.component import Component
 
+
 def load_components() -> list[Component]:
-    """Charge tous les composants concrets depuis le dossier experts/."""
+    """Charge les composants exposant une variable `component` dans experts/*.py."""
+
     experts_dir = pathlib.Path(__file__).parent.parent / "experts"
-    components = []
-    for f in experts_dir.glob("*.py"):
-        if f.name == "__init__.py":
+    components: list[Component] = []
+
+    for path in sorted(experts_dir.glob("*.py")):
+        if path.name == "__init__.py":
             continue
-        mod = importlib.import_module(f"experts.{f.stem}")
-        # On suppose que chaque module expose une variable `component` instance de Component
-        if hasattr(mod, "component"):
-            components.append(mod.component)
+        module = importlib.import_module(f"experts.{path.stem}")
+        component = getattr(module, "component", None)
+        if component is not None:
+            components.append(component)
+
     return components
