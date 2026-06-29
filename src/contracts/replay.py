@@ -85,3 +85,61 @@ class ReplayPlan:
         """Types d'événements présents dans l'ordre du plan."""
 
         return tuple(event.type for event in self.events)
+
+
+@dataclass(frozen=True, slots=True)
+class ReplaySandboxStep:
+    """Résultat immuable d'une étape de replay isolé.
+
+    Une étape ne contient aucun Event vivant. Elle décrit seulement ce que le
+    sandbox a accepté, refusé ou confié à un handler de simulation.
+    """
+
+    index: int
+    original_id: str
+    type: str
+    source: str
+    dest: str
+    accepted: bool
+    handled: bool
+    reason: str = ""
+    result_repr: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class ReplaySandboxResult:
+    """Bilan immuable d'une exécution ReplaySandbox."""
+
+    source_record_count: int
+    planned_event_count: int
+    steps: tuple[ReplaySandboxStep, ...]
+
+    @property
+    def accepted_count(self) -> int:
+        """Nombre d'étapes acceptées par le sandbox."""
+
+        return sum(1 for step in self.steps if step.accepted)
+
+    @property
+    def rejected_count(self) -> int:
+        """Nombre d'étapes refusées par le sandbox."""
+
+        return sum(1 for step in self.steps if not step.accepted)
+
+    @property
+    def handled_count(self) -> int:
+        """Nombre d'étapes acceptées ayant un handler de simulation."""
+
+        return sum(1 for step in self.steps if step.handled)
+
+    @property
+    def ok(self) -> bool:
+        """Indique si toutes les étapes planifiées ont été acceptées."""
+
+        return self.rejected_count == 0 and len(self.steps) == self.planned_event_count
+
+    @property
+    def event_types(self) -> tuple[str, ...]:
+        """Types d'événements traités dans l'ordre."""
+
+        return tuple(step.type for step in self.steps)

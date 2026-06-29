@@ -248,7 +248,7 @@ Prévu :
 
 Le MCTS produit des propositions, jamais des actions directes.
 
-## Layer 9 — Observability Phase 1.9
+## Layer 9 — Observability Phase 2.0
 
 Actuel :
 
@@ -257,7 +257,9 @@ Actuel :
 - `EventRecorder` ;
 - `EventLogSnapshot` ;
 - `ReplayReader` ;
-- `ReplayPlan`.
+- `ReplayPlan` ;
+- `ReplaySandbox` ;
+- `ReplaySandboxResult`.
 
 Prévu :
 
@@ -270,6 +272,8 @@ Prévu :
 - recovery.
 
 Observability écoute l'EventBus ou lit des snapshots. Elle ne commande pas le kernel.
+
+Le `ReplaySandbox` exécute un `ReplayPlan` dans une simulation isolée. Il ne connaît pas le Scheduler, ne publie aucun événement et refuse `SHUTDOWN` par défaut.
 
 ## Layer 10 — Test Harness
 
@@ -305,10 +309,13 @@ Couverture actuelle :
 - EventRecorder capture passivement les événements observés ;
 - EventLogSnapshot reste immuable ;
 - ReplayReader filtre par type/source/destination ;
-- ReplayReader produit un ReplayPlan contrôlé et immuable.
+- ReplayReader produit un ReplayPlan contrôlé et immuable ;
+- ReplaySandbox rejoue un ReplayPlan dans une simulation isolée ;
+- ReplaySandbox refuse SHUTDOWN par défaut ;
+- ReplaySandbox peut utiliser des handlers de simulation sans Scheduler.
 
 ## Prochaine étape logique
 
-Phase 2.0 : ajouter un moteur de replay contrôlé qui peut prendre un `ReplayPlan` et le rejouer dans un environnement isolé, sans affecter le Scheduler de production.
+Phase 2.1 : ajouter une API de scénario de replay plus riche, capable de comparer plusieurs `ReplaySandboxResult` et de produire un rapport déterministe.
 
-Le replay effectif ne doit pas réinjecter directement les événements dans le kernel courant. Il doit passer par une instance de test/simulation ou par une API explicite de replay.
+Le replay ne doit toujours pas réinjecter directement les événements dans le kernel courant.

@@ -1,24 +1,43 @@
-# Manifest — Phase 1.9 changed files
+# Manifest — Phase 2.0 changed files
 
-## Code
+## Ajoutés
 
-- `src/contracts/replay.py`
-- `src/observability/replay_reader.py`
-- `src/observability/__init__.py`
+```text
+src/observability/replay_sandbox.py
+tests/observability/test_replay_sandbox.py
+doc/CHANGELOG_PHASE2_0.md
+PHASE2_0_TEST_REPORT.md
+MANIFEST_CHANGED_FILES.md
+```
 
-## Tests
+## Modifiés
 
-- `tests/observability/test_replay_reader.py`
+```text
+src/contracts/replay.py
+src/observability/__init__.py
+doc/ARCHITECTURE_LAYERS.md
+doc/docs/architecture/00_global.dot
+doc/docs/architecture/observability/70_observability.dot
+doc/docs/architecture/tests/80_tests.dot
+```
 
-## Documentation
+## Non inclus
 
-- `doc/ARCHITECTURE_LAYERS.md`
-- `doc/CHANGELOG_PHASE1_9.md`
+```text
+*.svg
+scripts de patch
+```
 
-## DOT roadmap
+## Raison des DOT modifiés
 
-- `doc/docs/architecture/00_global.dot`
-- `doc/docs/architecture/observability/70_observability.dot`
-- `doc/docs/architecture/tests/80_tests.dot`
+Les DOT sont une roadmap vivante. Ils ont été modifiés uniquement parce que la Phase 2.0 ajoute un élément architectural réel :
 
-Aucun SVG. Aucun script de patch.
+```text
+ReplayPlan -> ReplaySandbox -> ReplaySandboxResult
+```
+
+Commentaires invisibles ajoutés :
+
+```text
+ROADMAP_NOTE[phase2_0]
+```
