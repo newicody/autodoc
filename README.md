@@ -6,7 +6,7 @@ L'objectif n'est pas de construire une application Python monolithique, mais un 
 
 ## État courant
 
-État de référence : **Phase 3.18 rebuild E5 sûr avec staging, validation et promotion**.
+État de référence : **Phase 4.2 recherche E5 locale dev-ready sur corpus repo**.
 
 Le prototype possède actuellement :
 
@@ -35,10 +35,21 @@ Le prototype possède actuellement :
 - un contrat `query:` / `passage:` ;
 - une CLI de ranking local E5 avant Qdrant ;
 - un corpus local E5 persistant depuis passages ou sources TXT/Markdown ;
-- un rapport de recherche E5 avec score, source, lignes et extrait;
-- un rebuild sûr du corpus E5 avec staging, validation optionnelle et promotion atomique.
+- un rapport de recherche E5 avec score, source, lignes et extrait ;
+- un rebuild sûr du corpus E5 avec staging, validation optionnelle et promotion atomique ;
+- une procédure de recherche E5 locale dev-ready validée sur le corpus du repo.
 
-OpenVINO est branché comme runtime générique à entrées brutes. Le choix du ou des modèles est décrit par profils déclaratifs : `embedding`, `generation` ou `raw`. La Phase 3.1 ajoute le pont contrôlé entre profil et `BackendRegistry`, sans tokenizer, post-processing ou modèle précis imposé. La Phase 3.2 ajoute une configuration spécialisée pour déclarer un profil `openvino.embedding` local, toujours sans chemin en dur ni chargement automatique. La Phase 3.3 ajoute la couche IO raw : tokens déjà préparés -> `InferenceRequest.context["inputs"]` -> sortie brute -> vecteur embedding stable. La Phase 3.4 ajoute le contrat tokenizer : texte -> `TokenizationResult` -> `OpenVINOEmbeddingRawInputs`, sans tokenizer concret imposé. La Phase 3.5 assemble ces pièces dans un pipeline embedding abstrait mono-texte : tokenizer injectable -> raw inputs -> `InferenceAdapter` -> sorties brutes -> vecteur. La Phase 3.6 ajoute un tokenizer déterministe de test : il permet de valider le pipeline complet sans dépendance externe, sans vocabulaire réel, et sans prétendre être compatible avec un vrai modèle OpenVINO.
+OpenVINO est branché comme runtime générique à entrées brutes. Le choix du ou des modèles est décrit par profils déclaratifs : `embedding`, `generation` ou `raw`.
+
+La Phase 3.1 ajoute le pont contrôlé entre profil et `BackendRegistry`, sans tokenizer, post-processing ou modèle précis imposé. La Phase 3.2 ajoute une configuration spécialisée pour déclarer un profil `openvino.embedding` local, toujours sans chemin en dur ni chargement automatique.
+
+La Phase 3.3 ajoute la couche IO raw : tokens déjà préparés -> `InferenceRequest.context["inputs"]` -> sortie brute -> vecteur embedding stable.
+
+La Phase 3.4 ajoute le contrat tokenizer : texte -> `TokenizationResult` -> `OpenVINOEmbeddingRawInputs`, sans tokenizer concret imposé.
+
+La Phase 3.5 assemble ces pièces dans un pipeline embedding abstrait mono-texte : tokenizer injectable -> raw inputs -> `InferenceAdapter` -> sorties brutes -> vecteur.
+
+La Phase 3.6 ajoute un tokenizer déterministe de test : il permet de valider le pipeline complet sans dépendance externe, sans vocabulaire réel, et sans prétendre être compatible avec un vrai modèle OpenVINO.
 
 ## Règle d'architecture
 
@@ -48,24 +59,24 @@ Le chemin d'exécution est :
 
 ```text
 Component.tick()
-  -> yield Event(...)
-  -> ComponentProxy
-  -> Scheduler.emit()
-  -> PolicyEngine.decide()
-  -> PriorityQueue
-  -> Scheduler.run()
-  -> Dispatcher
-  -> Handler
-  -> Request.reply
-  -> ComponentProxy
-  -> tick().asend(result)
+-> yield Event(...)
+-> ComponentProxy
+-> Scheduler.emit()
+-> PolicyEngine.decide()
+-> PriorityQueue
+-> Scheduler.run()
+-> Dispatcher
+-> Handler
+-> Request.reply
+-> ComponentProxy
+-> tick().asend(result)
 ```
 
 Le chemin d'observation est séparé :
 
 ```text
 EventBus.publish(Event)
-  -> telemetry / recorder / replay artifacts
+-> telemetry / recorder / replay artifacts
 ```
 
 ## Commandes de validation
@@ -99,6 +110,7 @@ cd doc && make -f makefile
 - `doc/MODEL_E5_CORPUS_PHASE3_12.md` : corpus local JSON persistant avant Qdrant.
 - `doc/MODEL_E5_SOURCES_PHASE3_13.md` : ingestion TXT/Markdown vers corpus E5.
 - `doc/MODEL_E5_SEARCH_REPORT_PHASE3_14.md` : rapport de résultats avec contexte source.
+- `doc/CHANGELOG_PHASE4_2_E5_LOCAL_SEARCH.md` : procédure de recherche E5 locale dev-ready.
 - `doc/docs/architecture/*.dot` : roadmap DOT navigable ; les SVG sont générés par le makefile.
 
 ## Développement
@@ -120,7 +132,6 @@ These tests enforce the current interpretation of `code_rule.md`: stdlib-first i
 ## Phase 3.8
 
 La Phase 3.8 ajoute une factory de pipeline local `multilingual-e5-small`. Elle transforme le test OpenVINO réel validé localement en capacité configurable : profil E5, tokenizer local Transformers, runtime OpenVINO et pipeline embedding sont assemblés sans modifier le Scheduler.
-
 
 ## Phase 3.9 — Tester l'embedding E5 local
 
@@ -148,7 +159,7 @@ Le vecteur complet n'est imprimé qu'avec `--full-vector`.
 E5 distingue maintenant explicitement deux rôles :
 
 ```text
-query:   texte qui cherche
+query: texte qui cherche
 passage: texte qui peut être retrouvé
 ```
 
@@ -171,7 +182,6 @@ Pour encoder un document :
 ```
 
 Un mini-ranker local `E5LocalRanker` permet aussi de valider `1 query -> N passages -> scores` avant Qdrant.
-
 
 ## Phase 3.11 — Classer des passages localement
 
@@ -200,7 +210,6 @@ Sortie JSON et limite :
 
 Cette commande encode la query en `query:` et les passages en `passage:` si les préfixes sont absents.
 
-
 ## Phase 3.12 — Corpus local E5 persistant
 
 Le ranking direct recalcule les passages à chaque requête. La phase 3.12 ajoute un corpus local JSON pour persister les embeddings des passages.
@@ -226,11 +235,15 @@ Rechercher dedans :
   "je me suis fait baiser"
 ```
 
-Cette couche reste un banc de test local avant Qdrant : elle ne fait pas encore d'index ANN ou de filtrage avancé. La mise à jour incrémentale arrive en Phase 3.15 via `--reuse-index`.
+Cette couche reste un banc de test local avant Qdrant : elle ne fait pas encore d'index ANN ou de filtrage avancé.
+
+La mise à jour incrémentale arrive en Phase 3.15 via `--reuse-index`.
 
 ## Phase 3.13 — Indexer un dossier TXT/Markdown
 
-La Phase 3.13 ajoute l’ingestion locale de sources `.md`, `.markdown` et `.txt`. Les fichiers sont découverts dans un ordre stable, lus en UTF-8, découpés par paragraphes, puis convertis en `E5CorpusDocument` avec métadonnées `source_path`, `chunk_index`, `start_line` et `end_line`.
+La Phase 3.13 ajoute l’ingestion locale de sources `.md`, `.markdown` et `.txt`.
+
+Les fichiers sont découverts dans un ordre stable, lus en UTF-8, découpés par paragraphes, puis convertis en `E5CorpusDocument` avec métadonnées `source_path`, `chunk_index`, `start_line` et `end_line`.
 
 Construire un corpus depuis un dossier :
 
@@ -278,7 +291,6 @@ Pour inclure le chunk complet :
 
 Cette étape reste locale et déterministe : elle ne remplace pas Qdrant, elle prépare le format de résultat exploitable.
 
-
 ## Phase 3.15 — Reconstruire un corpus sans tout recalculer
 
 La Phase 3.15 ajoute un build incrémental par hash. Quand un ancien index est fourni, les chunks inchangés réutilisent leur embedding existant. Seuls les chunks nouveaux ou modifiés sont recalculés.
@@ -303,7 +315,6 @@ removed_count: chunks disparus depuis l'ancien index
 
 Le schéma JSON reste `missipy.e5.corpus.v1`; les hash sont stockés dans les métadonnées pour préserver la compatibilité.
 
-
 ## Phase 3.16 — Build atomique du corpus
 
 La Phase 3.16 rend l'écriture du corpus plus sûre : `build_e5_corpus.py` écrit d'abord dans un fichier temporaire situé à côté de la cible, relit et valide ce JSON, puis remplace l'index final seulement si tout est correct.
@@ -317,12 +328,15 @@ La Phase 3.16 rend l'écriture du corpus plus sûre : `build_e5_corpus.py` écri
   --overwrite
 ```
 
-La sortie CLI indique maintenant `atomic_write: True`. Le fichier temporaire suit le modèle `.nom_du_fichier.tmp` dans le même répertoire que la cible, afin que le remplacement reste atomique sur le même système de fichiers.
+La sortie CLI indique maintenant `atomic_write: True`.
 
+Le fichier temporaire suit le modèle `.nom_du_fichier.tmp` dans le même répertoire que la cible, afin que le remplacement reste atomique sur le même système de fichiers.
 
 ## Phase 3.17 — Verrou fichier de build corpus
 
-La Phase 3.17 ajoute un verrou fichier pendant la construction du corpus E5. L'écriture atomique protège le remplacement final, mais elle n'empêchait pas encore deux processus de construire simultanément le même index.
+La Phase 3.17 ajoute un verrou fichier pendant la construction du corpus E5.
+
+L'écriture atomique protège le remplacement final, mais elle n'empêchait pas encore deux processus de construire simultanément le même index.
 
 Désormais, `build_e5_corpus.py` crée par défaut un verrou voisin de la cible :
 
@@ -332,7 +346,9 @@ Désormais, `build_e5_corpus.py` crée par défaut un verrou voisin de la cible 
 /tmp/.e5_corpus.json.tmp
 ```
 
-Le verrou est acquis par création atomique `O_CREAT | O_EXCL`. Si un autre build vise déjà le même fichier, la commande échoue explicitement au lieu de travailler en concurrence.
+Le verrou est acquis par création atomique `O_CREAT | O_EXCL`.
+
+Si un autre build vise déjà le même fichier, la commande échoue explicitement au lieu de travailler en concurrence.
 
 ```bash
 ./tools/build_e5_corpus.py \
@@ -353,7 +369,6 @@ lock_path: /tmp/.e5_corpus.next.json.lock
 
 En développement uniquement, le verrou peut être désactivé avec `--no-lock`, mais le comportement normal doit rester verrouillé.
 
-
 ## Phase 3.18 — Rebuild sûr du corpus E5
 
 La Phase 3.18 ajoute une commande dédiée au cycle opérationnel complet de reconstruction d'un corpus local : construire un candidat, le relire, exécuter éventuellement une recherche de validation, puis promouvoir le candidat vers l'index final seulement si tout a réussi.
@@ -362,12 +377,12 @@ Flux :
 
 ```text
 corpus.json actuel
-  -> .corpus.json.lock
-  -> .corpus.json.rebuild.json
-  -> validation structurelle
-  -> validation recherche optionnelle
-  -> replace(corpus.json)
-  -> release lock
+-> .corpus.json.lock
+-> .corpus.json.rebuild.json
+-> validation structurelle
+-> validation recherche optionnelle
+-> replace(corpus.json)
+-> release lock
 ```
 
 Exemple :
@@ -381,4 +396,69 @@ Exemple :
   --validation-query "test de recherche"
 ```
 
-Cette commande évite le `mv` manuel après un build incrémental. Elle reste hors Scheduler, hors Qdrant et conserve le format `missipy.e5.corpus.v1`.
+Cette commande évite le `mv` manuel après un build incrémental.
+
+Elle reste hors Scheduler, hors Qdrant et conserve le format `missipy.e5.corpus.v1`.
+
+## Phase 4.2 — Recherche E5 locale dev-ready
+
+La Phase 4.2 fige l'usage opérationnel local de la recherche E5 avant l'introduction d'une base vectorielle externe.
+
+Le corpus du dépôt peut être reconstruit avec promotion sûre :
+
+```bash
+PYTHONPATH=src ./tools/rebuild_e5_corpus.py \
+  --index /tmp/autodoc_e5_corpus.json \
+  --source-dir . \
+  --chunk-chars 1200 \
+  --validation-query "rebuild sûr avec staging validation promotion"
+```
+
+La sortie validée confirme :
+
+```text
+promoted: True
+atomic_write: True
+lock_enabled: True
+validation_search: True
+size: 218
+```
+
+La recherche locale exploite ensuite le corpus JSON sans modifier son format :
+
+```bash
+PYTHONPATH=src ./tools/search_e5_corpus.py \
+  --index /tmp/autodoc_e5_corpus.json \
+  --limit 5 \
+  "rebuild sûr avec staging validation promotion"
+```
+
+La sortie texte affiche les informations nécessaires au diagnostic :
+
+```text
+score
+id
+source
+lines
+chunk
+excerpt
+```
+
+La sortie JSON reste disponible pour l'intégration future :
+
+```bash
+PYTHONPATH=src ./tools/search_e5_corpus.py \
+  --index /tmp/autodoc_e5_corpus.json \
+  --limit 3 \
+  --format json \
+  "OpenVINO multilingual-e5-small local"
+```
+
+Cette phase reste volontairement locale :
+
+- pas de Qdrant ;
+- pas de Scheduler ;
+- pas de changement du format `missipy.e5.corpus.v1` ;
+- pas de nouveau backend ;
+- pas d'index ANN ;
+- pas de cache runtime supplémentaire.
