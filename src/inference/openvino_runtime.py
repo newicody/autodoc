@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
@@ -42,10 +42,10 @@ class RealOpenVINORuntimeUnavailable(RealOpenVINORuntimeError):
 class RealOpenVINORuntime:
     """Runtime OpenVINO réel, isolé dans un seul module.
 
-    Ce module est le seul endroit autorisé à importer ``openvino``. Il reste
-    volontairement générique : il ne tokenise pas, ne choisit aucun modèle et ne
-    connaît pas Qdrant. Il exécute uniquement des entrées OpenVINO brutes
-    fournies dans ``InferenceRequest.context['inputs']``.
+    Ce module est le seul endroit autorisé à importer ``openvino``.
+    Il reste volontairement générique : il ne tokenise pas, ne choisit aucun
+    modèle et ne connaît pas Qdrant. Il exécute uniquement des entrées
+    OpenVINO brutes fournies dans ``InferenceRequest.context['inputs']``.
     """
 
     is_real_openvino_runtime = True
@@ -59,12 +59,10 @@ class RealOpenVINORuntime:
     @classmethod
     def with_imported_openvino(cls) -> RealOpenVINORuntime:
         """Construit le runtime en important le module openvino installé."""
-
         return cls(_load_openvino_module())
 
     def state(self) -> RealOpenVINORuntimeState:
         """Construit une vue immuable de l'état du runtime."""
-
         return RealOpenVINORuntimeState(
             available=self._ov_module is not None,
             compiled_models=len(self._compiled_models),
@@ -84,12 +82,10 @@ class RealOpenVINORuntime:
         config: OpenVINOBackendConfig,
     ) -> InferenceResult:
         """Exécute une inférence OpenVINO sans bloquer l'event loop."""
-
         return await asyncio.to_thread(self._infer_sync, request, config)
 
     def close(self) -> None:
         """Libère les références au runtime OpenVINO."""
-
         self._compiled_models.clear()
         self._core = None
 
@@ -175,7 +171,69 @@ def _extract_raw_inputs(request: InferenceRequest) -> Any:
             "RealOpenVINORuntime requires raw OpenVINO inputs under "
             "InferenceRequest.context['inputs'] or metadata['inputs']."
         )
-    return inputs
+    return _prepare_openvino_inputs(inputs)
+
+
+def _prepare_openvino_inputs(inputs: Any) -> Any:
+    """Prépare des entrées internes immuables pour l'API OpenVINO.
+
+    Les contrats MissiPy transportent volontairement des ``MappingProxyType`` et
+    des tuples pour rester immuables/rejouables. L'API OpenVINO attend en
+    revanche des dictionnaires ou tableaux compatibles. La conversion reste ici,
+    dans le runtime réel, afin de ne pas rendre les contrats internes mutables.
+    """
+
+    if isinstance(inputs, Mapping):
+        return {key: _prepare_openvino_value(value) for key, value in inputs.items()}
+    return _prepare_openvino_value(inputs)
+
+
+def _prepare_openvino_value(value: Any) -> Any:
+    if value is None:
+        raise RealOpenVINORuntimeError("OpenVINO raw input values must not be None")
+    if isinstance(value, Mapping):
+        return {key: _prepare_openvino_value(item) for key, item in value.items()}
+    if hasattr(value, "__array__"):
+        return value
+    if isinstance(value, tuple):
+        return _sequence_to_openvino_value(value)
+    return value
+
+
+def _sequence_to_openvino_value(value: Sequence[Any]) -> Any:
+    converted = _tuple_to_lists(value)
+    numpy_module = _try_import_numpy()
+    if numpy_module is not None and _is_numeric_sequence(converted):
+        return numpy_module.asarray(converted)
+    return converted
+
+
+def _tuple_to_lists(value: Sequence[Any]) -> list[Any]:
+    result: list[Any] = []
+    for item in value:
+        if isinstance(item, tuple):
+            result.append(_tuple_to_lists(item))
+        else:
+            result.append(item)
+    return result
+
+
+def _try_import_numpy() -> Any | None:
+    try:
+        import numpy as np
+    except ModuleNotFoundError:
+        return None
+    return np
+
+
+def _is_numeric_sequence(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int | float):
+        return True
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return bool(value) and all(_is_numeric_sequence(item) for item in value)
+    return False
 
 
 def _run_compiled_model(compiled_model: Any, inputs: Any) -> Any:

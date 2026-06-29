@@ -93,3 +93,23 @@ output adapter
 ```
 
 Après cette phase, on sait les assembler dans un flux complet sans casser la règle centrale : le Scheduler ne connaît toujours ni OpenVINO, ni tokenizer, ni modèle, ni Qdrant.
+
+## Note Phase 3.6
+
+La Phase 3.6 ajoute un tokenizer concret de test : `DeterministicTokenizer`.
+Il permet de valider ce pipeline avec une implémentation réelle de
+`TextTokenizer`, mais sans dépendance externe et sans compatibilité modèle.
+
+Le flux de test devient :
+
+```text
+texte
+  -> DeterministicTokenizer
+  -> TokenizationResult
+  -> OpenVINOEmbeddingRawInputs
+  -> OpenVINOEmbeddingPipeline
+```
+
+Cette étape ne change pas la limite principale : le vrai tokenizer du modèle
+OpenVINO sera branché plus tard, une fois le modèle local et ses noms
+d'entrées/sorties vérifiés.

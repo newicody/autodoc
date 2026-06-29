@@ -1,14 +1,14 @@
-# Autodoc / MissiPy — Architecture logicielle Phase 3.5
+# Autodoc / MissiPy — Architecture logicielle Phase 3.14
 
-Ce document décrit l'état actuel du prototype après ajout du pipeline embedding abstrait en Phase 3.5.
+Ce document décrit l'état actuel du prototype après ajout du corpus local depuis sources TXT/Markdown et du rapport de recherche E5 avec contexte source en Phase 3.14.
 
 La règle centrale reste inchangée : le Scheduler ne contient pas de logique métier. Il orchestre l'entrée des événements, délègue l'autorisation au `PolicyEngine`, route par `PriorityQueue` puis `Dispatcher`, et expose son activité via une observabilité passive.
 
 ## Synthèse courte
 
-État courant : le prototype possède un micro-kernel coopératif testable, un contexte global événementiel, un chemin d'inférence fictif, un registre de backends, une observabilité minimale, une chaîne replay/export isolée, un runtime OpenVINO optionnel, un registre déclaratif de profils modèles et une factory qui transforme explicitement un profil en backend enregistrable, et une configuration spécialisée pour déclarer un profil `openvino.embedding` sans modèle imposé, une couche IO raw pour tokens déjà préparés et vecteurs embedding stables, un contrat tokenizer injectable sans dépendance externe imposée et un pipeline embedding abstrait qui assemble tokenizer, raw inputs, backend et output adapter.
+État courant : le prototype possède un micro-kernel coopératif testable, un contexte global événementiel, un chemin d'inférence fictif, un registre de backends, une observabilité minimale, une chaîne replay/export isolée, un runtime OpenVINO optionnel, un registre déclaratif de profils modèles, une factory de backends, une chaîne embedding E5 locale validée avec OpenVINO, un contrat query/passage, un mini-ranker local, un corpus local persistant depuis passages ou sources TXT/Markdown, et un rapport de recherche avec score, fichier, lignes et extrait avant Qdrant.
 
-OpenVINO est intégré sous forme de runtime réel optionnel isolé dans `src/inference/openvino_runtime.py`. La Phase 3.0 ajoute `OpenVINOModelProfileRegistry` pour décrire les modèles possibles sans les charger. La Phase 3.1 ajoute `OpenVINOBackendFactory` pour construire et enregistrer explicitement un backend depuis un profil sélectionné. La Phase 3.2 ajoute `OpenVINOEmbeddingProfileConfig` pour décrire un modèle d'embedding local configurable sans tokenizer ni chemin en dur. La Phase 3.3 ajoute `OpenVINOEmbeddingRawInputs` et `OpenVINOEmbeddingOutputAdapter` pour séparer tokens, inférence brute et vecteur final. La Phase 3.4 ajoute `TokenizerConfig`, `TokenizationRequest`, `TokenizationResult`, `TextTokenizer` et `TokenizerRegistry` pour représenter texte -> tokens sans choisir Hugging Face, SentencePiece ou un tokenizer maison. La Phase 3.5 ajoute `OpenVINOEmbeddingPipeline` pour assembler ce contrat avec les inputs bruts, `InferenceAdapter` et `OpenVINOEmbeddingOutputAdapter`.
+OpenVINO est intégré sous forme de runtime réel optionnel isolé dans `src/inference/openvino_runtime.py`. La Phase 3.0 ajoute `OpenVINOModelProfileRegistry` pour décrire les modèles possibles sans les charger. La Phase 3.1 ajoute `OpenVINOBackendFactory` pour construire et enregistrer explicitement un backend depuis un profil sélectionné. La Phase 3.2 ajoute `OpenVINOEmbeddingProfileConfig` pour décrire un modèle d'embedding local configurable sans tokenizer ni chemin en dur. La Phase 3.3 ajoute `OpenVINOEmbeddingRawInputs` et `OpenVINOEmbeddingOutputAdapter` pour séparer tokens, inférence brute et vecteur final. La Phase 3.4 ajoute `TokenizerConfig`, `TokenizationRequest`, `TokenizationResult`, `TextTokenizer` et `TokenizerRegistry` pour représenter texte -> tokens sans choisir Hugging Face, SentencePiece ou un tokenizer maison. La Phase 3.5 ajoute `OpenVINOEmbeddingPipeline` pour assembler ce contrat avec les inputs bruts, `InferenceAdapter` et `OpenVINOEmbeddingOutputAdapter`. La Phase 3.6 ajoute `DeterministicTokenizer`, un tokenizer pure stdlib réservé au test du pipeline, sans vocabulaire réel et sans compatibilité modèle revendiquée. Les Phases 3.7 à 3.11 valident ensuite `multilingual-e5-small` local avec OpenVINO, ajoutent la factory E5, la CLI embedding, le contrat `query:` / `passage:` et la CLI de ranking local.
 
 ## Layer 0 — Hardware target
 
@@ -177,6 +177,7 @@ Préparation OpenVINO Phase 3.1 :
 OpenVINOModelProfileRegistry
   -> OpenVINOModelProfile
   -> OpenVINOEmbeddingProfileConfig optionnel
+  -> DeterministicTokenizer de test optionnel
   -> TokenizationResult optionnel
   -> OpenVINOEmbeddingRawInputs optionnel
   -> OpenVINOBackendFactory
@@ -207,6 +208,34 @@ RealOpenVINORuntime
 OpenVINO ne doit jamais être appelé directement par le Scheduler, le Dispatcher ou le ComponentProxy. `OpenVINOBackend` n'importe toujours pas `openvino` : seul `RealOpenVINORuntime` est autorisé à le faire.
 
 Limite volontaire : aucun tokenizer concret et aucun modèle local ne sont encore intégrés. Le choix est déclaratif via profils `embedding`, `generation` ou `raw`, puis activé explicitement par la factory. La Phase 3.2 fournit un format configurable pour un profil embedding local. La Phase 3.3 fournit le contrat raw pour transporter `input_ids`, `attention_mask`, `token_type_ids` optionnel et pour transformer une sortie brute en `OpenVINOEmbeddingVector`. La Phase 3.4 fournit le contrat tokenizer abstrait qui peut produire ces matrices sans imposer l’implémentation concrète. Le runtime réel attend toujours des entrées brutes dans `InferenceRequest.context["inputs"]` ou `InferenceRequest.metadata["inputs"]`. La Phase 3.5 exploite `InferenceResult.metadata["raw_outputs"]` pour post-traiter un vecteur embedding en chemin direct, hors Scheduler.
+
+
+### Phase 3.6 — Tokenizer déterministe de test
+
+La Phase 3.6 ajoute un tokenizer concret minimal mais volontairement limité :
+
+```text
+TokenizationRequest
+  -> DeterministicTokenizer
+  -> TokenizationResult
+  -> OpenVINOEmbeddingRawInputs
+  -> OpenVINOEmbeddingPipeline
+```
+
+Ce tokenizer sert à tester le pipeline sans dépendance externe. Il utilise SHA-256 pour produire des ids stables et ne doit pas être confondu avec le tokenizer réel d'un modèle BGE, E5, MiniLM ou Qwen. Le vrai tokenizer viendra après validation de l'installation OpenVINO et du modèle local choisi.
+
+
+### Phase 3.14 — Rapport de résultats E5
+
+La Phase 3.14 ajoute une projection lisible des résultats du corpus local :
+
+```text
+E5CorpusSearchResults
+  -> E5SearchReport
+  -> score + source_path + start_line/end_line + excerpt
+```
+
+Cette couche ne relit pas encore les fichiers sources sur disque. Elle exploite les métadonnées persistées dans `corpus.json` depuis la Phase 3.13. Elle prépare l'affichage d'un résultat exploitable avant Qdrant et avant un frontend.
 
 ## Layer 6 — Experts
 
@@ -319,10 +348,10 @@ PYTHONPATH=src python3 src/main.py
 cd doc && make -f makefile
 ```
 
-État vérifié après Phase 3.2 :
+État vérifié après Phase 3.9 :
 
 ```text
-91 passed
+133 passed, 1 skipped
 main.py exit code: 0
 DOT_OK
 ```
@@ -346,3 +375,102 @@ La prochaine étape fonctionnelle logique sera de relier cette configuration à 
 
 `KernelTelemetry` is now kernel instrumentation and lives in `src/kernel/telemetry.py`.
 The passive observability layer still owns recorder/replay/report/export/bundle logic, but it no longer owns the object used directly by the Scheduler.
+
+## Phase 3.8 — Factory de pipeline E5 local
+
+La couche `inference.e5_pipeline` assemble explicitement le premier modèle réel validé localement : profil `multilingual-e5-small`, tokenizer local Transformers, runtime OpenVINO réel et pipeline embedding.
+
+Cette factory ne change pas le Scheduler. Elle devient le point d'entrée contrôlé pour activer le modèle E5 dans un launcher ou un futur composant de configuration.
+
+```text
+MultilingualE5SmallPipelineConfig
+  -> MultilingualE5SmallPipelineFactory
+  -> MultilingualE5SmallPipelineBundle
+      -> OpenVINOEmbeddingPipeline
+      -> OpenVINOModelProfileRegistry
+      -> TokenizerRegistry
+      -> BackendRegistry
+      -> MultilingualE5SmallPipelineBuildSummary
+```
+
+Le résumé de construction reste immuable et ne transporte aucun objet vivant. Le bundle, lui, est explicitement un objet d'exécution.
+
+
+## Phase 3.9 — CLI de développement E5 local
+
+La couche `inference.e5_cli` expose le pipeline E5 validé localement sous forme de commande de développement. Elle reste hors Scheduler : elle construit un bundle E5 explicite, exécute `embed_text()` et imprime un diagnostic texte ou JSON.
+
+```text
+tools/embed_e5.py
+  -> inference.e5_cli
+  -> MultilingualE5SmallPipelineFactory
+  -> OpenVINOEmbeddingPipeline
+  -> OpenVINOEmbeddingVector
+  -> sortie text/json
+```
+
+Cette phase ne transforme pas le pipeline en composant kernel. Elle sert uniquement à tester rapidement le modèle local depuis le terminal et à préparer la future étape `query:` / `passage:` avant indexation vectorielle.
+
+## Phase 3.10 — Contrat query/passage E5
+
+La couche `inference.e5_text` rend explicite la distinction entraînée par E5 : `query:` pour le texte qui cherche, `passage:` pour le texte qui peut être retrouvé.
+
+```text
+E5Text.query(...)
+  -> "query: ..."
+
+E5Text.passage(...)
+  -> "passage: ..."
+```
+
+La couche `inference.e5_ranker` ajoute un mini-ranker local avant Qdrant :
+
+```text
+query
+  -> embedding query
+passages
+  -> embeddings passages
+  -> dot_product
+  -> E5RankedResults
+```
+
+Ce ranker ne remplace pas Qdrant. Il sert à valider le comportement sémantique du modèle local sur quelques passages avant d'introduire persistance, index vectoriel et batch.
+
+
+## Phase 3.11 — CLI de ranking local E5
+
+La couche `inference.e5_rank_cli` expose le mini-ranker local sous forme de commande de développement. Elle reste hors Scheduler et hors Qdrant : elle construit explicitement le pipeline E5 local, encode une query, encode les passages fournis, puis classe les passages par produit scalaire.
+
+```text
+tools/rank_e5.py
+  -> inference.e5_rank_cli
+  -> MultilingualE5SmallPipelineFactory
+  -> E5LocalRanker
+  -> OpenVINOEmbeddingPipeline
+  -> E5RankedResults
+  -> sortie text/json
+```
+
+Cette étape valide le comportement sémantique sur un mini-corpus avant d'ajouter un stockage vectoriel. Elle ne met pas encore les embeddings en cache et ne crée pas d'index persistant.
+
+
+## Phase 3.12 — Corpus local E5
+
+La couche inference contient maintenant un corpus local persistant pour les passages E5.
+
+```text
+OpenVINOEmbeddingPipeline
+  -> E5CorpusBuilder
+  -> E5CorpusIndex
+  -> E5CorpusJsonStore
+  -> E5CorpusSearcher
+```
+
+Cette couche est volontairement hors Scheduler. Elle permet de valider la logique `query -> corpus local -> scores` avant l'introduction d'un vector store externe comme Qdrant.
+
+
+## Phase 3.13 — Sources locales TXT/Markdown
+
+La couche inference dispose maintenant d’un chargeur de sources locales (`e5_sources.py`) capable de découvrir des fichiers `.md`, `.markdown` et `.txt`, de les découper en chunks de passages et de produire des `E5CorpusDocument` enrichis en métadonnées.
+
+Cette brique reste hors Scheduler et hors Qdrant : elle prépare le futur Knowledge Manager en validant d’abord la chaîne locale fichier -> chunk -> embedding -> corpus JSON.

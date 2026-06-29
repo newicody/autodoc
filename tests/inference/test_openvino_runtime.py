@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from types import MappingProxyType
+
 import pytest
 
 from contracts.inference import InferenceRequest
+from inference import openvino_runtime as runtime_module
 from inference.openvino_backend import OpenVINOBackend, OpenVINOBackendConfig
 from inference.openvino_runtime import (
     RealOpenVINORuntime,
@@ -54,7 +57,6 @@ async def test_real_openvino_runtime_uses_injected_openvino_module() -> None:
         ),
         runtime,
     )
-
     request = InferenceRequest(
         prompt="ignored by raw runtime",
         model="openvino",
@@ -84,7 +86,6 @@ async def test_real_openvino_runtime_reuses_compiled_model_cache() -> None:
         OpenVINOBackendConfig(model_path="model.xml", device="CPU"),
         runtime,
     )
-
     request = InferenceRequest(prompt="x", model="openvino", context={"inputs": [1]})
 
     await backend.infer(request)
@@ -94,6 +95,41 @@ async def test_real_openvino_runtime_reuses_compiled_model_cache() -> None:
     assert len(ov_module.core.compile_calls) == 1
     assert runtime.state().compiled_models == 1
     assert runtime.state().infer_count == 2
+
+
+def test_prepare_openvino_inputs_turns_mapping_proxy_into_plain_dict() -> None:
+    raw = MappingProxyType(
+        {
+            "input_ids": ((1, 2, 3),),
+            "attention_mask": ((1, 1, 1),),
+            "token_type_ids": ((0, 0, 0),),
+        }
+    )
+
+    prepared = runtime_module._prepare_openvino_inputs(raw)
+
+    assert isinstance(prepared, dict)
+    assert set(prepared) == {"input_ids", "attention_mask", "token_type_ids"}
+    assert not isinstance(prepared, MappingProxyType)
+
+
+def test_prepare_openvino_inputs_can_stay_stdlib_without_numpy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runtime_module, "_try_import_numpy", lambda: None)
+
+    prepared = runtime_module._prepare_openvino_inputs(
+        MappingProxyType({"input_ids": ((1, 2), (3, 4))})
+    )
+
+    assert prepared == {"input_ids": [[1, 2], [3, 4]]}
+
+
+def test_prepare_openvino_inputs_rejects_none_values() -> None:
+    try:
+        runtime_module._prepare_openvino_inputs({"input_ids": None})
+    except RealOpenVINORuntimeError as exc:
+        assert "must not be None" in str(exc)
+    else:  # pragma: no cover - garde de sûreté.
+        raise AssertionError("RealOpenVINORuntimeError was not raised")
 
 
 def test_real_openvino_runtime_requires_raw_inputs() -> None:

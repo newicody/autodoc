@@ -1,55 +1,39 @@
-# Manifest — Phase 3.5 embedding pipeline
+# MANIFEST — Phase 3.14 E5 search report
 
-## Runtime / source
+Fichiers ajoutés ou modifiés uniquement.
+
+## Ajoutés
 
 ```text
-src/inference/embedding_pipeline.py
-src/inference/openvino_runtime.py
+src/inference/e5_search_report.py
+tests/inference/test_e5_search_report.py
+doc/MODEL_E5_SEARCH_REPORT_PHASE3_14.md
+doc/CHANGELOG_PHASE3_14_E5_SEARCH_REPORT.md
+doc/docs/architecture/inference/52_e5_search_report.dot
+PHASE3_14_TEST_REPORT.md
+MANIFEST_CHANGED_FILES.md
+```
+
+## Modifiés
+
+```text
 src/inference/__init__.py
-```
-
-## Tests
-
-```text
-tests/inference/test_openvino_embedding_pipeline.py
-tests/inference/test_openvino_runtime.py
-```
-
-## Documentation
-
-```text
+src/inference/e5_corpus_cli.py
+tests/inference/test_e5_corpus_cli.py
 README.md
 doc/ARCHITECTURE_LAYERS.md
-doc/OPENVINO_MODEL_STRATEGY.md
-doc/MODEL_TOKENIZER_CONTRACT_PHASE3_4.md
-doc/MODEL_EMBEDDING_PIPELINE_PHASE3_5.md
-doc/CHANGELOG_PHASE3_5_EMBEDDING_PIPELINE.md
-```
-
-## Roadmap DOT
-
-```text
 doc/docs/architecture/inference/40_inference.dot
-doc/docs/architecture/inference/45_openvino_embedding_raw.dot
-doc/docs/architecture/inference/46_tokenizer_contract.dot
-doc/docs/architecture/inference/47_openvino_embedding_pipeline.dot
+doc/docs/architecture/inference/50_e5_corpus.dot
 doc/docs/architecture/tests/80_tests.dot
 ```
 
-## Reports
+## Non inclus
 
 ```text
-MANIFEST_CHANGED_FILES.md
-PHASE3_5_TEST_REPORT.md
-```
-
-## Exclusions volontaires
-
-```text
-aucun SVG
+aucun .svg
 aucun __pycache__
+aucun .pytest_cache
 aucun script de patch
-aucun modèle OpenVINO local
-aucun tokenizer concret
+aucun changement Scheduler
 aucun Qdrant
 ```

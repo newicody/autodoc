@@ -237,3 +237,58 @@ TokenizationRequest
 ```
 
 Cette étape confirme que l'option embedding peut être branchée progressivement. Il reste à choisir plus tard l'implémentation concrète du tokenizer et le chemin réel du modèle local.
+
+
+## Phase 3.6 — Tokenizer déterministe de test
+
+La Phase 3.6 n'est pas encore le tokenizer réel du modèle. Elle ajoute un
+`DeterministicTokenizer` pure stdlib pour valider le pipeline complet sans
+dépendance Hugging Face, sans vocabulaire local, sans téléchargement et sans
+modèle OpenVINO réel.
+
+Ce tokenizer est volontairement artificiel : ses ids sont stables grâce à
+SHA-256, mais ils ne correspondent à aucun vocabulaire BGE/E5/MiniLM/Qwen.
+Il sert uniquement au test structurel du chemin :
+
+```text
+texte
+  -> tokens déterministes
+  -> raw inputs
+  -> backend fake ou OpenVINO brut
+  -> vecteur
+```
+
+## Préparation OpenVINO pour les prochains tests
+
+Pour les tests unitaires ordinaires, rien n'est requis : ils doivent continuer
+de passer sans OpenVINO installé.
+
+Pour les prochains tests d'intégration locaux, préparer :
+
+```bash
+python3 -c "import openvino as ov; print(ov.__version__)"
+```
+
+Puis disposer d'un modèle OpenVINO IR local, c'est-à-dire au minimum :
+
+```text
+model.xml
+model.bin
+```
+
+Le chemin sera passé par profil/configuration. Il ne doit pas être codé en dur
+dans le Scheduler ni dans le pipeline.
+
+Recommandation pour ton prototype : commencer par un modèle embedding exporté
+OpenVINO, puis vérifier seulement :
+
+```text
+input_names
+output_names
+dimension de sortie
+pooling attendu
+device CPU ou AUTO
+```
+
+Tant que ces informations ne sont pas figées, on garde le tokenizer réel et le
+modèle réel hors du noyau.

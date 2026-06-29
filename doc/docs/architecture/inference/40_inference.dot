@@ -39,6 +39,29 @@ digraph Inference {
     // InferenceAdapter et output adapter en chemin direct mono-texte. Le
     // Scheduler ne reçoit aucune nouvelle responsabilité.
 
+    // ROADMAP_NOTE[phase3_6]:
+    // DeterministicTokenizer fournit un tokenizer concret minimal de test,
+    // pure stdlib, pour valider le pipeline sans choisir de vrai tokenizer
+    // modèle. Il ne revendique aucune compatibilité BGE/E5/MiniLM.
+
+    // ROADMAP_NOTE[phase3_10]:
+    // Le contrat E5 query/passage rend explicite le rôle du texte avant
+    // tokenization et ajoute un mini-ranker local query -> passages -> scores
+    // avant Qdrant.
+
+    // ROADMAP_NOTE[phase3_12]:
+    // E5CorpusIndex persiste les embeddings de passages localement. La query
+    // reste calculée à la demande, mais les passages ne sont plus recalculés
+    // à chaque recherche. Qdrant reste une étape ultérieure.
+
+    // ROADMAP_NOTE[phase3_13]:
+    // E5SourceDocument et E5TextChunk ajoutent l'ingestion locale de fichiers
+    // TXT/Markdown. Le découpage source -> chunks -> E5CorpusDocument reste
+    // déterministe, hors Scheduler et avant Qdrant.
+    // ROADMAP_NOTE[phase3_14]:
+    // E5SearchReport enrichit les hits du corpus avec contexte source, lignes
+    // et extrait stable pour rendre la recherche locale exploitable.
+
     subgraph cluster_contracts {
         label="Contracts";
         color="#455a64";
@@ -82,6 +105,10 @@ digraph Inference {
         TokenizerContract [label="Tokenizer contract\ntext -> tokens", URL="46_tokenizer_contract.svg"];
         TokenizationResult [label="TokenizationResult\ninput_ids / attention_mask", URL="46_tokenizer_contract.svg"];
         EmbeddingPipeline [label="OpenVINOEmbeddingPipeline\ntext -> vector", URL="47_openvino_embedding_pipeline.svg"];
+        E5Text [label="E5Text\nquery/passage role", URL="49_e5_query_passage.svg"];
+        E5Ranker [label="E5LocalRanker\nquery -> passages", URL="49_e5_query_passage.svg"];
+        E5Sources [label="E5 source loader\nTXT/Markdown -> chunks", URL="51_e5_sources.svg"];
+        E5SearchReport [label="E5SearchReport\nsource + lines + excerpt", URL="52_e5_search_report.svg"];
     }
 
     Scheduler [fillcolor="#ede7f6", color="#512da8", URL="../scheduler/10_scheduler.svg"];
@@ -112,6 +139,7 @@ digraph Inference {
     OpenVINO -> OpenVINORuntime [style=dashed, label="infer via injection"];
     OpenVINORuntime -> RealRuntime [style=dotted, label="implementation"];
     EmbeddingConfig -> ModelProfile [label="to_model_profile"];
+    E5Text -> TokenizerContract [style=dashed, label="prefixed text"];
     TokenizerContract -> TokenizationResult [label="tokenize"];
     TokenizationResult -> EmbeddingRaw [label="to_embedding_raw_inputs"];
     TokenizationResult -> EmbeddingPipeline [style=dashed, label="Phase 3.5"];
@@ -120,6 +148,13 @@ digraph Inference {
     EmbeddingPipeline -> Adapter [style=dashed, label="infer raw request"];
     RealRuntime -> EmbeddingVector [style=dashed, label="raw output adapter"];
     EmbeddingVector -> EmbeddingPipeline [style=dotted, label="result vector"];
+    EmbeddingPipeline -> E5Ranker [style=dashed, label="Phase 3.10"];
+    E5Sources -> E5CorpusBuilder [style=dashed, label="source chunks"];
+    EmbeddingPipeline -> E5CorpusBuilder [style=dashed, label="embed passages once"];
+    EmbeddingPipeline -> E5CorpusSearcher [style=dashed, label="embed query only"];
+    E5CorpusBuilder -> E5Corpus [label="write index"];
+    E5Corpus -> E5CorpusSearcher [label="read persisted vectors"];
+    E5CorpusSearcher -> E5SearchReport [style=dashed, label="report hits"];
     ModelProfile -> ProfileRegistry [label="register profile"];
     ProfileRegistry -> BackendFactory [label="select(profile_name)"];
     BackendFactory -> OpenVINOConfig [style=dashed, label="to_backend_config"];
@@ -134,6 +169,11 @@ digraph Inference {
     Nav_EmbeddingRaw [label="Embedding raw IO", shape=plaintext, URL="45_openvino_embedding_raw.svg"];
     Nav_Tokenizer [label="Tokenizer contract", shape=plaintext, URL="46_tokenizer_contract.svg"];
     Nav_Pipeline [label="Embedding pipeline", shape=plaintext, URL="47_openvino_embedding_pipeline.svg"];
+    Nav_TestTokenizer [label="Deterministic tokenizer", shape=plaintext, URL="48_deterministic_tokenizer.svg"];
+    Nav_E5QueryPassage [label="E5 query/passage", shape=plaintext, URL="49_e5_query_passage.svg"];
+    Nav_E5Corpus [label="E5 corpus", shape=plaintext, URL="50_e5_corpus.svg"];
+    Nav_E5Sources [label="E5 sources", shape=plaintext, URL="51_e5_sources.svg"];
+    Nav_E5SearchReport [label="E5 search report", shape=plaintext, URL="52_e5_search_report.svg"];
 
-    { rank=sink; Nav_Global; Nav_Scheduler; Nav_Services; Nav_Profiles; Nav_Embedding; Nav_EmbeddingRaw; Nav_Tokenizer; Nav_Pipeline; }
+    { rank=sink; Nav_Global; Nav_Scheduler; Nav_Services; Nav_Profiles; Nav_Embedding; Nav_EmbeddingRaw; Nav_Tokenizer; Nav_Pipeline; Nav_TestTokenizer; Nav_E5QueryPassage; Nav_E5Corpus; Nav_E5Sources; Nav_E5SearchReport; }
 }

@@ -6,7 +6,7 @@ L'objectif n'est pas de construire une application Python monolithique, mais un 
 
 ## État courant
 
-État de référence : **Phase 3.5 embedding pipeline**.
+État de référence : **Phase 3.14 rapport de résultats E5 avec contexte source**.
 
 Le prototype possède actuellement :
 
@@ -28,9 +28,16 @@ Le prototype possède actuellement :
 - un `OpenVINOEmbeddingProfileConfig` configurable, sans modèle local imposé ;
 - un contrat embedding raw pour `input_ids` / `attention_mask` et sortie vecteur ;
 - un contrat tokenizer injectable, sans dépendance Hugging Face imposée ;
-- un pipeline embedding abstrait qui assemble tokenizer, raw inputs, backend et output adapter sans modèle concret imposé.
+- un pipeline embedding abstrait qui assemble tokenizer, raw inputs, backend et output adapter sans modèle concret imposé ;
+- un tokenizer déterministe de test, pure stdlib, pour valider le pipeline sans Hugging Face ni vocabulaire réel ;
+- une factory E5 locale validée avec OpenVINO ;
+- une CLI embedding E5 ;
+- un contrat `query:` / `passage:` ;
+- une CLI de ranking local E5 avant Qdrant ;
+- un corpus local E5 persistant depuis passages ou sources TXT/Markdown ;
+- un rapport de recherche E5 avec score, source, lignes et extrait.
 
-OpenVINO est branché comme runtime générique à entrées brutes. Le choix du ou des modèles est décrit par profils déclaratifs : `embedding`, `generation` ou `raw`. La Phase 3.1 ajoute le pont contrôlé entre profil et `BackendRegistry`, sans tokenizer, post-processing ou modèle précis imposé. La Phase 3.2 ajoute une configuration spécialisée pour déclarer un profil `openvino.embedding` local, toujours sans chemin en dur ni chargement automatique. La Phase 3.3 ajoute la couche IO raw : tokens déjà préparés -> `InferenceRequest.context["inputs"]` -> sortie brute -> vecteur embedding stable. La Phase 3.4 ajoute le contrat tokenizer : texte -> `TokenizationResult` -> `OpenVINOEmbeddingRawInputs`, sans tokenizer concret imposé. La Phase 3.5 assemble ces pièces dans un pipeline embedding abstrait mono-texte : tokenizer injectable -> raw inputs -> `InferenceAdapter` -> sorties brutes -> vecteur.
+OpenVINO est branché comme runtime générique à entrées brutes. Le choix du ou des modèles est décrit par profils déclaratifs : `embedding`, `generation` ou `raw`. La Phase 3.1 ajoute le pont contrôlé entre profil et `BackendRegistry`, sans tokenizer, post-processing ou modèle précis imposé. La Phase 3.2 ajoute une configuration spécialisée pour déclarer un profil `openvino.embedding` local, toujours sans chemin en dur ni chargement automatique. La Phase 3.3 ajoute la couche IO raw : tokens déjà préparés -> `InferenceRequest.context["inputs"]` -> sortie brute -> vecteur embedding stable. La Phase 3.4 ajoute le contrat tokenizer : texte -> `TokenizationResult` -> `OpenVINOEmbeddingRawInputs`, sans tokenizer concret imposé. La Phase 3.5 assemble ces pièces dans un pipeline embedding abstrait mono-texte : tokenizer injectable -> raw inputs -> `InferenceAdapter` -> sorties brutes -> vecteur. La Phase 3.6 ajoute un tokenizer déterministe de test : il permet de valider le pipeline complet sans dépendance externe, sans vocabulaire réel, et sans prétendre être compatible avec un vrai modèle OpenVINO.
 
 ## Règle d'architecture
 
@@ -83,6 +90,14 @@ cd doc && make -f makefile
 - `doc/MODEL_EMBEDDING_RAW_PHASE3_3.md` : contrat IO raw pour entrées tokenisées et sortie vecteur.
 - `doc/MODEL_TOKENIZER_CONTRACT_PHASE3_4.md` : contrat tokenizer injectable, sans dépendance externe imposée.
 - `doc/MODEL_EMBEDDING_PIPELINE_PHASE3_5.md` : pipeline embedding abstrait sans tokenizer concret ni Qdrant.
+- `doc/MODEL_DETERMINISTIC_TOKENIZER_PHASE3_6.md` : tokenizer de test déterministe, pure stdlib, pour valider le pipeline avant un tokenizer réel.
+- `doc/MODEL_E5_PIPELINE_FACTORY_PHASE3_8.md` : factory de pipeline local `multilingual-e5-small`.
+- `doc/MODEL_E5_CLI_PHASE3_9.md` : commande de développement pour tester un embedding E5 local depuis le terminal.
+- `doc/MODEL_E5_QUERY_PASSAGE_PHASE3_10.md` : contrat `query:` / `passage:` et mini-ranker local avant Qdrant.
+- `doc/MODEL_E5_RANK_CLI_PHASE3_11.md` : commande de développement pour classer plusieurs passages avec E5 local.
+- `doc/MODEL_E5_CORPUS_PHASE3_12.md` : corpus local JSON persistant avant Qdrant.
+- `doc/MODEL_E5_SOURCES_PHASE3_13.md` : ingestion TXT/Markdown vers corpus E5.
+- `doc/MODEL_E5_SEARCH_REPORT_PHASE3_14.md` : rapport de résultats avec contexte source.
 - `doc/docs/architecture/*.dot` : roadmap DOT navigable ; les SVG sont générés par le makefile.
 
 ## Développement
@@ -100,3 +115,164 @@ PYTHONPATH=src pytest -q tests/rules
 ```
 
 These tests enforce the current interpretation of `code_rule.md`: stdlib-first imports, frozen contract dataclasses, Scheduler isolation from backend/domain layers, and no direct OpenVINO import outside the explicit runtime phase.
+
+## Phase 3.8
+
+La Phase 3.8 ajoute une factory de pipeline local `multilingual-e5-small`. Elle transforme le test OpenVINO réel validé localement en capacité configurable : profil E5, tokenizer local Transformers, runtime OpenVINO et pipeline embedding sont assemblés sans modifier le Scheduler.
+
+
+## Phase 3.9 — Tester l'embedding E5 local
+
+Quand le modèle local est installé, la commande de développement est :
+
+```bash
+./tools/embed_e5.py \
+  --model-dir /home/eric/model/openvino/multilingual-e5-small \
+  "query: test de recherche vectorielle pour MissiPy"
+```
+
+Sortie JSON avec aperçu :
+
+```bash
+./tools/embed_e5.py \
+  --model-dir /home/eric/model/openvino/multilingual-e5-small \
+  --format json \
+  "query: test"
+```
+
+Le vecteur complet n'est imprimé qu'avec `--full-vector`.
+
+## Phase 3.10 — Query / Passage E5
+
+E5 distingue maintenant explicitement deux rôles :
+
+```text
+query:   texte qui cherche
+passage: texte qui peut être retrouvé
+```
+
+La CLI accepte `--role` pour éviter les textes bruts ambigus :
+
+```bash
+./tools/embed_e5.py \
+  --model-dir /home/eric/model/openvino/multilingual-e5-small \
+  --role query \
+  "je me suis fait baiser"
+```
+
+Pour encoder un document :
+
+```bash
+./tools/embed_e5.py \
+  --model-dir /home/eric/model/openvino/multilingual-e5-small \
+  --role passage \
+  "j'ai été arnaqué par un vendeur"
+```
+
+Un mini-ranker local `E5LocalRanker` permet aussi de valider `1 query -> N passages -> scores` avant Qdrant.
+
+
+## Phase 3.11 — Classer des passages localement
+
+Avant Qdrant, on peut tester un mini-corpus directement :
+
+```bash
+./tools/rank_e5.py \
+  --model-dir /home/eric/model/openvino/multilingual-e5-small \
+  "je me suis fait baiser" \
+  --passage "j'ai été arnaqué par un vendeur" \
+  --passage "problème moteur diesel" \
+  --passage "documentation OpenVINO"
+```
+
+Sortie JSON et limite :
+
+```bash
+./tools/rank_e5.py \
+  --model-dir /home/eric/model/openvino/multilingual-e5-small \
+  --format json \
+  --limit 2 \
+  "je me suis fait baiser" \
+  --passage "j'ai été arnaqué par un vendeur" \
+  --passage "problème moteur diesel"
+```
+
+Cette commande encode la query en `query:` et les passages en `passage:` si les préfixes sont absents.
+
+
+## Phase 3.12 — Corpus local E5 persistant
+
+Le ranking direct recalcule les passages à chaque requête. La phase 3.12 ajoute un corpus local JSON pour persister les embeddings des passages.
+
+Construire un corpus :
+
+```bash
+./tools/build_e5_corpus.py \
+  --model-dir /home/eric/model/openvino/multilingual-e5-small \
+  --output /tmp/e5_corpus.json \
+  --passage "j'ai été arnaqué par un vendeur" \
+  --passage "problème moteur diesel" \
+  --passage "documentation OpenVINO"
+```
+
+Rechercher dedans :
+
+```bash
+./tools/search_e5_corpus.py \
+  --model-dir /home/eric/model/openvino/multilingual-e5-small \
+  --index /tmp/e5_corpus.json \
+  --limit 3 \
+  "je me suis fait baiser"
+```
+
+Cette couche reste un banc de test local avant Qdrant : elle ne fait pas encore d'index ANN, de filtrage avancé ou de mise à jour incrémentale.
+
+## Phase 3.13 — Indexer un dossier TXT/Markdown
+
+La Phase 3.13 ajoute l’ingestion locale de sources `.md`, `.markdown` et `.txt`. Les fichiers sont découverts dans un ordre stable, lus en UTF-8, découpés par paragraphes, puis convertis en `E5CorpusDocument` avec métadonnées `source_path`, `chunk_index`, `start_line` et `end_line`.
+
+Construire un corpus depuis un dossier :
+
+```bash
+./tools/build_e5_corpus.py \
+  --model-dir /home/eric/model/openvino/multilingual-e5-small \
+  --source-dir /data/notes \
+  --chunk-chars 1200 \
+  --output /tmp/e5_corpus.json \
+  --overwrite
+```
+
+Puis rechercher :
+
+```bash
+./tools/search_e5_corpus.py \
+  --model-dir /home/eric/model/openvino/multilingual-e5-small \
+  --index /tmp/e5_corpus.json \
+  "question utilisateur"
+```
+
+Cette étape reste volontairement avant Qdrant : elle permet de vérifier le découpage, les métadonnées et la qualité des scores avec un corpus JSON local.
+
+## Phase 3.14 — Résultats avec contexte source
+
+La recherche dans un corpus local affiche maintenant le fichier source, les lignes et un extrait de chunk quand ces métadonnées existent :
+
+```bash
+./tools/search_e5_corpus.py \
+  --model-dir /home/eric/model/openvino/multilingual-e5-small \
+  --index /tmp/e5_corpus.json \
+  --excerpt-chars 180 \
+  "je cherche une arnaque vendeur"
+```
+
+Pour inclure le chunk complet :
+
+```bash
+./tools/search_e5_corpus.py \
+  --model-dir /home/eric/model/openvino/multilingual-e5-small \
+  --index /tmp/e5_corpus.json \
+  --full-text \
+  "je cherche une arnaque vendeur"
+```
+
+Cette étape reste locale et déterministe : elle ne remplace pas Qdrant, elle prépare le format de résultat exploitable.
