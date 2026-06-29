@@ -1,0 +1,68 @@
+digraph Inference {
+    rankdir=TB;
+    node [shape=box, style=filled, fontname="Arial", fontsize=10];
+
+    // ROADMAP_NOTE[phase1_4]:
+    // Cette vue introduit le backend fictif d'inférence. Le but n'est pas de
+    // faire de l'IA, mais de verrouiller le contrat InferenceRequest /
+    // InferenceResult et le routage kernel avant OpenVINO.
+
+    subgraph cluster_contracts {
+        label="Contracts";
+        color="#455a64";
+        bgcolor="#eceff1";
+        node [fillcolor="#eceff1", color="#455a64"];
+        InferenceRequest [label="InferenceRequest\nprompt/context/model/metadata"];
+        InferenceResult [label="InferenceResult\ntext/confidence/backend/metadata"];
+        InferenceBackend [label="InferenceBackend Protocol"];
+    }
+
+    subgraph cluster_runtime {
+        label="Runtime Phase 1.4";
+        color="#f9a825";
+        bgcolor="#fffde7";
+        node [fillcolor="#fffde7", color="#f9a825"];
+        EventRequest [label="EventType.INFERENCE_REQUEST\nRequest.reply"];
+        Handler [label="InferenceRequestHandler"];
+        Dummy [label="DummyInferenceBackend\ndeterministic"];
+        EventResult [label="EventType.INFERENCE_RESULT\nobservable"];
+    }
+
+    subgraph cluster_future {
+        label="Backends future";
+        color="#6d4c41";
+        bgcolor="#efebe9";
+        node [fillcolor="#efebe9", color="#6d4c41"];
+        OpenVINO [label="OpenVINOBackend"];
+        CompiledModel [label="CompiledModel"];
+        InferPool [label="InferRequestPool"];
+    }
+
+    Scheduler [fillcolor="#ede7f6", color="#512da8", URL="../scheduler/10_scheduler.svg"];
+    Dispatcher [fillcolor="#ede7f6", color="#512da8", URL="../scheduler/10_scheduler.svg"];
+    ComponentProxy [fillcolor="#ede7f6", color="#512da8", URL="../scheduler/component_proxy/14_component_proxy.svg"];
+    EventBus [fillcolor="#ede7f6", color="#512da8", URL="../scheduler/event_bus/12_event_bus.svg"];
+
+    ComponentProxy -> EventRequest [label="yield Event"];
+    EventRequest -> Scheduler [label="emit"];
+    Scheduler -> Dispatcher [label="Queue"];
+    Dispatcher -> Handler;
+    Handler -> InferenceRequest [style=dotted, label="validate payload"];
+    Handler -> InferenceBackend [style=dotted, label="protocol"];
+    Handler -> Dummy [label="infer"];
+    Dummy -> InferenceResult;
+    InferenceResult -> Handler;
+    Handler -> ComponentProxy [label="Request.reply", style=dashed];
+    Handler -> EventResult [label="publish"];
+    EventResult -> EventBus [style=dashed];
+
+    OpenVINO -> CompiledModel [style=dashed];
+    CompiledModel -> InferPool [style=dashed];
+    Handler -> OpenVINO [style=dashed, label="future replacement"];
+
+    Nav_Global [label="Global", shape=plaintext, URL="../00_global.svg"];
+    Nav_Scheduler [label="Scheduler", shape=plaintext, URL="../scheduler/10_scheduler.svg"];
+    Nav_Services [label="Services", shape=plaintext, URL="../services/30_services.svg"];
+
+    { rank=sink; Nav_Global; Nav_Scheduler; Nav_Services; }
+}

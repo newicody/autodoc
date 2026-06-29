@@ -1,25 +1,21 @@
-# Autodoc / MissiPy — Architecture logicielle Phase 1.3
+# Autodoc / MissiPy — Architecture logicielle Phase 1.4
 
-Ce document décrit l'état de développement après extraction du pipeline de contexte dans `src/context/`.
+Ce document décrit l'état de développement après introduction du premier chemin d'inférence fictif.
 
-## Objectif Phase 1.3
+La règle reste inchangée : le Scheduler ne contient pas d'IA, ne connaît pas OpenVINO et ne manipule pas directement les backends. Il route des événements.
 
-La Phase 1.3 verrouille une règle importante : le `ContextEngine` reste une brique fondamentale du noyau, mais les détails de collecte, réduction et construction d'`InferenceContext` ne sont plus dans le scheduler.
+## Objectif Phase 1.4
 
-Le système garantit maintenant :
+La Phase 1.4 ajoute un `DummyInferenceBackend` pour valider le contrat d'inférence avant OpenVINO.
 
-- `Event` immuable avec identifiant fiable ;
-- `Request.reply` explicite, séparé du `payload` ;
-- `Dispatcher` non bloquant même sans handler ;
-- `ComponentProxy` stateful et obligatoire ;
-- `ContextEngine` composé ;
-- `ContextCollector` événementiel ;
-- `ContextReducer` dédié ;
-- `InferenceContextBuilder` dédié ;
-- `ContextRequestHandler` séparé du lifecycle ;
-- suite `pytest` minimale couvrant scheduler, proxy, dispatcher, queue et contexte.
+Objectifs :
 
----
+- tester `InferenceRequest` / `InferenceResult` ;
+- tester `EventType.INFERENCE_REQUEST` ;
+- tester `EventType.INFERENCE_RESULT` observable ;
+- vérifier qu'un composant peut recevoir un résultat d'inférence via `Request.reply` ;
+- garder OpenVINO hors du Scheduler ;
+- préserver `EventBus` comme miroir d'observation.
 
 ## Layer 0 — Hardware target
 
@@ -31,9 +27,7 @@ Cible actuelle :
 - ZFS NVMe + RAIDZ2 SATA ;
 - Gentoo Linux.
 
-Le Scheduler ne dépend d'aucune ressource matérielle directement.
-
----
+Le Scheduler ne dépend directement d'aucune ressource matérielle.
 
 ## Layer 1 — Micro-Kernel
 
@@ -48,7 +42,7 @@ Composants actifs :
 - `LifecycleManager` ;
 - `ComponentProxy`.
 
-Flux runtime :
+Flux d'exécution :
 
 ```text
 Component.tick()
@@ -66,8 +60,6 @@ Component.tick()
 
 Règle importante : `EventBus` reste un miroir d'observation. Le chemin de commande est `Scheduler -> PriorityQueue -> Dispatcher`.
 
----
-
 ## Layer 2 — Contracts
 
 Contrats disponibles :
@@ -79,32 +71,19 @@ Contrats disponibles :
 - `contracts.context.InferenceContext` ;
 - `contracts.lifecycle.ComponentState` ;
 - `contracts.inference.InferenceRequest` ;
-- `contracts.inference.InferenceResult`.
+- `contracts.inference.InferenceResult` ;
+- `contracts.inference.InferenceBackend`.
 
-Décision :
+Décision maintenue : un `Future` ne doit jamais être caché dans `payload`. Il doit rester dans `Event.request.reply`.
 
-```text
-Future ne doit jamais être caché dans payload.
-```
+## Layer 3 — Context Fabric
 
-Il doit rester dans :
-
-```python
-Event.request.reply
-```
-
----
-
-## Layer 3 — Context Fabric Phase 1.3
-
-Le fast path `Registry -> proxy.context()` n'est plus le chemin principal du `ContextEngine`.
-
-Flux actuel :
+État Phase 1.4 : collecte événementielle active.
 
 ```text
-Scheduler context clock
+Scheduler clock
   -> ContextEngine.execute_tick()
-  -> ContextCollector.collect()
+  -> ContextCollector
   -> Event(CONTEXT_REQUEST + Request.reply)
   -> Scheduler.emit()
   -> PriorityQueue
@@ -113,17 +92,12 @@ Scheduler context clock
   -> ComponentProxy.context()
   -> Request.reply
   -> EventBus.publish(CONTEXT_REPLY)
-  -> ContextReducer.reduce()
+  -> ContextReducer
   -> GlobalContextSnapshot
-  -> InferenceContextBuilder.build()
   -> InferenceContext
 ```
 
-Le seul endroit qui touche `ComponentProxy.context()` est `ContextRequestHandler`.
-
-Le Scheduler déclenche le tick de contexte, mais ne connaît pas la logique de collecte, réduction ou projection.
-
----
+La collecte touche encore `ComponentProxy.context()`, pas `Component.context()` directement. Cela respecte l'isolation du noyau.
 
 ## Layer 4 — Independent Services future
 
@@ -138,33 +112,43 @@ Services prévus mais non branchés :
 
 Ces services seront des composants ou handlers pilotés par événements. Ils ne seront pas intégrés dans le Scheduler.
 
----
+## Layer 5 — Inference Phase 1.4
 
-## Layer 5 — Inference future
-
-État actuel : uniquement les contrats.
-
-Prévu :
+État actuel : chemin fictif actif.
 
 ```text
-InferenceRequest
-  -> InferenceAdapter
+Component
+  -> yield Event(INFERENCE_REQUEST, payload=InferenceRequest)
+  -> ComponentProxy
+  -> Scheduler.emit()
+  -> PriorityQueue
+  -> Dispatcher
+  -> InferenceRequestHandler
   -> DummyInferenceBackend
   -> InferenceResult
+  -> Request.reply
+  -> ComponentProxy
+  -> tick().asend(InferenceResult)
 ```
 
-Puis seulement ensuite :
+Un événement observable est aussi publié :
 
 ```text
-InferenceAdapter
+InferenceRequestHandler
+  -> EventBus.publish(Event(INFERENCE_RESULT, payload=InferenceResult))
+```
+
+Cible future :
+
+```text
+InferenceRequestHandler
   -> OpenVINOBackend
   -> CompiledModel
   -> InferRequestPool
+  -> InferenceResult
 ```
 
 OpenVINO ne doit jamais être appelé directement par le Scheduler.
-
----
 
 ## Layer 6 — Experts
 
@@ -186,24 +170,15 @@ Futurs experts :
 
 Chaque expert est un composant coopératif standard.
 
----
-
 ## Layer 7 — Validation future
 
 Prévu :
 
 ```text
-Compiler
-  -> Tests
-  -> Semantic Validator
-  -> Confidence
-  -> Conflict
-  -> Version Manager
+Compiler -> Tests -> Semantic Validator -> Confidence -> Conflict -> Version Manager
 ```
 
 Le LLM ne remplace jamais les validateurs techniques.
-
----
 
 ## Layer 8 — Learning future
 
@@ -217,8 +192,6 @@ Prévu :
 - MCTS.
 
 Le MCTS produit des propositions, jamais des actions directes.
-
----
 
 ## Layer 9 — Observability
 
@@ -234,8 +207,6 @@ Prévu :
 
 Observability écoute l'EventBus mais ne commande pas le kernel.
 
----
-
 ## Layer 10 — Test Harness
 
 Commandes de validation :
@@ -243,24 +214,30 @@ Commandes de validation :
 ```bash
 python3 -m compileall -q src tests
 pytest -q
+python3 src/main.py
 cd doc && make -f makefile
 ```
 
 Couverture actuelle :
 
-- Event ids uniques ;
-- Dispatcher sans handler ne bloque pas ;
+- ids d'événements uniques ;
+- Dispatcher sans handler non bloquant ;
 - PriorityQueue FIFO à priorité égale ;
 - ComponentProxy roundtrip `yield/asend` ;
 - événement inconnu non bloquant ;
-- composant qui plante : ERROR + kernel non bloqué ;
-- ContextEngine produit un snapshot via chemin événementiel ;
-- CONTEXT_REPLY observable sur EventBus.
-
----
+- composant qui plante : `ERROR` + kernel non bloqué ;
+- ContextEngine collecte via événements ;
+- DummyInferenceBackend déterministe ;
+- publication observable `INFERENCE_RESULT` ;
+- roundtrip composant -> inference handler -> backend -> composant.
 
 ## Prochaine étape logique
 
-Phase 1.4 : introduire un `PolicyEngine` minimal sans logique métier.
+Phase 1.5 : introduire un premier `PolicyEngine` minimal ou un `InferenceAdapter` plus explicite.
 
-Objectif : préparer les futures décisions de budget, priorité, sécurité et autorisation sans coupler le Scheduler aux services, à OpenVINO ou aux experts.
+Ordre conseillé :
+
+1. verrouiller `InferenceRequestHandler` ;
+2. ajouter `InferenceAdapter` si le backend doit devenir interchangeable ;
+3. seulement ensuite brancher `OpenVINOBackend` ;
+4. garder `DummyInferenceBackend` comme backend de test permanent.

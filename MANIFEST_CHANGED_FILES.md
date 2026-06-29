@@ -1,29 +1,47 @@
-# Manifest — Phase 1.3 sync
+# Manifest — Phase 1.4 changed files
 
-Cette livraison synchronise réellement le Scheduler avec le package `src/context/` déjà présent dans le dépôt.
+## Code
 
-Elle ne change pas la roadmap DOT : les graphes décrivent déjà le chemin cible `Scheduler -> ContextEngine -> ContextCollector -> CONTEXT_REQUEST -> Dispatcher -> ContextRequestHandler`.
+- `src/contracts/inference.py`
+- `src/inference/__init__.py`
+- `src/inference/backend.py`
+- `src/inference/handlers.py`
+- `src/kernel/launcher.py`
+- `src/kernel/scheduler.py`
+- `src/kernel/context_engine.py`
 
-## Fichiers modifiés
+## Tests
+
+- `tests/inference/test_dummy_inference.py`
+
+## Documentation
+
+- `doc/ARCHITECTURE_LAYERS.md`
+- `doc/CHANGELOG_PHASE1_4.md`
+
+## DOT roadmap
+
+- `doc/docs/architecture/00_global.dot`
+- `doc/docs/architecture/scheduler/10_scheduler.dot`
+- `doc/docs/architecture/inference/40_inference.dot`
+- `doc/docs/architecture/tests/80_tests.dot`
+
+Aucun SVG n'est inclus.
+Aucun script de patch n'est inclus.
+
+## Raison architecturale
+
+La Phase 1.4 introduit un backend d'inférence fictif pour valider le chemin :
 
 ```text
-src/kernel/scheduler.py
-src/kernel/launcher.py
-src/kernel/context_engine.py
-tests/context/test_context_engine.py
-doc/CHANGELOG_PHASE1_3_SYNC.md
+Event(INFERENCE_REQUEST)
+  -> Scheduler
+  -> PriorityQueue
+  -> Dispatcher
+  -> InferenceRequestHandler
+  -> DummyInferenceBackend
+  -> InferenceResult
+  -> Request.reply
 ```
 
-## Non modifié
-
-```text
-Aucun SVG.
-Aucun DOT.
-Aucun script de patch.
-Aucun fichier OpenVINO/Qdrant/SQLite.
-```
-
-## Raison
-
-Le dépôt contenait déjà `src/context/`, mais `src/kernel/scheduler.py` utilisait encore `kernel.context_engine`.
-Cette étape supprime la duplication active : `kernel/context_engine.py` devient un shim de compatibilité et le Scheduler utilise `context.engine.ContextEngine`.
+OpenVINO reste futur et ne doit pas être branché directement au Scheduler.
