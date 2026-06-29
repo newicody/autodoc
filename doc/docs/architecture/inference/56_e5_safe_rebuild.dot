@@ -1,0 +1,77 @@
+digraph E5SafeRebuild {
+    // ROADMAP_ID: inference.e5_safe_rebuild
+    // ROADMAP_PARENT: inference/50_e5_corpus.dot
+    // ROADMAP_NOTE[phase3_18]:
+    // Le rebuild sûr remplace le cycle manuel build -> vérifier -> mv. Il
+    // construit un staging, le valide, puis le promeut vers l'index final.
+
+    rankdir=TB;
+    node [shape=box, style=filled, fontname="Arial", fontsize=10];
+    edge [fontname="Arial", fontsize=9];
+
+    subgraph cluster_inputs {
+        label="Entrées";
+        color="#1565c0";
+        bgcolor="#e3f2fd";
+        node [fillcolor="#e3f2fd", color="#1565c0"];
+        Sources [label="sources / passages", URL="51_e5_sources.svg"];
+        Target [label="--index corpus.json"];
+        Staging [label="--staging optionnel\n.corpus.json.rebuild.json"];
+        ValidationQuery [label="--validation-query\noptionnel"];
+    }
+
+    subgraph cluster_guard {
+        label="Protection";
+        color="#ef6c00";
+        bgcolor="#fff3e0";
+        node [fillcolor="#fff3e0", color="#ef6c00"];
+        Lock [label="E5CorpusBuildLock", URL="55_e5_build_lock.svg"];
+        Previous [label="previous E5CorpusIndex\nsi --index existe", URL="50_e5_corpus.svg"];
+    }
+
+    subgraph cluster_candidate {
+        label="Candidat";
+        color="#2e7d32";
+        bgcolor="#e8f5e9";
+        node [fillcolor="#e8f5e9", color="#2e7d32"];
+        Incremental [label="E5IncrementalCorpusBuilder", URL="53_e5_incremental.svg"];
+        Builder [label="E5CorpusBuilder", URL="50_e5_corpus.svg"];
+        WriteAtomic [label="write_atomic(staging)", URL="54_e5_atomic_build.svg"];
+        Candidate [label="candidate corpus\nre-read + schema check"];
+    }
+
+    subgraph cluster_validation {
+        label="Validation + promotion";
+        color="#6d4c41";
+        bgcolor="#efebe9";
+        node [fillcolor="#efebe9", color="#6d4c41"];
+        Searcher [label="E5CorpusSearcher\nvalidation query", URL="50_e5_corpus.svg"];
+        Promote [label="staging.replace(index)"];
+        DryRun [label="--dry-run\nno promotion"];
+        Final [label="corpus.json final"];
+    }
+
+    Target -> Lock;
+    Lock -> Previous [label="guarded read"];
+    Sources -> Builder [label="no previous"];
+    Sources -> Incremental [label="with previous"];
+    Previous -> Incremental;
+    Builder -> WriteAtomic;
+    Incremental -> WriteAtomic;
+    Staging -> WriteAtomic;
+    WriteAtomic -> Candidate;
+    Candidate -> Searcher [label="if validation-query"];
+    ValidationQuery -> Searcher;
+    Searcher -> Promote [label="ok"];
+    Candidate -> Promote [label="no validation query"];
+    Candidate -> DryRun [style=dashed];
+    Promote -> Final;
+    Final -> Lock [style=dotted, label="release"];
+
+    Nav_Inference [label="Inference", shape=plaintext, URL="40_inference.svg"];
+    Nav_Corpus [label="E5 corpus", shape=plaintext, URL="50_e5_corpus.svg"];
+    Nav_Incremental [label="E5 incremental", shape=plaintext, URL="53_e5_incremental.svg"];
+    Nav_Lock [label="E5 build lock", shape=plaintext, URL="55_e5_build_lock.svg"];
+
+    { rank=sink; Nav_Inference; Nav_Corpus; Nav_Incremental; Nav_Lock; }
+}

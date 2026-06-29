@@ -518,3 +518,21 @@ corpus.json
 ```
 
 Cette étape complète l'écriture atomique : l'atomicité protège le fichier final, le verrou protège la phase longue de calcul. La couche reste hors Scheduler, hors Qdrant et n'introduit aucune dépendance externe.
+
+
+## Phase 3.18 — Rebuild sûr du corpus E5
+
+Le corpus local E5 dispose maintenant d'une commande de rebuild sûre. Elle ne remplace plus l'index final directement après calcul : elle construit d'abord un fichier candidat voisin, le relit via le même store, peut lancer une recherche de validation rapide, puis promeut le candidat par remplacement atomique.
+
+Flux :
+
+```text
+source-dir / passages
+  -> E5CorpusBuildLock(corpus.json)
+  -> E5IncrementalCorpusBuilder si corpus.json existe
+  -> staging .corpus.json.rebuild.json
+  -> validation structurelle + optionnelle query
+  -> staging.replace(corpus.json)
+```
+
+Cette couche reste une surcouche CLI/dev autour du corpus local. Elle ne modifie ni le Scheduler, ni le format JSON du corpus, ni le futur plan Qdrant.

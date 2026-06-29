@@ -49,6 +49,16 @@ from .e5_corpus_cli import (
     run_search as run_e5_corpus_search_cli,
 )
 
+
+from .e5_rebuild_cli import (
+    E5CorpusRebuildCliOutput,
+    E5CorpusRebuildValidation,
+    build_rebuild_parser as rebuild_e5_corpus_cli_parser,
+    rebuild_main as e5_corpus_rebuild_main,
+    rebuild_staging_path,
+    run_rebuild as run_e5_corpus_rebuild_cli,
+)
+
 from .e5_text import (
     E5_PASSAGE_PREFIX,
     E5_PASSAGE_ROLE,
@@ -207,6 +217,12 @@ __all__ = [
     "e5_corpus_search_main",
     "run_e5_corpus_build_cli",
     "run_e5_corpus_search_cli",
+    "E5CorpusRebuildCliOutput",
+    "E5CorpusRebuildValidation",
+    "rebuild_e5_corpus_cli_parser",
+    "e5_corpus_rebuild_main",
+    "rebuild_staging_path",
+    "run_e5_corpus_rebuild_cli",
     "E5_PASSAGE_PREFIX",
     "E5_PASSAGE_ROLE",
     "E5_QUERY_PREFIX",

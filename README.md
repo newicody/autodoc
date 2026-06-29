@@ -6,7 +6,7 @@ L'objectif n'est pas de construire une application Python monolithique, mais un 
 
 ## État courant
 
-État de référence : **Phase 3.17 build E5 atomique + verrou fichier**.
+État de référence : **Phase 3.18 rebuild E5 sûr avec staging, validation et promotion**.
 
 Le prototype possède actuellement :
 
@@ -35,7 +35,8 @@ Le prototype possède actuellement :
 - un contrat `query:` / `passage:` ;
 - une CLI de ranking local E5 avant Qdrant ;
 - un corpus local E5 persistant depuis passages ou sources TXT/Markdown ;
-- un rapport de recherche E5 avec score, source, lignes et extrait.
+- un rapport de recherche E5 avec score, source, lignes et extrait;
+- un rebuild sûr du corpus E5 avec staging, validation optionnelle et promotion atomique.
 
 OpenVINO est branché comme runtime générique à entrées brutes. Le choix du ou des modèles est décrit par profils déclaratifs : `embedding`, `generation` ou `raw`. La Phase 3.1 ajoute le pont contrôlé entre profil et `BackendRegistry`, sans tokenizer, post-processing ou modèle précis imposé. La Phase 3.2 ajoute une configuration spécialisée pour déclarer un profil `openvino.embedding` local, toujours sans chemin en dur ni chargement automatique. La Phase 3.3 ajoute la couche IO raw : tokens déjà préparés -> `InferenceRequest.context["inputs"]` -> sortie brute -> vecteur embedding stable. La Phase 3.4 ajoute le contrat tokenizer : texte -> `TokenizationResult` -> `OpenVINOEmbeddingRawInputs`, sans tokenizer concret imposé. La Phase 3.5 assemble ces pièces dans un pipeline embedding abstrait mono-texte : tokenizer injectable -> raw inputs -> `InferenceAdapter` -> sorties brutes -> vecteur. La Phase 3.6 ajoute un tokenizer déterministe de test : il permet de valider le pipeline complet sans dépendance externe, sans vocabulaire réel, et sans prétendre être compatible avec un vrai modèle OpenVINO.
 
@@ -351,3 +352,33 @@ lock_path: /tmp/.e5_corpus.next.json.lock
 ```
 
 En développement uniquement, le verrou peut être désactivé avec `--no-lock`, mais le comportement normal doit rester verrouillé.
+
+
+## Phase 3.18 — Rebuild sûr du corpus E5
+
+La Phase 3.18 ajoute une commande dédiée au cycle opérationnel complet de reconstruction d'un corpus local : construire un candidat, le relire, exécuter éventuellement une recherche de validation, puis promouvoir le candidat vers l'index final seulement si tout a réussi.
+
+Flux :
+
+```text
+corpus.json actuel
+  -> .corpus.json.lock
+  -> .corpus.json.rebuild.json
+  -> validation structurelle
+  -> validation recherche optionnelle
+  -> replace(corpus.json)
+  -> release lock
+```
+
+Exemple :
+
+```bash
+./tools/rebuild_e5_corpus.py \
+  --model-dir /home/eric/model/openvino/multilingual-e5-small \
+  --index /tmp/e5_corpus.json \
+  --source-dir /data/notes \
+  --chunk-chars 1200 \
+  --validation-query "test de recherche"
+```
+
+Cette commande évite le `mv` manuel après un build incrémental. Elle reste hors Scheduler, hors Qdrant et conserve le format `missipy.e5.corpus.v1`.
