@@ -1,26 +1,35 @@
-# Autodoc / MissiPy — Architecture logicielle Phase 1.8
+# Autodoc / MissiPy — Architecture logicielle Phase 1.9
 
-Ce document décrit l'état de développement après introduction de la télémétrie kernel minimale.
+Ce document décrit l'état de développement après introduction du `ReplayReader` minimal.
 
 La règle centrale reste inchangée : le Scheduler ne contient pas de logique métier. Il orchestre, délègue l'autorisation au `PolicyEngine`, route via la `PriorityQueue` et le `Dispatcher`, puis alimente une instrumentation passive.
 
-## Objectif Phase 1.8
+## Objectif Phase 1.9
 
-La Phase 1.8 ajoute `KernelTelemetry`.
+La Phase 1.9 ajoute la lecture contrôlée du journal d'événements.
 
 Objectifs :
 
-- mesurer les événements acceptés en queue ;
-- mesurer les événements sortis de queue ;
-- mesurer les événements dispatchés ;
-- compter les refus `PolicyEngine` ;
-- compter les erreurs de dispatch ;
-- compter les ticks de contexte ;
-- mesurer la taille courante et maximale de la queue ;
-- mesurer la latence de queue et la durée de dispatch ;
-- produire un `TelemetrySnapshot` immuable.
+- conserver `EventRecorder` comme observateur passif ;
+- lire un `EventLogSnapshot` sans toucher au Scheduler ;
+- filtrer les événements par type, source ou destination ;
+- produire un `ReplayPlan` immuable ;
+- ne pas reconstruire de `Request.reply` ;
+- ne pas désérialiser automatiquement le payload ;
+- préparer le replay déterministe futur sans le brancher au chemin d'exécution.
 
-`KernelTelemetry` ne commande rien. Il ne publie pas d'événement. Il ne décide rien. Il sert uniquement à observer le kernel avant d'ajouter OpenVINO.
+Flux Phase 1.9 :
+
+```text
+EventBus.publish(Event)
+  -> EventRecorder
+  -> EventRecord immuable
+  -> EventLogSnapshot
+  -> ReplayReader
+  -> ReplayPlan contrôlé
+```
+
+`ReplayReader` ne commande rien. Il ne publie rien. Il ne connaît pas le Scheduler.
 
 ## Layer 0 — Hardware target
 
@@ -100,13 +109,17 @@ Contrats disponibles :
 - `contracts.inference.InferenceResult` ;
 - `contracts.inference.InferenceBackend` ;
 - `contracts.policy.Decision` ;
-- `contracts.telemetry.TelemetrySnapshot`.
+- `contracts.telemetry.TelemetrySnapshot` ;
+- `contracts.replay.EventRecord` ;
+- `contracts.replay.EventLogSnapshot` ;
+- `contracts.replay.ReplayEvent` ;
+- `contracts.replay.ReplayPlan`.
 
-Décision maintenue : un `Future` ne doit jamais être caché dans `payload`. Il doit rester dans `Event.request.reply`.
+Décision maintenue : un `Future` ne doit jamais être caché dans `payload`. Il doit rester dans `Event.request.reply` et ne doit jamais être enregistré dans le journal de replay.
 
 ## Layer 3 — Context Fabric
 
-État Phase 1.8 : collecte événementielle active avec mesure de tick.
+État Phase 1.9 : collecte événementielle active avec mesure de tick.
 
 ```text
 Scheduler clock
@@ -127,7 +140,7 @@ Scheduler clock
   -> KernelTelemetry.record_context_tick()
 ```
 
-La collecte touche encore `ComponentProxy.context()`, pas `Component.context()` directement. Cela respecte l'isolation du noyau.
+La collecte touche `ComponentProxy.context()`, pas `Component.context()` directement. Cela respecte l'isolation du noyau.
 
 ## Layer 4 — Independent Services future
 
@@ -142,7 +155,7 @@ Services prévus mais non branchés :
 
 Ces services seront des composants ou handlers pilotés par événements. Ils ne seront pas intégrés dans le Scheduler.
 
-## Layer 5 — Inference Phase 1.8
+## Layer 5 — Inference Phase 1.9
 
 État actuel : chemin fictif actif avec adapter, policy et télémétrie de kernel.
 
@@ -235,19 +248,23 @@ Prévu :
 
 Le MCTS produit des propositions, jamais des actions directes.
 
-## Layer 9 — Observability Phase 1.8
+## Layer 9 — Observability Phase 1.9
 
 Actuel :
 
 - `KernelTelemetry` ;
-- `TelemetrySnapshot`.
+- `TelemetrySnapshot` ;
+- `EventRecorder` ;
+- `EventLogSnapshot` ;
+- `ReplayReader` ;
+- `ReplayPlan`.
 
 Prévu :
 
 - logger ;
 - metrics ;
 - dashboard ;
-- replay ;
+- replay effectif ;
 - tracer ;
 - watchdog ;
 - recovery.
@@ -284,33 +301,14 @@ Couverture actuelle :
 - ComponentProxy reçoit une `Decision` explicite lors d'un refus ;
 - KernelTelemetry compte enqueue/dequeue/dispatch ;
 - KernelTelemetry compte les refus policy sans queueing ;
-- TelemetrySnapshot expose des moyennes immuables.
+- TelemetrySnapshot expose des moyennes immuables ;
+- EventRecorder capture passivement les événements observés ;
+- EventLogSnapshot reste immuable ;
+- ReplayReader filtre par type/source/destination ;
+- ReplayReader produit un ReplayPlan contrôlé et immuable.
 
 ## Prochaine étape logique
 
-Phase 1.8 : ajouter un `EventRecorder` minimal pour préparer le replay déterministe.
+Phase 2.0 : ajouter un moteur de replay contrôlé qui peut prendre un `ReplayPlan` et le rejouer dans un environnement isolé, sans affecter le Scheduler de production.
 
-But : conserver une trace sérialisable des événements observés sans transformer l'EventBus en chemin de commande.
-
-
-## Phase 1.8 — EventRecorder minimal
-
-Le `EventRecorder` est un consommateur passif de l’`EventBus`. Il prépare la
-rejouabilité sans devenir un chemin de commande.
-
-Flux :
-
-```text
-EventBus.publish(Event)
-  -> EventRecorder queue d’observation
-  -> EventRecord immuable
-  -> EventLogSnapshot
-```
-
-Règles :
-
-- le recorder ne publie aucun événement ;
-- le recorder ne modifie aucune queue d’exécution ;
-- le recorder ne capture jamais `Request.reply` ;
-- le recorder conserve une représentation stable du payload via `repr()` ;
-- le replay effectif reste une phase future.
+Le replay effectif ne doit pas réinjecter directement les événements dans le kernel courant. Il doit passer par une instance de test/simulation ou par une API explicite de replay.
