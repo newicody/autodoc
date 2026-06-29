@@ -76,3 +76,23 @@ Le choix reste dans `InferenceRequest.model`.
 La recommandation reste de commencer par un profil `embedding`, mais le code ne l'impose pas.
 
 La prochaine étape logique est d'ajouter un profil embedding réel local, puis de définir le format exact des entrées/sorties autour de ce modèle.
+
+
+## Extension Phase 3.2 — Source de profil embedding
+
+La factory ne change pas en Phase 3.2. Elle reçoit toujours un
+`OpenVINOModelProfile`.
+
+La nouveauté est que ce profil peut maintenant être produit par :
+
+```text
+OpenVINOEmbeddingProfileConfig.to_model_profile()
+```
+
+Cela garde la séparation :
+
+```text
+configuration embedding -> profil générique -> factory -> backend
+```
+
+La factory ne connaît toujours pas le tokenizer, le pooling réel ou Qdrant.

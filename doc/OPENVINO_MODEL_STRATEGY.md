@@ -168,3 +168,34 @@ profil déclaré != backend actif
 ```
 
 Un modèle n'est actif que si la configuration de lancement ou une décision explicite demande sa construction.
+
+
+## Phase 3.2 — Embedding configurable sans modèle imposé
+
+La Phase 3.2 concrétise la recommandation "embedding d'abord" sans imposer
+BGE-M3, MiniLM, E5 ou un chemin local fixe.
+
+Le nouveau point d'entrée est :
+
+```text
+OpenVINOEmbeddingProfileConfig
+```
+
+Il permet de déclarer :
+
+```text
+model_path
+name
+device
+dimension optionnelle
+input_names
+output_names
+pooling déclaratif
+normalize déclaratif
+metadata
+```
+
+La stratégie reste prudente : on sait maintenant représenter un profil embedding
+local, mais le runtime OpenVINO réel reste raw-input. La prochaine difficulté
+n'est pas le Scheduler : c'est le pré-traitement texte -> tenseurs, puis le
+post-traitement sortie modèle -> vecteur normalisé.

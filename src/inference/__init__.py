@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from .adapter import InferenceAdapter
 from .backend import DummyInferenceBackend
+from .embedding_profile import (
+    DEFAULT_EMBEDDING_INPUT_NAMES,
+    DEFAULT_EMBEDDING_OUTPUT_NAMES,
+    SUPPORTED_EMBEDDING_POOLING,
+    OpenVINOEmbeddingProfileConfig,
+    register_openvino_embedding_profile,
+)
 from .handlers import InferenceRequestHandler
 from .model_profile import (
     OpenVINOModelProfile,
@@ -30,6 +37,11 @@ from .openvino_runtime import (
 from .registry import BackendRegistry, BackendRegistrySnapshot
 
 __all__ = [
+    "DEFAULT_EMBEDDING_INPUT_NAMES",
+    "DEFAULT_EMBEDDING_OUTPUT_NAMES",
+    "SUPPORTED_EMBEDDING_POOLING",
+    "OpenVINOEmbeddingProfileConfig",
+    "register_openvino_embedding_profile",
     "BackendRegistry",
     "BackendRegistrySnapshot",
     "DummyInferenceBackend",

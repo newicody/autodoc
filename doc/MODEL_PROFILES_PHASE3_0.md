@@ -105,3 +105,23 @@ modèle exécuté   = InferenceRequest.model sélectionné par InferenceAdapter
 ```
 
 Aucun tokenizer n'est encore ajouté ici.
+
+
+## Extension Phase 3.2 — Profil embedding configurable
+
+La Phase 3.2 ajoute une spécialisation déclarative :
+
+```text
+OpenVINOEmbeddingProfileConfig
+  -> OpenVINOModelProfile(task="embedding")
+```
+
+Elle permet de déclarer un profil `openvino.embedding` avec `dimension`,
+`pooling`, `normalize`, `input_names` et `output_names`, sans choisir de modèle
+local à la place de l'utilisateur.
+
+Le profil reste compatible avec `OpenVINOBackendFactory` : il produit simplement
+un `OpenVINOModelProfile` générique de tâche `embedding`.
+
+Aucun tokenizer, aucun Qdrant et aucun post-processing réel ne sont ajoutés en
+Phase 3.2.

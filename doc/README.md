@@ -6,7 +6,7 @@ L'objectif n'est pas de construire une application Python monolithique, mais un 
 
 ## État courant
 
-État de référence : **Phase 2.6 auditée**.
+État de référence : **Phase 3.1 OpenVINO backend factory**.
 
 Le prototype possède actuellement :
 
@@ -17,13 +17,17 @@ Le prototype possède actuellement :
 - un `ComponentProxy` obligatoire entre le noyau et les composants réels ;
 - un `ContextEngine` événementiel ;
 - un `PolicyEngine` minimal ;
-- une télémétrie kernel minimale ;
+- une télémétrie kernel minimale (`kernel.telemetry`) ;
 - une chaîne replay hors Scheduler vivant ;
 - un chemin d'inférence fictif ;
 - un `BackendRegistry` ;
-- un contrat `OpenVINOBackend` sans import du runtime OpenVINO réel.
+- un contrat `OpenVINOBackend` ;
+- un `RealOpenVINORuntime` optionnel, isolé dans `src/inference/openvino_runtime.py`, sans modèle imposé ;
+- un `OpenVINOModelProfileRegistry` déclaratif pour préparer un ou plusieurs modèles sans les charger ;
+- un `OpenVINOBackendFactory` qui transforme explicitement un profil en backend enregistrable ;
+- un `OpenVINOEmbeddingProfileConfig` configurable, sans modèle local imposé.
 
-OpenVINO n'est pas encore branché. La prochaine étape doit choisir une stratégie de modèles, puis brancher un runtime réel derrière le contrat déjà préparé.
+OpenVINO est branché comme runtime générique à entrées brutes. Le choix du ou des modèles est décrit par profils déclaratifs : `embedding`, `generation` ou `raw`. La Phase 3.1 ajoute le pont contrôlé entre profil et `BackendRegistry`, sans tokenizer, post-processing ou modèle précis imposé. La Phase 3.2 ajoute une configuration spécialisée pour déclarer un profil `openvino.embedding` local, toujours sans chemin en dur ni chargement automatique.
 
 ## Règle d'architecture
 
@@ -70,6 +74,9 @@ cd doc && make -f makefile
 - `doc/ARCHITECTURE_LAYERS.md` : couches logicielles actuelles.
 - `doc/PROJECT_REVIEW_PHASE2_6.md` : audit du modèle actuel.
 - `doc/OPENVINO_MODEL_STRATEGY.md` : stratégie proposée avant choix du ou des modèles OpenVINO.
+- `doc/MODEL_PROFILES_PHASE3_0.md` : contrat des profils déclaratifs OpenVINO.
+- `doc/MODEL_FACTORY_PHASE3_1.md` : construction contrôlée de backends depuis les profils.
+- `doc/MODEL_EMBEDDING_PROFILE_PHASE3_2.md` : configuration déclarative d’un profil embedding OpenVINO.
 - `doc/docs/architecture/*.dot` : roadmap DOT navigable ; les SVG sont générés par le makefile.
 
 ## Développement
@@ -77,3 +84,13 @@ cd doc && make -f makefile
 Les fichiers `.svg` ne sont pas édités à la main. Les graphes sources sont les `.dot`.
 
 Les fichiers de cache Python (`__pycache__`, `.pyc`, `.pytest_cache`) ne doivent pas être versionnés.
+
+## Rule audit
+
+Before integrating real OpenVINO runtime code, the repository includes code-rule guard tests:
+
+```bash
+PYTHONPATH=src pytest -q tests/rules
+```
+
+These tests enforce the current interpretation of `code_rule.md`: stdlib-first imports, frozen contract dataclasses, Scheduler isolation from backend/domain layers, and no direct OpenVINO import outside the explicit runtime phase.
