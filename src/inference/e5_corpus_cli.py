@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .e5_corpus import E5CorpusBuilder, E5CorpusIndex, E5CorpusJsonStore, E5CorpusSearcher
+from .e5_corpus_lock import E5CorpusBuildLock
 from .e5_incremental import E5IncrementalCorpusBuilder, E5IncrementalBuildStats
 from .e5_search_report import E5SearchReport, E5SearchReportConfig
 from .e5_sources import SUPPORTED_E5_SOURCE_EXTENSIONS, load_e5_corpus_documents_from_sources
@@ -43,6 +44,8 @@ class E5CorpusBuildCliOutput:
     embedded_count: int | None = None
     removed_count: int | None = None
     atomic_write: bool = True
+    lock_enabled: bool = True
+    lock_path: str | None = None
 
     def to_json_dict(self) -> dict[str, object]:
         data: dict[str, object] = {
@@ -53,7 +56,10 @@ class E5CorpusBuildCliOutput:
             "dimension": self.dimension,
             "size": self.size,
             "atomic_write": self.atomic_write,
+            "lock_enabled": self.lock_enabled,
         }
+        if self.lock_path is not None:
+            data["lock_path"] = self.lock_path
         if self.reused_count is not None:
             data["reused_count"] = self.reused_count
         if self.embedded_count is not None:
@@ -71,7 +77,10 @@ class E5CorpusBuildCliOutput:
             f"dimension: {self.dimension}",
             f"size: {self.size}",
             f"atomic_write: {self.atomic_write}",
+            f"lock_enabled: {self.lock_enabled}",
         ]
+        if self.lock_path is not None:
+            lines.append(f"lock_path: {self.lock_path}")
         if self.reused_count is not None:
             lines.append(f"reused_count: {self.reused_count}")
         if self.embedded_count is not None:
@@ -137,6 +146,7 @@ def build_build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", required=True, help="Fichier JSON de sortie du corpus local.")
     parser.add_argument("--reuse-index", default=None, help="Index JSON existant à réutiliser pour un build incrémental.")
     parser.add_argument("--overwrite", action="store_true", help="Autorise l'écrasement du fichier de sortie.")
+    parser.add_argument("--no-lock", action="store_true", help="Désactive le verrou fichier de build du corpus.")
     parser.add_argument("--format", choices=("text", "json"), default="text", help="Format de sortie CLI.")
     return parser
 
@@ -196,22 +206,17 @@ async def run_build_async(
         stderr.write("at least one --passage, --passages-file, --source-file or --source-dir entry is required\n")
         return 2
 
+    lock_enabled = not args.no_lock
+    lock_path: str | None = None
     try:
         json_store = store or E5CorpusJsonStore()
-        bundle = builder(_pipeline_config(args, cli_name="missipy-build-e5-corpus"))
-        stats: E5IncrementalBuildStats | None = None
-        if args.reuse_index is not None:
-            previous_index = json_store.read(args.reuse_index)
-            incremental = await E5IncrementalCorpusBuilder(bundle.pipeline).build(
-                passages,
-                previous_index=previous_index,
-                metadata={"builder": "missipy-build-e5-corpus"},
-            )
-            index = incremental.index
-            stats = incremental.stats
+        build_lock = E5CorpusBuildLock(args.output) if lock_enabled else None
+        if build_lock is None:
+            path, index, stats = await _build_and_write_corpus(args, passages, json_store, builder)
         else:
-            index = await E5CorpusBuilder(bundle.pipeline).build(passages, metadata={"builder": "missipy-build-e5-corpus"})
-        path = json_store.write_atomic(index, args.output, overwrite=args.overwrite)
+            with build_lock:
+                lock_path = str(build_lock.path)
+                path, index, stats = await _build_and_write_corpus(args, passages, json_store, builder)
     except Exception as exc:  # pragma: no cover - dépend des dépendances locales.
         stderr.write(f"missipy-build-e5-corpus failed: {exc}\n")
         return 1
@@ -227,9 +232,34 @@ async def run_build_async(
         embedded_count=stats.embedded_count if stats is not None else None,
         removed_count=stats.removed_count if stats is not None else None,
         atomic_write=True,
+        lock_enabled=lock_enabled,
+        lock_path=lock_path,
     )
     _write_output(stdout, args.format, output.to_json_dict(), output.to_text())
     return 0
+
+
+async def _build_and_write_corpus(
+    args: argparse.Namespace,
+    passages: Sequence[object],
+    json_store: E5CorpusJsonStore,
+    builder: E5CorpusPipelineBuilder,
+) -> tuple[Path, E5CorpusIndex, E5IncrementalBuildStats | None]:
+    bundle = builder(_pipeline_config(args, cli_name="missipy-build-e5-corpus"))
+    stats: E5IncrementalBuildStats | None = None
+    if args.reuse_index is not None:
+        previous_index = json_store.read(args.reuse_index)
+        incremental = await E5IncrementalCorpusBuilder(bundle.pipeline).build(
+            passages,
+            previous_index=previous_index,
+            metadata={"builder": "missipy-build-e5-corpus"},
+        )
+        index = incremental.index
+        stats = incremental.stats
+    else:
+        index = await E5CorpusBuilder(bundle.pipeline).build(passages, metadata={"builder": "missipy-build-e5-corpus"})
+    path = json_store.write_atomic(index, args.output, overwrite=args.overwrite)
+    return path, index, stats
 
 
 async def run_search_async(

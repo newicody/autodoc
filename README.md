@@ -6,7 +6,7 @@ L'objectif n'est pas de construire une application Python monolithique, mais un 
 
 ## État courant
 
-État de référence : **Phase 3.15 corpus E5 incrémental par hash**.
+État de référence : **Phase 3.17 build E5 atomique + verrou fichier**.
 
 Le prototype possède actuellement :
 
@@ -317,3 +317,37 @@ La Phase 3.16 rend l'écriture du corpus plus sûre : `build_e5_corpus.py` écri
 ```
 
 La sortie CLI indique maintenant `atomic_write: True`. Le fichier temporaire suit le modèle `.nom_du_fichier.tmp` dans le même répertoire que la cible, afin que le remplacement reste atomique sur le même système de fichiers.
+
+
+## Phase 3.17 — Verrou fichier de build corpus
+
+La Phase 3.17 ajoute un verrou fichier pendant la construction du corpus E5. L'écriture atomique protège le remplacement final, mais elle n'empêchait pas encore deux processus de construire simultanément le même index.
+
+Désormais, `build_e5_corpus.py` crée par défaut un verrou voisin de la cible :
+
+```text
+/tmp/e5_corpus.json
+/tmp/.e5_corpus.json.lock
+/tmp/.e5_corpus.json.tmp
+```
+
+Le verrou est acquis par création atomique `O_CREAT | O_EXCL`. Si un autre build vise déjà le même fichier, la commande échoue explicitement au lieu de travailler en concurrence.
+
+```bash
+./tools/build_e5_corpus.py \
+  --model-dir /home/eric/model/openvino/multilingual-e5-small \
+  --source-dir /data/notes \
+  --reuse-index /tmp/e5_corpus.json \
+  --output /tmp/e5_corpus.next.json \
+  --overwrite
+```
+
+La sortie CLI indique maintenant :
+
+```text
+atomic_write: True
+lock_enabled: True
+lock_path: /tmp/.e5_corpus.next.json.lock
+```
+
+En développement uniquement, le verrou peut être désactivé avec `--no-lock`, mais le comportement normal doit rester verrouillé.

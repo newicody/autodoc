@@ -223,3 +223,58 @@ def test_build_e5_corpus_cli_reuses_previous_index(tmp_path) -> None:
     assert "embedded_count: 0" in text
     assert "removed_count: 0" in text
     assert "embedding_reused" in rebuilt.read_text(encoding="utf-8")
+
+
+def test_build_e5_corpus_cli_reports_and_removes_lock(tmp_path) -> None:
+    corpus = tmp_path / "corpus.json"
+    out = StringIO()
+    err = StringIO()
+
+    code = run_build(
+        ["--output", str(corpus), "--passage", "arnaque vendeur"],
+        stdout=out,
+        stderr=err,
+        builder=fake_builder,
+    )
+
+    assert code == 0
+    assert err.getvalue() == ""
+    text = out.getvalue()
+    assert "lock_enabled: True" in text
+    assert "lock_path: " in text
+    assert not (tmp_path / ".corpus.json.lock").exists()
+
+
+def test_build_e5_corpus_cli_rejects_existing_lock(tmp_path) -> None:
+    corpus = tmp_path / "corpus.json"
+    lock = tmp_path / ".corpus.json.lock"
+    lock.write_text("busy\n", encoding="utf-8")
+    err = StringIO()
+
+    code = run_build(
+        ["--output", str(corpus), "--passage", "arnaque vendeur"],
+        stdout=StringIO(),
+        stderr=err,
+        builder=fake_builder,
+    )
+
+    assert code == 1
+    assert "already locked" in err.getvalue()
+    assert not corpus.exists()
+    assert lock.exists()
+
+
+def test_build_e5_corpus_cli_can_disable_lock(tmp_path) -> None:
+    corpus = tmp_path / "corpus.json"
+    out = StringIO()
+
+    code = run_build(
+        ["--output", str(corpus), "--no-lock", "--passage", "arnaque vendeur"],
+        stdout=out,
+        stderr=StringIO(),
+        builder=fake_builder,
+    )
+
+    assert code == 0
+    assert "lock_enabled: False" in out.getvalue()
+    assert "lock_path:" not in out.getvalue()

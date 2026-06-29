@@ -499,3 +499,22 @@ La règle d'invalidation est déterministe : elle ne dépend pas des timestamps 
 Le corpus local E5 dispose maintenant d'un chemin d'écriture atomique. `E5CorpusJsonStore.write_atomic()` sérialise le nouvel index dans un fichier temporaire voisin, le relit via le même store, compare la projection JSON reconstruite au corpus attendu, puis remplace la cible par `Path.replace()`.
 
 Cette étape protège l'index local pendant les builds longs : un crash pendant l'embedding ou une erreur de validation ne remplace pas le corpus existant. Elle reste hors Scheduler, hors Qdrant et compatible avec le schéma `missipy.e5.corpus.v1`.
+
+
+## Phase 3.17 — Verrou de build corpus E5
+
+La construction du corpus local E5 dispose maintenant d'un verrou fichier exclusif. `E5CorpusBuildLock` crée un fichier voisin de la cible avec `os.O_CREAT | os.O_EXCL`, puis le supprime à la sortie du build, y compris en cas d'exception.
+
+Flux :
+
+```text
+corpus.json
+  -> .corpus.json.lock
+  -> build/reuse embeddings
+  -> .corpus.json.tmp
+  -> validate
+  -> replace corpus.json
+  -> release lock
+```
+
+Cette étape complète l'écriture atomique : l'atomicité protège le fichier final, le verrou protège la phase longue de calcul. La couche reste hors Scheduler, hors Qdrant et n'introduit aucune dépendance externe.

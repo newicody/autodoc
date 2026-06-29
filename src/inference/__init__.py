@@ -97,6 +97,13 @@ from .e5_incremental import (
     reuse_embedding,
 )
 
+from .e5_corpus_lock import (
+    E5CorpusBuildLock,
+    E5CorpusBuildLockError,
+    E5CorpusBuildLockInfo,
+    build_e5_corpus_lock_path,
+)
+
 from .e5_corpus import (
     E5CorpusBuilder,
     E5CorpusDocument,
@@ -226,6 +233,10 @@ __all__ = [
     "discover_e5_source_files",
     "load_e5_corpus_documents_from_sources",
     "load_e5_source_documents",
+    "E5CorpusBuildLock",
+    "E5CorpusBuildLockError",
+    "E5CorpusBuildLockInfo",
+    "build_e5_corpus_lock_path",
     "E5CorpusBuilder",
     "E5CorpusDocument",
     "E5CorpusEmbedding",

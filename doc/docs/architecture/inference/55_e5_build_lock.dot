@@ -1,0 +1,68 @@
+digraph E5CorpusBuildLock {
+    // ROADMAP_ID: inference.e5_build_lock
+    // ROADMAP_PARENT: inference/50_e5_corpus.dot
+    // ROADMAP_NOTE[phase3_17]:
+    // Le verrou fichier empêche deux builds concurrents de viser le même
+    // corpus JSON. Il complète l'écriture atomique : lock pendant tout le
+    // build, tmp/validate/replace seulement à la fin.
+
+    rankdir=TB;
+    node [shape=box, style=filled, fontname="Arial", fontsize=10];
+    edge [fontname="Arial", fontsize=9];
+
+    subgraph cluster_target {
+        label="Cible";
+        color="#1565c0";
+        bgcolor="#e3f2fd";
+        node [fillcolor="#e3f2fd", color="#1565c0"];
+        Output [label="corpus.json"];
+        LockPath [label="build_e5_corpus_lock_path\n.corpus.json.lock"];
+        TempPath [label="atomic_temp_path\n.corpus.json.tmp", URL="54_e5_atomic_build.svg"];
+    }
+
+    subgraph cluster_lock {
+        label="Verrou exclusif";
+        color="#ef6c00";
+        bgcolor="#fff3e0";
+        node [fillcolor="#fff3e0", color="#ef6c00"];
+        Lock [label="E5CorpusBuildLock"];
+        Acquire [label="acquire\nos.O_CREAT | os.O_EXCL"];
+        LockInfo [label="E5CorpusBuildLockInfo\npid + target + lock_path"];
+        Reject [label="E5CorpusBuildLockError\nexisting lock"];
+        Release [label="release\nunlink lock"];
+    }
+
+    subgraph cluster_build {
+        label="Build protégé";
+        color="#2e7d32";
+        bgcolor="#e8f5e9";
+        node [fillcolor="#e8f5e9", color="#2e7d32"];
+        Sources [label="sources/passages"];
+        Incremental [label="E5IncrementalCorpusBuilder", URL="53_e5_incremental.svg"];
+        Builder [label="E5CorpusBuilder", URL="50_e5_corpus.svg"];
+        Atomic [label="write_atomic", URL="54_e5_atomic_build.svg"];
+        Final [label="validated corpus.json"];
+    }
+
+    Output -> LockPath;
+    Output -> TempPath;
+    Lock -> Acquire;
+    Acquire -> LockInfo [label="ok"];
+    Acquire -> Reject [label="exists"];
+    LockInfo -> Sources [style=dashed, label="build starts"];
+    Sources -> Builder;
+    Sources -> Incremental [style=dashed, label="--reuse-index"];
+    Builder -> Atomic;
+    Incremental -> Atomic;
+    Atomic -> TempPath [style=dotted];
+    Atomic -> Final [label="validated replace"];
+    Final -> Release;
+    Reject -> Output [style=dotted, label="unchanged"];
+
+    Nav_Inference [label="Inference", shape=plaintext, URL="40_inference.svg"];
+    Nav_Corpus [label="E5 corpus", shape=plaintext, URL="50_e5_corpus.svg"];
+    Nav_Incremental [label="E5 incremental", shape=plaintext, URL="53_e5_incremental.svg"];
+    Nav_Atomic [label="E5 atomic build", shape=plaintext, URL="54_e5_atomic_build.svg"];
+
+    { rank=sink; Nav_Inference; Nav_Corpus; Nav_Incremental; Nav_Atomic; }
+}
