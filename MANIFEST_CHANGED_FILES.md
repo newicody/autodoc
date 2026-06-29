@@ -1,32 +1,31 @@
-# Manifest — Phase 2.4c
+# MANIFEST — Phase 2.5 changed files
 
-## Fichiers modifiés
+## Runtime / inference
 
-```text
-tests/docs/test_dot_links.py
+- `src/inference/registry.py`
+- `src/inference/adapter.py`
+- `src/inference/__init__.py`
+- `src/kernel/launcher.py`
 
-doc/CHANGELOG_PHASE2_4C.md
+## Tests
 
-doc/docs/architecture/context/20_context.dot
-doc/docs/architecture/context/21_collector.dot
-doc/docs/architecture/context/22_reducer.dot
-doc/docs/architecture/context/23_snapshot.dot
-doc/docs/architecture/context/24_decision_engine.dot
+- `tests/inference/test_backend_registry.py`
+- `tests/inference/test_dummy_inference.py`
 
-doc/docs/architecture/scheduler/11_dispatcher.dot
-doc/docs/architecture/scheduler/12_event_bus.dot
-doc/docs/architecture/scheduler/13_priority_queue.dot
-doc/docs/architecture/scheduler/14_component_proxy.dot
-```
+## Documentation
 
-## Non modifié
+- `doc/ARCHITECTURE_LAYERS.md`
+- `doc/CHANGELOG_PHASE2_5.md`
 
-```text
-src/**
-*.svg
-makefile
-```
+## Roadmap DOT
 
-## Intention
+- `doc/docs/architecture/00_global.dot`
+- `doc/docs/architecture/inference/40_inference.dot`
+- `doc/docs/architecture/tests/80_tests.dot`
 
-Corriger uniquement la cohérence de navigation DOT et le test associé.
+## Non inclus
+
+- Aucun `.svg`
+- Aucun script de patch
+- Aucun changement OpenVINO
+- Aucun changement Qdrant / SQLite

@@ -7,6 +7,7 @@ from context.handlers import ContextRequestHandler
 from contracts.event import EventType
 from inference.adapter import InferenceAdapter
 from inference.backend import DummyInferenceBackend
+from inference.registry import BackendRegistry
 from inference.handlers import InferenceRequestHandler
 from observability.recorder import EventRecorder
 from observability.telemetry import KernelTelemetry
@@ -35,7 +36,9 @@ class Launcher:
         self.telemetry = KernelTelemetry()
         self.event_recorder = EventRecorder(self.event_bus)
         self.inference_backend = DummyInferenceBackend()
-        self.inference_adapter = InferenceAdapter(self.inference_backend)
+        self.inference_registry = BackendRegistry()
+        self.inference_registry.register(self.inference_backend, make_default=True)
+        self.inference_adapter = InferenceAdapter(self.inference_registry)
         self.scheduler = Scheduler(
             self.queue,
             self.dispatcher,

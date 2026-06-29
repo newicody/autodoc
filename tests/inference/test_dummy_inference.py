@@ -11,6 +11,7 @@ from contracts.inference import InferenceRequest, InferenceResult
 from inference.adapter import InferenceAdapter
 from inference.backend import DummyInferenceBackend
 from inference.handlers import InferenceRequestHandler
+from inference.registry import BackendRegistry
 from kernel.dispatcher import Dispatcher
 from kernel.event_bus import EventBus
 from kernel.lifecycle import LifecycleManager
@@ -71,20 +72,24 @@ async def test_dummy_inference_backend_is_deterministic() -> None:
 
 @pytest.mark.asyncio
 async def test_inference_adapter_selects_registered_backend() -> None:
-    adapter = InferenceAdapter(DummyInferenceBackend())
-    adapter.register_backend(UppercaseBackend())
+    registry = BackendRegistry()
+    registry.register(DummyInferenceBackend(), make_default=True)
+    registry.register(UppercaseBackend())
+    adapter = InferenceAdapter(registry)
     request = InferenceRequest(prompt="hello", model="upper")
 
     result = await adapter.infer(request)
 
     assert result.backend == "upper"
     assert result.text == "HELLO"
-    assert tuple(sorted(adapter.backends)) == ("dummy", "upper")
+    assert adapter.default_backend_name == "dummy"
 
 
 @pytest.mark.asyncio
 async def test_inference_adapter_rejects_unknown_backend() -> None:
-    adapter = InferenceAdapter(DummyInferenceBackend())
+    registry = BackendRegistry()
+    registry.register(DummyInferenceBackend(), make_default=True)
+    adapter = InferenceAdapter(registry)
     request = InferenceRequest(prompt="hello", model="missing")
 
     with pytest.raises(LookupError, match="missing"):
@@ -95,7 +100,7 @@ async def test_inference_adapter_rejects_unknown_backend() -> None:
 async def test_inference_handler_publishes_observable_result() -> None:
     bus = EventBus()
     observed = bus.subscribe(EventType.INFERENCE_RESULT)
-    adapter = InferenceAdapter(DummyInferenceBackend())
+    adapter = InferenceAdapter.from_backend(DummyInferenceBackend())
     handler = InferenceRequestHandler(adapter, bus)
     request = InferenceRequest(prompt="hello")
     event = Event(EventType.INFERENCE_REQUEST, source="test", payload=request)
@@ -118,7 +123,7 @@ async def test_component_can_roundtrip_through_dummy_inference_handler() -> None
     dispatcher = Dispatcher(bus)
     lifecycle = LifecycleManager()
     lifecycle.register_handlers(dispatcher)
-    adapter = InferenceAdapter(DummyInferenceBackend())
+    adapter = InferenceAdapter.from_backend(DummyInferenceBackend())
     dispatcher.register(
         EventType.INFERENCE_REQUEST,
         InferenceRequestHandler(adapter, bus),

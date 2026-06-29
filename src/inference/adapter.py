@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from types import MappingProxyType
-
 from contracts.inference import InferenceBackend, InferenceRequest, InferenceResult
+
+from .registry import BackendRegistry
 
 
 class InferenceAdapter:
@@ -16,42 +15,33 @@ class InferenceAdapter:
 
     name = "inference-adapter"
 
-    def __init__(self, default_backend: InferenceBackend) -> None:
-        self._default_backend_name = default_backend.name
-        self._backends: dict[str, InferenceBackend] = {}
-        self.register_backend(default_backend)
+    def __init__(self, registry: BackendRegistry) -> None:
+        self._registry = registry
+
+    @classmethod
+    def from_backend(cls, default_backend: InferenceBackend) -> InferenceAdapter:
+        """Construit un adapter minimal autour d'un backend unique."""
+
+        registry = BackendRegistry()
+        registry.register(default_backend, make_default=True)
+        return cls(registry)
+
+    @property
+    def registry(self) -> BackendRegistry:
+        """Registre utilisé par l'adapter."""
+
+        return self._registry
 
     @property
     def default_backend_name(self) -> str:
-        """Nom du backend utilisé quand la requête ne précise pas de modèle."""
+        """Nom du backend par défaut."""
 
-        return self._default_backend_name
-
-    @property
-    def backends(self) -> Mapping[str, InferenceBackend]:
-        """Vue immuable des backends connus de l'adapter."""
-
-        return MappingProxyType(self._backends)
-
-    def register_backend(self, backend: InferenceBackend) -> None:
-        """Ajoute ou remplace explicitement un backend d'inférence."""
-
-        if not backend.name:
-            raise ValueError("Inference backend name must not be empty")
-        self._backends[backend.name] = backend
+        return self._registry.default_backend_name
 
     def select_backend(self, request: InferenceRequest) -> InferenceBackend:
-        """Sélectionne le backend demandé sans fallback implicite dangereux."""
+        """Sélectionne le backend demandé via le registre."""
 
-        backend_name = request.model or self._default_backend_name
-        backend = self._backends.get(backend_name)
-        if backend is None:
-            available = ", ".join(sorted(self._backends)) or "none"
-            raise LookupError(
-                f"No inference backend registered for model '{backend_name}'. "
-                f"Available backends: {available}"
-            )
-        return backend
+        return self._registry.select(request.model)
 
     async def infer(self, request: InferenceRequest) -> InferenceResult:
         """Délègue l'inférence au backend sélectionné."""

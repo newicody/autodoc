@@ -376,3 +376,32 @@ La roadmap DOT est aussi renforcée : les sous-graphes du scheduler manquants
 ont été ajoutés pour que les liens de zoom descente/remontée soient valides.
 Un test vérifie désormais que chaque URL SVG dans les DOT possède une source
 DOT correspondante.
+
+## Phase 2.5 — BackendRegistry minimal pour l'inférence
+
+La couche inference sépare maintenant explicitement trois responsabilités :
+
+```text
+InferenceRequestHandler
+  -> InferenceAdapter
+  -> BackendRegistry
+  -> InferenceBackend
+```
+
+Le `BackendRegistry` connaît la liste des backends disponibles et le backend par
+défaut. L'`InferenceAdapter` ne stocke plus directement les backends : il demande
+au registry de sélectionner le backend correspondant au modèle demandé.
+
+Garanties :
+
+- aucun changement dans le Scheduler ;
+- aucun changement dans le Dispatcher ;
+- aucun changement dans le ComponentProxy ;
+- aucun OpenVINO encore intégré ;
+- les doublons de noms de backends sont refusés ;
+- un modèle inconnu produit une erreur explicite ;
+- le snapshot du registry est immuable et exploitable par observability/policy.
+
+Cette phase prépare directement OpenVINO : il pourra être ajouté comme backend
+supplémentaire enregistré dans `BackendRegistry`, puis autorisé par `PolicyEngine`,
+sans modifier le chemin kernel.
