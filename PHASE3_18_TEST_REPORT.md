@@ -15,6 +15,47 @@ PYTHONPATH=src python3 src/main.py
 ./tools/search_e5_corpus.py --help
 find doc/docs/architecture -name '*.dot' -print0 | xargs -0 -I{} dot -Tsvg {} -o /tmp/phase318.svg
 PYTHONPATH=src pytest -q tests/docs/test_dot_links.py
+
+Phase 3.18 test report
+
+Commands run:
+
+- git status --short
+- PYTHONPATH=src pytest -q tests/rules
+- PYTHONPATH=src pytest -q
+- PYTHONPATH=src pytest -q tests/integration/test_openvino_e5_local.py
+
+Results:
+
+- tests/rules: 4 passed in 0.19s
+- full portable suite: 203 passed, 1 skipped in 0.74s
+- OpenVINO E5 local integration test: 1 skipped in 0.05s
+
+Notes:
+
+- Scheduler/domain boundary rule is green.
+- Portable suite is green.
+- OpenVINO E5 local pytest was skipped in this run.
+- No Qdrant change.
+- No corpus format change.
+- No Scheduler functional change beyond justified boundary correction if applicable.
+- No SVG.
+- No patch script.
+
+Statut avant Phase 4
+
+Tu peux fermer 3.18 si :
+
+git status --short
+
+ne sort rien, ou seulement les fichiers de clôture attendus.
+
+Verdict :
+
+Phase 3.18 portable: OK
+Phase 3.18 OpenVINO pytest local: skipped
+Phase 3.18 manual E5 local: déjà validé précédemment
+Phase 4: autorisée après commit propre de clôture
 ```
 
 ## Résultats
