@@ -1,16 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
+
+from contracts.event import Event
+from contracts.policy import Decision
 
 
 @dataclass(frozen=True, slots=True)
 class TelemetrySnapshot:
-    """Image immuable de la télémétrie kernel minimale.
-
-    Le snapshot reste une donnée de contrat : il peut être exposé au contexte,
-    testé ou sérialisé sans donner accès à l'objet mutable qui collecte les
-    compteurs.
-    """
+    """Image immuable de la télémétrie kernel minimale."""
 
     events_enqueued: int = 0
     events_dequeued: int = 0
@@ -27,16 +26,85 @@ class TelemetrySnapshot:
 
     @property
     def average_queue_latency_ns(self) -> int:
-        """Latence moyenne entre création de l'événement et dispatch."""
-
         if self.events_dispatched == 0:
             return 0
         return self.total_queue_latency_ns // self.events_dispatched
 
     @property
     def average_dispatch_latency_ns(self) -> int:
-        """Durée moyenne du Dispatcher pour les événements traités."""
-
         if self.events_dispatched == 0:
             return 0
         return self.total_dispatch_latency_ns // self.events_dispatched
+
+
+class TelemetryRecorder(Protocol):
+    def record_enqueue(self, event: Event, queue_size: int) -> None: ...
+
+    def record_dequeue(self, event: Event, queue_size: int) -> None: ...
+
+    def record_dispatch_success(
+        self,
+        event: Event,
+        queue_latency_ns: int,
+        dispatch_latency_ns: int,
+        queue_size: int,
+    ) -> None: ...
+
+    def record_dispatch_error(
+        self,
+        event: Event,
+        queue_latency_ns: int,
+        dispatch_latency_ns: int,
+        queue_size: int,
+    ) -> None: ...
+
+    def record_policy_denied(
+        self,
+        event: Event,
+        decision: Decision,
+        queue_size: int,
+    ) -> None: ...
+
+    def record_context_tick(self, queue_size: int) -> None: ...
+
+    def snapshot(self, queue_size: int | None = None) -> TelemetrySnapshot: ...
+
+
+class NullTelemetry:
+    def record_enqueue(self, event: Event, queue_size: int) -> None:
+        return None
+
+    def record_dequeue(self, event: Event, queue_size: int) -> None:
+        return None
+
+    def record_dispatch_success(
+        self,
+        event: Event,
+        queue_latency_ns: int,
+        dispatch_latency_ns: int,
+        queue_size: int,
+    ) -> None:
+        return None
+
+    def record_dispatch_error(
+        self,
+        event: Event,
+        queue_latency_ns: int,
+        dispatch_latency_ns: int,
+        queue_size: int,
+    ) -> None:
+        return None
+
+    def record_policy_denied(
+        self,
+        event: Event,
+        decision: Decision,
+        queue_size: int,
+    ) -> None:
+        return None
+
+    def record_context_tick(self, queue_size: int) -> None:
+        return None
+
+    def snapshot(self, queue_size: int | None = None) -> TelemetrySnapshot:
+        return TelemetrySnapshot(current_queue_size=queue_size or 0)

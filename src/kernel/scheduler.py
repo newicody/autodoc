@@ -8,7 +8,8 @@ from context.engine import ContextEngine
 from contracts.event import Event, EventType
 from contracts.policy import Decision
 from contracts.scheduler import SchedulerContract
-from observability.telemetry import KernelTelemetry
+from contracts.telemetry import NullTelemetry, TelemetryRecorder
+#from observability.telemetry import KernelTelemetry
 from policy.engine import PolicyEngine
 
 from .dispatcher import Dispatcher
@@ -36,7 +37,7 @@ class Scheduler(SchedulerContract):
         registry: Registry,
         context_interval: float = 1.0,
         policy_engine: PolicyEngine | None = None,
-        telemetry: KernelTelemetry | None = None,
+        telemetry: TelemetryRecorder | None = None,
     ) -> None:
         self.queue = queue
         self.dispatcher = dispatcher
@@ -44,7 +45,7 @@ class Scheduler(SchedulerContract):
         self.registry = registry
         self.context_interval = context_interval
         self.policy_engine = policy_engine or PolicyEngine()
-        self.telemetry = telemetry or KernelTelemetry()
+        self.telemetry: TelemetryRecorder = telemetry or NullTelemetry()
         self.context_engine = ContextEngine(registry, self, event_bus)
         self._running = False
         self._clock_task: asyncio.Task[None] | None = None
