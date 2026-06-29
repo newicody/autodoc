@@ -301,3 +301,19 @@ removed_count: chunks disparus depuis l'ancien index
 ```
 
 Le schéma JSON reste `missipy.e5.corpus.v1`; les hash sont stockés dans les métadonnées pour préserver la compatibilité.
+
+
+## Phase 3.16 — Build atomique du corpus
+
+La Phase 3.16 rend l'écriture du corpus plus sûre : `build_e5_corpus.py` écrit d'abord dans un fichier temporaire situé à côté de la cible, relit et valide ce JSON, puis remplace l'index final seulement si tout est correct.
+
+```bash
+./tools/build_e5_corpus.py \
+  --model-dir /home/eric/model/openvino/multilingual-e5-small \
+  --source-dir /data/notes \
+  --reuse-index /tmp/e5_corpus.json \
+  --output /tmp/e5_corpus.next.json \
+  --overwrite
+```
+
+La sortie CLI indique maintenant `atomic_write: True`. Le fichier temporaire suit le modèle `.nom_du_fichier.tmp` dans le même répertoire que la cible, afin que le remplacement reste atomique sur le même système de fichiers.

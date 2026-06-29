@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from contextlib import suppress
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from hashlib import sha256
@@ -362,20 +363,43 @@ class E5CorpusJsonStore:
     """Persistance JSON contrôlée d'un corpus E5 local."""
 
     def write(self, index: E5CorpusIndex, path: str | Path, *, overwrite: bool = False) -> Path:
-        """Écrit un index local dans un fichier JSON."""
+        """Écrit un index local dans un fichier JSON.
+
+        Cette méthode conserve le comportement historique direct. Pour les CLI
+        de build, préférer ``write_atomic`` afin de ne remplacer l'index final
+        qu'après sérialisation et validation complètes.
+        """
 
         target = Path(path)
-        if target.exists() and not overwrite:
-            raise FileExistsError(target)
-        if not target.parent.exists():
-            raise FileNotFoundError(target.parent)
-        content = json.dumps(
-            index.to_json_dict(),
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        target.write_text(content + "\n", encoding="utf-8")
+        _ensure_writable_target(target, overwrite=overwrite)
+        target.write_text(_serialize_corpus_index(index), encoding="utf-8")
+        return target
+
+    def write_atomic(self, index: E5CorpusIndex, path: str | Path, *, overwrite: bool = False) -> Path:
+        """Écrit un index avec remplacement atomique du fichier cible.
+
+        Le contenu est d'abord écrit dans un fichier temporaire situé dans le
+        même répertoire que la cible, puis relu via ``read`` pour valider que le
+        JSON correspond bien au corpus attendu. La cible n'est remplacée par
+        ``Path.replace`` que si cette validation réussit.
+        """
+
+        target = Path(path)
+        _ensure_writable_target(target, overwrite=overwrite)
+        temp = atomic_temp_path(target)
+        content = _serialize_corpus_index(index)
+        if temp.exists():
+            temp.unlink()
+        try:
+            temp.write_text(content, encoding="utf-8")
+            loaded = self.read(temp)
+            if loaded.to_json_dict() != index.to_json_dict():
+                raise ValueError("atomic E5 corpus validation failed")
+            temp.replace(target)
+        except Exception:
+            with suppress(FileNotFoundError):
+                temp.unlink()
+            raise
         return target
 
     def read(self, path: str | Path) -> E5CorpusIndex:
@@ -384,6 +408,30 @@ class E5CorpusJsonStore:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         return E5CorpusIndex.from_json_dict(data)
 
+
+def atomic_temp_path(path: str | Path) -> Path:
+    """Chemin temporaire stable utilisé pour un remplacement atomique."""
+
+    target = Path(path)
+    if not target.name:
+        raise ValueError("atomic temp path target must have a filename")
+    return target.with_name(f".{target.name}.tmp")
+
+
+def _serialize_corpus_index(index: E5CorpusIndex) -> str:
+    return json.dumps(
+        index.to_json_dict(),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ) + "\n"
+
+
+def _ensure_writable_target(target: Path, *, overwrite: bool) -> None:
+    if target.exists() and not overwrite:
+        raise FileExistsError(target)
+    if not target.parent.exists():
+        raise FileNotFoundError(target.parent)
 
 def make_corpus_document_id(text: str, *, index: int | None = None) -> str:
     """Identifiant stable et lisible pour un passage."""

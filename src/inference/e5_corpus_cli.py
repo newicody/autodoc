@@ -42,6 +42,7 @@ class E5CorpusBuildCliOutput:
     reused_count: int | None = None
     embedded_count: int | None = None
     removed_count: int | None = None
+    atomic_write: bool = True
 
     def to_json_dict(self) -> dict[str, object]:
         data: dict[str, object] = {
@@ -51,6 +52,7 @@ class E5CorpusBuildCliOutput:
             "tokenizer": self.tokenizer,
             "dimension": self.dimension,
             "size": self.size,
+            "atomic_write": self.atomic_write,
         }
         if self.reused_count is not None:
             data["reused_count"] = self.reused_count
@@ -68,6 +70,7 @@ class E5CorpusBuildCliOutput:
             f"tokenizer: {self.tokenizer}",
             f"dimension: {self.dimension}",
             f"size: {self.size}",
+            f"atomic_write: {self.atomic_write}",
         ]
         if self.reused_count is not None:
             lines.append(f"reused_count: {self.reused_count}")
@@ -208,7 +211,7 @@ async def run_build_async(
             stats = incremental.stats
         else:
             index = await E5CorpusBuilder(bundle.pipeline).build(passages, metadata={"builder": "missipy-build-e5-corpus"})
-        path = json_store.write(index, args.output, overwrite=args.overwrite)
+        path = json_store.write_atomic(index, args.output, overwrite=args.overwrite)
     except Exception as exc:  # pragma: no cover - dépend des dépendances locales.
         stderr.write(f"missipy-build-e5-corpus failed: {exc}\n")
         return 1
@@ -223,6 +226,7 @@ async def run_build_async(
         reused_count=stats.reused_count if stats is not None else None,
         embedded_count=stats.embedded_count if stats is not None else None,
         removed_count=stats.removed_count if stats is not None else None,
+        atomic_write=True,
     )
     _write_output(stdout, args.format, output.to_json_dict(), output.to_text())
     return 0

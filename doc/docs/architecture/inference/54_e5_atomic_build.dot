@@ -1,0 +1,65 @@
+digraph E5AtomicCorpusBuild {
+    // ROADMAP_ID: inference.e5_atomic_build
+    // ROADMAP_PARENT: inference/50_e5_corpus.dot
+    // ROADMAP_NOTE[phase3_16]:
+    // L'écriture atomique protège l'index local pendant les builds longs. Le
+    // fichier cible n'est remplacé qu'après écriture temporaire, relecture et
+    // validation complète du corpus JSON.
+
+    rankdir=TB;
+    node [shape=box, style=filled, fontname="Arial", fontsize=10];
+    edge [fontname="Arial", fontsize=9];
+
+    subgraph cluster_input {
+        label="Entrée";
+        color="#1565c0";
+        bgcolor="#e3f2fd";
+        node [fillcolor="#e3f2fd", color="#1565c0"];
+        Index [label="E5CorpusIndex\nmissipy.e5.corpus.v1", URL="50_e5_corpus.svg"];
+        Target [label="target corpus.json"];
+        Overwrite [label="overwrite policy"];
+    }
+
+    subgraph cluster_atomic {
+        label="Écriture atomique";
+        color="#2e7d32";
+        bgcolor="#e8f5e9";
+        node [fillcolor="#e8f5e9", color="#2e7d32"];
+        Guard [label="_ensure_writable_target\nparent + overwrite"];
+        TempPath [label="atomic_temp_path\n.<target>.tmp"];
+        Serialize [label="_serialize_corpus_index\nstable JSON"];
+        TempWrite [label="write tmp file"];
+        Validate [label="read tmp + compare\nto_json_dict"];
+        Replace [label="Path.replace(target)"];
+        Cleanup [label="cleanup tmp on failure"];
+    }
+
+    subgraph cluster_output {
+        label="Sortie";
+        color="#6d4c41";
+        bgcolor="#efebe9";
+        node [fillcolor="#efebe9", color="#6d4c41"];
+        Final [label="validated corpus.json"];
+        Existing [label="previous corpus preserved\nif validation fails"];
+        Cli [label="build_e5_corpus.py\natomic_write: True"];
+    }
+
+    Index -> Serialize;
+    Target -> Guard;
+    Overwrite -> Guard;
+    Guard -> TempPath;
+    TempPath -> TempWrite;
+    Serialize -> TempWrite;
+    TempWrite -> Validate;
+    Validate -> Replace [label="ok"];
+    Validate -> Cleanup [label="error"];
+    Cleanup -> Existing;
+    Replace -> Final;
+    Final -> Cli;
+
+    Nav_Inference [label="Inference", shape=plaintext, URL="40_inference.svg"];
+    Nav_Corpus [label="E5 corpus", shape=plaintext, URL="50_e5_corpus.svg"];
+    Nav_Incremental [label="E5 incremental", shape=plaintext, URL="53_e5_incremental.svg"];
+
+    { rank=sink; Nav_Inference; Nav_Corpus; Nav_Incremental; }
+}

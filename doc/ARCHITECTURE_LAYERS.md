@@ -492,3 +492,10 @@ sources TXT/Markdown
 ```
 
 La règle d'invalidation est déterministe : elle ne dépend pas des timestamps mais de l'identifiant du document et de son texte préfixé E5. Cette couche reste hors Scheduler et prépare les futurs `upsert/delete` Qdrant.
+
+
+## Phase 3.16 — Écriture atomique du corpus E5
+
+Le corpus local E5 dispose maintenant d'un chemin d'écriture atomique. `E5CorpusJsonStore.write_atomic()` sérialise le nouvel index dans un fichier temporaire voisin, le relit via le même store, compare la projection JSON reconstruite au corpus attendu, puis remplace la cible par `Path.replace()`.
+
+Cette étape protège l'index local pendant les builds longs : un crash pendant l'embedding ou une erreur de validation ne remplace pas le corpus existant. Elle reste hors Scheduler, hors Qdrant et compatible avec le schéma `missipy.e5.corpus.v1`.

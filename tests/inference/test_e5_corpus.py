@@ -143,3 +143,34 @@ def test_corpus_index_validates_unique_ids_and_dimensions() -> None:
             dimension=2,
             embeddings=(first, second),
         )
+
+
+def test_corpus_json_store_atomic_roundtrip_and_overwrite(tmp_path) -> None:
+    index = asyncio.run(E5CorpusBuilder(FakePipeline()).build(["arnaque vendeur"]))
+    store = E5CorpusJsonStore()
+    path = tmp_path / "corpus.json"
+
+    written = store.write_atomic(index, path)
+
+    assert written == path
+    assert store.read(path).to_json_dict() == index.to_json_dict()
+    assert not (tmp_path / ".corpus.json.tmp").exists()
+    with pytest.raises(FileExistsError):
+        store.write_atomic(index, path)
+    store.write_atomic(index, path, overwrite=True)
+
+
+def test_corpus_json_store_atomic_does_not_replace_existing_when_validation_fails(tmp_path) -> None:
+    index = asyncio.run(E5CorpusBuilder(FakePipeline()).build(["arnaque vendeur"]))
+    path = tmp_path / "corpus.json"
+    path.write_text("old corpus\n", encoding="utf-8")
+
+    class BrokenValidationStore(E5CorpusJsonStore):
+        def read(self, path):  # type: ignore[no-untyped-def]
+            raise ValueError("forced validation failure")
+
+    with pytest.raises(ValueError, match="forced validation failure"):
+        BrokenValidationStore().write_atomic(index, path, overwrite=True)
+
+    assert path.read_text(encoding="utf-8") == "old corpus\n"
+    assert not (tmp_path / ".corpus.json.tmp").exists()

@@ -1,38 +1,32 @@
-# MANIFEST_CHANGED_FILES — Phase 3.15
+# MANIFEST_CHANGED_FILES — Phase 3.16
 
-## Code
+## Objet
 
-- `src/inference/e5_incremental.py`
-- `src/inference/e5_corpus_cli.py`
-- `src/inference/e5_sources.py`
-- `src/inference/__init__.py`
+Phase 3.16 — build atomique du corpus E5 local.
 
-## Tests
+## Fichiers modifiés / ajoutés
 
-- `tests/inference/test_e5_incremental.py`
-- `tests/inference/test_e5_corpus_cli.py`
+```text
+src/inference/e5_corpus.py
+src/inference/e5_corpus_cli.py
+tests/inference/test_e5_corpus.py
 
-## Documentation
+README.md
+doc/ARCHITECTURE_LAYERS.md
+doc/CHANGELOG_PHASE3_16_E5_ATOMIC_BUILD.md
+doc/MODEL_E5_ATOMIC_BUILD_PHASE3_16.md
 
-- `README.md`
-- `doc/ARCHITECTURE_LAYERS.md`
-- `doc/CHANGELOG_PHASE3_15_E5_INCREMENTAL.md`
-- `doc/MODEL_E5_INCREMENTAL_PHASE3_15.md`
+doc/docs/architecture/inference/40_inference.dot
+doc/docs/architecture/inference/53_e5_incremental.dot
+doc/docs/architecture/inference/54_e5_atomic_build.dot
+doc/docs/architecture/tests/80_tests.dot
 
-## Architecture DOT
+PHASE3_16_TEST_REPORT.md
+MANIFEST_CHANGED_FILES.md
+```
 
-- `doc/docs/architecture/inference/40_inference.dot`
-- `doc/docs/architecture/inference/50_e5_corpus.dot`
-- `doc/docs/architecture/inference/53_e5_incremental.dot`
-- `doc/docs/architecture/tests/80_tests.dot`
+## Remarques
 
-## Rapports
-
-- `MANIFEST_CHANGED_FILES.md`
-- `PHASE3_15_TEST_REPORT.md`
-
-## Exclusions volontaires
-
-- Aucun `.svg`
-- Aucun script de patch
-- Aucun fichier `__pycache__`
+- Le lot ne contient que les fichiers modifiés ou ajoutés.
+- Les SVG générés par `doc/makefile` ne sont pas inclus.
+- Aucun script de modification n'est inclus.
