@@ -1,16 +1,19 @@
-# Manifest — Phase 2.0 changed files
+# MANIFEST — Phase 2.1 changed files
 
-## Ajoutés
+## Objectif
+
+Ajouter `ReplayScenarioRunner` et `ReplayReport` pour comparer plusieurs résultats de `ReplaySandbox` dans un rapport déterministe, sans réinjecter de replay dans le Scheduler vivant.
+
+## Fichiers ajoutés
 
 ```text
-src/observability/replay_sandbox.py
-tests/observability/test_replay_sandbox.py
-doc/CHANGELOG_PHASE2_0.md
-PHASE2_0_TEST_REPORT.md
-MANIFEST_CHANGED_FILES.md
+src/observability/replay_scenario.py
+tests/observability/test_replay_scenario.py
+doc/CHANGELOG_PHASE2_1.md
+PHASE2_1_TEST_REPORT.md
 ```
 
-## Modifiés
+## Fichiers modifiés
 
 ```text
 src/contracts/replay.py
@@ -21,23 +24,19 @@ doc/docs/architecture/observability/70_observability.dot
 doc/docs/architecture/tests/80_tests.dot
 ```
 
-## Non inclus
+## Fichiers volontairement non fournis
 
 ```text
 *.svg
 scripts de patch
 ```
 
-## Raison des DOT modifiés
+Les SVG restent générés localement via le `makefile` du dossier `doc`.
 
-Les DOT sont une roadmap vivante. Ils ont été modifiés uniquement parce que la Phase 2.0 ajoute un élément architectural réel :
-
-```text
-ReplayPlan -> ReplaySandbox -> ReplaySandboxResult
-```
-
-Commentaires invisibles ajoutés :
+## Validation
 
 ```text
-ROADMAP_NOTE[phase2_0]
+39 passed
+main.py exit code: 0
+DOT_OK
 ```

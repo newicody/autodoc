@@ -5,6 +5,14 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 
+def _empty_mapping() -> Mapping[str, Any]:
+    return MappingProxyType({})
+
+
+def _default_denied_replay_types() -> frozenset[str]:
+    return frozenset({"SHUTDOWN"})
+
+
 @dataclass(frozen=True, slots=True)
 class EventRecord:
     """Copie immuable et rejouable d'un événement observé.
@@ -23,7 +31,7 @@ class EventRecord:
     timestamp_ns: int
     correlation_id: str | None = None
     payload_repr: str = ""
-    metadata: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
+    metadata: Mapping[str, Any] = field(default_factory=_empty_mapping)
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,7 +72,7 @@ class ReplayEvent:
     timestamp_ns: int
     correlation_id: str | None = None
     payload_repr: str = ""
-    metadata: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
+    metadata: Mapping[str, Any] = field(default_factory=_empty_mapping)
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,3 +151,129 @@ class ReplaySandboxResult:
         """Types d'événements traités dans l'ordre."""
 
         return tuple(step.type for step in self.steps)
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayScenario:
+    """Scénario immuable de replay isolé.
+
+    Un scénario décrit uniquement comment un ReplayPlan doit être simulé. Il ne
+    connaît pas le Scheduler et ne contient pas de handler vivant. Les handlers
+    restent fournis au runner, afin de garder ce contrat sérialisable et stable.
+    """
+
+    name: str
+    plan: ReplayPlan
+    max_events: int = 1_000
+    allowed_types: frozenset[str] | None = None
+    denied_types: frozenset[str] = field(default_factory=_default_denied_replay_types)
+    tags: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("ReplayScenario.name must not be empty")
+        if self.max_events <= 0:
+            raise ValueError("ReplayScenario.max_events must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayScenarioResult:
+    """Résultat immuable d'un scénario de replay."""
+
+    scenario_name: str
+    tags: tuple[str, ...]
+    sandbox_result: ReplaySandboxResult
+
+    @property
+    def ok(self) -> bool:
+        """Indique si le scénario a réussi sans refus sandbox."""
+
+        return self.sandbox_result.ok
+
+    @property
+    def accepted_count(self) -> int:
+        """Nombre d'événements acceptés pour ce scénario."""
+
+        return self.sandbox_result.accepted_count
+
+    @property
+    def rejected_count(self) -> int:
+        """Nombre d'événements refusés pour ce scénario."""
+
+        return self.sandbox_result.rejected_count
+
+    @property
+    def handled_count(self) -> int:
+        """Nombre d'événements manipulés par des handlers de simulation."""
+
+        return self.sandbox_result.handled_count
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayReport:
+    """Rapport déterministe de plusieurs scénarios de replay."""
+
+    scenario_results: tuple[ReplayScenarioResult, ...]
+
+    @property
+    def scenario_count(self) -> int:
+        """Nombre de scénarios inclus dans le rapport."""
+
+        return len(self.scenario_results)
+
+    @property
+    def ok(self) -> bool:
+        """Indique si tous les scénarios ont réussi."""
+
+        return all(result.ok for result in self.scenario_results)
+
+    @property
+    def accepted_count(self) -> int:
+        """Total des événements acceptés par tous les scénarios."""
+
+        return sum(result.accepted_count for result in self.scenario_results)
+
+    @property
+    def rejected_count(self) -> int:
+        """Total des événements refusés par tous les scénarios."""
+
+        return sum(result.rejected_count for result in self.scenario_results)
+
+    @property
+    def handled_count(self) -> int:
+        """Total des événements manipulés par handlers de simulation."""
+
+        return sum(result.handled_count for result in self.scenario_results)
+
+    @property
+    def scenario_names(self) -> tuple[str, ...]:
+        """Noms de scénarios dans l'ordre du rapport."""
+
+        return tuple(result.scenario_name for result in self.scenario_results)
+
+    def to_lines(self) -> tuple[str, ...]:
+        """Produit une représentation textuelle stable du rapport.
+
+        Cette sortie est déterministe : pas d'horodatage, pas d'ordre dépendant
+        d'un dictionnaire, pas de contenu runtime non sérialisable.
+        """
+
+        status = "OK" if self.ok else "FAILED"
+        lines = [
+            f"ReplayReport: {status}",
+            f"scenarios={self.scenario_count}",
+            f"accepted={self.accepted_count}",
+            f"rejected={self.rejected_count}",
+            f"handled={self.handled_count}",
+        ]
+        for result in self.scenario_results:
+            scenario_status = "OK" if result.ok else "FAILED"
+            lines.append(
+                "scenario="
+                f"{result.scenario_name} "
+                f"status={scenario_status} "
+                f"accepted={result.accepted_count} "
+                f"rejected={result.rejected_count} "
+                f"handled={result.handled_count}"
+            )
+        return tuple(lines)

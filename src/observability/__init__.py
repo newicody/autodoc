@@ -1,5 +1,6 @@
 from observability.recorder import EventRecorder
 from observability.replay_reader import ReplayReader
+from observability.replay_scenario import ReplayScenarioRunner
 from observability.replay_sandbox import (
     ReplaySandbox,
     ReplaySandboxConfig,
@@ -12,6 +13,7 @@ __all__ = [
     "EventRecorder",
     "KernelTelemetry",
     "ReplayReader",
+    "ReplayScenarioRunner",
     "ReplaySandbox",
     "ReplaySandboxConfig",
     "ReplaySandboxHandler",
