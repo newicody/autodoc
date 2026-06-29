@@ -5,11 +5,12 @@ from typing import Any, AsyncGenerator
 
 import pytest
 
+from context.engine import ContextEngine
+from context.handlers import ContextRequestHandler
 from contracts.component import Component
 from contracts.event import Event, EventType
 from kernel.dispatcher import Dispatcher
 from kernel.event_bus import EventBus
-from kernel.lifecycle import LifecycleManager
 from kernel.queue import PriorityQueue
 from kernel.registry import Registry
 from kernel.scheduler import Scheduler
@@ -27,31 +28,30 @@ class ContextComponent(Component):
 
 
 @pytest.mark.asyncio
-async def test_context_engine_collects_context_via_events() -> None:
+async def test_context_engine_uses_event_path_for_snapshot() -> None:
     registry = Registry()
     bus = EventBus()
     dispatcher = Dispatcher(bus)
-    LifecycleManager().register_handlers(dispatcher)
-    scheduler = Scheduler(
-        PriorityQueue(),
-        dispatcher,
-        bus,
-        registry,
-        context_interval=60.0,
-    )
+    scheduler = Scheduler(PriorityQueue(), dispatcher, bus, registry, context_interval=60.0)
+    dispatcher.register(EventType.CONTEXT_REQUEST, ContextRequestHandler(registry))
+
     proxy = ComponentProxy(ContextComponent(), scheduler)
     registry.register(proxy.name, proxy)
-    observed_replies = bus.subscribe(EventType.CONTEXT_REPLY)
+    replies = bus.subscribe(EventType.CONTEXT_REPLY)
+
     scheduler_task = asyncio.create_task(scheduler.run())
+    try:
+        engine = ContextEngine(registry, scheduler, bus)
+        snapshot = await engine.execute_tick()
+        reply_event = await asyncio.wait_for(replies.get(), timeout=1.0)
 
-    snapshot = await scheduler.context_engine.execute_tick()
-    reply_event = await observed_replies.get()
-    await scheduler.shutdown()
-    await scheduler_task
-
-    assert "Ctx" in snapshot.components
-    assert snapshot.components["Ctx"]["proxy_state"] == "CREATED"
-    assert snapshot.components["Ctx"]["component"]["status"] == "ok"
-    assert reply_event.source == "Ctx"
-    assert scheduler.context_engine.last_inference_context is not None
-    assert scheduler.context_engine.last_inference_context.features["component_count"] == 1
+        assert "Ctx" in snapshot.components
+        assert snapshot.components["Ctx"]["proxy_state"] == "CREATED"
+        assert snapshot.components["Ctx"]["component"]["status"] == "ok"
+        assert reply_event.type == EventType.CONTEXT_REPLY
+        assert reply_event.source == "Ctx"
+        assert engine.last_inference_context is not None
+        assert engine.last_inference_context.features["component_count"] == 1
+    finally:
+        await scheduler.shutdown()
+        await scheduler_task

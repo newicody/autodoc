@@ -9,71 +9,56 @@ from .dispatcher import Dispatcher
 
 
 class LifecycleManager:
-    """Gestion minimale et observable du cycle de vie des composants."""
+    """Gestionnaire minimal du cycle de vie Phase 1.
+
+    Il reste un handler du kernel, pas une logique métier. Son rôle est de rendre
+    les transitions observables et testables avant l'arrivée de services plus
+    lourds comme OpenVINO, SQLite ou Qdrant.
+    """
 
     def __init__(self) -> None:
         self.states: dict[str, ComponentState] = {}
-        self.errors: dict[str, dict[str, Any]] = {}
+        self.errors: dict[str, Any] = {}
 
     def register_handlers(self, dispatcher: Dispatcher) -> None:
-        dispatcher.register(EventType.LOAD, LoadHandler(self))
-        dispatcher.register(EventType.START, StartHandler(self))
-        dispatcher.register(EventType.STOP, StopHandler(self))
-        dispatcher.register(EventType.ERROR, ErrorHandler(self))
-        dispatcher.register(EventType.TICK, TickHandler())
+        dispatcher.register(EventType.LOAD, _StateHandler(self, "LOAD", ComponentState.LOADED))
+        dispatcher.register(EventType.START, _StateHandler(self, "START", ComponentState.STARTED))
+        dispatcher.register(EventType.STOP, _StateHandler(self, "STOP", ComponentState.STOPPED))
+        dispatcher.register(EventType.ERROR, _ErrorHandler(self))
+        dispatcher.register(EventType.TICK, _TickHandler(self))
 
-    def state_of(self, component_name: str) -> ComponentState | None:
-        return self.states.get(component_name)
+    def state_of(self, component: str) -> ComponentState | None:
+        return self.states.get(component)
 
 
-class LoadHandler:
+class _StateHandler:
+    def __init__(self, lifecycle: LifecycleManager, label: str, state: ComponentState) -> None:
+        self.lifecycle = lifecycle
+        self.label = label
+        self.state = state
+
+    async def handle(self, event: Event) -> Any:
+        self.lifecycle.states[event.source] = self.state
+        print(f"[Lifecycle] {self.label}: {event.source} -> {event.dest} payload={event.payload!r}")
+        return {"ok": True, "event": self.label, "state": self.state.name}
+
+
+class _ErrorHandler:
     def __init__(self, lifecycle: LifecycleManager) -> None:
         self.lifecycle = lifecycle
 
-    async def handle(self, event: Event) -> dict[str, Any]:
-        self.lifecycle.states[event.source] = ComponentState.LOADED
-        return {"ok": True, "handled": "LOAD", "source": event.source}
-
-
-class StartHandler:
-    def __init__(self, lifecycle: LifecycleManager) -> None:
-        self.lifecycle = lifecycle
-
-    async def handle(self, event: Event) -> dict[str, Any]:
-        self.lifecycle.states[event.source] = ComponentState.STARTED
-        return {"ok": True, "handled": "START", "source": event.source}
-
-
-class StopHandler:
-    def __init__(self, lifecycle: LifecycleManager) -> None:
-        self.lifecycle = lifecycle
-
-    async def handle(self, event: Event) -> dict[str, Any]:
-        self.lifecycle.states[event.source] = ComponentState.STOPPED
-        return {"ok": True, "handled": "STOP", "source": event.source}
-
-
-class ErrorHandler:
-    def __init__(self, lifecycle: LifecycleManager) -> None:
-        self.lifecycle = lifecycle
-
-    async def handle(self, event: Event) -> dict[str, Any]:
-        error_payload = event.payload if isinstance(event.payload, dict) else {}
+    async def handle(self, event: Event) -> Any:
         self.lifecycle.states[event.source] = ComponentState.ERROR
-        self.lifecycle.errors[event.source] = error_payload
-        return {
-            "ok": False,
-            "handled": "ERROR",
-            "source": event.source,
-            "error": error_payload,
-        }
+        self.lifecycle.errors[event.source] = event.payload
+        print(f"[Lifecycle] ERROR: {event.source} -> {event.dest} payload={event.payload!r}")
+        return {"ok": False, "event": "ERROR", "state": ComponentState.ERROR.name, "payload": event.payload}
 
 
-class TickHandler:
-    async def handle(self, event: Event) -> dict[str, Any]:
-        return {
-            "ok": True,
-            "handled": "TICK",
-            "source": event.source,
-            "payload": event.payload,
-        }
+class _TickHandler:
+    def __init__(self, lifecycle: LifecycleManager) -> None:
+        self.lifecycle = lifecycle
+
+    async def handle(self, event: Event) -> Any:
+        self.lifecycle.states[event.source] = ComponentState.RUNNING
+        print(f"[Tick] {event.source}: {event.payload!r}")
+        return {"ok": True, "handled": "TICK", "payload": event.payload}

@@ -1,64 +1,104 @@
 digraph Context {
+    // ROADMAP_NOTE[phase1_3]: Context is now a dedicated pipeline.
+    // The fast path Registry -> proxy.context() is removed from the roadmap as the main path.
+    // Collector emits CONTEXT_REQUEST through Scheduler.emit(), Handler touches ComponentProxy,
+    // Reducer builds GlobalContextSnapshot, Builder builds InferenceContext.
+
     rankdir=TB;
-    node [shape=box, style=filled, fontname="Arial", fontsize=10];
+    splines=ortho;
+    compound=true;
 
-    // ROADMAP_NOTE[phase1_2bis]:
-    // Le fast path Registry -> proxy.context() a été remplacé par une collecte
-    // événementielle. Le ContextRequestHandler touche toujours le ComponentProxy,
-    // jamais le composant réel directement.
+    graph [fontname="Arial", fontsize=11];
+    node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10];
+    edge [fontname="Arial", fontsize=9, arrowsize=0.7];
 
-    subgraph cluster_context {
-        label="Context Fabric";
+    subgraph cluster_engine {
+        label="Context Engine Phase 1.3";
         color="#ef6c00";
         bgcolor="#fff3e0";
         node [fillcolor="#fff3e0", color="#ef6c00"];
 
-        Engine [label="ContextEngine"];
-        Collector [label="ContextCollector", URL="collector/21_collector.svg"];
-        Request [label="CONTEXT_REQUEST\nRequest.reply"];
-        Handler [label="ContextRequestHandler"];
-        Reply [label="CONTEXT_REPLY\nobservable"];
-        Reducer [label="ContextReducer", URL="reducer/22_reducer.svg"];
-        Snapshot [label="GlobalContextSnapshot", URL="snapshot/23_snapshot.svg"];
-        Inference [label="InferenceContext", URL="snapshot/23_snapshot.svg"];
-        Decision [label="DecisionEngine\nfuture", URL="decision_engine/24_decision_engine.svg"];
+        Clock [label="Scheduler context clock"];
+        Engine [label="ContextEngine\nengine.py"];
+        Collector [label="ContextCollector\ncollector.py"];
+        Reducer [label="ContextReducer\nreducer.py"];
+        Builder [label="InferenceContextBuilder\nbuilder.py"];
+        Snapshot [label="GlobalContextSnapshot"];
+        Inference [label="InferenceContext"];
     }
 
-    Scheduler [fillcolor="#ede7f6", color="#512da8", URL="../scheduler/10_scheduler.svg"];
-    Queue [fillcolor="#ede7f6", color="#512da8", URL="../scheduler/10_scheduler.svg"];
-    Dispatcher [fillcolor="#ede7f6", color="#512da8", URL="../scheduler/10_scheduler.svg"];
-    Proxy [fillcolor="#ede7f6", color="#512da8", URL="../scheduler/component_proxy/14_component_proxy.svg"];
-    EventBus [fillcolor="#ede7f6", color="#512da8", URL="../scheduler/event_bus/12_event_bus.svg"];
-    Policy [fillcolor="#ede7f6", color="#512da8", URL="../scheduler/10_scheduler.svg"];
-    MCTS [fillcolor="#fffde7", color="#fbc02d", URL="../learning/60_learning.svg"];
-    OpenVINO [fillcolor="#fffde7", color="#fbc02d", URL="../services/30_services.svg"];
+    subgraph cluster_event_path {
+        label="Event path";
+        color="#512da8";
+        bgcolor="#ede7f6";
+        node [fillcolor="#ede7f6", color="#512da8"];
 
-    Scheduler -> Engine [label="clock tick"];
+        Scheduler [label="Scheduler.emit()"];
+        Queue [label="PriorityQueue"];
+        Dispatcher [label="Dispatcher"];
+        Handler [label="ContextRequestHandler\nhandlers.py"];
+        Request [label="CONTEXT_REQUEST\nRequest.reply=Future"];
+        Reply [label="CONTEXT_REPLY\nEventBus observation"];
+    }
+
+    subgraph cluster_component {
+        label="Component boundary";
+        color="#388e3c";
+        bgcolor="#e8f5e9";
+        node [fillcolor="#e8f5e9", color="#388e3c"];
+
+        Registry [label="Registry"];
+        Proxy [label="ComponentProxy.context()"];
+        Component [label="Component.context()"];
+    }
+
+    subgraph cluster_future {
+        label="Future consumers";
+        color="#455a64";
+        bgcolor="#eceff1";
+        node [fillcolor="#eceff1", color="#455a64"];
+
+        Decision [label="DecisionEngine\nfuture"];
+        OpenVINO [label="OpenVINO Adapter\nfuture"];
+        MCTS [label="MCTS\nfuture"];
+    }
+
+    subgraph cluster_tests {
+        label="Tests";
+        color="#1565c0";
+        bgcolor="#e3f2fd";
+        node [fillcolor="#e3f2fd", color="#1565c0"];
+
+        TestContext [label="test_context_engine\nevent path + reply"];
+    }
+
+    Clock -> Engine;
     Engine -> Collector;
     Collector -> Request;
-    Request -> Scheduler [label="emit"];
+    Request -> Scheduler;
     Scheduler -> Queue;
     Queue -> Dispatcher;
     Dispatcher -> Handler;
-    Handler -> Proxy [label="proxy.context()"];
-    Handler -> Request [label="Request.reply", style=dashed];
-    Request -> Reply;
-    Reply -> EventBus [style=dashed, label="observation"];
-    Reply -> Reducer;
+    Handler -> Registry;
+    Registry -> Proxy;
+    Proxy -> Component;
+    Component -> Handler;
+    Handler -> Collector [label="Future result", style=dashed];
+    Collector -> Reply [label="publish observation"];
+    Collector -> Reducer;
     Reducer -> Snapshot;
-    Snapshot -> Inference;
-    Inference -> Decision [style=dashed, label="future"];
-    Decision -> Policy [style=dashed];
-    Policy -> Scheduler [style=dashed];
-    Decision -> MCTS [style=dashed];
-    Decision -> OpenVINO [style=dashed];
+    Snapshot -> Builder;
+    Builder -> Inference;
+
+    Inference -> Decision [style=dashed];
+    Inference -> OpenVINO [style=dashed];
+    Inference -> MCTS [style=dashed];
+
+    TestContext -> Collector [style=dotted];
+    TestContext -> Reply [style=dotted];
 
     Nav_Global [label="Global", shape=plaintext, URL="../00_global.svg"];
     Nav_Scheduler [label="Scheduler", shape=plaintext, URL="../scheduler/10_scheduler.svg"];
-    Nav_Collector [label="Collector", shape=plaintext, URL="collector/21_collector.svg"];
-    Nav_Reducer [label="Reducer", shape=plaintext, URL="reducer/22_reducer.svg"];
-    Nav_Snapshot [label="Snapshot", shape=plaintext, URL="snapshot/23_snapshot.svg"];
-    Nav_Decision [label="Decision Engine", shape=plaintext, URL="decision_engine/24_decision_engine.svg"];
 
-    { rank=sink; Nav_Global; Nav_Scheduler; Nav_Collector; Nav_Reducer; Nav_Snapshot; Nav_Decision; }
+    { rank=sink; Nav_Global; Nav_Scheduler; }
 }

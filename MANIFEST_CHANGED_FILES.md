@@ -1,43 +1,36 @@
-# Phase 1.2bis — Fichiers modifiés
+# Manifest — Phase 1.3 changed files
 
-Aucun script de patch n'est fourni. Copier uniquement les fichiers nécessaires dans le dépôt.
+Ce lot ne contient pas de script de patch et ne contient aucun SVG.
 
-## Code
+## Fichiers ajoutés
 
-- `src/contracts/component.py`
-- `src/contracts/context.py`
-- `src/contracts/event.py`
-- `src/contracts/inference.py`
-- `src/contracts/lifecycle.py`
-- `src/contracts/policy.py`
-- `src/contracts/scheduler.py`
-- `src/kernel/context_engine.py`
-- `src/kernel/dispatcher.py`
-- `src/kernel/event_bus.py`
-- `src/kernel/launcher.py`
-- `src/kernel/lifecycle.py`
-- `src/kernel/queue.py`
-- `src/kernel/registry.py`
-- `src/kernel/scheduler.py`
-- `src/runtime/component.py`
-- `src/runtime/loader.py`
-- `src/experts/dummy.py`
-- `src/main.py`
+```text
+src/context/__init__.py
+src/context/builder.py
+src/context/collector.py
+src/context/engine.py
+src/context/handlers.py
+src/context/reducer.py
+```
 
-## Tests
+## Fichiers modifiés
 
-- `tests/conftest.py`
-- `tests/kernel/test_event_and_dispatcher.py`
-- `tests/runtime/test_component_proxy.py`
-- `tests/context/test_context_engine.py`
+```text
+src/kernel/context_engine.py
+src/kernel/lifecycle.py
+src/kernel/scheduler.py
+src/kernel/launcher.py
+src/runtime/component.py
+tests/context/test_context_engine.py
 
-## Documentation
+doc/ARCHITECTURE_LAYERS.md
+doc/CHANGELOG_PHASE1_3.md
+doc/docs/architecture/context/20_context.dot
+doc/docs/architecture/scheduler/10_scheduler.dot
+```
 
-- `code_rule.md`
-- `doc/ARCHITECTURE_LAYERS.md`
-- `doc/CHANGELOG_PHASE1_2BIS.md`
-- `doc/docs/architecture/00_global.dot`
-- `doc/docs/architecture/scheduler/10_scheduler.dot`
-- `doc/docs/architecture/context/20_context.dot`
+## Raison architecturale
 
-Aucun `.svg` n'est inclus.
+La Phase 1.3 extrait la logique de contexte hors du `kernel/` tout en conservant le `ContextEngine` comme brique fondamentale du micro-kernel.
+
+Le Scheduler déclenche le contexte, mais ne contient pas la logique de collecte, réduction ou construction d'`InferenceContext`.

@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 
+from context.handlers import ContextRequestHandler
+from contracts.event import EventType
 from runtime.component import ComponentProxy
 from runtime.loader import load_components
 
@@ -15,7 +17,7 @@ from .scheduler import Scheduler
 
 
 class Launcher:
-    """Assemble le kernel et démarre les composants Phase 1.2bis."""
+    """Assemble le kernel Phase 1.3 et démarre les composants."""
 
     def __init__(self, context_interval: float = 1.0) -> None:
         self.registry = Registry()
@@ -40,10 +42,9 @@ class Launcher:
             self._proxies.append(proxy)
 
         self.lifecycle.register_handlers(self.dispatcher)
-        scheduler_task = asyncio.create_task(
-            self.scheduler.run(),
-            name="missipy-scheduler",
-        )
+        self.dispatcher.register(EventType.CONTEXT_REQUEST, ContextRequestHandler(self.registry))
+
+        scheduler_task = asyncio.create_task(self.scheduler.run(), name="missipy-scheduler")
 
         try:
             for proxy in self._proxies:

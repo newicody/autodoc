@@ -18,7 +18,7 @@ class ComponentProxy:
 
     Le proxy est la seule surface visible par le kernel : il démarre le
     composant, intercepte les Events, ajoute un canal de réponse et fournit le
-    contexte observable.
+    contexte.
     """
 
     def __init__(self, real: Component, scheduler: Scheduler) -> None:
@@ -39,10 +39,8 @@ class ComponentProxy:
         self.state = ComponentState.LOADED
         await self.scheduler.emit(Event(EventType.LOAD, source=self.name))
 
-        self._tick_task = asyncio.create_task(
-            self._tick_loop(),
-            name=f"component:{self.name}",
-        )
+        self._tick_task = asyncio.create_task(self._tick_loop(), name=f"component:{self.name}")
+
         self.state = ComponentState.STARTED
         await self.scheduler.emit(Event(EventType.START, source=self.name))
 
@@ -51,10 +49,12 @@ class ComponentProxy:
             await self._tick_task
 
     async def stop(self) -> None:
-        if self.state is ComponentState.STOPPED:
+        if self._stopped:
             return
 
-        self.state = ComponentState.STOPPING
+        if self.state != ComponentState.ERROR:
+            self.state = ComponentState.STOPPING
+
         if self._tick_task is not None and not self._tick_task.done():
             self._tick_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -83,10 +83,7 @@ class ComponentProxy:
                 Event(
                     EventType.ERROR,
                     source=self.name,
-                    payload={
-                        "error": repr(exc),
-                        "class": exc.__class__.__name__,
-                    },
+                    payload={"error": repr(exc), "class": exc.__class__.__name__},
                     priority=-100,
                 )
             )
@@ -97,26 +94,20 @@ class ComponentProxy:
         future: asyncio.Future[Any] = loop.create_future()
         timeout = event.request.timeout if event.request else 5.0
         request = Request(reply=future, timeout=timeout)
-        outbound = replace(
-            event,
-            source=event.source or self.name,
-            request=request,
-        )
+        outbound = replace(event, source=event.source or self.name, request=request)
         await self.scheduler.emit(outbound)
         return await asyncio.wait_for(future, timeout=timeout)
 
     async def _emit_stop_once(self) -> None:
-        if self._stopped:
-            return
-
-        self._stopped = True
-        if self.state is not ComponentState.ERROR:
-            self.state = ComponentState.STOPPED
-        await self.scheduler.emit(Event(EventType.STOP, source=self.name))
+        if not self._stopped:
+            self._stopped = True
+            if self.state != ComponentState.ERROR:
+                self.state = ComponentState.STOPPED
+            await self.scheduler.emit(Event(EventType.STOP, source=self.name))
 
     async def context(self) -> dict[str, Any]:
-        component_context = await self._real.context()
+        context = await self._real.context()
         return {
             "proxy_state": self.state.name,
-            "component": component_context,
+            "component": context,
         }
