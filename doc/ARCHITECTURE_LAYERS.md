@@ -1,21 +1,26 @@
-# Autodoc / MissiPy — Architecture logicielle Phase 1.6
+# Autodoc / MissiPy — Architecture logicielle Phase 1.8
 
-Ce document décrit l'état de développement après introduction de `PolicyEngine`.
+Ce document décrit l'état de développement après introduction de la télémétrie kernel minimale.
 
-La règle reste inchangée : le Scheduler ne contient pas de logique métier. Il orchestre, mais délègue maintenant explicitement l'autorisation des événements à une politique kernel minimale.
+La règle centrale reste inchangée : le Scheduler ne contient pas de logique métier. Il orchestre, délègue l'autorisation au `PolicyEngine`, route via la `PriorityQueue` et le `Dispatcher`, puis alimente une instrumentation passive.
 
-## Objectif Phase 1.6
+## Objectif Phase 1.8
 
-La Phase 1.6 ajoute une barrière déterministe avant l'entrée en `PriorityQueue`.
+La Phase 1.8 ajoute `KernelTelemetry`.
 
 Objectifs :
 
-- empêcher un composant de demander un `SHUTDOWN` ;
-- empêcher des priorités hors budget kernel ;
-- empêcher des destinations non autorisées ;
-- empêcher une demande d'inférence vers un modèle/backend non autorisé ;
-- retourner un refus explicite via `Request.reply` sans bloquer le composant ;
-- publier une copie observable `POLICY_DENIED` sur l'`EventBus`.
+- mesurer les événements acceptés en queue ;
+- mesurer les événements sortis de queue ;
+- mesurer les événements dispatchés ;
+- compter les refus `PolicyEngine` ;
+- compter les erreurs de dispatch ;
+- compter les ticks de contexte ;
+- mesurer la taille courante et maximale de la queue ;
+- mesurer la latence de queue et la durée de dispatch ;
+- produire un `TelemetrySnapshot` immuable.
+
+`KernelTelemetry` ne commande rien. Il ne publie pas d'événement. Il ne décide rien. Il sert uniquement à observer le kernel avant d'ajouter OpenVINO.
 
 ## Layer 0 — Hardware target
 
@@ -41,7 +46,8 @@ Composants actifs :
 - `EventBus` ;
 - `Registry` ;
 - `LifecycleManager` ;
-- `ComponentProxy`.
+- `ComponentProxy` ;
+- `KernelTelemetry`.
 
 Flux d'exécution autorisé :
 
@@ -52,9 +58,12 @@ Component.tick()
   -> Scheduler.emit()
   -> PolicyEngine.decide()
   -> PriorityQueue
+  -> KernelTelemetry.record_enqueue()
   -> Scheduler.run()
+  -> KernelTelemetry.record_dequeue()
   -> Dispatcher.dispatch()
   -> Handler ou default result
+  -> KernelTelemetry.record_dispatch_success()
   -> Request.reply
   -> ComponentProxy
   -> tick().asend(result)
@@ -68,6 +77,7 @@ Component.tick()
   -> ComponentProxy
   -> Scheduler.emit()
   -> PolicyEngine.decide() == denied
+  -> KernelTelemetry.record_policy_denied()
   -> EventBus.publish(POLICY_DENIED)
   -> Request.reply = Decision(allowed=False)
   -> ComponentProxy
@@ -89,13 +99,14 @@ Contrats disponibles :
 - `contracts.inference.InferenceRequest` ;
 - `contracts.inference.InferenceResult` ;
 - `contracts.inference.InferenceBackend` ;
-- `contracts.policy.Decision`.
+- `contracts.policy.Decision` ;
+- `contracts.telemetry.TelemetrySnapshot`.
 
 Décision maintenue : un `Future` ne doit jamais être caché dans `payload`. Il doit rester dans `Event.request.reply`.
 
 ## Layer 3 — Context Fabric
 
-État Phase 1.6 : collecte événementielle active.
+État Phase 1.8 : collecte événementielle active avec mesure de tick.
 
 ```text
 Scheduler clock
@@ -113,6 +124,7 @@ Scheduler clock
   -> ContextReducer
   -> GlobalContextSnapshot
   -> InferenceContext
+  -> KernelTelemetry.record_context_tick()
 ```
 
 La collecte touche encore `ComponentProxy.context()`, pas `Component.context()` directement. Cela respecte l'isolation du noyau.
@@ -130,9 +142,9 @@ Services prévus mais non branchés :
 
 Ces services seront des composants ou handlers pilotés par événements. Ils ne seront pas intégrés dans le Scheduler.
 
-## Layer 5 — Inference Phase 1.6
+## Layer 5 — Inference Phase 1.8
 
-État actuel : chemin fictif actif avec adapter et politique.
+État actuel : chemin fictif actif avec adapter, policy et télémétrie de kernel.
 
 ```text
 Component
@@ -156,6 +168,7 @@ Si le modèle demandé n'est pas autorisé :
 ```text
 PolicyEngine
   -> Decision(allowed=False, rule="inference.model.denied")
+  -> KernelTelemetry.record_policy_denied()
   -> EventBus.publish(POLICY_DENIED)
   -> Request.reply
 ```
@@ -222,7 +235,12 @@ Prévu :
 
 Le MCTS produit des propositions, jamais des actions directes.
 
-## Layer 9 — Observability
+## Layer 9 — Observability Phase 1.8
+
+Actuel :
+
+- `KernelTelemetry` ;
+- `TelemetrySnapshot`.
 
 Prévu :
 
@@ -234,7 +252,7 @@ Prévu :
 - watchdog ;
 - recovery.
 
-Observability écoute l'EventBus mais ne commande pas le kernel.
+Observability écoute l'EventBus ou lit des snapshots. Elle ne commande pas le kernel.
 
 ## Layer 10 — Test Harness
 
@@ -263,10 +281,36 @@ Couverture actuelle :
 - roundtrip composant -> inference handler -> adapter -> backend -> composant ;
 - PolicyEngine autorise/refuse les événements structuraux ;
 - Scheduler publie `POLICY_DENIED` sans queueing ;
-- ComponentProxy reçoit une `Decision` explicite lors d'un refus.
+- ComponentProxy reçoit une `Decision` explicite lors d'un refus ;
+- KernelTelemetry compte enqueue/dequeue/dispatch ;
+- KernelTelemetry compte les refus policy sans queueing ;
+- TelemetrySnapshot expose des moyennes immuables.
 
 ## Prochaine étape logique
 
-Phase 1.7 : préparer une télémétrie kernel minimale.
+Phase 1.8 : ajouter un `EventRecorder` minimal pour préparer le replay déterministe.
 
-But : observer proprement les décisions de policy, les événements traités, les refus, les latences et les compteurs de queue avant de brancher OpenVINO.
+But : conserver une trace sérialisable des événements observés sans transformer l'EventBus en chemin de commande.
+
+
+## Phase 1.8 — EventRecorder minimal
+
+Le `EventRecorder` est un consommateur passif de l’`EventBus`. Il prépare la
+rejouabilité sans devenir un chemin de commande.
+
+Flux :
+
+```text
+EventBus.publish(Event)
+  -> EventRecorder queue d’observation
+  -> EventRecord immuable
+  -> EventLogSnapshot
+```
+
+Règles :
+
+- le recorder ne publie aucun événement ;
+- le recorder ne modifie aucune queue d’exécution ;
+- le recorder ne capture jamais `Request.reply` ;
+- le recorder conserve une représentation stable du payload via `repr()` ;
+- le replay effectif reste une phase future.

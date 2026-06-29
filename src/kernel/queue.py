@@ -30,5 +30,10 @@ class PriorityQueue:
     def task_done(self) -> None:
         self._queue.task_done()
 
+    def qsize(self) -> int:
+        """Nombre courant d'événements en attente."""
+
+        return self._queue.qsize()
+
     async def join(self) -> None:
         await self._queue.join()

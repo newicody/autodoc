@@ -8,6 +8,8 @@ from contracts.event import EventType
 from inference.adapter import InferenceAdapter
 from inference.backend import DummyInferenceBackend
 from inference.handlers import InferenceRequestHandler
+from observability.recorder import EventRecorder
+from observability.telemetry import KernelTelemetry
 from policy.engine import PolicyEngine
 from runtime.component import ComponentProxy
 from runtime.loader import load_components
@@ -21,7 +23,7 @@ from .scheduler import Scheduler
 
 
 class Launcher:
-    """Assemble le kernel et démarre les composants Phase 1.5."""
+    """Assemble le kernel et démarre les composants Phase 1.7."""
 
     def __init__(self, context_interval: float = 1.0) -> None:
         self.registry = Registry()
@@ -30,6 +32,8 @@ class Launcher:
         self.queue = PriorityQueue()
         self.lifecycle = LifecycleManager()
         self.policy_engine = PolicyEngine()
+        self.telemetry = KernelTelemetry()
+        self.event_recorder = EventRecorder(self.event_bus)
         self.inference_backend = DummyInferenceBackend()
         self.inference_adapter = InferenceAdapter(self.inference_backend)
         self.scheduler = Scheduler(
@@ -39,6 +43,7 @@ class Launcher:
             self.registry,
             context_interval=context_interval,
             policy_engine=self.policy_engine,
+            telemetry=self.telemetry,
         )
         self._proxies: list[ComponentProxy] = []
 
@@ -50,6 +55,7 @@ class Launcher:
             self.registry.register(proxy.name, proxy)
             self._proxies.append(proxy)
 
+        await self.event_recorder.start()
         scheduler_task = asyncio.create_task(
             self.scheduler.run(),
             name="missipy-scheduler",
@@ -66,6 +72,7 @@ class Launcher:
         finally:
             for proxy in self._proxies:
                 await proxy.stop()
+            await self.event_recorder.stop()
             if not scheduler_task.done():
                 scheduler_task.cancel()
                 with suppress(asyncio.CancelledError):

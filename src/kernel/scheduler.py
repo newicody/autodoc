@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from contextlib import suppress
 
 from context.engine import ContextEngine
 from contracts.event import Event, EventType
 from contracts.policy import Decision
 from contracts.scheduler import SchedulerContract
+from observability.telemetry import KernelTelemetry
 from policy.engine import PolicyEngine
 
 from .dispatcher import Dispatcher
@@ -20,7 +22,8 @@ class Scheduler(SchedulerContract):
 
     Le Scheduler ne contient aucune logique métier. Il orchestre la queue,
     délègue les décisions d'autorisation au PolicyEngine, déclenche le contexte
-    global, délègue au Dispatcher et arrête proprement les tâches internes.
+    global, délègue au Dispatcher, alimente la télémétrie kernel et arrête
+    proprement les tâches internes.
     """
 
     SHUTDOWN_PRIORITY = 1_000_000
@@ -33,6 +36,7 @@ class Scheduler(SchedulerContract):
         registry: Registry,
         context_interval: float = 1.0,
         policy_engine: PolicyEngine | None = None,
+        telemetry: KernelTelemetry | None = None,
     ) -> None:
         self.queue = queue
         self.dispatcher = dispatcher
@@ -40,6 +44,7 @@ class Scheduler(SchedulerContract):
         self.registry = registry
         self.context_interval = context_interval
         self.policy_engine = policy_engine or PolicyEngine()
+        self.telemetry = telemetry or KernelTelemetry()
         self.context_engine = ContextEngine(registry, self, event_bus)
         self._running = False
         self._clock_task: asyncio.Task[None] | None = None
@@ -52,6 +57,7 @@ class Scheduler(SchedulerContract):
         decision = self.policy_engine.decide(event, self.registry.all().keys())
         if decision.allowed:
             await self.queue.put(event.priority, event)
+            self.telemetry.record_enqueue(event, self.queue.qsize())
             return
 
         await self._deny_event(event, decision)
@@ -65,13 +71,40 @@ class Scheduler(SchedulerContract):
         try:
             while self._running:
                 _priority, event = await self.queue.get()
+                queue_latency_ns = time.monotonic_ns() - event.timestamp_ns
+                self.telemetry.record_dequeue(event, self.queue.qsize())
+                dispatch_started_ns = time.monotonic_ns()
                 try:
                     if event.type is EventType.SHUTDOWN:
                         self._running = False
                         await self.event_bus.publish(event)
                         self._resolve_request(event, {"ok": True, "shutdown": True})
+                        dispatch_latency_ns = time.monotonic_ns() - dispatch_started_ns
+                        self.telemetry.record_dispatch_success(
+                            event,
+                            queue_latency_ns,
+                            dispatch_latency_ns,
+                            self.queue.qsize(),
+                        )
                         break
+
                     await self.dispatcher.dispatch(event)
+                    dispatch_latency_ns = time.monotonic_ns() - dispatch_started_ns
+                    self.telemetry.record_dispatch_success(
+                        event,
+                        queue_latency_ns,
+                        dispatch_latency_ns,
+                        self.queue.qsize(),
+                    )
+                except BaseException:
+                    dispatch_latency_ns = time.monotonic_ns() - dispatch_started_ns
+                    self.telemetry.record_dispatch_error(
+                        event,
+                        queue_latency_ns,
+                        dispatch_latency_ns,
+                        self.queue.qsize(),
+                    )
+                    raise
                 finally:
                     self.queue.task_done()
         finally:
@@ -92,6 +125,7 @@ class Scheduler(SchedulerContract):
             await asyncio.sleep(self.context_interval)
             if self.registry.all():
                 await self.context_engine.execute_tick()
+                self.telemetry.record_context_tick(self.queue.qsize())
 
     async def _finalize(self) -> None:
         self._running = False
@@ -101,6 +135,7 @@ class Scheduler(SchedulerContract):
                 await self._clock_task
 
     async def _deny_event(self, event: Event, decision: Decision) -> None:
+        self.telemetry.record_policy_denied(event, decision, self.queue.qsize())
         await self.event_bus.publish(
             Event(
                 EventType.POLICY_DENIED,
