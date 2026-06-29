@@ -3,13 +3,15 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import Enum, auto
-from typing import Any, Mapping
+from types import MappingProxyType
+from typing import Any
 
 
 class EventType(Enum):
-    """Types d'événements connus du micro-kernel Phase 1.1."""
+    """Types d'événements connus du micro-kernel Phase 1.2bis."""
 
     # Cycle de vie
     LOAD = auto()
@@ -30,16 +32,20 @@ class EventType(Enum):
     SHUTDOWN = auto()
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class Request:
     """Canal de réponse optionnel pour un Event.
 
-    Le Future est explicitement séparé du payload. Cela évite de polluer
-    le contenu métier et permet au Dispatcher de résoudre proprement les
-    appels coopératifs du ComponentProxy.
+    Le Future reste explicitement séparé du payload. Le payload conserve le sens
+    métier de l'événement, tandis que Request décrit uniquement la mécanique de
+    réponse coopérative.
     """
 
-    reply: asyncio.Future[Any] | None = field(default=None, repr=False, compare=False)
+    reply: asyncio.Future[Any] | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
     timeout: float = 5.0
 
 
@@ -54,12 +60,16 @@ class Event:
     priority: int = 0
     correlation_id: str | None = None
     request: Request | None = field(default=None, compare=False)
-    metadata: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=lambda: MappingProxyType({}))
     timestamp_ns: int = field(default_factory=time.monotonic_ns)
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
-    def with_request(self, request: Request) -> "Event":
+    def with_request(self, request: Request) -> Event:
+        """Retourne une copie de l'événement avec un canal de réponse."""
+
         return replace(self, request=request)
 
-    def with_source(self, source: str) -> "Event":
+    def with_source(self, source: str) -> Event:
+        """Retourne une copie de l'événement avec une nouvelle source."""
+
         return replace(self, source=source)

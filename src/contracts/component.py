@@ -12,15 +12,18 @@ class Component(ABC):
     name: str
 
     @abstractmethod
-    def tick(self) -> AsyncGenerator[Event, Any]:
+    async def tick(self) -> AsyncGenerator[Event, Any]:
         """Boucle coopérative principale.
 
-        Le composant ne commande rien directement : il émet des intentions
-        via `yield Event(...)` et reçoit éventuellement un résultat via `asend`.
+        Un composant n'appelle pas directement une action. Il émet une intention
+        via ``yield Event(...)`` et reçoit éventuellement une réponse via
+        ``asend(result)``.
         """
+
         raise NotImplementedError
 
     @abstractmethod
     async def context(self) -> dict[str, Any]:
         """Retourne l'état observable du composant."""
+
         raise NotImplementedError

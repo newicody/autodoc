@@ -6,12 +6,16 @@ from .event import Event
 
 
 class SchedulerContract(ABC):
+    """Surface minimale exposée aux ComponentProxy."""
+
     @abstractmethod
     async def emit(self, event: Event) -> None:
-        """Réceptionne un événement produit par un proxy ou le kernel."""
+        """Réceptionne un événement émis par un proxy."""
+
         raise NotImplementedError
 
     @abstractmethod
     async def shutdown(self) -> None:
-        """Demande l'arrêt propre du scheduler."""
+        """Demande un arrêt coopératif du kernel."""
+
         raise NotImplementedError

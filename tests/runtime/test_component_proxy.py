@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, AsyncGenerator
 
-import asyncio
 import pytest
 
 from contracts.component import Component
@@ -37,7 +37,11 @@ class UnknownEventComponent(Component):
         self.result: Any = None
 
     async def tick(self) -> AsyncGenerator[Event, Any]:
-        self.result = yield Event(EventType.INFERENCE_REQUEST, source=self.name, payload="future")
+        self.result = yield Event(
+            EventType.INFERENCE_REQUEST,
+            source=self.name,
+            payload="future",
+        )
 
     async def context(self) -> dict[str, Any]:
         return {"result": self.result}
@@ -54,24 +58,30 @@ class FailingComponent(Component):
         return {"status": "broken"}
 
 
-async def build_kernel() -> tuple[Scheduler, Registry, LifecycleManager, EventBus]:
+def build_kernel() -> tuple[Scheduler, Registry, LifecycleManager, EventBus]:
     registry = Registry()
     bus = EventBus()
     dispatcher = Dispatcher(bus)
     lifecycle = LifecycleManager()
     lifecycle.register_handlers(dispatcher)
-    scheduler = Scheduler(PriorityQueue(), dispatcher, bus, registry, context_interval=60.0)
+    scheduler = Scheduler(
+        PriorityQueue(),
+        dispatcher,
+        bus,
+        registry,
+        context_interval=60.0,
+    )
     return scheduler, registry, lifecycle, bus
 
 
 @pytest.mark.asyncio
 async def test_component_proxy_tick_roundtrip() -> None:
-    scheduler, registry, lifecycle, _ = await build_kernel()
+    scheduler, registry, lifecycle, _bus = build_kernel()
     component = OneShotComponent()
     proxy = ComponentProxy(component, scheduler)
     registry.register(proxy.name, proxy)
-
     scheduler_task = asyncio.create_task(scheduler.run())
+
     await proxy.start()
     await proxy.wait()
     await scheduler.shutdown()
@@ -85,12 +95,12 @@ async def test_component_proxy_tick_roundtrip() -> None:
 
 @pytest.mark.asyncio
 async def test_unknown_event_returns_explicit_unhandled_result() -> None:
-    scheduler, registry, _, _ = await build_kernel()
+    scheduler, registry, _lifecycle, _bus = build_kernel()
     component = UnknownEventComponent()
     proxy = ComponentProxy(component, scheduler)
     registry.register(proxy.name, proxy)
-
     scheduler_task = asyncio.create_task(scheduler.run())
+
     await proxy.start()
     await proxy.wait()
     await scheduler.shutdown()
@@ -104,13 +114,13 @@ async def test_unknown_event_returns_explicit_unhandled_result() -> None:
 
 @pytest.mark.asyncio
 async def test_failing_component_emits_error_and_does_not_block_kernel() -> None:
-    scheduler, registry, lifecycle, bus = await build_kernel()
+    scheduler, registry, lifecycle, bus = build_kernel()
     observed_errors = bus.subscribe(EventType.ERROR)
     component = FailingComponent()
     proxy = ComponentProxy(component, scheduler)
     registry.register(proxy.name, proxy)
-
     scheduler_task = asyncio.create_task(scheduler.run())
+
     await proxy.start()
     await proxy.wait()
     error_event = await observed_errors.get()

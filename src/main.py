@@ -1,4 +1,3 @@
-#!/usr/bin/env python3.14
 from __future__ import annotations
 
 import asyncio
@@ -8,7 +7,7 @@ from kernel.launcher import Launcher
 
 async def main() -> None:
     launcher = Launcher()
-    await launcher.boot(run_forever=False)
+    await launcher.boot()
 
 
 if __name__ == "__main__":

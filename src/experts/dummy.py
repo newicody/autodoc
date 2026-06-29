@@ -7,22 +7,16 @@ from contracts.event import Event, EventType
 
 
 class DummyExpert(Component):
+    """Composant de test minimal du micro-kernel."""
+
     name = "DummyExpert"
 
-    def __init__(self) -> None:
-        self.counter = 0
-        self.last_result: Any = None
-
     async def tick(self) -> AsyncGenerator[Event, Any]:
-        self.last_result = yield Event(EventType.TICK, source=self.name, payload="hello")
-        self.counter += 1
+        result = yield Event(EventType.TICK, source=self.name, payload="hello")
+        _ = result
 
     async def context(self) -> dict[str, Any]:
-        return {
-            "status": "idle",
-            "counter": self.counter,
-            "last_result": self.last_result,
-        }
+        return {"status": "idle", "counter": 0}
 
 
 component = DummyExpert()

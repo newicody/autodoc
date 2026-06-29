@@ -16,11 +16,12 @@ if TYPE_CHECKING:
 class ComponentProxy:
     """Isolation minimale autour d'un Component réel.
 
-    Le proxy est la seule surface visible par le kernel : il démarre le composant,
-    intercepte les Events, ajoute un canal de réponse et fournit le contexte.
+    Le proxy est la seule surface visible par le kernel : il démarre le
+    composant, intercepte les Events, ajoute un canal de réponse et fournit le
+    contexte observable.
     """
 
-    def __init__(self, real: Component, scheduler: "Scheduler") -> None:
+    def __init__(self, real: Component, scheduler: Scheduler) -> None:
         self._real = real
         self.name = getattr(real, "name", real.__class__.__name__)
         self.scheduler = scheduler
@@ -33,10 +34,15 @@ class ComponentProxy:
     async def start(self) -> None:
         if self._started:
             return
+
         self._started = True
         self.state = ComponentState.LOADED
         await self.scheduler.emit(Event(EventType.LOAD, source=self.name))
-        self._tick_task = asyncio.create_task(self._tick_loop(), name=f"component:{self.name}")
+
+        self._tick_task = asyncio.create_task(
+            self._tick_loop(),
+            name=f"component:{self.name}",
+        )
         self.state = ComponentState.STARTED
         await self.scheduler.emit(Event(EventType.START, source=self.name))
 
@@ -45,21 +51,26 @@ class ComponentProxy:
             await self._tick_task
 
     async def stop(self) -> None:
+        if self.state is ComponentState.STOPPED:
+            return
+
         self.state = ComponentState.STOPPING
         if self._tick_task is not None and not self._tick_task.done():
             self._tick_task.cancel()
             with suppress(asyncio.CancelledError):
                 await self._tick_task
+
         await self._emit_stop_once()
 
     async def _tick_loop(self) -> None:
         try:
             self.state = ComponentState.RUNNING
-            gen = self._real.tick()
-            event = await gen.__anext__()
+            generator = self._real.tick()
+            event = await generator.__anext__()
+
             while True:
                 result = await self._dispatch_event(event)
-                event = await gen.asend(result)
+                event = await generator.asend(result)
         except StopAsyncIteration:
             await self._emit_stop_once()
         except asyncio.CancelledError:
@@ -72,7 +83,10 @@ class ComponentProxy:
                 Event(
                     EventType.ERROR,
                     source=self.name,
-                    payload={"error": repr(exc), "class": exc.__class__.__name__},
+                    payload={
+                        "error": repr(exc),
+                        "class": exc.__class__.__name__,
+                    },
                     priority=-100,
                 )
             )
@@ -83,20 +97,26 @@ class ComponentProxy:
         future: asyncio.Future[Any] = loop.create_future()
         timeout = event.request.timeout if event.request else 5.0
         request = Request(reply=future, timeout=timeout)
-        outbound = replace(event, source=event.source or self.name, request=request)
+        outbound = replace(
+            event,
+            source=event.source or self.name,
+            request=request,
+        )
         await self.scheduler.emit(outbound)
         return await asyncio.wait_for(future, timeout=timeout)
 
     async def _emit_stop_once(self) -> None:
-        if not self._stopped:
-            self._stopped = True
-            if self.state != ComponentState.ERROR:
-                self.state = ComponentState.STOPPED
-            await self.scheduler.emit(Event(EventType.STOP, source=self.name))
+        if self._stopped:
+            return
+
+        self._stopped = True
+        if self.state is not ComponentState.ERROR:
+            self.state = ComponentState.STOPPED
+        await self.scheduler.emit(Event(EventType.STOP, source=self.name))
 
     async def context(self) -> dict[str, Any]:
-        ctx = await self._real.context()
+        component_context = await self._real.context()
         return {
             "proxy_state": self.state.name,
-            "component": ctx,
+            "component": component_context,
         }

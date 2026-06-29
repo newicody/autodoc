@@ -5,6 +5,7 @@ from contextlib import suppress
 
 from contracts.event import Event, EventType
 from contracts.scheduler import SchedulerContract
+
 from .context_engine import ContextEngine
 from .dispatcher import Dispatcher
 from .event_bus import EventBus
@@ -13,7 +14,12 @@ from .registry import Registry
 
 
 class Scheduler(SchedulerContract):
-    """Interpréteur central du micro-kernel coopératif."""
+    """Interpréteur central du micro-kernel coopératif.
+
+    Le Scheduler ne contient aucune logique métier. Il orchestre la queue,
+    déclenche le contexte global, délègue au Dispatcher et arrête proprement les
+    tâches internes.
+    """
 
     SHUTDOWN_PRIORITY = 1_000_000
 
@@ -30,7 +36,8 @@ class Scheduler(SchedulerContract):
         self.event_bus = event_bus
         self.registry = registry
         self.context_interval = context_interval
-        self.context_engine = ContextEngine(registry, event_bus)
+        self.context_engine = ContextEngine(registry, self.emit, event_bus)
+        self.context_engine.register_handlers(dispatcher)
         self._running = False
         self._clock_task: asyncio.Task[None] | None = None
 
@@ -43,13 +50,16 @@ class Scheduler(SchedulerContract):
 
     async def run(self) -> None:
         self._running = True
-        self._clock_task = asyncio.create_task(self._clock(), name="missipy-context-clock")
+        self._clock_task = asyncio.create_task(
+            self._clock(),
+            name="missipy-context-clock",
+        )
 
         try:
             while self._running:
-                _, event = await self.queue.get()
+                _priority, event = await self.queue.get()
                 try:
-                    if event.type == EventType.SHUTDOWN:
+                    if event.type is EventType.SHUTDOWN:
                         self._running = False
                         await self.event_bus.publish(event)
                         self._resolve_request(event, {"ok": True, "shutdown": True})
