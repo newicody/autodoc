@@ -13,13 +13,28 @@ from typing import Protocol
 from .e5_corpus import E5CorpusBuilder, E5CorpusIndex, E5CorpusJsonStore, E5CorpusSearcher
 from .e5_corpus_lock import E5CorpusBuildLock
 from .e5_incremental import E5IncrementalBuildStats, E5IncrementalCorpusBuilder
+from .e5_corpus_inspect import (
+    E5CorpusDiagnosticGateConfig,
+    E5CorpusDiagnosticGateResult,
+    evaluate_e5_corpus_diagnostic_gate,
+    inspect_e5_corpus,
+)
 from .e5_pipeline import (
     MultilingualE5SmallPipelineBundle,
     MultilingualE5SmallPipelineConfig,
     build_multilingual_e5_small_pipeline,
 )
 from .e5_profile import MULTILINGUAL_E5_SMALL_ENV, MultilingualE5SmallLocalConfig
-from .e5_sources import SUPPORTED_E5_SOURCE_EXTENSIONS, load_e5_corpus_documents_from_sources
+from .e5_sources import (
+    DEFAULT_E5_EXCLUDED_DIR_NAMES,
+    DEFAULT_E5_EXCLUDED_FILE_SUFFIXES,
+    SUPPORTED_E5_SOURCE_EXTENSIONS,
+    load_e5_corpus_documents_from_sources,
+)
+
+
+class E5CorpusRebuildDiagnosticGateError(ValueError):
+    """Erreur contrôlée quand un candidat échoue au diagnostic gate."""
 
 
 class E5RebuildPipelineBuilder(Protocol):
@@ -76,6 +91,7 @@ class E5CorpusRebuildCliOutput:
     embedded_count: int | None
     removed_count: int | None
     validation: E5CorpusRebuildValidation
+    diagnostic_gate: E5CorpusDiagnosticGateResult | None = None
     atomic_write: bool = True
     lock_enabled: bool = True
     lock_path: str | None = None
@@ -94,6 +110,8 @@ class E5CorpusRebuildCliOutput:
             "lock_enabled": self.lock_enabled,
             "validation": self.validation.to_json_dict(),
         }
+        if self.diagnostic_gate is not None:
+            data["diagnostic_gate"] = self.diagnostic_gate.to_json_dict()
         if self.lock_path is not None:
             data["lock_path"] = self.lock_path
         if self.reused_count is not None:
@@ -126,12 +144,13 @@ class E5CorpusRebuildCliOutput:
         if self.removed_count is not None:
             lines.append(f"removed_count: {self.removed_count}")
         lines.extend(self.validation.to_text_lines())
+        if self.diagnostic_gate is not None:
+            lines.extend(_diagnostic_gate_text_lines(self.diagnostic_gate))
         return "\n".join(lines)
 
 
 def build_rebuild_parser() -> argparse.ArgumentParser:
     """Parser pour le rebuild sûr d'un corpus local."""
-
     parser = argparse.ArgumentParser(
         prog="missipy-rebuild-e5-corpus",
         description="Reconstruit un corpus E5 via staging, validation puis promotion atomique.",
@@ -141,14 +160,59 @@ def build_rebuild_parser() -> argparse.ArgumentParser:
     parser.add_argument("--staging", default=None, help="Fichier candidat temporaire. Par défaut: voisin caché de --index.")
     parser.add_argument("--passage", action="append", default=[], help="Passage à indexer. Peut être répété.")
     parser.add_argument("--passages-file", default=None, help="Fichier texte contenant un passage par ligne.")
-    parser.add_argument("--source-file", action="append", default=[], help="Fichier .md/.markdown/.txt à découper en passages. Peut être répété.")
-    parser.add_argument("--source-dir", action="append", default=[], help="Dossier contenant des sources .md/.markdown/.txt à indexer. Peut être répété.")
-    parser.add_argument("--source-extensions", default=",".join(SUPPORTED_E5_SOURCE_EXTENSIONS), help="Extensions source séparées par des virgules.")
+    parser.add_argument(
+        "--source-file",
+        action="append",
+        default=[],
+        help="Fichier .md/.markdown/.txt à découper en passages. Peut être répété.",
+    )
+    parser.add_argument(
+        "--source-dir",
+        action="append",
+        default=[],
+        help="Dossier contenant des sources .md/.markdown/.txt à indexer. Peut être répété.",
+    )
+    parser.add_argument(
+        "--source-extensions",
+        default=",".join(SUPPORTED_E5_SOURCE_EXTENSIONS),
+        help="Extensions source séparées par des virgules.",
+    )
     parser.add_argument("--no-recursive", action="store_true", help="Ne parcourt pas récursivement les --source-dir.")
+    parser.add_argument(
+        "--exclude-dir",
+        action="append",
+        default=[],
+        help="Nom de répertoire supplémentaire à ignorer pendant l'ingestion source. Peut être répété.",
+    )
+    parser.add_argument(
+        "--exclude-file-suffix",
+        action="append",
+        default=[],
+        help="Suffixe de fichier supplémentaire à ignorer pendant l'ingestion source. Peut être répété.",
+    )
     parser.add_argument("--chunk-chars", type=int, default=1200, help="Taille cible maximale des chunks source en caractères.")
     parser.add_argument("--overlap-paragraphs", type=int, default=0, help="Nombre de paragraphes repris entre deux chunks.")
     parser.add_argument("--validation-query", default=None, help="Requête rapide exécutée sur le corpus candidat avant promotion.")
     parser.add_argument("--validation-limit", type=int, default=1, help="Nombre de hits demandés pendant la validation recherche.")
+    parser.add_argument("--min-chunks", type=int, default=None, help="Nombre minimal de chunks requis avant promotion.")
+    parser.add_argument(
+        "--max-missing-source-metadata",
+        type=int,
+        default=None,
+        help="Nombre maximal de chunks sans métadonnée source_path avant promotion.",
+    )
+    parser.add_argument("--max-empty-texts", type=int, default=None, help="Nombre maximal de chunks à texte vide tolérés.")
+    parser.add_argument(
+        "--max-dimension-mismatches",
+        type=int,
+        default=None,
+        help="Nombre maximal de vecteurs dont la dimension diffère de l'index.",
+    )
+    parser.add_argument(
+        "--fail-on-warning",
+        action="store_true",
+        help="Échoue avant promotion si le diagnostic candidat contient des avertissements.",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Construit et valide le staging sans le promouvoir vers --index.")
     parser.add_argument("--keep-staging", action="store_true", help="Conserve le staging après échec ou dry-run.")
     parser.add_argument("--no-lock", action="store_true", help="Désactive le verrou fichier du corpus final.")
@@ -165,7 +229,6 @@ async def run_rebuild_async(
     store: E5CorpusJsonStore | None = None,
 ) -> int:
     """Reconstruit un corpus local en staging puis promotion contrôlée."""
-
     args = build_rebuild_parser().parse_args(list(argv))
     validation_error = _validate_args(args)
     if validation_error is not None:
@@ -184,6 +247,7 @@ async def run_rebuild_async(
     except OSError as exc:
         stderr.write(f"missipy-rebuild-e5-corpus failed to read passages: {exc}\n")
         return 1
+
     if not passages:
         stderr.write("at least one --passage, --passages-file, --source-file or --source-dir entry is required\n")
         return 2
@@ -199,6 +263,11 @@ async def run_rebuild_async(
             with build_lock:
                 lock_path = str(build_lock.path)
                 output = await _rebuild_candidate(args, passages, target, staging, json_store, builder, lock_path=lock_path)
+    except E5CorpusRebuildDiagnosticGateError as exc:
+        if not args.keep_staging:
+            _cleanup_staging(staging)
+        stderr.write(f"candidate diagnostic gate failed: {exc}\n")
+        return 2
     except Exception as exc:  # pragma: no cover - dépend des dépendances locales.
         if not args.keep_staging:
             _cleanup_staging(staging)
@@ -224,6 +293,7 @@ async def _rebuild_candidate(
     index, stats = await _build_index(bundle, passages, previous_index)
     json_store.write_atomic(index, staging, overwrite=True)
     candidate = json_store.read(staging)
+    diagnostic_gate = _evaluate_candidate_diagnostic_gate(candidate, args)
     validation = await _validate_candidate(bundle, candidate, args.validation_query, args.validation_limit)
     promoted = False
     if not args.dry_run:
@@ -231,7 +301,6 @@ async def _rebuild_candidate(
         promoted = True
     elif not args.keep_staging:
         _cleanup_staging(staging)
-
     return E5CorpusRebuildCliOutput(
         index=str(target),
         staging=str(staging),
@@ -245,6 +314,7 @@ async def _rebuild_candidate(
         embedded_count=stats.embedded_count if stats is not None else None,
         removed_count=stats.removed_count if stats is not None else None,
         validation=validation,
+        diagnostic_gate=diagnostic_gate,
         atomic_write=True,
         lock_enabled=not args.no_lock,
         lock_path=lock_path,
@@ -285,6 +355,45 @@ async def _validate_candidate(
     )
 
 
+def _evaluate_candidate_diagnostic_gate(
+    candidate: E5CorpusIndex,
+    args: argparse.Namespace,
+) -> E5CorpusDiagnosticGateResult | None:
+    """Inspecte le candidat et bloque la promotion si les seuils échouent."""
+    config = _diagnostic_gate_config(args)
+    if not config.enabled:
+        return None
+    diagnostics = inspect_e5_corpus(candidate)
+    gate = evaluate_e5_corpus_diagnostic_gate(diagnostics, config)
+    if not gate.passed:
+        raise E5CorpusRebuildDiagnosticGateError("; ".join(gate.violations))
+    return gate
+
+
+def _diagnostic_gate_config(args: argparse.Namespace) -> E5CorpusDiagnosticGateConfig:
+    return E5CorpusDiagnosticGateConfig(
+        min_chunks=args.min_chunks,
+        max_missing_source_metadata=args.max_missing_source_metadata,
+        max_empty_texts=args.max_empty_texts,
+        max_dimension_mismatches=args.max_dimension_mismatches,
+        fail_on_warning=args.fail_on_warning,
+    )
+
+
+def _diagnostic_gate_text_lines(gate: E5CorpusDiagnosticGateResult) -> tuple[str, ...]:
+    lines = [
+        "diagnostic_gate:",
+        f"  enabled: {str(gate.enabled)}",
+        f"  passed: {str(gate.passed)}",
+    ]
+    if gate.violations:
+        lines.append("  violations:")
+        lines.extend(f"    - {item}" for item in gate.violations)
+    else:
+        lines.append("  violations: none")
+    return tuple(lines)
+
+
 def run_rebuild(
     argv: Sequence[str] | None = None,
     *,
@@ -310,7 +419,6 @@ def rebuild_main(argv: Sequence[str] | None = None) -> int:
 
 def rebuild_staging_path(index_path: str | Path) -> Path:
     """Chemin de staging voisin utilisé par rebuild sûr."""
-
     target = Path(index_path)
     if not target.name:
         raise ValueError("E5 rebuild target must have a filename")
@@ -326,6 +434,15 @@ def _validate_args(args: argparse.Namespace) -> str | None:
         return "--overlap-paragraphs must be zero or positive"
     if args.validation_limit <= 0:
         return "--validation-limit must be positive"
+    for option_name in (
+        "min_chunks",
+        "max_missing_source_metadata",
+        "max_empty_texts",
+        "max_dimension_mismatches",
+    ):
+        value = getattr(args, option_name)
+        if value is not None and value < 0:
+            return f"--{option_name.replace('_', '-')} must not be negative"
     return None
 
 
@@ -343,6 +460,8 @@ def _collect_passages(args: argparse.Namespace) -> tuple[object, ...]:
                 recursive=not args.no_recursive,
                 max_chars=args.chunk_chars,
                 overlap_paragraphs=args.overlap_paragraphs,
+                excluded_dir_names=_merge_cli_values(DEFAULT_E5_EXCLUDED_DIR_NAMES, args.exclude_dir),
+                excluded_file_suffixes=_merge_cli_values(DEFAULT_E5_EXCLUDED_FILE_SUFFIXES, args.exclude_file_suffix),
             )
         )
     return tuple(passages)
@@ -350,6 +469,16 @@ def _collect_passages(args: argparse.Namespace) -> tuple[object, ...]:
 
 def _read_passages_file(path: Path) -> tuple[str, ...]:
     return tuple(line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+
+
+def _merge_cli_values(defaults: Sequence[str], extras: Sequence[str]) -> tuple[str, ...]:
+    """Fusionne les garde-fous par défaut et les ajouts CLI en ordre stable."""
+    values: list[str] = []
+    for item in (*defaults, *extras):
+        value = item.strip()
+        if value and value not in values:
+            values.append(value)
+    return tuple(values)
 
 
 def _pipeline_config(args: argparse.Namespace, *, cli_name: str) -> MultilingualE5SmallPipelineConfig:

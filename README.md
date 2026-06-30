@@ -6,7 +6,7 @@ L'objectif n'est pas de construire une application Python monolithique, mais un 
 
 ## État courant
 
-État de référence : **Phase 4.7 diagnostic gate du corpus E5**.
+État de référence : **Phase 4.8 diagnostic gate du rebuild E5 sûr**.
 
 Le prototype possède actuellement :
 
@@ -42,7 +42,8 @@ Le prototype possède actuellement :
 - une hygiène de découverte des sources E5 locales qui exclut les répertoires et suffixes parasites ;
 - des contrôles CLI `--exclude-dir` et `--exclude-file-suffix` pour étendre cette hygiène sans modifier le code ;
 - une commande locale `inspect_e5_corpus.py` pour diagnostiquer un corpus E5 JSON en lecture seule ;
-- un mode gate optionnel pour transformer les diagnostics E5 en garde-fous CI/dev.
+- un mode gate optionnel pour transformer les diagnostics E5 en garde-fous CI/dev ;
+- un gate diagnostic optionnel dans `rebuild_e5_corpus.py` pour bloquer la promotion d'un candidat douteux.
 
 OpenVINO est branché comme runtime générique à entrées brutes. Le choix du ou des modèles est décrit par profils déclaratifs : `embedding`, `generation` ou `raw`.
 
@@ -703,3 +704,60 @@ Cette phase reste volontairement locale :
 - inspection en lecture seule ;
 - mise à jour des graphes DOT d'inférence uniquement ;
 - pas de SVG versionné.
+
+## Phase 4.8 — Diagnostic gate du rebuild E5 sûr
+
+La Phase 4.8 réutilise les diagnostics et seuils de la Phase 4.7 directement dans le rebuild sûr du corpus E5.
+
+Le flux reste le même : le corpus candidat est construit dans un fichier de staging, relu, diagnostiqué, validé, puis promu uniquement si les garde-fous demandés sont respectés.
+
+Exemple :
+
+```bash
+PYTHONPATH=src ./tools/rebuild_e5_corpus.py \
+  --index /tmp/autodoc_e5_corpus.json \
+  --source-dir . \
+  --validation-query "OpenVINO E5 local" \
+  --min-chunks 10 \
+  --max-missing-source-metadata 0 \
+  --max-empty-texts 0 \
+  --max-dimension-mismatches 0 \
+  --fail-on-warning
+```
+
+Les seuils disponibles sont identiques au diagnostic gate en lecture seule :
+
+- `--min-chunks N` : nombre minimal de chunks requis avant promotion ;
+- `--max-missing-source-metadata N` : nombre maximal de chunks sans `source_path` ;
+- `--max-empty-texts N` : nombre maximal de textes vides ;
+- `--max-dimension-mismatches N` : nombre maximal de dimensions incohérentes ;
+- `--fail-on-warning` : échoue si le diagnostic candidat contient des avertissements.
+
+Si le gate est activé et passe, la sortie contient une section `diagnostic_gate` :
+
+```text
+diagnostic_gate:
+  enabled: True
+  passed: True
+  violations: none
+```
+
+Si un seuil est violé, le staging n'est pas promu. Par défaut, le staging est nettoyé ; `--keep-staging` permet de conserver le candidat pour inspection.
+
+Codes retour :
+
+```text
+0 : candidat construit, gate respecté si demandé, promotion ou dry-run OK
+1 : erreur de lecture, build, validation ou écriture
+2 : option invalide ou diagnostic gate violé
+```
+
+Cette phase reste volontairement locale :
+
+- pas de Qdrant ;
+- pas de Scheduler ;
+- pas de changement du format `missipy.e5.corpus.v1` ;
+- pas de promotion si le diagnostic gate échoue ;
+- mise à jour des graphes DOT d'inférence uniquement ;
+- pas de SVG versionné.
+
