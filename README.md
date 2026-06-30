@@ -1018,3 +1018,39 @@ code_rule_review: done
 code_rule_update_required: true
 code_rule_reason: ajout de la règle demandée sur les bibliothèques hors stdlib ; 4.14 n'ajoute aucune dépendance externe.
 ```
+
+## Phase 4.15 — E5 context consumer contract
+
+La Phase 4.15 ajoute un contrat de consommation du bundle de contexte E5 sans brancher de LLM, de Scheduler ni de Qdrant.
+
+Le flux préparé est :
+
+```text
+E5ContextBundle
+-> E5ContextConsumptionPolicy
+-> consume_e5_context_bundle()
+-> E5ConsumedContext
+```
+
+`E5ConsumedContext` fournit un texte de contexte déterministe, borné par budget de caractères, et une projection JSON stable pour un futur composant de réponse ou un futur `InferenceContext`.
+
+Exemple d'usage interne :
+
+```python
+from inference.e5_context_consumer import E5ContextConsumptionPolicy, consume_e5_context_bundle
+
+consumed = consume_e5_context_bundle(
+    bundle,
+    E5ContextConsumptionPolicy(max_chars=4000, max_items=5),
+)
+```
+
+Cette phase ne crée pas de nouveau script CLI. Elle garde le domaine pur : le consommateur ne lit ni n'écrit aucun fichier. Les effets IO restent dans les adaptateurs existants.
+
+Aucune bibliothèque hors stdlib Python n'est ajoutée.
+
+```text
+code_rule_review: done
+code_rule_update_required: false
+code_rule_reason: le contrat de consommation applique les règles Phase 4.12-r2 existantes ; aucune nouvelle guideline n'est nécessaire.
+```
