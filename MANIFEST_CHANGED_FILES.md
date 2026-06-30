@@ -1,23 +1,26 @@
-# Manifest — Phase 4.4 E5 source hygiene
+# Manifest — Phase 4.6 E5 corpus diagnostics
 
 ## Code
 
-- `src/inference/e5_sources.py`
+- `src/inference/e5_corpus_inspect.py`
+- `src/inference/e5_corpus_inspect_cli.py`
+- `tools/inspect_e5_corpus.py`
 
 ## Tests
 
-- `tests/inference/test_e5_source_hygiene.py`
+- `tests/inference/test_e5_corpus_inspect.py`
+- `tests/inference/test_e5_corpus_inspect_cli.py`
 
 ## Documentation
 
 - `README.md`
-- `doc/CHANGELOG_PHASE4_4_E5_SOURCE_HYGIENE.md`
-- `doc/docs/architecture/inference/51_e5_sources.dot`
-- `doc/docs/architecture/inference/58_e5_source_hygiene.dot`
+- `doc/CHANGELOG_PHASE4_6_E5_CORPUS_DIAGNOSTICS.md`
+- `doc/docs/architecture/inference/59_e5_source_hygiene_cli.dot`
+- `doc/docs/architecture/inference/60_e5_corpus_diagnostics.dot`
 
 ## Reports
 
-- `PHASE4_4_TEST_REPORT.md`
+- `PHASE4_6_TEST_REPORT.md`
 - `MANIFEST_CHANGED_FILES.md`
 
 ## Non inclus

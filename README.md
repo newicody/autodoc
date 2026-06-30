@@ -6,7 +6,7 @@ L'objectif n'est pas de construire une application Python monolithique, mais un 
 
 ## État courant
 
-État de référence : **Phase 4.4 hygiène des sources E5 locales**.
+État de référence : **Phase 4.6 diagnostics locaux du corpus E5**.
 
 Le prototype possède actuellement :
 
@@ -39,7 +39,9 @@ Le prototype possède actuellement :
 - un rebuild sûr du corpus E5 avec staging, validation optionnelle et promotion atomique ;
 - une procédure de recherche E5 locale dev-ready validée sur le corpus du repo ;
 - un garde-fou `--min-score` pour filtrer les résultats E5 locaux trop faibles ;
-- une hygiène de découverte des sources E5 locales qui exclut les répertoires et suffixes parasites.
+- une hygiène de découverte des sources E5 locales qui exclut les répertoires et suffixes parasites ;
+- des contrôles CLI `--exclude-dir` et `--exclude-file-suffix` pour étendre cette hygiène sans modifier le code ;
+- une commande locale `inspect_e5_corpus.py` pour diagnostiquer un corpus E5 JSON en lecture seule.
 
 OpenVINO est branché comme runtime générique à entrées brutes. Le choix du ou des modèles est décrit par profils déclaratifs : `embedding`, `generation` ou `raw`.
 
@@ -114,9 +116,11 @@ cd doc && make -f makefile
 - `doc/MODEL_E5_SEARCH_REPORT_PHASE3_14.md` : rapport de résultats avec contexte source.
 - `doc/CHANGELOG_PHASE4_2_E5_LOCAL_SEARCH.md` : procédure de recherche E5 locale dev-ready.
 - `doc/CHANGELOG_PHASE4_3_E5_SCORE_GUARD.md` : garde-fou de score minimal pour recherche E5 locale.
+- `doc/CHANGELOG_PHASE4_6_E5_CORPUS_DIAGNOSTICS.md` : diagnostic local du corpus E5 JSON.
 - `doc/CHANGELOG_PHASE4_4_E5_SOURCE_HYGIENE.md` : hygiène de découverte des sources E5 locales.
 - `doc/docs/architecture/inference/52_e5_search_report.dot` : rapport E5 enrichi avec lien vers le garde-fou de score.
 - `doc/docs/architecture/inference/57_e5_score_guard.dot` : détail Phase 4.3 du filtrage `--min-score`.
+- `doc/docs/architecture/inference/60_e5_corpus_diagnostics.dot` : inspection locale du corpus E5 JSON.
 - `doc/docs/architecture/inference/58_e5_source_hygiene.dot` : détail Phase 4.4 du filtrage des sources parasites avant chunking.
 - `doc/docs/architecture/*.dot` : roadmap DOT navigable ; les SVG sont générés par le makefile.
 
@@ -549,5 +553,107 @@ Cette phase reste volontairement locale :
 - pas de Scheduler ;
 - pas de changement du format corpus ;
 - pas d'index ANN ;
+- mise à jour des graphes DOT d'inférence uniquement ;
+- pas de SVG versionné.
+
+## Phase 4.5 — Contrôles CLI d'hygiène des sources E5
+
+La Phase 4.5 expose dans les commandes de build et de rebuild sûr les garde-fous d'hygiène centralisés en Phase 4.4.
+
+Les exclusions par défaut restent actives. Les options CLI ajoutent seulement des exclusions supplémentaires, sans désactiver les garde-fous communs.
+
+Exemple build :
+
+```bash
+PYTHONPATH=src ./tools/build_e5_corpus.py \
+  --source-dir . \
+  --exclude-dir vendor \
+  --exclude-dir generated \
+  --exclude-file-suffix .draft.md \
+  --output /tmp/autodoc_e5_corpus.json \
+  --overwrite
+```
+
+Exemple rebuild sûr :
+
+```bash
+PYTHONPATH=src ./tools/rebuild_e5_corpus.py \
+  --index /tmp/autodoc_e5_corpus.json \
+  --source-dir . \
+  --exclude-dir vendor \
+  --exclude-dir generated \
+  --exclude-file-suffix .draft.md \
+  --validation-query "OpenVINO E5 local"
+```
+
+Ces options passent par le même chemin central :
+
+```text
+CLI build/rebuild
+-> options source hygiene
+-> e5_sources.py
+-> discover_e5_source_files()
+-> read_text/chunking
+-> corpus E5 local
+```
+
+Cette phase reste volontairement locale :
+
+- pas de Qdrant ;
+- pas de Scheduler ;
+- pas de changement du format `missipy.e5.corpus.v1` ;
+- pas d'index ANN ;
+- mise à jour des graphes DOT d'inférence uniquement ;
+- pas de SVG versionné.
+
+## Phase 4.6 — Diagnostics locaux du corpus E5
+
+La Phase 4.6 ajoute une commande d'inspection locale pour diagnostiquer un corpus E5 JSON déjà vectorisé, sans ouvrir le fichier à la main.
+
+La commande lit le même format `missipy.e5.corpus.v1` que les étapes précédentes :
+
+```bash
+PYTHONPATH=src ./tools/inspect_e5_corpus.py \
+  --index /tmp/autodoc_e5_corpus.json
+```
+
+Elle affiche notamment :
+
+```text
+schema
+model / backend / tokenizer
+dimension
+chunk_count
+source_count
+extensions
+top_sources
+embedding_reuse
+health
+```
+
+La sortie JSON est disponible pour une intégration future :
+
+```bash
+PYTHONPATH=src ./tools/inspect_e5_corpus.py \
+  --index /tmp/autodoc_e5_corpus.json \
+  --format json
+```
+
+Cette phase aide à répondre rapidement à des questions de contrôle :
+
+- combien de chunks contient l'index ;
+- quelles extensions dominent ;
+- quelles sources dominent ;
+- combien d'embeddings viennent d'un build incrémental ;
+- si des métadonnées source manquent ;
+- si le corpus contient des anomalies structurelles simples.
+
+Cette phase reste volontairement locale :
+
+- pas de Qdrant ;
+- pas de Scheduler ;
+- pas de changement du format `missipy.e5.corpus.v1` ;
+- pas d'index ANN ;
+- inspection en lecture seule ;
 - mise à jour des graphes DOT d'inférence uniquement ;
 - pas de SVG versionné.
