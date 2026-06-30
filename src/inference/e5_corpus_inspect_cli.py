@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO
 
+from .e5_cli_contracts import E5DiagnosticGatePolicy, E5InspectCommand
 from .e5_corpus import E5CorpusJsonStore
 from .e5_corpus_inspect import (
     DEFAULT_E5_CORPUS_TOP_SOURCES_LIMIT,
-    E5CorpusDiagnosticGateConfig,
     E5CorpusDiagnosticGateResult,
     E5CorpusDiagnostics,
     evaluate_e5_corpus_diagnostic_gate,
@@ -51,36 +51,12 @@ def build_inspect_parser() -> argparse.ArgumentParser:
         description="Inspecte un corpus E5 local déjà vectorisé.",
     )
     parser.add_argument("--index", required=True, help="Fichier JSON du corpus local à inspecter.")
-    parser.add_argument(
-        "--top-sources-limit",
-        type=int,
-        default=DEFAULT_E5_CORPUS_TOP_SOURCES_LIMIT,
-        help="Nombre maximal de sources dominantes affichées.",
-    )
+    parser.add_argument("--top-sources-limit", type=int, default=DEFAULT_E5_CORPUS_TOP_SOURCES_LIMIT, help="Nombre maximal de sources dominantes affichées.")
     parser.add_argument("--min-chunks", type=int, default=None, help="Nombre minimal de chunks requis.")
-    parser.add_argument(
-        "--max-missing-source-metadata",
-        type=int,
-        default=None,
-        help="Nombre maximal de chunks sans métadonnée source_path.",
-    )
-    parser.add_argument(
-        "--max-empty-texts",
-        type=int,
-        default=None,
-        help="Nombre maximal de chunks à texte vide tolérés.",
-    )
-    parser.add_argument(
-        "--max-dimension-mismatches",
-        type=int,
-        default=None,
-        help="Nombre maximal de vecteurs dont la dimension diffère de l'index.",
-    )
-    parser.add_argument(
-        "--fail-on-warning",
-        action="store_true",
-        help="Retourne le code 2 si le diagnostic contient des avertissements.",
-    )
+    parser.add_argument("--max-missing-source-metadata", type=int, default=None, help="Nombre maximal de chunks sans métadonnée source_path.")
+    parser.add_argument("--max-empty-texts", type=int, default=None, help="Nombre maximal de chunks à texte vide tolérés.")
+    parser.add_argument("--max-dimension-mismatches", type=int, default=None, help="Nombre maximal de vecteurs dont la dimension diffère de l'index.")
+    parser.add_argument("--fail-on-warning", action="store_true", help="Retourne le code 2 si le diagnostic contient des avertissements.")
     parser.add_argument("--format", choices=("text", "json"), default="text", help="Format de sortie CLI.")
     return parser
 
@@ -95,35 +71,25 @@ def run_inspect(
     """Point d'entrée testable de la CLI d'inspection."""
     out = stdout or sys.stdout
     err = stderr or sys.stderr
-    args = build_inspect_parser().parse_args(list(argv) if argv is not None else None)
-
+    raw_args = build_inspect_parser().parse_args(list(argv) if argv is not None else None)
     try:
-        gate_config = E5CorpusDiagnosticGateConfig(
-            min_chunks=args.min_chunks,
-            max_missing_source_metadata=args.max_missing_source_metadata,
-            max_empty_texts=args.max_empty_texts,
-            max_dimension_mismatches=args.max_dimension_mismatches,
-            fail_on_warning=args.fail_on_warning,
-        )
+        command = _inspect_command(raw_args)
     except ValueError as exc:
         err.write(f"{exc}\n")
         return 2
 
-    if args.top_sources_limit <= 0:
-        err.write("--top-sources-limit must be positive\n")
-        return 2
-
     corpus_store = store or E5CorpusJsonStore()
     try:
-        index = corpus_store.read(Path(args.index))
-        diagnostics = inspect_e5_corpus(index, top_sources_limit=args.top_sources_limit)
+        index = corpus_store.read(command.index)
+        diagnostics = inspect_e5_corpus(index, top_sources_limit=command.top_sources_limit)
     except Exception as exc:
         err.write(f"missipy-inspect-e5-corpus failed: {exc}\n")
         return 1
 
+    gate_config = command.diagnostic_gate.to_config()
     gate = evaluate_e5_corpus_diagnostic_gate(diagnostics, gate_config) if gate_config.enabled else None
-    output = E5CorpusInspectCliOutput(index_path=str(args.index), diagnostics=diagnostics, gate=gate)
-    _write_output(out, args.format, output.to_json_dict(), output.to_text())
+    output = E5CorpusInspectCliOutput(index_path=str(command.index), diagnostics=diagnostics, gate=gate)
+    _write_output(out, command.output_format, output.to_json_dict(), output.to_text())
     if gate is not None and not gate.passed:
         return 2
     return 0
@@ -132,6 +98,21 @@ def run_inspect(
 def main(argv: list[str] | tuple[str, ...] | None = None) -> int:
     """Point d'entrée console."""
     return run_inspect(argv)
+
+
+def _inspect_command(args: argparse.Namespace) -> E5InspectCommand:
+    return E5InspectCommand(
+        index=Path(args.index),
+        top_sources_limit=args.top_sources_limit,
+        output_format=args.format,
+        diagnostic_gate=E5DiagnosticGatePolicy(
+            min_chunks=args.min_chunks,
+            max_missing_source_metadata=args.max_missing_source_metadata,
+            max_empty_texts=args.max_empty_texts,
+            max_dimension_mismatches=args.max_dimension_mismatches,
+            fail_on_warning=args.fail_on_warning,
+        ),
+    )
 
 
 def _write_output(stdout: TextIO, output_format: str, payload: dict[str, object], text: str) -> None:

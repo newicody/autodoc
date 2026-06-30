@@ -6,7 +6,7 @@ L'objectif n'est pas de construire une application Python monolithique, mais un 
 
 ## État courant
 
-État de référence : **Phase 4.11 rapport JSON de recherche E5**.
+État de référence : **Phase 4.12-r2 réalignement code_rule E5 4.2 → 4.11**.
 
 Le prototype possède actuellement :
 
@@ -903,3 +903,38 @@ Elle reste volontairement locale :
 - rapport optionnel seulement ;
 - mise à jour des graphes DOT d'inférence uniquement ;
 - pas de SVG versionné.
+
+## Phase 4.12-r2 — réalignement code_rule E5
+
+La Phase 4.12-r2 ne change pas le format `missipy.e5.corpus.v1` et n'ajoute ni Qdrant ni Scheduler.
+Elle conserve l'ancien `doc/code_rule.md` comme socle et ajoute seulement un addendum court pour appliquer cette philosophie aux phases E5 4.2 → 4.11 :
+
+```text
+CLI adapter
+-> Command dataclass immuable
+-> Policy dataclass immuable
+-> use-case testable
+-> Result dataclass immuable
+-> renderer / report_io
+```
+
+Les outils E5 sont des adaptateurs temporaires, pas une exception à la philosophie du noyau. Même exposé par une CLI, le cœur du code doit rester écrit comme un futur composant pilotable par événement : intention typée, politiques explicites, résultat immuable et effets IO isolés.
+
+Nouveaux contrats :
+
+- `E5BuildCommand`
+- `E5SearchCommand`
+- `E5RebuildCommand`
+- `E5InspectCommand`
+- `E5SearchPolicy`
+- `E5DiagnosticGatePolicy`
+- `E5SearchValidationPolicy`
+- `JsonReportWritePolicy`
+
+Les écritures JSON de rapport sont centralisées dans `src/inference/report_io.py`.
+Chaque phase future doit documenter explicitement la revue `code_rule` :
+
+```text
+code_rule_review: done
+code_rule_update_required: true|false
+```
