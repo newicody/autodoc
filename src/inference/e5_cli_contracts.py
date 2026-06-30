@@ -152,6 +152,40 @@ class E5SearchRenderPolicy:
             raise ValueError("--excerpt-chars must be positive")
 
 
+
+
+@dataclass(frozen=True, slots=True)
+class E5SearchArtifactDirectoryPolicy:
+    """Politique optionnelle de répertoire d'artefacts pour un dry-run search E5."""
+
+    path: Path | None = None
+
+    def __post_init__(self) -> None:
+        if self.path is not None and not str(self.path).strip():
+            raise ValueError("--artifact-dir must not be empty")
+
+    @property
+    def enabled(self) -> bool:
+        return self.path is not None
+
+    def default_report_path(self) -> Path | None:
+        return self._default_path("report.json")
+
+    def default_context_path(self) -> Path | None:
+        return self._default_path("context.json")
+
+    def default_consumed_context_path(self) -> Path | None:
+        return self._default_path("consumed_context.json")
+
+    def default_prompt_path(self) -> Path | None:
+        return self._default_path("prompt.json")
+
+    def _default_path(self, filename: str) -> Path | None:
+        if self.path is None:
+            return None
+        return self.path / filename
+
+
 @dataclass(frozen=True, slots=True)
 class E5SearchCommand:
     """Commande typée de recherche dans un corpus E5 local."""
@@ -161,6 +195,7 @@ class E5SearchCommand:
     query: str
     search: E5SearchPolicy = E5SearchPolicy()
     render: E5SearchRenderPolicy = E5SearchRenderPolicy()
+    artifacts: E5SearchArtifactDirectoryPolicy = E5SearchArtifactDirectoryPolicy()
     report: JsonReportWritePolicy = JsonReportWritePolicy(path=None)
     context: JsonReportWritePolicy = JsonReportWritePolicy(path=None)
     consumed_context: JsonReportWritePolicy = JsonReportWritePolicy(path=None)

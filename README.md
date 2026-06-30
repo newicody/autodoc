@@ -1132,3 +1132,39 @@ code_rule_review: done
 code_rule_update_required: false
 code_rule_reason: 4.17 applique les règles Phase 4.12-r2 et la règle stdlib introduite en 4.14 ; aucune nouvelle guideline n'est nécessaire.
 ```
+
+## Phase 4.18 — E5 dry-run artifact directory
+
+La Phase 4.18 ajoute un mode dry-run compact à la sous-commande `search`, sans créer de nouveau script et sans appeler de LLM, de Scheduler ni de Qdrant.
+
+Le flux reste le même que 4.17, mais une seule option peut maintenant préparer les artefacts de prototype :
+
+```bash
+PYTHONPATH=src ./tools/e5.py search \
+  --index /tmp/autodoc_e5_corpus.json \
+  --limit 5 \
+  --artifact-dir /tmp/autodoc_e5_dry_run \
+  --context-max-chars 4000 \
+  "OpenVINO local"
+```
+
+Par défaut, `--artifact-dir DIR` écrit :
+
+```text
+DIR/report.json
+DIR/context.json
+DIR/consumed_context.json
+DIR/prompt.json
+```
+
+Les chemins explicites restent prioritaires. Par exemple, `--artifact-dir DIR --report-file /tmp/report.json` écrit le rapport dans `/tmp/report.json`, mais conserve les autres artefacts dans `DIR/`.
+
+Cette phase ferme le chemin local de prototype : recherche, contexte brut, contexte consommé et paquet de prompt peuvent être produits en une passe, sans génération de réponse.
+
+Aucune bibliothèque hors stdlib Python n'est ajoutée.
+
+```text
+code_rule_review: done
+code_rule_update_required: false
+code_rule_reason: 4.18 applique les règles Phase 4.12-r2 et la règle stdlib introduite en 4.14 ; aucune nouvelle guideline n'est nécessaire.
+```

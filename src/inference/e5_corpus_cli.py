@@ -14,6 +14,7 @@ from .e5_answer_prompt import E5AnswerPromptPolicy, build_e5_answer_prompt
 from .e5_cli_contracts import (
     E5BuildCommand,
     E5CliModelPolicy,
+    E5SearchArtifactDirectoryPolicy,
     E5SearchCommand,
     E5SearchPolicy,
     E5SearchRenderPolicy,
@@ -173,6 +174,7 @@ def build_search_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-score", type=float, default=None, help="Score minimal inclusif requis pour conserver un résultat.")
     parser.add_argument("--format", choices=("text", "json"), default="text", help="Format de sortie CLI.")
     parser.add_argument("--report-file", default=None, help="Écrit un rapport JSON stable de la recherche vers ce fichier si la recherche réussit.")
+    parser.add_argument("--artifact-dir", default=None, help="Répertoire dry-run : écrit report.json, context.json, consumed_context.json et prompt.json par défaut.")
     parser.add_argument("--context-file", default=None, help="Écrit un bundle de contexte JSON extrait des hits de recherche si la recherche réussit.")
     parser.add_argument("--consumed-context-file", default=None, help="Écrit un contexte consommé JSON, borné par budget, si la recherche réussit.")
     parser.add_argument("--prompt-file", default=None, help="Écrit un paquet de prompt JSON dérivé du contexte consommé si la recherche réussit.")
@@ -309,6 +311,12 @@ async def run_search_async(
     json_output = output.to_json_dict()
 
     try:
+        _prepare_search_artifact_directory(command.artifacts)
+    except OSError as exc:
+        stderr.write(f"missipy-search-e5-corpus failed to prepare artifact directory: {exc}\n")
+        return 1
+
+    try:
         write_json_report_atomic(command.report, json_output)
     except OSError as exc:
         stderr.write(f"missipy-search-e5-corpus failed to write report: {exc}\n")
@@ -404,10 +412,21 @@ def _build_command(args: argparse.Namespace) -> E5BuildCommand:
 
 
 def _search_command(args: argparse.Namespace) -> E5SearchCommand:
-    report_file = _optional_output_file(args.report_file, "--report-file")
-    context_file = _optional_output_file(args.context_file, "--context-file")
-    consumed_context_file = _optional_output_file(args.consumed_context_file, "--consumed-context-file")
-    prompt_file = _optional_output_file(args.prompt_file, "--prompt-file")
+    artifact_directory = E5SearchArtifactDirectoryPolicy(
+        path=Path(args.artifact_dir) if args.artifact_dir is not None else None
+    )
+    report_file = _artifact_or_explicit_output_file(
+        args.report_file, "--report-file", artifact_directory.default_report_path()
+    )
+    context_file = _artifact_or_explicit_output_file(
+        args.context_file, "--context-file", artifact_directory.default_context_path()
+    )
+    consumed_context_file = _artifact_or_explicit_output_file(
+        args.consumed_context_file, "--consumed-context-file", artifact_directory.default_consumed_context_path()
+    )
+    prompt_file = _artifact_or_explicit_output_file(
+        args.prompt_file, "--prompt-file", artifact_directory.default_prompt_path()
+    )
 
     return E5SearchCommand(
         model=E5CliModelPolicy(
@@ -424,6 +443,7 @@ def _search_command(args: argparse.Namespace) -> E5SearchCommand:
             excerpt_chars=args.excerpt_chars,
             include_full_text=args.full_text,
         ),
+        artifacts=artifact_directory,
         report=JsonReportWritePolicy(path=report_file),
         context=JsonReportWritePolicy(path=context_file),
         consumed_context=JsonReportWritePolicy(path=consumed_context_file),
@@ -466,13 +486,18 @@ def _search_answer_prompt_policy(args: argparse.Namespace) -> E5AnswerPromptPoli
         raise
 
 
-def _optional_output_file(value: str | None, option_name: str) -> Path | None:
+def _artifact_or_explicit_output_file(value: str | None, option_name: str, default_path: Path | None) -> Path | None:
     if value is None:
-        return None
+        return default_path
     path = Path(value)
     if not path.name:
         raise ValueError(f"{option_name} must target a filename")
     return path
+
+
+def _prepare_search_artifact_directory(policy: E5SearchArtifactDirectoryPolicy) -> None:
+    if policy.path is not None:
+        policy.path.mkdir(parents=True, exist_ok=True)
 
 
 def _add_common_model_args(parser: argparse.ArgumentParser) -> None:
