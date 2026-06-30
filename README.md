@@ -1082,3 +1082,53 @@ code_rule_review: done
 code_rule_update_required: false
 code_rule_reason: le paquet de prompt applique les règles Phase 4.12-r2 existantes ; aucune nouvelle guideline n'est nécessaire.
 ```
+
+## Phase 4.17 — E5 prompt file CLI
+
+La Phase 4.17 branche la chaîne locale complète dans la sous-commande `search`, sans appeler de LLM, sans Qdrant et sans Scheduler.
+
+Le flux disponible devient :
+
+```text
+search E5
+-> E5SearchReport
+-> E5ContextBundle
+-> E5ConsumedContext
+-> E5AnswerPromptPacket
+-> artefacts JSON optionnels
+```
+
+La commande peut maintenant produire plusieurs artefacts en une seule recherche :
+
+```bash
+PYTHONPATH=src ./tools/e5.py search \
+  --index /tmp/autodoc_e5_corpus.json \
+  --limit 5 \
+  --context-file /tmp/autodoc_context.json \
+  --consumed-context-file /tmp/autodoc_consumed_context.json \
+  --prompt-file /tmp/autodoc_prompt.json \
+  --context-max-chars 4000 \
+  "OpenVINO local"
+```
+
+Les nouvelles options sont :
+
+```text
+--consumed-context-file FILE
+--prompt-file FILE
+--context-max-chars INT
+--context-max-items INT
+--context-include-scores
+--prompt-system-instruction TEXT
+--prompt-answer-instruction TEXT
+```
+
+La CLI reste un adaptateur de bordure : le domaine construit les structures immuables, et `report_io.write_json_report_atomic()` écrit les fichiers JSON.
+
+Aucune bibliothèque hors stdlib Python n'est ajoutée.
+
+```text
+code_rule_review: done
+code_rule_update_required: false
+code_rule_reason: 4.17 applique les règles Phase 4.12-r2 et la règle stdlib introduite en 4.14 ; aucune nouvelle guideline n'est nécessaire.
+```

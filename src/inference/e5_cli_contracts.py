@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from .e5_answer_prompt import E5AnswerPromptPolicy
+from .e5_context_consumer import E5ContextConsumptionPolicy
 from .e5_corpus_inspect import E5CorpusDiagnosticGateConfig
 from .e5_pipeline import MultilingualE5SmallPipelineConfig
 from .e5_profile import MultilingualE5SmallLocalConfig
@@ -161,6 +163,10 @@ class E5SearchCommand:
     render: E5SearchRenderPolicy = E5SearchRenderPolicy()
     report: JsonReportWritePolicy = JsonReportWritePolicy(path=None)
     context: JsonReportWritePolicy = JsonReportWritePolicy(path=None)
+    consumed_context: JsonReportWritePolicy = JsonReportWritePolicy(path=None)
+    prompt: JsonReportWritePolicy = JsonReportWritePolicy(path=None)
+    context_consumption: E5ContextConsumptionPolicy = E5ContextConsumptionPolicy()
+    answer_prompt: E5AnswerPromptPolicy = E5AnswerPromptPolicy()
 
     def __post_init__(self) -> None:
         if not self.index.name:

@@ -10,6 +10,7 @@ from io import TextIOBase
 from pathlib import Path
 from typing import Protocol
 
+from .e5_answer_prompt import E5AnswerPromptPolicy, build_e5_answer_prompt
 from .e5_cli_contracts import (
     E5BuildCommand,
     E5CliModelPolicy,
@@ -20,6 +21,7 @@ from .e5_cli_contracts import (
 )
 from .e5_corpus import E5CorpusBuilder, E5CorpusIndex, E5CorpusJsonStore, E5CorpusSearcher
 from .e5_context_bundle import E5ContextBundle
+from .e5_context_consumer import E5ContextConsumptionPolicy, consume_e5_context_bundle
 from .e5_corpus_lock import E5CorpusBuildLock
 from .e5_incremental import E5IncrementalBuildStats, E5IncrementalCorpusBuilder
 from .e5_pipeline import (
@@ -172,6 +174,13 @@ def build_search_parser() -> argparse.ArgumentParser:
     parser.add_argument("--format", choices=("text", "json"), default="text", help="Format de sortie CLI.")
     parser.add_argument("--report-file", default=None, help="Écrit un rapport JSON stable de la recherche vers ce fichier si la recherche réussit.")
     parser.add_argument("--context-file", default=None, help="Écrit un bundle de contexte JSON extrait des hits de recherche si la recherche réussit.")
+    parser.add_argument("--consumed-context-file", default=None, help="Écrit un contexte consommé JSON, borné par budget, si la recherche réussit.")
+    parser.add_argument("--prompt-file", default=None, help="Écrit un paquet de prompt JSON dérivé du contexte consommé si la recherche réussit.")
+    parser.add_argument("--context-max-chars", type=int, default=4000, help="Budget de caractères du contexte consommé pour le futur prompt.")
+    parser.add_argument("--context-max-items", type=int, default=None, help="Nombre maximal d'items de contexte consommés avant prompt.")
+    parser.add_argument("--context-include-scores", action="store_true", help="Inclut les scores E5 dans le contexte consommé.")
+    parser.add_argument("--prompt-system-instruction", default=None, help="Instruction système personnalisée pour le paquet de prompt.")
+    parser.add_argument("--prompt-answer-instruction", default=None, help="Instruction de réponse personnalisée pour le paquet de prompt.")
     parser.add_argument("--excerpt-chars", type=int, default=280, help="Longueur maximale de l'extrait affiché par résultat.")
     parser.add_argument("--full-text", action="store_true", help="Inclut le texte complet du chunk dans la sortie.")
     return parser
@@ -298,12 +307,17 @@ async def run_search_async(
         ),
     )
     json_output = output.to_json_dict()
+    context_bundle = E5ContextBundle.from_search_report(output.report)
+    consumed_context = consume_e5_context_bundle(context_bundle, command.context_consumption)
+    prompt_packet = build_e5_answer_prompt(consumed_context, command.answer_prompt)
+
     try:
         write_json_report_atomic(command.report, json_output)
-        context_bundle = E5ContextBundle.from_search_report(output.report)
         write_json_report_atomic(command.context, context_bundle.to_json_dict())
+        write_json_report_atomic(command.consumed_context, consumed_context.to_json_dict())
+        write_json_report_atomic(command.prompt, prompt_packet.to_json_dict())
     except OSError as exc:
-        stderr.write(f"missipy-search-e5-corpus failed to write report: {exc}\n")
+        stderr.write(f"missipy-search-e5-corpus failed to write search artifacts: {exc}\n")
         return 1
 
     _write_output(stdout, command.render.output_format, json_output, output.to_text())
@@ -385,12 +399,10 @@ def _build_command(args: argparse.Namespace) -> E5BuildCommand:
 
 
 def _search_command(args: argparse.Namespace) -> E5SearchCommand:
-    report_file = Path(args.report_file) if args.report_file is not None else None
-    if report_file is not None and not report_file.name:
-        raise ValueError("--report-file must target a filename")
-    context_file = Path(args.context_file) if args.context_file is not None else None
-    if context_file is not None and not context_file.name:
-        raise ValueError("--context-file must target a filename")
+    report_file = _optional_output_file(args.report_file, "--report-file")
+    context_file = _optional_output_file(args.context_file, "--context-file")
+    consumed_context_file = _optional_output_file(args.consumed_context_file, "--consumed-context-file")
+    prompt_file = _optional_output_file(args.prompt_file, "--prompt-file")
 
     return E5SearchCommand(
         model=E5CliModelPolicy(
@@ -409,7 +421,53 @@ def _search_command(args: argparse.Namespace) -> E5SearchCommand:
         ),
         report=JsonReportWritePolicy(path=report_file),
         context=JsonReportWritePolicy(path=context_file),
+        consumed_context=JsonReportWritePolicy(path=consumed_context_file),
+        prompt=JsonReportWritePolicy(path=prompt_file),
+        context_consumption=_search_context_consumption_policy(args),
+        answer_prompt=_search_answer_prompt_policy(args),
     )
+
+
+def _search_context_consumption_policy(args: argparse.Namespace) -> E5ContextConsumptionPolicy:
+    try:
+        return E5ContextConsumptionPolicy(
+            max_chars=args.context_max_chars,
+            max_items=args.context_max_items,
+            include_scores=args.context_include_scores,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        if message.startswith("max_chars "):
+            raise ValueError("--context-max-chars" + message[len("max_chars"):]) from exc
+        if message.startswith("max_items "):
+            raise ValueError("--context-max-items" + message[len("max_items"):]) from exc
+        raise
+
+
+def _search_answer_prompt_policy(args: argparse.Namespace) -> E5AnswerPromptPolicy:
+    defaults = E5AnswerPromptPolicy()
+    try:
+        return E5AnswerPromptPolicy(
+            system_instruction=args.prompt_system_instruction or defaults.system_instruction,
+            answer_instruction=args.prompt_answer_instruction or defaults.answer_instruction,
+            empty_context_notice=defaults.empty_context_notice,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        if message.startswith("system_instruction "):
+            raise ValueError("--prompt-system-instruction" + message[len("system_instruction"):]) from exc
+        if message.startswith("answer_instruction "):
+            raise ValueError("--prompt-answer-instruction" + message[len("answer_instruction"):]) from exc
+        raise
+
+
+def _optional_output_file(value: str | None, option_name: str) -> Path | None:
+    if value is None:
+        return None
+    path = Path(value)
+    if not path.name:
+        raise ValueError(f"{option_name} must target a filename")
+    return path
 
 
 def _add_common_model_args(parser: argparse.ArgumentParser) -> None:
