@@ -300,6 +300,8 @@ async def run_search_async(
     json_output = output.to_json_dict()
     try:
         write_json_report_atomic(command.report, json_output)
+        context_bundle = E5ContextBundle.from_search_report(output.report)
+        write_json_report_atomic(command.context, context_bundle.to_json_dict())
     except OSError as exc:
         stderr.write(f"missipy-search-e5-corpus failed to write report: {exc}\n")
         return 1
