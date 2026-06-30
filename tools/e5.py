@@ -9,8 +9,8 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from inference.e5_corpus_cli import search_main
+from inference.e5_tool_cli import e5_tool_main
 
 
 if __name__ == "__main__":
-    raise SystemExit(search_main())
+    raise SystemExit(e5_tool_main())

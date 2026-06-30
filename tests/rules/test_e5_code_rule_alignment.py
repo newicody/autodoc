@@ -59,3 +59,23 @@ def test_e5_contract_module_contains_command_and_policy_dataclasses() -> None:
         "class E5SearchValidationPolicy",
     ):
         assert name in text
+
+
+def test_e5_unified_cli_surface_exists_without_replacing_compatibility_wrappers() -> None:
+    tool = _read("tools/e5.py")
+    dispatch = _read("src/inference/e5_tool_cli.py")
+
+    assert "e5_tool_main" in tool
+    assert "class E5ToolCommand" in dispatch
+    assert "class E5ToolDispatchPolicy" in dispatch
+    assert "default_e5_tool_dispatch_policy" in dispatch
+
+    for wrapper in (
+        "tools/embed_e5.py",
+        "tools/rank_e5.py",
+        "tools/build_e5_corpus.py",
+        "tools/search_e5_corpus.py",
+        "tools/rebuild_e5_corpus.py",
+        "tools/inspect_e5_corpus.py",
+    ):
+        assert (ROOT / wrapper).exists()

@@ -6,7 +6,7 @@ L'objectif n'est pas de construire une application Python monolithique, mais un 
 
 ## État courant
 
-État de référence : **Phase 4.12-r2 réalignement code_rule E5 4.2 → 4.11**.
+État de référence : **Phase 4.13 unified E5 command surface**.
 
 Le prototype possède actuellement :
 
@@ -46,7 +46,8 @@ Le prototype possède actuellement :
 - un gate diagnostic optionnel dans `rebuild_e5_corpus.py` pour bloquer la promotion d'un candidat douteux ;
 - un jeu de validation recherche E5 multi-requêtes avant promotion du corpus candidat ;
 - un rapport JSON optionnel de rebuild E5 pour archiver diagnostic, validation et promotion;
-- un rapport JSON optionnel de recherche E5 pour conserver requête, seuils, hits et contexte source.
+- un rapport JSON optionnel de recherche E5 pour conserver requête, seuils, hits et contexte source ;
+- une façade CLI E5 unifiée `tools/e5.py` avec sous-commandes `embed`, `rank`, `build`, `search`, `rebuild` et `inspect`.
 
 OpenVINO est branché comme runtime générique à entrées brutes. Le choix du ou des modèles est décrit par profils déclaratifs : `embedding`, `generation` ou `raw`.
 
@@ -938,3 +939,45 @@ Chaque phase future doit documenter explicitement la revue `code_rule` :
 code_rule_review: done
 code_rule_update_required: true|false
 ```
+
+## Phase 4.13 — Surface de commande E5 unifiée
+
+La Phase 4.13 réduit la dispersion de l'outillage E5 sans supprimer les scripts historiques.
+
+Les scripts existants restent des wrappers de compatibilité :
+
+```text
+tools/embed_e5.py
+tools/rank_e5.py
+tools/build_e5_corpus.py
+tools/search_e5_corpus.py
+tools/rebuild_e5_corpus.py
+tools/inspect_e5_corpus.py
+```
+
+La nouvelle direction est une façade unique :
+
+```bash
+PYTHONPATH=src ./tools/e5.py embed "query: exemple"
+PYTHONPATH=src ./tools/e5.py search --index /tmp/autodoc_e5_corpus.json "OpenVINO local"
+PYTHONPATH=src ./tools/e5.py rebuild --index /tmp/autodoc_e5_corpus.json --source-dir .
+PYTHONPATH=src ./tools/e5.py inspect --index /tmp/autodoc_e5_corpus.json
+```
+
+Le nouveau module `src/inference/e5_tool_cli.py` reste volontairement fin :
+
+```text
+argv
+-> E5ToolCommand
+-> E5ToolDispatchPolicy
+-> handler de sous-commande existant
+```
+
+Cette phase ne change pas le format `missipy.e5.corpus.v1`, n'ajoute pas Qdrant, ne modifie pas le Scheduler et ne charge aucun backend implicitement. Elle applique l'addendum Phase 4.12-r2 : les CLI sont des adaptateurs temporaires et leur cœur reste une intention typée avec politique explicite.
+
+```text
+code_rule_review: done
+code_rule_update_required: false
+code_rule_reason: la réduction de surface CLI était déjà prévue par l'addendum Phase 4.12-r2 ; aucune nouvelle règle n'est nécessaire.
+```
+

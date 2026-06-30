@@ -1,36 +1,45 @@
-# Manifest — Phase 4.12-r2 E5 total code_rule-preserving realignment
+# Manifest — Phase 4.13 unified E5 command surface
 
 ## Fichiers modifiés
 
 - `README.md`
 - `MANIFEST_CHANGED_FILES.md`
-- `PHASE4_12_TEST_REPORT.md`
-- `PHASE4_12_CODE_STYLE_AUDIT.md`
-- `doc/code_rule.md`
-- `doc/CHANGELOG_PHASE4_12_E5_CODE_STYLE_REALIGNMENT.md`
-- `doc/docs/architecture/inference/65_e5_search_report_file.dot`
+- `PHASE4_13_TEST_REPORT.md`
+- `doc/CHANGELOG_PHASE4_13_E5_UNIFIED_COMMAND_SURFACE.md`
 - `doc/docs/architecture/inference/66_e5_code_style_alignment.dot`
-- `src/inference/e5_cli_contracts.py`
-- `src/inference/report_io.py`
-- `src/inference/e5_corpus_cli.py`
-- `src/inference/e5_rebuild_cli.py`
-- `src/inference/e5_corpus_inspect_cli.py`
-- `tests/inference/test_e5_cli_contracts.py`
-- `tests/inference/test_report_io.py`
+- `doc/docs/architecture/inference/67_e5_unified_command_surface.dot`
+- `src/inference/e5_tool_cli.py`
+- `tests/inference/test_e5_tool_cli.py`
 - `tests/rules/test_e5_code_rule_alignment.py`
+- `tools/e5.py`
+- `tools/embed_e5.py`
+- `tools/rank_e5.py`
+- `tools/build_e5_corpus.py`
+- `tools/search_e5_corpus.py`
+- `tools/rebuild_e5_corpus.py`
+- `tools/inspect_e5_corpus.py`
 
-## Nature de la correction r2
+## Nature de la phase
 
-- Conservation de l'ancien `doc/code_rule.md` comme socle.
-- Ajout d'un addendum court d'application aux phases E5.
-- Suppression de la formulation trop permissive `Outillage CLI hors kernel`.
-- Maintien du réalignement technique : commandes, politiques, résultats, IO isolée.
+- Ajout d'une façade unique `tools/e5.py` pour les sous-commandes E5.
+- Conservation et normalisation des scripts existants comme wrappers de compatibilité.
+- Dispatch typé via `E5ToolCommand`.
+- Routage explicite via `E5ToolDispatchPolicy`.
+- Aucun changement du format corpus.
+- Aucune modification Scheduler.
+- Aucun Qdrant.
+
+## code_rule
+
+```text
+code_rule_review: done
+code_rule_update_required: false
+code_rule_reason: l'addendum Phase 4.12-r2 couvre déjà la réduction de surface CLI ; 4.13 applique cette règle sans en créer une nouvelle.
+```
 
 ## Exclusions maintenues
 
 - Aucun `.svg` livré.
 - Aucun `__pycache__` livré.
 - Aucun script de patch.
-- Aucun Qdrant.
-- Aucune modification Scheduler.
-- Aucun changement de schéma corpus.
+- Aucun fichier généré.
