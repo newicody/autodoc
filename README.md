@@ -1408,3 +1408,103 @@ code_rule_review: done
 code_rule_update_required: false
 code_rule_reason: 5.1 ajoute un pont pur et typé vers InferenceContext ; aucune règle de programmation nouvelle n'est nécessaire.
 ```
+
+## Phase 5.2 — E5 artifact directory loader
+
+La Phase 5.2 ajoute la première bordure IO locale autour des artefacts Phase 4.
+
+Elle lit un dossier produit par :
+
+```bash
+PYTHONPATH=src ./tools/e5.py search \
+  --index /tmp/autodoc_e5_corpus.json \
+  --artifact-dir /tmp/autodoc_e5_dry_run \
+  "OpenVINO local"
+```
+
+et charge :
+
+```text
+report.json
+context.json
+consumed_context.json
+prompt.json
+```
+
+dans un `E5RuntimeArtifactBundle`, puis peut réutiliser `E5RuntimeBridge` pour produire un `InferenceContext` local.
+
+Chaîne Phase 5.2 :
+
+```text
+artifact-dir local
+-> E5RuntimeArtifactDirectoryLoader
+-> E5RuntimeArtifactBundle
+-> E5RuntimeBridge
+-> InferenceContext
+```
+
+Frontières maintenues : pas de daemon, pas de Scheduler vivant, pas de Qdrant, pas de LLM, pas d'API GitHub, pas de token et pas de polling réseau.
+
+Aucune bibliothèque hors stdlib Python n'est ajoutée.
+
+code_rule_review: done
+code_rule_update_required: false
+code_rule_reason: 5.2 ajoute une bordure IO locale explicite autour du pont pur 5.1 ; aucune règle de programmation nouvelle n'est nécessaire.
+
+## Phase 5.3 — E5 artifact context CLI
+
+La Phase 5.3 ajoute une bordure CLI locale pour vérifier un `artifact-dir` Phase 4 et afficher l'`InferenceContext` construit par la Phase 5 :
+
+```bash
+PYTHONPATH=src python -m context.e5_artifact_cli /tmp/autodoc_e5_dry_run
+PYTHONPATH=src python -m context.e5_artifact_cli --format json /tmp/autodoc_e5_dry_run
+```
+
+Chaîne :
+
+```text
+artifact-dir Phase 4
+-> E5RuntimeArtifactDirectoryLoader
+-> E5RuntimeBridge
+-> InferenceContext
+-> stdout text/json
+```
+
+Frontières : pas de daemon, pas de Scheduler vivant, pas de Qdrant, pas de LLM, pas d'appel OpenVINO, pas d'API GitHub, pas de token et pas de polling réseau.
+
+Aucune bibliothèque hors stdlib Python n'est ajoutée.
+
+```text
+code_rule_review: done
+code_rule_update_required: false
+code_rule_reason: 5.3 ajoute une bordure CLI locale typée autour des contrats 5.1/5.2 ; aucune règle de programmation nouvelle n'est nécessaire.
+```
+
+
+## Phase 5.3-r1 — E5 artifact CLI import hygiene
+
+La Phase 5.3-r1 corrige l'hygiène d'import de la bordure CLI `context.e5_artifact_cli`.
+
+`src/context/__init__.py` ne réexporte plus les symboles CLI afin que :
+
+```bash
+PYTHONPATH=src python -m context.e5_artifact_cli --help
+```
+
+ne charge pas le module CLI deux fois via le package `context`.
+
+La CLI reste disponible explicitement par son module :
+
+```bash
+PYTHONPATH=src python -m context.e5_artifact_cli /tmp/autodoc_e5_dry_run
+```
+
+Les symboles runtime/loader/bridge restent exportés par `context`.
+
+Aucune bibliothèque hors stdlib Python n'est ajoutée.
+
+```text
+code_rule_review: done
+code_rule_update_required: false
+code_rule_reason: 5.3-r1 corrige une fuite de bordure CLI dans le package context ; aucune règle de programmation nouvelle n'est nécessaire.
+```
