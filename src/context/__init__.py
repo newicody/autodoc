@@ -8,6 +8,14 @@ from .e5_artifact_loader import (
     build_e5_runtime_bridge_from_directory,
     load_e5_runtime_artifacts_from_directory,
 )
+from .e5_local_context_runtime import (
+    E5LocalContextRuntime,
+    E5LocalContextRuntimePolicy,
+    E5LocalContextRuntimeRequest,
+    E5LocalContextRuntimeResult,
+    build_e5_local_context_from_artifact_dir,
+    build_e5_local_inference_context_from_artifact_dir,
+)
 from .e5_runtime_bridge import (
     E5RuntimeArtifactBundle,
     E5RuntimeBridge,
@@ -34,6 +42,12 @@ __all__ = [
     "E5RuntimeBridge",
     "E5RuntimeBridgePolicy",
     "E5RuntimeBridgeResult",
+    "E5LocalContextRuntime",
+    "E5LocalContextRuntimePolicy",
+    "E5LocalContextRuntimeRequest",
+    "E5LocalContextRuntimeResult",
+    "build_e5_local_context_from_artifact_dir",
+    "build_e5_local_inference_context_from_artifact_dir",
     "InferenceContextBuilder",
     "build_e5_runtime_inference_context",
 ]

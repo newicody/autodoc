@@ -1,10 +1,16 @@
-# Phase 5.3-r1 — Changed files
+# Manifest — Phase 5.4-r1
 
-```text
-README.md
-MANIFEST_CHANGED_FILES.md
-PHASE5_3_R1_TEST_REPORT.md
-doc/CHANGELOG_PHASE5_3_R1_E5_ARTIFACT_CLI_IMPORT_HYGIENE.md
-src/context/__init__.py
-tests/context/test_e5_artifact_cli.py
-```
+## Fichiers modifiés
+
+- `tests/context/test_e5_local_context_runtime.py`
+
+## Fichiers ajoutés
+
+- `doc/CHANGELOG_PHASE5_4_R1_E5_LOCAL_CONTEXT_RUNTIME_TEST_FIX.md`
+- `PHASE5_4_R1_TEST_REPORT.md`
+- `MANIFEST_CHANGED_FILES.md`
+- `README.md`
+
+## Dépendances
+
+Aucune bibliothèque hors stdlib Python n'est ajoutée.
