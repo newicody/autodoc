@@ -1,17 +1,30 @@
-# Manifest — Phase 4.15 E5 context consumer contract
+# Manifest — Phase 4.16 E5 answer prompt packet
 
-Fichiers modifiés ou ajoutés uniquement :
+## Fichiers modifiés
 
 - `README.md`
 - `MANIFEST_CHANGED_FILES.md`
-- `PHASE4_15_TEST_REPORT.md`
-- `doc/CHANGELOG_PHASE4_15_E5_CONTEXT_CONSUMER.md`
-- `doc/docs/architecture/inference/68_e5_context_bundle.dot`
+- `PHASE4_16_TEST_REPORT.md`
+- `doc/CHANGELOG_PHASE4_16_E5_ANSWER_PROMPT_PACKET.md`
 - `doc/docs/architecture/inference/69_e5_context_consumer.dot`
-- `src/inference/e5_context_consumer.py`
-- `tests/inference/test_e5_context_consumer.py`
+- `doc/docs/architecture/inference/70_e5_answer_prompt_packet.dot`
+- `src/inference/e5_answer_prompt.py`
+- `tests/inference/test_e5_answer_prompt.py`
 
-Aucun SVG n'est inclus.
-Aucun `__pycache__` n'est inclus.
-Aucun script de patch n'est inclus.
-Aucune bibliothèque hors stdlib Python n'est ajoutée.
+## Contraintes respectées
+
+- Fichiers complets uniquement.
+- Pas de script de patch.
+- Pas de SVG versionné.
+- Pas de Qdrant.
+- Pas de Scheduler.
+- Pas de LLM appelé.
+- Aucune bibliothèque hors stdlib Python ajoutée.
+
+## code_rule
+
+```text
+code_rule_review: done
+code_rule_update_required: false
+code_rule_reason: le paquet de prompt applique les règles Phase 4.12-r2 existantes ; aucune nouvelle guideline n'est nécessaire.
+```

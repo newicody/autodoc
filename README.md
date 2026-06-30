@@ -1054,3 +1054,31 @@ code_rule_review: done
 code_rule_update_required: false
 code_rule_reason: le contrat de consommation applique les règles Phase 4.12-r2 existantes ; aucune nouvelle guideline n'est nécessaire.
 ```
+
+## Phase 4.16 — E5 answer prompt packet
+
+La Phase 4.16 ajoute un contrat de paquet de prompt E5 sans brancher de LLM, de Scheduler ni de Qdrant.
+
+Le flux local devient :
+
+```text
+E5ContextBundle
+-> E5ConsumedContext
+-> E5AnswerPromptPacket
+```
+
+Le module `src/inference/e5_answer_prompt.py` introduit :
+
+- `E5AnswerPromptPolicy` : instructions explicites de construction du prompt ;
+- `E5AnswerPromptPacket` : résultat immuable, texte/JSON stable ;
+- `build_e5_answer_prompt()` : fonction pure transformant un contexte consommé en paquet de prompt.
+
+Cette phase ne génère pas de réponse. Elle prépare seulement un contrat déterministe pour une future couche d'inférence.
+
+Aucune bibliothèque hors stdlib Python n'est ajoutée.
+
+```text
+code_rule_review: done
+code_rule_update_required: false
+code_rule_reason: le paquet de prompt applique les règles Phase 4.12-r2 existantes ; aucune nouvelle guideline n'est nécessaire.
+```
