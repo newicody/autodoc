@@ -1168,3 +1168,203 @@ code_rule_review: done
 code_rule_update_required: false
 code_rule_reason: 4.18 applique les règles Phase 4.12-r2 et la règle stdlib introduite en 4.14 ; aucune nouvelle guideline n'est nécessaire.
 ```
+
+
+## Phase 4.18-r1 — Source Candidate / GitHub Project Orchestrator Architecture
+
+La Phase 4.18-r1 inscrit dans l’architecture une brique future : GitHub Projects, issues, actions et artefacts pourront servir de surface de pilotage pour le serveur local autodoc/MissiPy.
+
+L’idée importante est qu’un push, un ticket, une issue ou un artefact peut devenir une **source candidate**. Cette source candidate peut ensuite être rejetée, archivée, enrichie, promue en contexte autonome ou fusionnée dans un contexte existant.
+
+Le flux conceptuel devient :
+
+```text
+push / issue / ticket / artefact
+-> graine de source
+-> enrichissement serveur
+-> validation utilisateur
+-> devient contexte autonome
+   ou fusionne dans un contexte existant
+-> retour GitHub
+-> nouvelle itération
+```
+
+GitHub n’est pas la base de connaissance autoritative. GitHub sert d’interface de pilotage, de validation, de synchronisation et de miroir publiable. La source enrichie reste sur la machine serveur.
+
+La roadmap future est clarifiée :
+
+```text
+Phase 4 = moteur local E5 et contexte
+Phase 5 = serveur local / Scheduler / contexte runtime
+Phase 6 = GitHub Project Orchestrator
+Phase 7 = boucle aller-retour GitHub <-> serveur <-> git
+```
+
+Cette phase ne branche pas l’API GitHub, ne crée pas de token, n’ajoute pas de polling réseau et ne dépend pas de Copilot. Elle ajoute uniquement la place architecturale de cette couche.
+
+Aucune bibliothèque hors stdlib Python n'est ajoutée.
+
+```text
+code_rule_review: done
+code_rule_update_required: false
+code_rule_reason: 4.18-r1 ajoute uniquement une architecture future documentée ; aucune règle de code nouvelle n'est nécessaire.
+```
+
+## Phase 4.18-r2 — Source Candidate dans l'architecture globale
+
+La Phase 4.18-r2 corrige l'intégration documentaire de 4.18-r1 : la couche GitHub Project Orchestrator / SourceCandidate n'est plus seulement présente dans les graphes `integrations/`, elle devient visible depuis le graphe général `doc/docs/architecture/00_global.dot`.
+
+Le graphe global ajoute un layer futur :
+
+```text
+Layer 11 — Remote Work Intake future
+```
+
+Ce layer expose :
+
+```text
+GitHubProject
+GitHubAction
+CopilotMetadata
+SourceCandidate
+LocalAuthority
+GitHubFeedback
+```
+
+Le flux conceptuel affiché dans la carte générale devient :
+
+```text
+GitHub Project / Issue / Push / Ticket
+-> GitHub Action
+-> metadata Copilot optionnelles
+-> SourceCandidate
+-> source autoritative serveur local
+-> ContextEngine / Knowledge future
+-> projection GitHub
+-> boucle de statut / validation
+```
+
+Cette intégration reste volontairement documentaire. Elle n'ajoute ni API GitHub, ni token, ni polling réseau, ni dépendance Copilot, ni branchement Scheduler.
+
+Aucune bibliothèque hors stdlib Python n'est ajoutée.
+
+```text
+code_rule_review: done
+code_rule_update_required: false
+code_rule_reason: 4.18-r2 intègre une couche future dans le graphe global sans ajouter de code runtime ni de dépendance externe.
+```
+
+## Phase 4.19 — Audit final Phase 4
+
+La Phase 4.19 clôt l'audit du moteur local E5 avant la phase de fermeture 4.20.
+
+Le moteur local E5 est maintenant représenté comme un stack complet dans l'architecture globale :
+
+```text
+E5 local context stack — Phase 4 final
+```
+
+Il couvre :
+
+```text
+corpus local
+-> build / rebuild sûr
+-> diagnostics / gates / validation
+-> search
+-> E5SearchReport
+-> E5ContextBundle
+-> E5ConsumedContext
+-> E5AnswerPromptPacket
+-> dry-run artifact directory
+```
+
+La Phase 4.19 ajoute aussi un rapport documentaire :
+
+```text
+doc/PHASE4_FINAL_AUDIT.md
+```
+
+Ce rapport fixe les frontières importantes :
+
+```text
+pas de Scheduler
+pas de Qdrant
+pas de LLM de réponse
+pas d'API GitHub
+IO uniquement en bordure CLI / report_io.py
+aucune dépendance hors stdlib
+```
+
+La carte globale `doc/docs/architecture/00_global.dot` relie maintenant la future couche `SourceCandidate` au stack E5 local afin de montrer le futur flux :
+
+```text
+GitHub Project / Issue / Push / Ticket
+-> SourceCandidate
+-> source autoritative serveur local
+-> E5 local context stack
+-> ContextEngine / Knowledge future
+-> retour GitHub
+```
+
+La Phase 4.20 pourra maintenant être courte : rapport de capacité final, commandes utiles, artefacts produits, puis préparation Phase 5.
+
+Aucune bibliothèque hors stdlib Python n'est ajoutée.
+
+```text
+code_rule_review: done
+code_rule_update_required: false
+code_rule_reason: 4.19 audite les frontières existantes et ne modifie pas les règles de programmation.
+```
+
+## Phase 4.20 — Clôture Phase 4
+
+La Phase 4.20 ferme officiellement l'étape 4.
+
+Elle ne développe pas de nouveau runtime : elle fige le bilan, les commandes utiles, les artefacts produits et les portes d'entrée Phase 5.
+
+Le résultat Phase 4 est maintenant clair :
+
+```text
+corpus local
+-> build / rebuild sûr
+-> diagnostics / gates / validation
+-> search local
+-> report.json
+-> context.json
+-> consumed_context.json
+-> prompt.json
+```
+
+La commande de dry-run locale reste le point d'entrée pratique :
+
+```bash
+PYTHONPATH=src ./tools/e5.py search \
+  --index /tmp/autodoc_e5_corpus.json \
+  --limit 5 \
+  --artifact-dir /tmp/autodoc_e5_dry_run \
+  --context-max-chars 4000 \
+  "OpenVINO local"
+```
+
+La clôture confirme aussi les limites volontaires :
+
+```text
+pas de Scheduler
+pas de Qdrant
+pas de LLM de réponse
+pas d'API GitHub
+pas de token
+pas de polling réseau
+```
+
+La couche GitHub Project / SourceCandidate est intégrée à l'architecture générale comme direction future, mais elle reste documentaire à ce stade. Elle sera reprise plus tard comme orchestration de travail distant, avec source autoritative côté serveur local et projection contrôlée vers GitHub.
+
+La Phase 5 peut maintenant démarrer sur une base stable : serveur local, Context Engine/runtime, ou handoff contrôlé des artefacts E5.
+
+Aucune bibliothèque hors stdlib Python n'est ajoutée.
+
+```text
+code_rule_review: done
+code_rule_update_required: false
+code_rule_reason: 4.20 clôture la Phase 4 par documentation et bilan ; aucune règle de programmation nouvelle n'est nécessaire.
+```
