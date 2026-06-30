@@ -1368,3 +1368,43 @@ code_rule_review: done
 code_rule_update_required: false
 code_rule_reason: 4.20 clôture la Phase 4 par documentation et bilan ; aucune règle de programmation nouvelle n'est nécessaire.
 ```
+
+## Phase 5.1 — E5 runtime bridge
+
+La Phase 5.1 ouvre l'intégration locale contrôlée après la clôture Phase 4.
+
+Elle ajoute un pont pur entre les artefacts E5 déjà chargés et le `InferenceContext` :
+
+```text
+report.json / context.json / consumed_context.json / prompt.json
+-> E5RuntimeArtifactBundle
+-> E5RuntimeBridge
+-> InferenceContext
+```
+
+Le pont ne lit pas les fichiers et ne lance aucun runtime externe. Il extrait une projection stable :
+
+```text
+features["e5_local_context"]
+priorities["e5_local_context"]
+```
+
+Commande de test ciblée :
+
+```bash
+PYTHONPATH=src pytest -q tests/context/test_e5_runtime_bridge.py
+```
+
+Documentation :
+
+- `doc/PHASE5_ENTRY.md`
+- `doc/CHANGELOG_PHASE5_1_E5_RUNTIME_BRIDGE.md`
+- `doc/docs/architecture/context/25_e5_runtime_bridge.dot`
+
+Aucune bibliothèque hors stdlib Python n'est ajoutée.
+
+```text
+code_rule_review: done
+code_rule_update_required: false
+code_rule_reason: 5.1 ajoute un pont pur et typé vers InferenceContext ; aucune règle de programmation nouvelle n'est nécessaire.
+```

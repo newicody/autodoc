@@ -1,26 +1,27 @@
-# Manifest — Phase 4.20 — Phase 4 closure
+# Manifest — Phase 5.1 — E5 runtime bridge
 
-Changed files included as complete files:
+Archive : `autodoc_phase5_1_e5_runtime_bridge.tar.gz`
+
+## Fichiers modifiés ou ajoutés
 
 ```text
 README.md
 MANIFEST_CHANGED_FILES.md
-PHASE4_20_TEST_REPORT.md
-doc/PHASE4_CLOSURE.md
-doc/CHANGELOG_PHASE4_20_CLOSURE.md
+PHASE5_1_TEST_REPORT.md
+doc/PHASE5_ENTRY.md
+doc/CHANGELOG_PHASE5_1_E5_RUNTIME_BRIDGE.md
 doc/docs/architecture/00_global.dot
-doc/docs/architecture/inference/73_e5_phase4_final_audit.dot
 doc/docs/architecture/inference/74_e5_phase4_closure.dot
+doc/docs/architecture/context/25_e5_runtime_bridge.dot
+src/context/__init__.py
+src/context/e5_runtime_bridge.py
+tests/context/test_e5_runtime_bridge.py
 ```
 
-Not included:
+## Notes
 
-```text
-SVG generated files
-__pycache__
-patch scripts
-runtime GitHub integration
-Qdrant integration
-Scheduler changes
-LLM backend
-```
+- Fichiers complets à écraser.
+- Aucun script patch.
+- Aucun SVG généré.
+- Aucun `__pycache__`.
+- Aucune bibliothèque hors stdlib Python ajoutée.
