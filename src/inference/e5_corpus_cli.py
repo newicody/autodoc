@@ -307,14 +307,19 @@ async def run_search_async(
         ),
     )
     json_output = output.to_json_dict()
-    context_bundle = E5ContextBundle.from_search_report(output.report)
-    consumed_context = consume_e5_context_bundle(context_bundle, command.context_consumption)
-    prompt_packet = build_e5_answer_prompt(consumed_context, command.answer_prompt)
 
     try:
         write_json_report_atomic(command.report, json_output)
+    except OSError as exc:
+        stderr.write(f"missipy-search-e5-corpus failed to write report: {exc}\n")
+        return 1
+
+    try:
+        context_bundle = E5ContextBundle.from_search_report(output.report)
         write_json_report_atomic(command.context, context_bundle.to_json_dict())
+        consumed_context = consume_e5_context_bundle(context_bundle, command.context_consumption)
         write_json_report_atomic(command.consumed_context, consumed_context.to_json_dict())
+        prompt_packet = build_e5_answer_prompt(consumed_context, command.answer_prompt)
         write_json_report_atomic(command.prompt, prompt_packet.to_json_dict())
     except OSError as exc:
         stderr.write(f"missipy-search-e5-corpus failed to write search artifacts: {exc}\n")
