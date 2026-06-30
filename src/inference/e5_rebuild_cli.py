@@ -10,7 +10,7 @@ from io import TextIOBase
 from pathlib import Path
 from typing import Protocol
 
-from .e5_corpus import E5CorpusBuilder, E5CorpusIndex, E5CorpusJsonStore, E5CorpusSearcher
+from .e5_corpus import E5CorpusBuilder, E5CorpusIndex, E5CorpusJsonStore
 from .e5_corpus_lock import E5CorpusBuildLock
 from .e5_incremental import E5IncrementalBuildStats, E5IncrementalCorpusBuilder
 from .e5_corpus_inspect import (
@@ -25,6 +25,7 @@ from .e5_pipeline import (
     build_multilingual_e5_small_pipeline,
 )
 from .e5_profile import MULTILINGUAL_E5_SMALL_ENV, MultilingualE5SmallLocalConfig
+from .e5_search_validation import E5SearchValidationQueryResult, validate_e5_search_queries
 from .e5_sources import (
     DEFAULT_E5_EXCLUDED_DIR_NAMES,
     DEFAULT_E5_EXCLUDED_FILE_SUFFIXES,
@@ -37,6 +38,10 @@ class E5CorpusRebuildDiagnosticGateError(ValueError):
     """Erreur contrôlée quand un candidat échoue au diagnostic gate."""
 
 
+class E5CorpusRebuildSearchValidationError(ValueError):
+    """Erreur contrôlée quand le jeu de validation recherche échoue."""
+
+
 class E5RebuildPipelineBuilder(Protocol):
     """Factory injectable du bundle E5 local pour rebuild sûr."""
 
@@ -46,32 +51,99 @@ class E5RebuildPipelineBuilder(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class E5CorpusRebuildValidation:
-    """Résultat stable de validation d'un corpus candidat avant promotion."""
+    """Résultat stable de validation recherche avant promotion."""
 
     query: str | None = None
     hit_count: int | None = None
     best_score: float | None = None
+    query_results: tuple[E5SearchValidationQueryResult, ...] = ()
+    min_score: float | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "query_results", tuple(self.query_results))
 
     @property
     def search_enabled(self) -> bool:
-        return self.query is not None
+        return self.query is not None or bool(self.query_results)
+
+    @property
+    def query_count(self) -> int:
+        if self.query_results:
+            return len(self.query_results)
+        return 1 if self.query is not None else 0
+
+    @property
+    def passed(self) -> bool:
+        return all(item.passed for item in self.query_results)
+
+    @property
+    def total_hit_count(self) -> int | None:
+        if self.query_results:
+            return sum(item.hit_count for item in self.query_results)
+        return self.hit_count
+
+    @property
+    def effective_best_score(self) -> float | None:
+        if self.query_results:
+            scores = [item.best_score for item in self.query_results if item.best_score is not None]
+            return max(scores) if scores else None
+        return self.best_score
+
+    @classmethod
+    def from_query_results(
+        cls,
+        query_results: tuple[E5SearchValidationQueryResult, ...],
+        *,
+        min_score: float | None = None,
+    ) -> E5CorpusRebuildValidation:
+        """Construit le résumé rebuild depuis un jeu de requêtes validées."""
+        first = query_results[0] if len(query_results) == 1 else None
+        return cls(
+            query=first.query if first is not None else None,
+            hit_count=sum(item.hit_count for item in query_results),
+            best_score=max(
+                (item.best_score for item in query_results if item.best_score is not None),
+                default=None,
+            ),
+            query_results=query_results,
+            min_score=min_score,
+        )
 
     def to_json_dict(self) -> dict[str, object | None]:
         return {
             "search_enabled": self.search_enabled,
             "query": self.query,
-            "hit_count": self.hit_count,
-            "best_score": self.best_score,
+            "hit_count": self.total_hit_count,
+            "best_score": self.effective_best_score,
+            "query_count": self.query_count,
+            "min_score": self.min_score,
+            "passed": self.passed,
+            "queries": [item.to_json_dict() for item in self.query_results],
         }
 
     def to_text_lines(self) -> tuple[str, ...]:
         if not self.search_enabled:
             return ("validation_search: False",)
-        lines = ["validation_search: True", f"validation_query: {self.query}"]
-        if self.hit_count is not None:
-            lines.append(f"validation_hit_count: {self.hit_count}")
-        if self.best_score is not None:
-            lines.append(f"validation_best_score: {self.best_score:.8f}")
+        lines = ["validation_search: True", f"validation_query_count: {self.query_count}"]
+        if self.query is not None:
+            lines.append(f"validation_query: {self.query}")
+        if self.min_score is not None:
+            lines.append(f"validation_min_score: {self.min_score:.8f}")
+        total_hit_count = self.total_hit_count
+        if total_hit_count is not None:
+            lines.append(f"validation_hit_count: {total_hit_count}")
+        best_score = self.effective_best_score
+        if best_score is not None:
+            lines.append(f"validation_best_score: {best_score:.8f}")
+        lines.append(f"validation_passed: {str(self.passed)}")
+        if len(self.query_results) > 1:
+            lines.append("validation_queries:")
+            for result in self.query_results:
+                lines.append(f"  - query: {result.query}")
+                lines.append(f"    hit_count: {result.hit_count}")
+                lines.append(f"    passed: {str(result.passed)}")
+                if result.best_score is not None:
+                    lines.append(f"    best_score: {result.best_score:.8f}")
         return tuple(lines)
 
 
@@ -192,7 +264,24 @@ def build_rebuild_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--chunk-chars", type=int, default=1200, help="Taille cible maximale des chunks source en caractères.")
     parser.add_argument("--overlap-paragraphs", type=int, default=0, help="Nombre de paragraphes repris entre deux chunks.")
-    parser.add_argument("--validation-query", default=None, help="Requête rapide exécutée sur le corpus candidat avant promotion.")
+    parser.add_argument(
+        "--validation-query",
+        action="append",
+        default=[],
+        help="Requête rapide exécutée sur le corpus candidat avant promotion. Peut être répétée.",
+    )
+    parser.add_argument(
+        "--validation-queries-file",
+        action="append",
+        default=[],
+        help="Fichier texte contenant une requête de validation par ligne. Peut être répété.",
+    )
+    parser.add_argument(
+        "--validation-min-score",
+        type=float,
+        default=None,
+        help="Score minimal inclusif requis pour chaque requête de validation.",
+    )
     parser.add_argument("--validation-limit", type=int, default=1, help="Nombre de hits demandés pendant la validation recherche.")
     parser.add_argument("--min-chunks", type=int, default=None, help="Nombre minimal de chunks requis avant promotion.")
     parser.add_argument(
@@ -268,6 +357,11 @@ async def run_rebuild_async(
             _cleanup_staging(staging)
         stderr.write(f"candidate diagnostic gate failed: {exc}\n")
         return 2
+    except E5CorpusRebuildSearchValidationError as exc:
+        if not args.keep_staging:
+            _cleanup_staging(staging)
+        stderr.write(f"candidate search validation failed: {exc}\n")
+        return 2
     except Exception as exc:  # pragma: no cover - dépend des dépendances locales.
         if not args.keep_staging:
             _cleanup_staging(staging)
@@ -294,7 +388,14 @@ async def _rebuild_candidate(
     json_store.write_atomic(index, staging, overwrite=True)
     candidate = json_store.read(staging)
     diagnostic_gate = _evaluate_candidate_diagnostic_gate(candidate, args)
-    validation = await _validate_candidate(bundle, candidate, args.validation_query, args.validation_limit)
+    validation_queries = _collect_validation_queries(args)
+    validation = await _validate_candidate(
+        bundle,
+        candidate,
+        validation_queries,
+        args.validation_limit,
+        args.validation_min_score,
+    )
     promoted = False
     if not args.dry_run:
         staging.replace(target)
@@ -339,20 +440,24 @@ async def _build_index(
 async def _validate_candidate(
     bundle: MultilingualE5SmallPipelineBundle,
     index: E5CorpusIndex,
-    query: str | None,
+    queries: Sequence[str],
     limit: int,
+    min_score: float | None,
 ) -> E5CorpusRebuildValidation:
-    if query is None:
+    if not queries:
         return E5CorpusRebuildValidation()
-    results = await E5CorpusSearcher(bundle.pipeline).search(query, index, limit=limit)
-    if index.size > 0 and not results.hits:
-        raise ValueError("candidate validation search returned no hits")
-    best_score = results.best.score if results.best is not None else None
-    return E5CorpusRebuildValidation(
-        query=results.query.content,
-        hit_count=len(results.hits),
-        best_score=best_score,
+    results = await validate_e5_search_queries(
+        bundle.pipeline,
+        index,
+        queries,
+        limit=limit,
+        min_score=min_score,
     )
+    failed = tuple(item for item in results if not item.passed)
+    if failed:
+        failed_queries = ", ".join(item.query for item in failed)
+        raise E5CorpusRebuildSearchValidationError(f"queries returned no hits: {failed_queries}")
+    return E5CorpusRebuildValidation.from_query_results(results, min_score=min_score)
 
 
 def _evaluate_candidate_diagnostic_gate(
@@ -434,6 +539,8 @@ def _validate_args(args: argparse.Namespace) -> str | None:
         return "--overlap-paragraphs must be zero or positive"
     if args.validation_limit <= 0:
         return "--validation-limit must be positive"
+    if args.validation_min_score is not None and not -1.0 <= args.validation_min_score <= 1.0:
+        return "--validation-min-score must be between -1.0 and 1.0"
     for option_name in (
         "min_chunks",
         "max_missing_source_metadata",
@@ -444,6 +551,14 @@ def _validate_args(args: argparse.Namespace) -> str | None:
         if value is not None and value < 0:
             return f"--{option_name.replace('_', '-')} must not be negative"
     return None
+
+
+def _collect_validation_queries(args: argparse.Namespace) -> tuple[str, ...]:
+    """Collecte les requêtes de validation CLI en ordre stable."""
+    queries: list[str] = [item.strip() for item in args.validation_query if item.strip()]
+    for file_path in args.validation_queries_file:
+        queries.extend(_read_passages_file(Path(file_path)))
+    return tuple(queries)
 
 
 def _collect_passages(args: argparse.Namespace) -> tuple[object, ...]:

@@ -6,7 +6,7 @@ L'objectif n'est pas de construire une application Python monolithique, mais un 
 
 ## État courant
 
-État de référence : **Phase 4.8 diagnostic gate du rebuild E5 sûr**.
+État de référence : **Phase 4.9 jeu de validation recherche E5 avant promotion**.
 
 Le prototype possède actuellement :
 
@@ -43,7 +43,8 @@ Le prototype possède actuellement :
 - des contrôles CLI `--exclude-dir` et `--exclude-file-suffix` pour étendre cette hygiène sans modifier le code ;
 - une commande locale `inspect_e5_corpus.py` pour diagnostiquer un corpus E5 JSON en lecture seule ;
 - un mode gate optionnel pour transformer les diagnostics E5 en garde-fous CI/dev ;
-- un gate diagnostic optionnel dans `rebuild_e5_corpus.py` pour bloquer la promotion d'un candidat douteux.
+- un gate diagnostic optionnel dans `rebuild_e5_corpus.py` pour bloquer la promotion d'un candidat douteux ;
+- un jeu de validation recherche E5 multi-requêtes avant promotion du corpus candidat.
 
 OpenVINO est branché comme runtime générique à entrées brutes. Le choix du ou des modèles est décrit par profils déclaratifs : `embedding`, `generation` ou `raw`.
 
@@ -119,10 +120,12 @@ cd doc && make -f makefile
 - `doc/CHANGELOG_PHASE4_2_E5_LOCAL_SEARCH.md` : procédure de recherche E5 locale dev-ready.
 - `doc/CHANGELOG_PHASE4_3_E5_SCORE_GUARD.md` : garde-fou de score minimal pour recherche E5 locale.
 - `doc/CHANGELOG_PHASE4_6_E5_CORPUS_DIAGNOSTICS.md` : diagnostic local du corpus E5 JSON.
+- `doc/CHANGELOG_PHASE4_9_E5_SEARCH_VALIDATION_SET.md` : validation recherche multi-requêtes avant promotion.
 - `doc/CHANGELOG_PHASE4_4_E5_SOURCE_HYGIENE.md` : hygiène de découverte des sources E5 locales.
 - `doc/docs/architecture/inference/52_e5_search_report.dot` : rapport E5 enrichi avec lien vers le garde-fou de score.
 - `doc/docs/architecture/inference/57_e5_score_guard.dot` : détail Phase 4.3 du filtrage `--min-score`.
 - `doc/docs/architecture/inference/60_e5_corpus_diagnostics.dot` : inspection locale du corpus E5 JSON.
+- `doc/docs/architecture/inference/63_e5_search_validation_set.dot` : validation recherche multi-requêtes du candidat rebuild.
 - `doc/docs/architecture/inference/58_e5_source_hygiene.dot` : détail Phase 4.4 du filtrage des sources parasites avant chunking.
 - `doc/docs/architecture/*.dot` : roadmap DOT navigable ; les SVG sont générés par le makefile.
 
@@ -758,6 +761,57 @@ Cette phase reste volontairement locale :
 - pas de Scheduler ;
 - pas de changement du format `missipy.e5.corpus.v1` ;
 - pas de promotion si le diagnostic gate échoue ;
+- mise à jour des graphes DOT d'inférence uniquement ;
+- pas de SVG versionné.
+
+## Phase 4.9 — Jeu de validation recherche E5
+
+La Phase 4.9 rend la validation recherche du rebuild E5 plus robuste : une seule `--validation-query` ne suffit pas toujours à vérifier qu'un corpus candidat répond aux intentions importantes du projet.
+
+Le rebuild sûr accepte maintenant plusieurs requêtes de validation et un fichier de requêtes :
+
+```bash
+PYTHONPATH=src ./tools/rebuild_e5_corpus.py \
+  --index /tmp/autodoc_e5_corpus.json \
+  --source-dir . \
+  --validation-query "rebuild sûr staging promotion" \
+  --validation-query "Scheduler telemetry code_rule" \
+  --validation-query "OpenVINO multilingual-e5-small local" \
+  --validation-min-score 0.80
+```
+
+Ou depuis un fichier :
+
+```bash
+PYTHONPATH=src ./tools/rebuild_e5_corpus.py \
+  --index /tmp/autodoc_e5_corpus.json \
+  --source-dir . \
+  --validation-queries-file doc/e5_validation_queries.txt \
+  --validation-min-score 0.80
+```
+
+Chaque requête est exécutée sur le corpus candidat relu depuis le staging. Si une requête ne produit aucun hit après application du seuil `--validation-min-score`, le staging n'est pas promu.
+
+La sortie texte indique maintenant :
+
+```text
+validation_search: True
+validation_query_count: 3
+validation_min_score: 0.80000000
+validation_hit_count: 3
+validation_best_score: 0.91230000
+validation_passed: True
+```
+
+La sortie JSON expose aussi le détail de chaque requête dans `validation.queries`.
+
+Cette phase reste volontairement locale :
+
+- pas de Qdrant ;
+- pas de Scheduler ;
+- pas de changement du format `missipy.e5.corpus.v1` ;
+- pas de promotion si une requête de validation échoue ;
+- validation après diagnostic gate et avant promotion finale ;
 - mise à jour des graphes DOT d'inférence uniquement ;
 - pas de SVG versionné.
 
