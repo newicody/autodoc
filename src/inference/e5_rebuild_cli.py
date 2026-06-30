@@ -468,6 +468,11 @@ def rebuild_staging_path(index_path: str | Path) -> Path:
 
 
 def _rebuild_command(args: argparse.Namespace) -> E5RebuildCommand:
+    diagnostic_gate = _rebuild_diagnostic_gate_policy(args)
+    report_file = Path(args.report_file) if args.report_file is not None else None
+    if report_file is not None and not report_file.name:
+        raise ValueError("--report-file must target a filename")
+
     return E5RebuildCommand(
         model=E5CliModelPolicy(
             cli_name="missipy-rebuild-e5-corpus",
@@ -493,21 +498,41 @@ def _rebuild_command(args: argparse.Namespace) -> E5RebuildCommand:
         keep_staging=args.keep_staging,
         lock_enabled=not args.no_lock,
         output_format=args.format,
-        diagnostic_gate=E5DiagnosticGatePolicy(
-            min_chunks=args.min_chunks,
-            max_missing_source_metadata=args.max_missing_source_metadata,
-            max_empty_texts=args.max_empty_texts,
-            max_dimension_mismatches=args.max_dimension_mismatches,
-            fail_on_warning=args.fail_on_warning,
-        ),
+        diagnostic_gate=diagnostic_gate,
         validation=E5SearchValidationPolicy(
             queries=tuple(args.validation_query),
             query_files=tuple(Path(item) for item in args.validation_queries_file),
             limit=args.validation_limit,
             min_score=args.validation_min_score,
         ),
-        report=JsonReportWritePolicy(path=Path(args.report_file) if args.report_file is not None else None),
+        report=JsonReportWritePolicy(path=report_file),
     )
+
+
+def _rebuild_diagnostic_gate_policy(args: argparse.Namespace) -> E5DiagnosticGatePolicy:
+    try:
+        return E5DiagnosticGatePolicy(
+            min_chunks=args.min_chunks,
+            max_missing_source_metadata=args.max_missing_source_metadata,
+            max_empty_texts=args.max_empty_texts,
+            max_dimension_mismatches=args.max_dimension_mismatches,
+            fail_on_warning=args.fail_on_warning,
+        )
+    except ValueError as exc:
+        raise ValueError(_rebuild_cli_error_message(str(exc))) from exc
+
+
+def _rebuild_cli_error_message(message: str) -> str:
+    field_to_option = {
+        "min_chunks": "--min-chunks",
+        "max_missing_source_metadata": "--max-missing-source-metadata",
+        "max_empty_texts": "--max-empty-texts",
+        "max_dimension_mismatches": "--max-dimension-mismatches",
+    }
+    for field, option in field_to_option.items():
+        if message.startswith(f"{field} "):
+            return option + message[len(field):]
+    return message
 
 
 def _add_common_model_args(parser: argparse.ArgumentParser) -> None:

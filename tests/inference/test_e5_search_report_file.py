@@ -124,7 +124,7 @@ def test_search_rejects_report_file_without_filename() -> None:
     )
 
     assert code == 2
-    assert "--report-file must target a filename" in stderr.getvalue()
+    assert "report-file must target a filename" in stderr.getvalue()
 
 
 def test_search_report_file_failure_returns_error(tmp_path) -> None:

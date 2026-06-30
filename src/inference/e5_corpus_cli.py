@@ -381,6 +381,10 @@ def _build_command(args: argparse.Namespace) -> E5BuildCommand:
 
 
 def _search_command(args: argparse.Namespace) -> E5SearchCommand:
+    report_file = Path(args.report_file) if args.report_file is not None else None
+    if report_file is not None and not report_file.name:
+        raise ValueError("--report-file must target a filename")
+
     return E5SearchCommand(
         model=E5CliModelPolicy(
             cli_name="missipy-search-e5-corpus",
@@ -396,7 +400,7 @@ def _search_command(args: argparse.Namespace) -> E5SearchCommand:
             excerpt_chars=args.excerpt_chars,
             include_full_text=args.full_text,
         ),
-        report=JsonReportWritePolicy(path=Path(args.report_file) if args.report_file is not None else None),
+        report=JsonReportWritePolicy(path=report_file),
     )
 
 

@@ -187,7 +187,7 @@ class E5DiagnosticGatePolicy:
         ):
             value = getattr(self, name)
             if value is not None and value < 0:
-                raise ValueError(f"--{name.replace('_', '-')} must not be negative")
+                raise ValueError(f"{name} must not be negative")
 
     @property
     def enabled(self) -> bool:
