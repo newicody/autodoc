@@ -6,7 +6,7 @@ L'objectif n'est pas de construire une application Python monolithique, mais un 
 
 ## État courant
 
-État de référence : **Phase 4.6 diagnostics locaux du corpus E5**.
+État de référence : **Phase 4.7 diagnostic gate du corpus E5**.
 
 Le prototype possède actuellement :
 
@@ -41,7 +41,8 @@ Le prototype possède actuellement :
 - un garde-fou `--min-score` pour filtrer les résultats E5 locaux trop faibles ;
 - une hygiène de découverte des sources E5 locales qui exclut les répertoires et suffixes parasites ;
 - des contrôles CLI `--exclude-dir` et `--exclude-file-suffix` pour étendre cette hygiène sans modifier le code ;
-- une commande locale `inspect_e5_corpus.py` pour diagnostiquer un corpus E5 JSON en lecture seule.
+- une commande locale `inspect_e5_corpus.py` pour diagnostiquer un corpus E5 JSON en lecture seule ;
+- un mode gate optionnel pour transformer les diagnostics E5 en garde-fous CI/dev.
 
 OpenVINO est branché comme runtime générique à entrées brutes. Le choix du ou des modèles est décrit par profils déclaratifs : `embedding`, `generation` ou `raw`.
 
@@ -654,6 +655,51 @@ Cette phase reste volontairement locale :
 - pas de Scheduler ;
 - pas de changement du format `missipy.e5.corpus.v1` ;
 - pas d'index ANN ;
+- inspection en lecture seule ;
+- mise à jour des graphes DOT d'inférence uniquement ;
+- pas de SVG versionné.
+
+
+## Phase 4.7 — Diagnostic gate du corpus E5
+
+La Phase 4.7 rend les diagnostics de corpus E5 actionnables dans un workflow développeur ou CI.
+
+La commande d'inspection reste en lecture seule, mais elle peut maintenant retourner un code d'échec si le corpus ne respecte pas les seuils demandés :
+
+```bash
+PYTHONPATH=src ./tools/inspect_e5_corpus.py \
+  --index /tmp/autodoc_e5_corpus.json \
+  --min-chunks 10 \
+  --max-missing-source-metadata 0 \
+  --max-empty-texts 0 \
+  --max-dimension-mismatches 0 \
+  --fail-on-warning
+```
+
+Le mode gate conserve les sorties texte et JSON de la Phase 4.6, puis ajoute une section `gate` quand au moins un seuil est demandé.
+
+Codes retour :
+
+```text
+0 : diagnostic lu et seuils respectés
+1 : erreur de lecture ou corpus invalide
+2 : option invalide ou seuil gate violé
+```
+
+Seuils disponibles :
+
+- `--min-chunks N` : nombre minimal de chunks requis ;
+- `--max-missing-source-metadata N` : nombre maximal de chunks sans `source_path` ;
+- `--max-empty-texts N` : nombre maximal de textes vides ;
+- `--max-dimension-mismatches N` : nombre maximal de dimensions incohérentes ;
+- `--fail-on-warning` : échoue si le diagnostic contient des avertissements.
+
+Cette phase reste volontairement locale :
+
+- pas de Qdrant ;
+- pas de Scheduler ;
+- pas de changement du format `missipy.e5.corpus.v1` ;
+- pas de promotion automatique ;
 - inspection en lecture seule ;
 - mise à jour des graphes DOT d'inférence uniquement ;
 - pas de SVG versionné.

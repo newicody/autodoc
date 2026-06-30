@@ -3,7 +3,11 @@ from __future__ import annotations
 import pytest
 
 from inference.e5_corpus import E5CorpusEmbedding, E5CorpusIndex
-from inference.e5_corpus_inspect import inspect_e5_corpus
+from inference.e5_corpus_inspect import (
+    E5CorpusDiagnosticGateConfig,
+    evaluate_e5_corpus_diagnostic_gate,
+    inspect_e5_corpus,
+)
 
 
 def _embedding(
@@ -86,3 +90,52 @@ def test_inspect_e5_corpus_text_output_is_stable() -> None:
 def test_inspect_e5_corpus_rejects_invalid_top_sources_limit() -> None:
     with pytest.raises(ValueError, match="top_sources_limit"):
         inspect_e5_corpus(_index(), top_sources_limit=0)
+
+
+def test_diagnostic_gate_passes_when_thresholds_are_satisfied() -> None:
+    diagnostics = inspect_e5_corpus(_index())
+
+    gate = evaluate_e5_corpus_diagnostic_gate(
+        diagnostics,
+        E5CorpusDiagnosticGateConfig(
+            min_chunks=4,
+            max_missing_source_metadata=1,
+            max_empty_texts=0,
+            max_dimension_mismatches=0,
+        ),
+    )
+
+    assert gate.enabled is True
+    assert gate.passed is True
+    assert gate.violations == ()
+
+
+def test_diagnostic_gate_fails_when_min_chunks_is_not_reached() -> None:
+    diagnostics = inspect_e5_corpus(_index())
+
+    gate = evaluate_e5_corpus_diagnostic_gate(
+        diagnostics,
+        E5CorpusDiagnosticGateConfig(min_chunks=5),
+    )
+
+    assert gate.passed is False
+    assert gate.violations == ("chunk_count 4 < min_chunks 5",)
+
+
+def test_diagnostic_gate_fails_on_warning_when_requested() -> None:
+    diagnostics = inspect_e5_corpus(_index())
+
+    gate = evaluate_e5_corpus_diagnostic_gate(
+        diagnostics,
+        E5CorpusDiagnosticGateConfig(fail_on_warning=True),
+    )
+
+    assert gate.passed is False
+    assert "diagnostics has warnings" in gate.violations
+
+
+def test_diagnostic_gate_rejects_negative_thresholds() -> None:
+    with pytest.raises(ValueError, match="min_chunks"):
+        E5CorpusDiagnosticGateConfig(min_chunks=-1)
+    with pytest.raises(ValueError, match="max_empty_texts"):
+        E5CorpusDiagnosticGateConfig(max_empty_texts=-1)

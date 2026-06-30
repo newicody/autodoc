@@ -47,6 +47,96 @@ class E5CorpusTopSource:
 
 
 @dataclass(frozen=True, slots=True)
+class E5CorpusDiagnosticGateConfig:
+    """Seuils optionnels pour rendre un diagnostic E5 actionnable."""
+
+    min_chunks: int | None = None
+    max_missing_source_metadata: int | None = None
+    max_empty_texts: int | None = None
+    max_dimension_mismatches: int | None = None
+    fail_on_warning: bool = False
+
+    def __post_init__(self) -> None:
+        if self.min_chunks is not None and self.min_chunks < 0:
+            raise ValueError("min_chunks must not be negative")
+        for name in (
+            "max_missing_source_metadata",
+            "max_empty_texts",
+            "max_dimension_mismatches",
+        ):
+            value = getattr(self, name)
+            if value is not None and value < 0:
+                raise ValueError(f"{name} must not be negative")
+
+    @property
+    def enabled(self) -> bool:
+        """Indique si au moins un garde-fou est actif."""
+        return any(
+            (
+                self.min_chunks is not None,
+                self.max_missing_source_metadata is not None,
+                self.max_empty_texts is not None,
+                self.max_dimension_mismatches is not None,
+                self.fail_on_warning,
+            )
+        )
+
+    def to_json_dict(self) -> dict[str, object]:
+        """Convertit la configuration gate vers JSON stable."""
+        return {
+            "min_chunks": self.min_chunks,
+            "max_missing_source_metadata": self.max_missing_source_metadata,
+            "max_empty_texts": self.max_empty_texts,
+            "max_dimension_mismatches": self.max_dimension_mismatches,
+            "fail_on_warning": self.fail_on_warning,
+            "enabled": self.enabled,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class E5CorpusDiagnosticGateResult:
+    """Résultat d'évaluation des seuils sur un diagnostic E5."""
+
+    config: E5CorpusDiagnosticGateConfig
+    violations: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "violations", tuple(self.violations))
+        if any(not item for item in self.violations):
+            raise ValueError("E5CorpusDiagnosticGateResult.violations must contain non-empty strings")
+
+    @property
+    def enabled(self) -> bool:
+        """Indique si le gate a réellement été demandé."""
+        return self.config.enabled
+
+    @property
+    def passed(self) -> bool:
+        """Indique si le corpus respecte les seuils demandés."""
+        return not self.violations
+
+    def to_json_dict(self) -> dict[str, object]:
+        """Convertit le résultat gate vers JSON stable."""
+        return {
+            "enabled": self.enabled,
+            "passed": self.passed,
+            "config": self.config.to_json_dict(),
+            "violations": list(self.violations),
+        }
+
+    def to_text(self) -> str:
+        """Produit une section texte stable pour la CLI."""
+        lines = ["gate:", f"  enabled: {str(self.enabled)}", f"  passed: {str(self.passed)}"]
+        if self.violations:
+            lines.append("  violations:")
+            for violation in self.violations:
+                lines.append(f"    - {violation}")
+        else:
+            lines.append("  violations: none")
+        return "\n".join(lines)
+
+
+@dataclass(frozen=True, slots=True)
 class E5CorpusDiagnostics:
     """Diagnostic stable d'un index E5 local déjà chargé."""
 
@@ -230,6 +320,40 @@ def inspect_e5_corpus(
         empty_text_count=empty_text_count,
         wrong_dimension_count=wrong_dimension_count,
     )
+
+
+def evaluate_e5_corpus_diagnostic_gate(
+    diagnostics: E5CorpusDiagnostics,
+    config: E5CorpusDiagnosticGateConfig,
+) -> E5CorpusDiagnosticGateResult:
+    """Évalue des seuils optionnels sans modifier le corpus inspecté."""
+    violations: list[str] = []
+    if config.min_chunks is not None and diagnostics.chunk_count < config.min_chunks:
+        violations.append(f"chunk_count {diagnostics.chunk_count} < min_chunks {config.min_chunks}")
+    if (
+        config.max_missing_source_metadata is not None
+        and diagnostics.missing_source_count > config.max_missing_source_metadata
+    ):
+        violations.append(
+            "missing_source_count "
+            f"{diagnostics.missing_source_count} > "
+            f"max_missing_source_metadata {config.max_missing_source_metadata}"
+        )
+    if config.max_empty_texts is not None and diagnostics.empty_text_count > config.max_empty_texts:
+        violations.append(f"empty_text_count {diagnostics.empty_text_count} > max_empty_texts {config.max_empty_texts}")
+    if (
+        config.max_dimension_mismatches is not None
+        and diagnostics.wrong_dimension_count > config.max_dimension_mismatches
+    ):
+        violations.append(
+            "wrong_dimension_count "
+            f"{diagnostics.wrong_dimension_count} > "
+            f"max_dimension_mismatches {config.max_dimension_mismatches}"
+        )
+    if config.fail_on_warning and diagnostics.has_warnings:
+        violations.append("diagnostics has warnings")
+    return E5CorpusDiagnosticGateResult(config=config, violations=tuple(violations))
+
 
 
 def _top_sources(

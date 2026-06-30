@@ -1,10 +1,9 @@
-# Manifest — Phase 4.6 E5 corpus diagnostics
+# Manifest — Phase 4.7 E5 corpus diagnostic gate
 
 ## Code
 
 - `src/inference/e5_corpus_inspect.py`
 - `src/inference/e5_corpus_inspect_cli.py`
-- `tools/inspect_e5_corpus.py`
 
 ## Tests
 
@@ -14,13 +13,13 @@
 ## Documentation
 
 - `README.md`
-- `doc/CHANGELOG_PHASE4_6_E5_CORPUS_DIAGNOSTICS.md`
-- `doc/docs/architecture/inference/59_e5_source_hygiene_cli.dot`
+- `doc/CHANGELOG_PHASE4_7_E5_CORPUS_DIAGNOSTIC_GATE.md`
 - `doc/docs/architecture/inference/60_e5_corpus_diagnostics.dot`
+- `doc/docs/architecture/inference/61_e5_corpus_diagnostic_gate.dot`
 
 ## Reports
 
-- `PHASE4_6_TEST_REPORT.md`
+- `PHASE4_7_TEST_REPORT.md`
 - `MANIFEST_CHANGED_FILES.md`
 
 ## Non inclus
