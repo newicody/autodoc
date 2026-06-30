@@ -19,6 +19,7 @@ from .e5_cli_contracts import (
     source_selection_policy_from_cli,
 )
 from .e5_corpus import E5CorpusBuilder, E5CorpusIndex, E5CorpusJsonStore, E5CorpusSearcher
+from .e5_context_bundle import E5ContextBundle
 from .e5_corpus_lock import E5CorpusBuildLock
 from .e5_incremental import E5IncrementalBuildStats, E5IncrementalCorpusBuilder
 from .e5_pipeline import (
@@ -170,6 +171,7 @@ def build_search_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-score", type=float, default=None, help="Score minimal inclusif requis pour conserver un résultat.")
     parser.add_argument("--format", choices=("text", "json"), default="text", help="Format de sortie CLI.")
     parser.add_argument("--report-file", default=None, help="Écrit un rapport JSON stable de la recherche vers ce fichier si la recherche réussit.")
+    parser.add_argument("--context-file", default=None, help="Écrit un bundle de contexte JSON extrait des hits de recherche si la recherche réussit.")
     parser.add_argument("--excerpt-chars", type=int, default=280, help="Longueur maximale de l'extrait affiché par résultat.")
     parser.add_argument("--full-text", action="store_true", help="Inclut le texte complet du chunk dans la sortie.")
     return parser
@@ -384,6 +386,9 @@ def _search_command(args: argparse.Namespace) -> E5SearchCommand:
     report_file = Path(args.report_file) if args.report_file is not None else None
     if report_file is not None and not report_file.name:
         raise ValueError("--report-file must target a filename")
+    context_file = Path(args.context_file) if args.context_file is not None else None
+    if context_file is not None and not context_file.name:
+        raise ValueError("--context-file must target a filename")
 
     return E5SearchCommand(
         model=E5CliModelPolicy(
@@ -401,6 +406,7 @@ def _search_command(args: argparse.Namespace) -> E5SearchCommand:
             include_full_text=args.full_text,
         ),
         report=JsonReportWritePolicy(path=report_file),
+        context=JsonReportWritePolicy(path=context_file),
     )
 
 

@@ -160,6 +160,7 @@ class E5SearchCommand:
     search: E5SearchPolicy = E5SearchPolicy()
     render: E5SearchRenderPolicy = E5SearchRenderPolicy()
     report: JsonReportWritePolicy = JsonReportWritePolicy(path=None)
+    context: JsonReportWritePolicy = JsonReportWritePolicy(path=None)
 
     def __post_init__(self) -> None:
         if not self.index.name:

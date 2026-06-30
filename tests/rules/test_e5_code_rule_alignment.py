@@ -25,6 +25,8 @@ def test_code_rule_preserves_kernel_identity_and_adds_only_e5_addendum() -> None
     assert "ne sont pas une exception au style kernel" in text
     assert "futur composant pilotable par événement" in text
     assert "code_rule_review" in text
+    assert "Bibliothèques hors bibliothèque standard" in text
+    assert "Toute phase qui ajoute une bibliothèque externe doit l'annoncer explicitement" in text
 
     assert "Outillage CLI hors kernel" not in text
 
@@ -79,3 +81,13 @@ def test_e5_unified_cli_surface_exists_without_replacing_compatibility_wrappers(
         "tools/inspect_e5_corpus.py",
     ):
         assert (ROOT / wrapper).exists()
+
+
+def test_e5_context_bundle_extends_search_without_new_cli_script() -> None:
+    corpus_cli = _read("src/inference/e5_corpus_cli.py")
+    context = _read("src/inference/e5_context_bundle.py")
+
+    assert "--context-file" in corpus_cli
+    assert "class E5ContextBundle" in context
+    assert "class E5ContextBundleItem" in context
+    assert not (ROOT / "tools/context_e5.py").exists()

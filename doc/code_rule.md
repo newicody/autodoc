@@ -18,29 +18,29 @@ Le Scheduler constitue le cœur du système. Il ne contient aucune logique méti
 
 ## Principes fondamentaux
 
-* Tout est un composant.
-* Tout est piloté par événements.
-* Tout composant est une coroutine coopérative.
-* Toute décision est déterministe.
-* Toute exécution est rejouable.
-* Toute activité est observable.
-* Toute fonctionnalité est extensible sans modification du noyau.
+- Tout est un composant.
+- Tout est piloté par événements.
+- Tout composant est une coroutine coopérative.
+- Toute décision est déterministe.
+- Toute exécution est rejouable.
+- Toute activité est observable.
+- Toute fonctionnalité est extensible sans modification du noyau.
 
 ## Philosophie de développement
 
 Le projet privilégie systématiquement :
 
-* la bibliothèque standard Python avant toute dépendance externe ;
-* Python 3.14 et les mécanismes modernes du langage ;
-* le typage statique exhaustif ;
-* les `dataclass(frozen=True)` pour les données immuables ;
-* les générateurs (`yield`) plutôt que les appels bloquants ;
-* les événements plutôt que les appels directs ;
-* la composition plutôt que l'héritage profond ;
-* le chargement paresseux (`Lazy Loading`) ;
-* les politiques explicites plutôt que les comportements implicites ;
-* des composants faiblement couplés ;
-* des structures facilement testables et rejouables.
+- la bibliothèque standard Python avant toute dépendance externe ;
+- Python 3.14 et les mécanismes modernes du langage ;
+- le typage statique exhaustif ;
+- les `dataclass(frozen=True)` pour les données immuables ;
+- les générateurs (`yield`) plutôt que les appels bloquants ;
+- les événements plutôt que les appels directs ;
+- la composition plutôt que l'héritage profond ;
+- le chargement paresseux (`Lazy Loading`) ;
+- les politiques explicites plutôt que les comportements implicites ;
+- des composants faiblement couplés ;
+- des structures facilement testables et rejouables.
 
 ## Contrat d'un composant
 
@@ -69,27 +69,27 @@ Les mécanismes d'introspection de Python sont utilisés comme infrastructure de
 
 Les hooks tels que :
 
-* `__new__`
-* `__init__`
-* `__getattribute__`
-* `__getattr__`
-* `__setattr__`
-* `__call__`
-* `__iter__`
-* `__enter__`
-* `__exit__`
+- `__new__`
+- `__init__`
+- `__getattribute__`
+- `__getattr__`
+- `__setattr__`
+- `__call__`
+- `__iter__`
+- `__enter__`
+- `__exit__`
 
 ne contiennent aucune logique métier.
 
 Ils servent exclusivement à :
 
-* produire des événements ;
-* mesurer les performances ;
-* appliquer les politiques ;
-* assurer le chargement paresseux ;
-* alimenter la télémétrie ;
-* tracer l'exécution ;
-* garantir la reproductibilité.
+- produire des événements ;
+- mesurer les performances ;
+- appliquer les politiques ;
+- assurer le chargement paresseux ;
+- alimenter la télémétrie ;
+- tracer l'exécution ;
+- garantir la reproductibilité.
 
 Chaque composant est exposé au système à travers un `ComponentProxy`, chargé d'intercepter les accès, de publier les événements et de préserver l'isolation entre le noyau et les composants.
 
@@ -105,11 +105,11 @@ Cette approche permet d'adapter dynamiquement les priorités, les ressources et 
 
 ## Décisions architecturales maintenues
 
-* Le Context Engine est une brique fondamentale du noyau, et non un simple module.
-* Le ComponentProxy est obligatoire et fait partie du contrat du kernel.
-* Le Scheduler construit un `GlobalContext` qui influence les décisions d'exécution sans casser le déterminisme.
-* La Queue est le chemin de commande déterministe.
-* L'EventBus est le chemin d'observation et ne commande pas les composants.
+- Le Context Engine est une brique fondamentale du noyau, et non un simple module.
+- Le ComponentProxy est obligatoire et fait partie du contrat du kernel.
+- Le Scheduler construit un `GlobalContext` qui influence les décisions d'exécution sans casser le déterminisme.
+- La Queue est le chemin de commande déterministe.
+- L'EventBus est le chemin d'observation et ne commande pas les composants.
 
 ## État actuel du modèle après Phase 2.6
 
@@ -161,18 +161,18 @@ Même exposée par une CLI, une fonctionnalité doit être écrite comme un futu
 
 La CLI peut :
 
-* parser les arguments ;
-* transformer les arguments en intention typée ;
-* appeler un use-case local en attendant son intégration au Scheduler ;
-* convertir le résultat en texte, JSON, fichier, code retour ou message d'erreur.
+- parser les arguments ;
+- transformer les arguments en intention typée ;
+- appeler un use-case local en attendant son intégration au Scheduler ;
+- convertir le résultat en texte, JSON, fichier, code retour ou message d'erreur.
 
 La CLI ne doit pas :
 
-* contenir la logique métier principale ;
-* propager `argparse.Namespace` hors de la couche d'adaptation ;
-* charger implicitement un backend réel ;
-* créer des politiques implicites ;
-* contourner le modèle du noyau dans du code destiné à devenir composant.
+- contenir la logique métier principale ;
+- propager `argparse.Namespace` hors de la couche d'adaptation ;
+- charger implicitement un backend réel ;
+- créer des politiques implicites ;
+- contourner le modèle du noyau dans du code destiné à devenir composant.
 
 ### 2. Toute CLI doit produire une intention typée
 
@@ -238,11 +238,11 @@ Un use-case doit produire un résultat stable.
 
 Le résultat doit pouvoir être :
 
-* testé directement ;
-* transformé en texte ;
-* transformé en JSON stable ;
-* enregistré comme artefact d'audit ;
-* rejoué ou comparé.
+- testé directement ;
+- transformé en texte ;
+- transformé en JSON stable ;
+- enregistré comme artefact d'audit ;
+- rejoué ou comparé.
 
 Les méthodes attendues sont typiquement :
 
@@ -261,13 +261,13 @@ Ils doivent rester dans les couches d'adaptation.
 
 Un use-case testable ne doit pas dépendre directement de :
 
-* `sys.argv` ;
-* `sys.exit` ;
-* `stdout` ou `stderr` ;
-* `argparse.Namespace` ;
-* chemins temporaires implicites ;
-* backend réel chargé sans injection ;
-* écriture JSON dupliquée.
+- `sys.argv` ;
+- `sys.exit` ;
+- `stdout` ou `stderr` ;
+- `argparse.Namespace` ;
+- chemins temporaires implicites ;
+- backend réel chargé sans injection ;
+- écriture JSON dupliquée.
 
 Les écritures de rapports doivent être centralisées, atomiques et testées.
 
@@ -356,11 +356,30 @@ Les règles importantes doivent devenir exécutables dans `tests/rules` dès qu'
 
 Les tests doivent notamment empêcher :
 
-* l'import direct d'un backend réel dans le noyau ;
-* la modification implicite du Scheduler par une phase outillage ;
-* l'utilisation de `argparse.Namespace` hors couche CLI ;
-* la duplication d'écriture JSON atomique ;
-* l'ajout non justifié de nouvelles CLI ;
-* l'introduction de Qdrant avant la phase prévue ;
-* la versionisation de fichiers générés comme les `.svg` ;
-* le changement silencieux du format `missipy.e5.corpus.v1`.
+- l'import direct d'un backend réel dans le noyau ;
+- la modification implicite du Scheduler par une phase outillage ;
+- l'utilisation de `argparse.Namespace` hors couche CLI ;
+- la duplication d'écriture JSON atomique ;
+- l'ajout non justifié de nouvelles CLI ;
+- l'introduction de Qdrant avant la phase prévue ;
+- la versionisation de fichiers générés comme les `.svg` ;
+- le changement silencieux du format `missipy.e5.corpus.v1`.
+
+
+### 10. Bibliothèques hors bibliothèque standard
+
+La bibliothèque standard Python reste le choix par défaut.
+
+Toute phase qui ajoute une bibliothèque externe doit l'annoncer explicitement dans la conversation et dans son rapport de phase.
+
+Cette annonce doit préciser :
+
+- le nom de la bibliothèque ;
+- la raison technique ;
+- pourquoi la bibliothèque standard ne suffit pas ;
+- la frontière exacte où la dépendance est autorisée ;
+- les tests qui empêchent cette dépendance de remonter vers le noyau.
+
+Si aucune bibliothèque externe n'est ajoutée, le rapport de phase doit l'indiquer explicitement.
+
+Une dépendance externe ne doit jamais devenir implicite dans le Scheduler, les contrats abstraits ou les structures de politique.

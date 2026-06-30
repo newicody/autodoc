@@ -981,3 +981,40 @@ code_rule_update_required: false
 code_rule_reason: la réduction de surface CLI était déjà prévue par l'addendum Phase 4.12-r2 ; aucune nouvelle règle n'est nécessaire.
 ```
 
+
+## Phase 4.14 — E5 context bundle
+
+La Phase 4.14 ajoute un bundle de contexte dérivé des résultats de recherche E5.
+
+La commande `search` peut maintenant produire un artefact JSON de contexte :
+
+```bash
+PYTHONPATH=src ./tools/e5.py search \
+  --index /tmp/autodoc_e5_corpus.json \
+  --limit 5 \
+  --context-file /tmp/autodoc_e5_context.json \
+  "OpenVINO local"
+```
+
+Ce fichier contient :
+
+```text
+query
+prefixed_query
+index
+model/backend/tokenizer/dimension
+item_count
+items avec rank, id, score, source_path, line_range, chunk_index, excerpt
+```
+
+Le bundle est construit depuis `E5SearchReport`, donc il ne relance pas une recherche séparée et ne change pas le format `missipy.e5.corpus.v1`.
+
+Cette phase évite d'ajouter un nouveau script CLI : la surface reste `tools/e5.py search`, avec les wrappers historiques toujours conservés. L'écriture JSON reste centralisée dans `report_io.write_json_report_atomic()`.
+
+Aucune bibliothèque hors stdlib Python n'est ajoutée.
+
+```text
+code_rule_review: done
+code_rule_update_required: true
+code_rule_reason: ajout de la règle demandée sur les bibliothèques hors stdlib ; 4.14 n'ajoute aucune dépendance externe.
+```
