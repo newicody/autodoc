@@ -6,7 +6,7 @@ L'objectif n'est pas de construire une application Python monolithique, mais un 
 
 ## État courant
 
-État de référence : **Phase 4.10 rapport JSON de rebuild E5**.
+État de référence : **Phase 4.11 rapport JSON de recherche E5**.
 
 Le prototype possède actuellement :
 
@@ -45,7 +45,8 @@ Le prototype possède actuellement :
 - un mode gate optionnel pour transformer les diagnostics E5 en garde-fous CI/dev ;
 - un gate diagnostic optionnel dans `rebuild_e5_corpus.py` pour bloquer la promotion d'un candidat douteux ;
 - un jeu de validation recherche E5 multi-requêtes avant promotion du corpus candidat ;
-- un rapport JSON optionnel de rebuild E5 pour archiver diagnostic, validation et promotion.
+- un rapport JSON optionnel de rebuild E5 pour archiver diagnostic, validation et promotion;
+- un rapport JSON optionnel de recherche E5 pour conserver requête, seuils, hits et contexte source.
 
 OpenVINO est branché comme runtime générique à entrées brutes. Le choix du ou des modèles est décrit par profils déclaratifs : `embedding`, `generation` ou `raw`.
 
@@ -122,11 +123,15 @@ cd doc && make -f makefile
 - `doc/CHANGELOG_PHASE4_3_E5_SCORE_GUARD.md` : garde-fou de score minimal pour recherche E5 locale.
 - `doc/CHANGELOG_PHASE4_6_E5_CORPUS_DIAGNOSTICS.md` : diagnostic local du corpus E5 JSON.
 - `doc/CHANGELOG_PHASE4_9_E5_SEARCH_VALIDATION_SET.md` : validation recherche multi-requêtes avant promotion.
+- `doc/CHANGELOG_PHASE4_10_E5_REBUILD_REPORT_FILE.md` : rapport JSON optionnel du rebuild E5.
+- `doc/CHANGELOG_PHASE4_11_E5_SEARCH_REPORT_FILE.md` : rapport JSON optionnel de la recherche E5.
 - `doc/CHANGELOG_PHASE4_4_E5_SOURCE_HYGIENE.md` : hygiène de découverte des sources E5 locales.
 - `doc/docs/architecture/inference/52_e5_search_report.dot` : rapport E5 enrichi avec lien vers le garde-fou de score.
 - `doc/docs/architecture/inference/57_e5_score_guard.dot` : détail Phase 4.3 du filtrage `--min-score`.
 - `doc/docs/architecture/inference/60_e5_corpus_diagnostics.dot` : inspection locale du corpus E5 JSON.
 - `doc/docs/architecture/inference/63_e5_search_validation_set.dot` : validation recherche multi-requêtes du candidat rebuild.
+- `doc/docs/architecture/inference/64_e5_rebuild_report_file.dot` : artefact JSON optionnel du rebuild E5.
+- `doc/docs/architecture/inference/65_e5_search_report_file.dot` : artefact JSON optionnel de recherche E5.
 - `doc/docs/architecture/inference/58_e5_source_hygiene.dot` : détail Phase 4.4 du filtrage des sources parasites avant chunking.
 - `doc/docs/architecture/*.dot` : roadmap DOT navigable ; les SVG sont générés par le makefile.
 
@@ -855,6 +860,46 @@ Elle reste volontairement locale :
 - pas de Scheduler ;
 - pas de changement du format corpus ;
 - pas de promotion si le diagnostic ou la validation échoue ;
+- rapport optionnel seulement ;
+- mise à jour des graphes DOT d'inférence uniquement ;
+- pas de SVG versionné.
+
+
+## Phase 4.11 — Rapport JSON de recherche E5
+
+La Phase 4.11 ajoute un artefact de recherche optionnel.
+
+La recherche locale peut écrire un rapport JSON stable contenant le même résumé que la sortie JSON CLI :
+
+```bash
+PYTHONPATH=src ./tools/search_e5_corpus.py \
+  --index /tmp/autodoc_e5_corpus.json \
+  --limit 5 \
+  --min-score 0.80 \
+  --report-file /tmp/autodoc_e5_search_report.json \
+  "OpenVINO multilingual-e5-small local"
+```
+
+Le rapport contient notamment :
+
+```text
+query
+prefixed_query
+index
+model/backend/tokenizer/dimension
+hit_count
+hits avec score, source, lignes, chunk et extrait
+```
+
+Le fichier est écrit uniquement si la recherche réussit. Il est produit via fichier temporaire voisin puis remplacement final.
+
+Cette phase prépare les futurs usages d'audit, d'interface HTML et de workflow question -> contexte sans changer le format `missipy.e5.corpus.v1`.
+
+Elle reste volontairement locale :
+
+- pas de Qdrant ;
+- pas de Scheduler ;
+- pas de changement du format corpus ;
 - rapport optionnel seulement ;
 - mise à jour des graphes DOT d'inférence uniquement ;
 - pas de SVG versionné.

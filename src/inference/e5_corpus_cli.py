@@ -20,7 +20,12 @@ from .e5_pipeline import (
 )
 from .e5_profile import MULTILINGUAL_E5_SMALL_ENV, MultilingualE5SmallLocalConfig
 from .e5_search_report import E5SearchReport, E5SearchReportConfig
-from .e5_sources import SUPPORTED_E5_SOURCE_EXTENSIONS, load_e5_corpus_documents_from_sources
+from .e5_sources import (
+    DEFAULT_E5_EXCLUDED_DIR_NAMES,
+    DEFAULT_E5_EXCLUDED_FILE_SUFFIXES,
+    SUPPORTED_E5_SOURCE_EXTENSIONS,
+    load_e5_corpus_documents_from_sources,
+)
 
 
 class E5CorpusPipelineBuilder(Protocol):
@@ -154,6 +159,18 @@ def build_build_parser() -> argparse.ArgumentParser:
         help="Extensions source séparées par des virgules.",
     )
     parser.add_argument("--no-recursive", action="store_true", help="Ne parcourt pas récursivement les --source-dir.")
+    parser.add_argument(
+        "--exclude-dir",
+        action="append",
+        default=[],
+        help="Nom de répertoire supplémentaire à ignorer pendant l'ingestion source. Peut être répété.",
+    )
+    parser.add_argument(
+        "--exclude-file-suffix",
+        action="append",
+        default=[],
+        help="Suffixe de fichier supplémentaire à ignorer pendant l'ingestion source. Peut être répété.",
+    )
     parser.add_argument("--chunk-chars", type=int, default=1200, help="Taille cible maximale des chunks source en caractères.")
     parser.add_argument(
         "--overlap-paragraphs",
@@ -186,6 +203,11 @@ def build_search_parser() -> argparse.ArgumentParser:
         help="Score minimal inclusif requis pour conserver un résultat.",
     )
     parser.add_argument("--format", choices=("text", "json"), default="text", help="Format de sortie CLI.")
+    parser.add_argument(
+        "--report-file",
+        default=None,
+        help="Écrit un rapport JSON stable de la recherche vers ce fichier si la recherche réussit.",
+    )
     parser.add_argument("--excerpt-chars", type=int, default=280, help="Longueur maximale de l'extrait affiché par résultat.")
     parser.add_argument("--full-text", action="store_true", help="Inclut le texte complet du chunk dans la sortie.")
     return parser
@@ -221,6 +243,8 @@ async def run_build_async(
             recursive=not args.no_recursive,
             chunk_chars=args.chunk_chars,
             overlap_paragraphs=args.overlap_paragraphs,
+            excluded_dir_names=args.exclude_dir,
+            excluded_file_suffixes=args.exclude_file_suffix,
         )
     except OSError as exc:
         stderr.write(f"missipy-build-e5-corpus failed to read passages: {exc}\n")
@@ -308,6 +332,9 @@ async def run_search_async(
     if args.excerpt_chars <= 0:
         stderr.write("--excerpt-chars must be positive\n")
         return 2
+    if args.report_file is not None and not Path(args.report_file).name:
+        stderr.write("--report-file must target a filename\n")
+        return 2
 
     try:
         index: E5CorpusIndex = (store or E5CorpusJsonStore()).read(args.index)
@@ -332,7 +359,14 @@ async def run_search_async(
             include_full_text=args.full_text,
         ),
     )
-    _write_output(stdout, args.format, output.to_json_dict(), output.to_text())
+    json_output = output.to_json_dict()
+    try:
+        _write_report_file(args.report_file, json_output)
+    except OSError as exc:
+        stderr.write(f"missipy-search-e5-corpus failed to write report: {exc}\n")
+        return 1
+
+    _write_output(stdout, args.format, json_output, output.to_text())
     return 0
 
 
@@ -414,6 +448,8 @@ def _collect_passages(
     recursive: bool = True,
     chunk_chars: int = 1200,
     overlap_paragraphs: int = 0,
+    excluded_dir_names: Sequence[str] = (),
+    excluded_file_suffixes: Sequence[str] = (),
 ) -> tuple[object, ...]:
     passages: list[object] = [item for item in cli_passages if item.strip()]
     if passages_file is not None:
@@ -428,13 +464,36 @@ def _collect_passages(
                 recursive=recursive,
                 max_chars=chunk_chars,
                 overlap_paragraphs=overlap_paragraphs,
+                excluded_dir_names=_merge_cli_values(DEFAULT_E5_EXCLUDED_DIR_NAMES, excluded_dir_names),
+                excluded_file_suffixes=_merge_cli_values(DEFAULT_E5_EXCLUDED_FILE_SUFFIXES, excluded_file_suffixes),
             )
         )
     return tuple(passages)
 
 
+def _merge_cli_values(defaults: Sequence[str], extras: Sequence[str]) -> tuple[str, ...]:
+    """Fusionne les garde-fous par défaut et les ajouts CLI en ordre stable."""
+    values: list[str] = []
+    for item in (*defaults, *extras):
+        value = item.strip()
+        if value and value not in values:
+            values.append(value)
+    return tuple(values)
+
+
 def _read_passages_file(path: Path) -> tuple[str, ...]:
     return tuple(line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip())
+
+
+def _write_report_file(report_file: str | None, json_data: dict[str, object]) -> None:
+    """Écrit le rapport JSON de recherche de façon atomique si demandé."""
+    if report_file is None:
+        return
+    target = Path(report_file)
+    content = json.dumps(json_data, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    temp = target.with_name(f".{target.name}.tmp")
+    temp.write_text(content, encoding="utf-8")
+    temp.replace(target)
 
 
 def _write_output(stdout: TextIOBase, fmt: str, json_data: dict[str, object], text: str) -> None:
