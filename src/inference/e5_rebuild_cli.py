@@ -306,6 +306,11 @@ def build_rebuild_parser() -> argparse.ArgumentParser:
     parser.add_argument("--keep-staging", action="store_true", help="Conserve le staging après échec ou dry-run.")
     parser.add_argument("--no-lock", action="store_true", help="Désactive le verrou fichier du corpus final.")
     parser.add_argument("--format", choices=("text", "json"), default="text", help="Format de sortie CLI.")
+    parser.add_argument(
+        "--report-file",
+        default=None,
+        help="Écrit un rapport JSON stable du rebuild vers ce fichier si le rebuild réussit.",
+    )
     return parser
 
 
@@ -368,7 +373,14 @@ async def run_rebuild_async(
         stderr.write(f"missipy-rebuild-e5-corpus failed: {exc}\n")
         return 1
 
-    _write_output(stdout, args.format, output.to_json_dict(), output.to_text())
+    json_output = output.to_json_dict()
+    try:
+        _write_report_file(args.report_file, json_output)
+    except OSError as exc:
+        stderr.write(f"missipy-rebuild-e5-corpus failed to write report: {exc}\n")
+        return 1
+
+    _write_output(stdout, args.format, json_output, output.to_text())
     return 0
 
 
@@ -541,6 +553,8 @@ def _validate_args(args: argparse.Namespace) -> str | None:
         return "--validation-limit must be positive"
     if args.validation_min_score is not None and not -1.0 <= args.validation_min_score <= 1.0:
         return "--validation-min-score must be between -1.0 and 1.0"
+    if args.report_file is not None and not Path(args.report_file).name:
+        return "--report-file must target a filename"
     for option_name in (
         "min_chunks",
         "max_missing_source_metadata",
@@ -616,6 +630,17 @@ def _add_common_model_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--device", default="CPU", help="Device OpenVINO, par exemple CPU ou GPU.")
     parser.add_argument("--max-length", type=int, default=128, help="Longueur maximale de tokenization.")
+
+
+def _write_report_file(report_file: str | None, json_data: dict[str, object]) -> None:
+    """Écrit le rapport JSON de rebuild de façon atomique si demandé."""
+    if report_file is None:
+        return
+    target = Path(report_file)
+    content = json.dumps(json_data, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    temp = target.with_name(f".{target.name}.tmp")
+    temp.write_text(content, encoding="utf-8")
+    temp.replace(target)
 
 
 def _write_output(stdout: TextIOBase, fmt: str, json_data: dict[str, object], text: str) -> None:

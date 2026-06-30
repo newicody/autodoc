@@ -6,7 +6,7 @@ L'objectif n'est pas de construire une application Python monolithique, mais un 
 
 ## État courant
 
-État de référence : **Phase 4.9 jeu de validation recherche E5 avant promotion**.
+État de référence : **Phase 4.10 rapport JSON de rebuild E5**.
 
 Le prototype possède actuellement :
 
@@ -44,7 +44,8 @@ Le prototype possède actuellement :
 - une commande locale `inspect_e5_corpus.py` pour diagnostiquer un corpus E5 JSON en lecture seule ;
 - un mode gate optionnel pour transformer les diagnostics E5 en garde-fous CI/dev ;
 - un gate diagnostic optionnel dans `rebuild_e5_corpus.py` pour bloquer la promotion d'un candidat douteux ;
-- un jeu de validation recherche E5 multi-requêtes avant promotion du corpus candidat.
+- un jeu de validation recherche E5 multi-requêtes avant promotion du corpus candidat ;
+- un rapport JSON optionnel de rebuild E5 pour archiver diagnostic, validation et promotion.
 
 OpenVINO est branché comme runtime générique à entrées brutes. Le choix du ou des modèles est décrit par profils déclaratifs : `embedding`, `generation` ou `raw`.
 
@@ -815,3 +816,45 @@ Cette phase reste volontairement locale :
 - mise à jour des graphes DOT d'inférence uniquement ;
 - pas de SVG versionné.
 
+## Phase 4.10 — Rapport JSON de rebuild E5
+
+La Phase 4.10 ajoute un artefact de rebuild optionnel.
+
+Le rebuild sûr peut écrire un rapport JSON stable contenant le même résumé que la sortie JSON CLI :
+
+```bash
+PYTHONPATH=src ./tools/rebuild_e5_corpus.py \
+  --index /tmp/autodoc_e5_corpus.json \
+  --source-dir . \
+  --validation-query "rebuild sûr staging promotion" \
+  --validation-query "OpenVINO multilingual-e5-small local" \
+  --validation-min-score 0.80 \
+  --report-file /tmp/autodoc_e5_rebuild_report.json
+```
+
+Le rapport contient notamment :
+
+```text
+index
+staging
+promoted
+model/backend/tokenizer/dimension
+size
+validation
+diagnostic_gate, si activé
+reused_count / embedded_count / removed_count, si disponibles
+```
+
+Le fichier est écrit uniquement après rebuild réussi, diagnostic gate réussi et validation recherche réussie.
+
+Cette phase prépare les futurs usages CI, HTML et audit de corpus sans changer le format `missipy.e5.corpus.v1`.
+
+Elle reste volontairement locale :
+
+- pas de Qdrant ;
+- pas de Scheduler ;
+- pas de changement du format corpus ;
+- pas de promotion si le diagnostic ou la validation échoue ;
+- rapport optionnel seulement ;
+- mise à jour des graphes DOT d'inférence uniquement ;
+- pas de SVG versionné.
