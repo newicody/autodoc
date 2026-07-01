@@ -383,3 +383,434 @@ Cette annonce doit préciser :
 Si aucune bibliothèque externe n'est ajoutée, le rapport de phase doit l'indiquer explicitement.
 
 Une dépendance externe ne doit jamais devenir implicite dans le Scheduler, les contrats abstraits ou les structures de politique.
+
+Addendum Phase 6-r1 — Squelette porteur, chemin vivant et intégration progressive du spécialiste
+
+Cet addendum ne remplace pas les règles précédentes. Il ajoute une discipline d'intégration qui gouverne les phases à venir.
+
+Il applique deux patrons connus du génie logiciel :
+
+    le squelette porteur (walking skeleton, Cockburn) ;
+
+    les balles traçantes (tracer bullets, Hunt & Thomas).
+
+Une implémentation minuscule mais réelle, traversant progressivement l'architecture de bout en bout, doit rester vivante pendant qu'on l'étoffe.
+
+Objectif : empêcher deux dérives symétriques :
+
+    le spécialiste accumule des surfaces typées mais reste fictif ;
+
+    le noyau devient vestigial parce qu'un produit se construit à côté du Scheduler.
+
+La règle générale est :
+
+le churn vit dans la feuille ;
+la stabilité vit à la frontière de contrats.
+
+Le spécialiste peut évoluer vite, mais il ne doit jamais contaminer le noyau.
+1. Le spécialiste doit converger vers le chemin noyau
+
+Toute capacité destinée à devenir un comportement du système doit converger vers le chemin noyau :
+
+Command dataclass
+-> Scheduler.emit()
+-> PolicyEngine.decide()
+-> PriorityQueue
+-> Scheduler.run()
+-> Dispatcher
+-> Handler
+-> Event observable
+
+Une CLI de développement reste autorisée comme adaptateur opérateur, mais elle ne doit pas devenir le chemin réel principal d'une capacité durable.
+
+La CLI peut encore exister pour :
+
+    parser les arguments ;
+
+    produire une commande typée ;
+
+    afficher un résultat ;
+
+    écrire un rapport ;
+
+    faciliter le diagnostic manuel.
+
+Mais une capacité destinée au système doit disposer d'un chemin Scheduler vivant au plus tard à la phase d'intégration correspondante.
+
+Formulation pratique :
+
+contrat pur -> use-case local court -> chemin Scheduler vivant -> CLI fine autour
+
+Un use-case local non câblé est accepté comme transition courte. Il ne doit pas devenir une architecture parallèle.
+2. Le chemin noyau est le chemin réel cible
+
+Le chemin réel cible d'une capacité durable est :
+
+Command dataclass
+-> Scheduler
+-> PolicyEngine
+-> Queue
+-> Dispatcher
+-> Handler
+-> backend réel déclaré
+-> résultat observable
+
+Aucun code destiné à devenir composant durable ne doit appeler directement :
+
+    E5 ;
+
+    une base de données ;
+
+    Qdrant ;
+
+    un backend LLM ;
+
+    GitHub ;
+
+    OpenVINO ;
+
+    un store persistant ;
+
+sans passer par une commande typée et une frontière un store persistant ;
+
+sans passer par une commande typée et une frontière d'adaptation déclarée.
+
+Les appels directs restent autorisés uniquement dans :
+
+    les adaptateurs explicitement nommés ;
+
+    les tests ciblés de bas niveau ;
+
+    les CLI transitoires pendant une phase d'intégration ;
+
+    les scripts de diagnostic clairement séparés du noyau.
+
+3. Définition d'un backend réel
+
+Un backend réel est un backend non-dummy déclaré comme backend de validation pour l'environnement courant.
+
+Exemples :
+
+machine développeur avec modèle local :
+OpenVINO E5 local peut être backend réel
+
+CI légère :
+un backend local déterministe non-dummy peut servir de chemin vivant minimal
+
+tests unitaires isolés :
+un backend dummy reste autorisé, mais ne prouve pas le chemin vivant
+
+Le dummy est un outil de test et un mode dégradé. Il ne doit pas être présenté comme preuve que le chemin système fonctionne réellement.
+
+La validation complète distingue donc :
+
+test unitaire avec dummy        -> autorisé
+test d'intégration chemin vivant -> backend réel déclaré requis
+validation matérielle locale     -> backend OpenVINO ou équivalent réel
+
+4. Invariant de chemin vivant
+
+À partir de la phase où une capacité est déclarée intégrée, il doit exister au moins un test de chemin vivant qui traverse :
+
+commande typée
+-> Scheduler
+-> Handler
+-> backend réel déclaré
+-> résultat observable
+
+Ce test doit rester vert.
+
+Pendant la phase de transition, le rapport de phase peut indiquer :
+
+live_path_status: transition
+
+Mais une phase ne doit pas se déclarer close en tant que capacité intégrée si son chemin vivant reste absent.
+
+Les états autorisés sont :
+
+live_path_status: green|red|transition|n/a
+
+    green : chemin vivant testé et valide ;
+
+    red : chemin vivant attendu mais cassé ;
+
+    transition : capacité encore en cours de câblage ;
+
+    n/a : phase documentaire, audit, contrat pur ou correction sans capacité exécutable.
+
+5. Le spécialiste peut être impur derrière sa membrane
+
+Le spécialiste peut utiliser des bibliothèques externes ou du code impur si cela est justifié :
+
+    numpy ;
+
+    OpenVINO ;
+
+    Qdrant ;
+
+    LibCST ;
+
+    client GitHub ;
+
+    backend LLM ;
+
+    autre dépendance explicitement validée.
+
+Mais cette impureté reste confinée derrière une frontière de module en liste blanche.
+
+Le noyau, les contrats abstraits et les politiques générales restent stdlib-first.
+
+Le Scheduler ne doit jamais dépendre implicitement d'un backend réel.
+
+Le noyau ne voit que :
+
+Command
+Policy
+Event
+Result
+Context
+
+Il ne voit jamais directement :
+
+OpenVINO
+Qdrant
+PostgreSQL
+GitHub API
+LLM runtime
+
+6. Reformulation de contexte : fréquente autorisée, silencieuse interdite
+
+Les reformulations fréquentes du contexte du spécialiste sont autorisées.
+
+Toute reformulation qui change le contrat public doit être versionnée.
+
+Exemple :
+
+missipy.context.v1
+missipy.context.v2
+
+Le changement de version est requis si :
+
+    un champ public disparaît ;
+
+    un champ change de type ;
+
+    une signification change ;
+
+    un nouveau consommateur durable dépend d'une structure différente.
+
+Le changement de version doit être testé.
+
+Règle :
+
+fréquent est permis ;
+silencieux est interdit.
+
+Le contexte du spécialiste peut commencer minimal et s'enrichir sous l'usage. On ne cherche pas à deviner trop tôt un contrat complet.
+7. Les CLI restent des adaptateurs, pas des chemins parallèles
+
+Les CLI existantes restent valides comme outils opérateur et diagnostic.
+
+Cependant, quand une capacité devient durable, la CLI doit progressivement devenir :
+
+argparse
+-> Command dataclass
+-> chemin Scheduler ou use-case explicitement transitoire
+-> Result dataclass
+-> rendu text/json/report
+
+Une CLI ne doit pas :
+
+    contenir la logique métier principale ;
+
+    choisir implicitement un backend réel ;
+
+    contourner les politiques ;
+
+    devenir le seul chemin de validation durable ;
+
+    faire évoluer un store ou un contexte sans contrat typé.
+
+8. Effet sur la roadmap
+
+Aucune phase fonctionnelle n'est annulée.
+
+Mais les phases à venir doivent éviter d'ajouter seulement des surfaces typées sans comportement réel.
+
+Formulation attendue :
+
+mauvais :
+ajouter un contrat de recherche, sans chemin réel
+
+bon :
+ajouter une commande de recherche bornée,
+un handler,
+un backend réel déclaré,
+un événement observable,
+un rapport testable
+
+Une phase documentaire peut rester documentaire. Mais une phase qui prétend ajouter une capacité doit fournir un chemin d'exécution correspondant ou déclarer explicitement son état de transition.
+9. Tests de règles ajoutés
+
+La section tests/rules et les tests d'intégration doivent progressivement empêcher :
+
+    l'absence de chemin vivant pour une capacité déclarée intégrée ;
+
+    l'usage d'un backend dummy comme validation par défaut d'une capacité intégrée ;
+
+    l'appel direct d'un backend réel depuis un module destiné à devenir composant ;
+
+    le changement silencieux du contrat de contexte ;
+
+    l'import direct d'une dépendance spécialiste dans le noyau ;
+
+    la régression d'un chemin Scheduler vers un chemin CLI direct.
+
+Ces tests peuvent être introduits progressivement.
+
+Ils ne doivent pas invalider rétroactivement tout le code existant sans phase de migration.
+10. Revue de phase — champs ajoutés
+
+Le bloc obligatoire de revue de phase devient :
+
+code_rule_review: done
+code_rule_update_required: true|false
+code_rule_reason: ...
+live_path_status: green|red|transition|n/a
+live_path_uses_real_backend: true|false|n/a
+context_contract_version: missipy.context.vN|n/a
+context_contract_changed: true|false
+search_commands_bounded: true|false|n/a
+
+Règles :
+
+    live_path_status: n/a est autorisé pour une phase documentaire, un audit ou une correction sans nouvelle capacité ;
+
+    live_path_status: transition est autorisé pour une capacité en cours de câblage ;
+
+    live_path_status: green est requis pour clore une capacité déclarée intégrée ;
+
+    live_path_uses_real_backend: false est autorisé pour les tests unitaires, mais pas comme preuve de validation complète ;
+
+    context_contract_changed: true impose d'indiquer la nouvelle version du contrat ;
+
+    search_commands_bounded: true est requis pour toute commande de recherche ou d'exploration.
+
+11. Règle de clôture
+
+on n'ajoute pas seulement une surface typée ;
+on ajoute une capacité portée par le noyau ou on déclare explicitement la transition.
+
+le squelette marche,
+il reste petit,
+il grandit sans cesser d'être testable.
+
+Addendum Phase 6-r2 — Borne de ressources obligatoire pour la recherche
+
+Cet addendum ajoute un invariant de frontière. Il ne décrit aucune heuristique de recherche.
+1. Toute recherche porte un budget borné
+
+Toute commande qui explore un espace de solutions doit porter un budget de ressources borné.
+
+Cela concerne notamment :
+
+    MCTS ;
+
+    best-of-n ;
+
+    recherche hybride ;
+
+    exploration de plans ;
+
+    reranking itératif ;
+
+    génération multi-candidats ;
+
+    toute boucle de recherche susceptible de croître.
+
+Une recherche sans borne est interdite.
+
+Le budget est un contrat typé, validé à la construction :
+
+from dataclasses import dataclass
+
+@dataclass(frozen=True, slots=True)
+class SearchBudget:
+    max_evaluations: int
+    max_wall_time_s: float
+
+    def __post_init__(self) -> None:
+        if self.max_evaluations <= 0:
+            raise ValueError("max_evaluations must be > 0")
+        if self.max_wall_time_s <= 0:
+            raise ValueError("max_wall_time_s must be > 0")
+
+La recherche s'arrête dès qu'une borne est atteinte.
+2. Pourquoi c'est une règle de frontière
+
+Cette règle ne choisit pas la qualité de la recherche.
+
+Elle garantit seulement que le spécialiste ne peut pas monopoliser les ressources et bloquer le système.
+
+Elle ne définit pas :
+
+    le barème de récompense ;
+
+    le facteur de branchement ;
+
+    le nombre de candidats ;
+
+    la stratégie d'expansion ;
+
+    le progressive widening ;
+
+    la coupure précoce ;
+
+    le choix entre recherche complète et best-of-n.
+
+Ces décisions appartiennent au spécialiste.
+
+Un mauvais réglage peut produire un spécialiste médiocre, mais proprement isolé. Il ne doit pas corrompre le noyau.
+3. Application aux commandes
+
+Toute commande de recherche doit porter explicitement :
+
+SearchBudget
+
+ou un contrat équivalent nommé et testé.
+
+Exemples :
+
+E5SearchCommand              -> limit/min_score suffisants pour recherche simple non exploratoire
+MCTSSearchCommand            -> SearchBudget obligatoire
+BestOfNCommand               -> SearchBudget obligatoire
+PlanExplorationCommand       -> SearchBudget obligatoire
+LLMMultiCandidateCommand     -> SearchBudget obligatoire
+HybridRetrievalCommand       -> SearchBudget obligatoire si itératif
+
+Une recherche simple bornée par limit peut être considérée comme bornée si :
+
+    limit est validé ;
+
+    aucune boucle exploratoire non bornée n'existe ;
+
+    le rapport de phase indique search_commands_bounded: true.
+
+4. Test de règle
+
+tests/rules doit progressivement empêcher :
+
+    l'acceptation d'une commande de recherche itérative sans budget ;
+
+    l'acceptation d'un budget nul ou négatif ;
+
+    l'ajout d'une boucle exploratoire sans borne explicite.
+
+5. Revue de phase
+
+Le champ suivant est obligatoire :
+
+search_commands_bounded: true|false|n/a
+true : une commande de recherche existe et elle est bornée ;
+false : une commande de recherche existe mais n'est pas bornée ;
+n/a : la phase n'ajoute aucune commande de recherche.

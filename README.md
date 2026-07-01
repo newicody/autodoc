@@ -1,71 +1,51 @@
-# Phase 5.18 — Phase 5 closure audit
+# autodoc — Phase 6.1 — SourceCandidate intake CLI
 
-This archive closes Phase 5 as a local E5 context intake and SourceCandidate preparation layer.
+Cette archive démarre la Phase 6 avec une bordure CLI locale pour créer ou
+remplacer une `SourceCandidate` dans le store JSON atomique introduit en Phase
+5.15.
 
-## Goal
-
-```text
-Phase 4 artifact-dir
--> local E5 runtime/intake
--> ContextEngine explicit attachment
--> status/report
--> SourceCandidate local contract/store
--> future GitHub projection design
--> future local adapter boundary
--> Phase 5 closure audit
-```
-
-## Main additions
-
-```text
-doc/PHASE5_CLOSURE_AUDIT.md
-doc/CHANGELOG_PHASE5_18_PHASE5_CLOSURE.md
-doc/docs/architecture/context/42_phase5_closure_audit.dot
-```
-
-Updated:
-
-```text
-doc/docs/architecture/00_global.dot
-doc/docs/architecture/context/41_local_server_boundary.dot
-```
-
-## Boundary statement
-
-```text
-no Scheduler rewrite
-no Scheduler autoload
-no daemon
-no polling
-no watcher
-no network
-no GitHub API
-no token
-no server implementation
-no framework selected
-no Qdrant
-no LLM
-no hidden OpenVINO call
-no persistent database
-```
-
-## Dependency statement
-
-No non-stdlib dependency was added.
-
-## Suggested tests
+## Usage
 
 ```bash
-PYTHONPATH=src pytest -q tests/docs/test_dot_links.py::test_dot_urls_resolve_to_existing_dot_sources
-PYTHONPATH=src pytest -q tests/context
-PYTHONPATH=src pytest -q tests/rules
-PYTHONPATH=src pytest -q
+PYTHONPATH=src python3 -m context.source_candidate_intake_cli \
+  --store-file /tmp/source_candidates.json \
+  --title "Inspect artifact-dir local" \
+  --body "artifact-dir à analyser" \
+  --origin-kind artifact_dir \
+  --origin-reference /tmp/autodoc_e5_dry_run
 ```
+
+Avec sortie JSON et rapport :
+
+```bash
+PYTHONPATH=src python3 -m context.source_candidate_intake_cli \
+  --store-file /tmp/source_candidates.json \
+  --title "Inspect artifact-dir local" \
+  --body "artifact-dir à analyser" \
+  --origin-kind artifact_dir \
+  --origin-reference /tmp/autodoc_e5_dry_run \
+  --decision inspect \
+  --format json \
+  --report-file /tmp/source_candidate_intake_report.json
+```
+
+## Frontières
+
+- pas de serveur ;
+- pas de daemon/watcher/polling ;
+- pas de réseau ;
+- pas d'API GitHub ;
+- pas de token ;
+- pas de Qdrant ;
+- pas de LLM ;
+- pas d'appel OpenVINO.
+
+Aucune bibliothèque hors stdlib Python n'est ajoutée.
 
 ## code_rule
 
 ```text
 code_rule_review: done
 code_rule_update_required: false
-code_rule_reason: 5.18 clôture et audite la Phase 5 sans nouvelle règle de programmation.
+code_rule_reason: 6.1 ajoute une bordure CLI manuelle autour des contrats SourceCandidate existants ; aucune règle de programmation nouvelle n'est nécessaire.
 ```
