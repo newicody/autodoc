@@ -1,74 +1,64 @@
-# Phase 5.12 — Local context loop design
+# Phase 5.13 — Local context loop CLI
 
-Cette archive ajoute la conception de la boucle locale manuelle qui relie les
-artefacts E5 Phase 4, le runtime local E5, l'intake explicite `ContextEngine`,
-la projection status/report et la décision humaine future.
+This archive adds a thin manual CLI boundary for the local context loop described in Phase 5.12.
 
-## Objectif
+The command consumes an existing Phase 4 E5 artifact directory, attaches it explicitly to a local `ContextEngine`, inspects the E5 status, and renders a text/json report.
 
-```text
-artifact-dir Phase 4
--> E5RuntimeArtifactDirectoryLoader
--> E5LocalContextRuntime
--> ContextEngine.attach_e5_*()
--> E5ContextEngineStatus
--> CLI/report existants
--> décision humaine future
-```
+It does not rebuild/search E5, does not call OpenVINO, and does not apply any operator decision.
 
-## Fichiers modifiés / ajoutés
-
-```text
-doc/LOCAL_CONTEXT_LOOP_DESIGN.md
-doc/CHANGELOG_PHASE5_12_LOCAL_CONTEXT_LOOP_DESIGN.md
-doc/docs/architecture/00_global.dot
-doc/docs/architecture/context/35_context_engine_contract_lock.dot
-doc/docs/architecture/context/36_local_context_loop_design.dot
-```
-
-## Frontières conservées
-
-```text
-pas de nouvelle CLI en 5.12
-pas de serveur
-pas de daemon
-pas de watcher fichier
-pas de polling
-pas de réseau
-pas d'API GitHub
-pas de token
-pas de Qdrant
-pas de stockage persistant
-pas de LLM
-pas d'appel OpenVINO caché
-```
-
-## Dépendances
-
-Aucune bibliothèque hors stdlib Python n'est ajoutée.
-
-## Tests conseillés
+## Usage
 
 ```bash
-PYTHONPATH=src pytest -q tests/docs/test_dot_links.py::test_dot_urls_resolve_to_existing_dot_sources
-PYTHONPATH=src pytest -q tests/context
-PYTHONPATH=src pytest -q tests/rules
-PYTHONPATH=src pytest -q
+PYTHONPATH=src python3 -m context.local_context_loop_cli /tmp/autodoc_e5_dry_run
+PYTHONPATH=src python3 -m context.local_context_loop_cli --format json /tmp/autodoc_e5_dry_run
+PYTHONPATH=src python3 -m context.local_context_loop_cli --report-file /tmp/local_context_loop.json /tmp/autodoc_e5_dry_run
 ```
 
-## Graphviz
+Optional operator next-action, recorded only in the payload:
 
 ```bash
-dot -Tsvg doc/docs/architecture/00_global.dot >/tmp/00_global.svg
-dot -Tsvg doc/docs/architecture/context/35_context_engine_contract_lock.dot >/tmp/35_context_engine_contract_lock.svg
-dot -Tsvg doc/docs/architecture/context/36_local_context_loop_design.dot >/tmp/36_local_context_loop_design.svg
-rm -f /tmp/00_global.svg /tmp/35_context_engine_contract_lock.svg /tmp/36_local_context_loop_design.svg
+PYTHONPATH=src python3 -m context.local_context_loop_cli \
+  --next-action archive \
+  --report-file /tmp/local_context_loop.json \
+  /tmp/autodoc_e5_dry_run
 ```
+
+Allowed values:
+
+```text
+inspect
+relaunch
+reject
+archive
+promote
+merge
+```
+
+## Boundaries
+
+```text
+no E5/OpenVINO execution
+no Scheduler living loop
+no daemon
+no server
+no watcher
+no network
+no GitHub API
+no token
+no Qdrant
+no LLM
+no persistent storage
+no decision mutation
+```
+
+## Dependency policy
+
+No non-stdlib Python dependency was added.
 
 ## code_rule
 
 ```text
 code_rule_review: done
 code_rule_update_required: false
-code_rule_reason: 5.12 formalise une boucle locale documentaire sans nouvelle règle de programmation.
+code_rule_reason: 5.13 ajoute une CLI manuelle mince au-dessus des contrats existants ; aucune règle de programmation nouvelle n'est nécessaire.
 ```
