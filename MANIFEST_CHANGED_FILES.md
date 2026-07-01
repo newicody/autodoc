@@ -1,16 +1,30 @@
-# Manifest — Phase 5.4-r1
-
-## Fichiers modifiés
-
-- `tests/context/test_e5_local_context_runtime.py`
+# Manifest — Phase 5.7 — E5 ContextEngine status projection
 
 ## Fichiers ajoutés
 
-- `doc/CHANGELOG_PHASE5_4_R1_E5_LOCAL_CONTEXT_RUNTIME_TEST_FIX.md`
-- `PHASE5_4_R1_TEST_REPORT.md`
-- `MANIFEST_CHANGED_FILES.md`
-- `README.md`
+```text
+doc/CHANGELOG_PHASE5_7_E5_CONTEXT_ENGINE_STATUS.md
+doc/docs/architecture/context/31_e5_context_engine_status.dot
+src/context/e5_context_engine_status.py
+tests/context/test_e5_context_engine_status.py
+```
 
-## Dépendances
+## Fichiers modifiés
 
-Aucune bibliothèque hors stdlib Python n'est ajoutée.
+```text
+README.md
+MANIFEST_CHANGED_FILES.md
+PHASE5_7_TEST_REPORT.md
+doc/docs/architecture/00_global.dot
+doc/docs/architecture/context/30_e5_context_engine_intake.dot
+src/context/__init__.py
+```
+
+## Non inclus
+
+```text
+Aucun SVG.
+Aucun __pycache__.
+Aucun script patch.
+Aucun fichier OpenVINO/Qdrant/GitHub API.
+```

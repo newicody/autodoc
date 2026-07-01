@@ -1,5 +1,12 @@
 from .builder import InferenceContextBuilder
 from .collector import ContextCollector
+from .e5_context_attachment import (
+    E5ContextAttachment,
+    E5ContextAttachmentPolicy,
+    E5ContextAttachmentResult,
+    attach_e5_artifact_dir_to_context,
+    attach_e5_runtime_context,
+)
 from .e5_artifact_loader import (
     E5RuntimeArtifactDirectoryBridge,
     E5RuntimeArtifactDirectoryLoader,
@@ -23,13 +30,34 @@ from .e5_runtime_bridge import (
     E5RuntimeBridgeResult,
     build_e5_runtime_inference_context,
 )
-from .engine import ContextEngine
+from .e5_context_engine_status import (
+    E5ContextEngineStatus,
+    E5ContextEngineStatusPolicy,
+    inspect_e5_context_engine,
+    inspect_e5_inference_context,
+)
+from .engine import (
+    ContextEngine,
+    E5ContextEngineIntakePolicy,
+    E5ContextEngineIntakeResult,
+)
 from .handlers import ContextRequestHandler
 from .reducer import ContextReducer
 
 __all__ = [
+    "attach_e5_runtime_context",
+    "attach_e5_artifact_dir_to_context",
+    "E5ContextAttachmentResult",
+    "E5ContextAttachmentPolicy",
+    "E5ContextAttachment",
     "ContextCollector",
+    "E5ContextEngineStatus",
+    "E5ContextEngineStatusPolicy",
+    "inspect_e5_context_engine",
+    "inspect_e5_inference_context",
     "ContextEngine",
+    "E5ContextEngineIntakePolicy",
+    "E5ContextEngineIntakeResult",
     "ContextRequestHandler",
     "ContextReducer",
     "E5RuntimeArtifactDirectoryBridge",
