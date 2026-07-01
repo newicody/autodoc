@@ -813,9 +813,9 @@ true : une commande de recherche existe et elle est bornée ;
 false : une commande de recherche existe mais n'est pas bornée ;
 n/a : la phase n'ajoute aucune commande de recherche.
 
-## Addendum Phase 6-r3 — Patch Queue, hygiène de dépôt et développement assisté
+## Addendum Phase 6-r3 — Patch Queue, hygiène Git et documentation générée
 
-Cet addendum formalise le nouveau mode de développement du dépôt. Les changements proposés par IA, outil externe ou session de travail longue ne doivent plus être livrés comme scripts Python modifiant directement le dépôt. Le format normal est un patch Git standard, rangé dans un répertoire versionné.
+Cet addendum formalise le nouveau mode de développement du dépôt. Les changements proposés par IA, outil externe ou session longue ne doivent plus être livrés comme scripts Python modifiant directement le dépôt. Le format normal est un patch Git standard, rangé dans un répertoire versionné.
 
 ### 1. Un patch = un répertoire versionné
 
@@ -833,7 +833,7 @@ Les patchs plats directement posés dans `patch/*.patch` ou `patch/*.diff` sont 
 
 `README.md` décrit l’intention du patch, son scope et ses limites. `metadata.json` peut préciser le sujet de commit, les commandes de test attendues et les notes d’intégration. `patch.diff` reste le patch Git standard applicable par `git apply`.
 
-### 2. Outil d’application autorisé
+### 2. `apply_patch_queue.py` est un outil de développement
 
 `apply_patch_queue.py` est l’outil local autorisé pour appliquer les patchs versionnés. Il reste un outil de développement, pas une capacité métier du micro-kernel.
 
@@ -851,7 +851,7 @@ découvrir patch/<patch-id>/
 
 Il ne doit pas contenir de logique métier Autodoc/MissiPy. Il ne remplace pas le Scheduler, le Dispatcher, le PolicyEngine ou les handlers métier.
 
-### 3. SSH sans ssh-agent
+### 3. SSH sans `ssh-agent`
 
 L’outil peut effectuer des opérations Git réseau optionnelles sans dépendre de `ssh-agent`.
 
@@ -863,9 +863,11 @@ variables d’environnement
 .patchqueue.local.json
 ```
 
-`.patchqueue.local.json` doit rester ignoré par Git. Aucune clé privée, aucun certificat SSH utilisateur, aucun secret et aucun token ne doivent être versionnés.
+`.patchqueue.local.json` doit rester ignoré par Git.
 
-L’outil peut construire temporairement `GIT_SSH_COMMAND`, par exemple avec :
+Aucune clé privée, aucun certificat SSH utilisateur, aucun secret et aucun token ne doivent être versionnés.
+
+L’outil peut construire temporairement `GIT_SSH_COMMAND` avec une configuration explicite :
 
 ```text
 IdentityAgent=none
@@ -898,9 +900,11 @@ Tout patch qui modifie le README racine doit justifier pourquoi une documentatio
 
 ### 5. DOT versionnés, SVG générés
 
-Les sources d’architecture sont les fichiers `.dot`. Les `.svg` sont des artefacts générés localement.
+Les sources d’architecture sont les fichiers `.dot`.
 
-La règle est :
+Les `.svg` sont des artefacts générés localement. Ils ne doivent pas être versionnés.
+
+La règle locale est :
 
 ```bash
 make -C doc
@@ -909,7 +913,7 @@ make -C doc clean
 
 avant revue ou push lorsque les graphes sont générés.
 
-Les `.svg`, `.pyo`, caches Python et sorties de build ne doivent pas être versionnés.
+Les `.svg`, `.pyo`, caches Python et sorties de build doivent rester absents de l’index Git.
 
 ### 6. Documentation obligatoire par phase
 
@@ -930,7 +934,7 @@ Le rapport de phase doit toujours contenir un bloc :
 code_rule_review: done
 code_rule_update_required: true|false
 code_rule_reason: ...
-live_path_status: green|red|n/a
+live_path_status: green|red|transition|n/a
 live_path_uses_real_backend: true|false|n/a
 external_dependencies_added: true|false
 scheduler_modified: true|false
@@ -938,6 +942,7 @@ network_added: true|false
 github_api_added: true|false
 qdrant_added: true|false
 llm_or_openvino_added: true|false
+search_commands_bounded: true|false|n/a
 ```
 
 ### 7. Tests de règles
