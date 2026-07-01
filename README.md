@@ -1,88 +1,74 @@
-# Phase 5.9 — E5 ContextEngine CLI report file
+# Phase 5.12 — Local context loop design
 
-Cette archive étend la bordure CLI manuelle de la Phase 5.8 sans créer une nouvelle surface de commande.
+Cette archive ajoute la conception de la boucle locale manuelle qui relie les
+artefacts E5 Phase 4, le runtime local E5, l'intake explicite `ContextEngine`,
+la projection status/report et la décision humaine future.
 
-La chaîne visée reste :
+## Objectif
 
 ```text
 artifact-dir Phase 4
--> ContextEngine.attach_e5_artifact_dir()
--> inspect_e5_context_engine()
--> payload missipy.e5.context_engine_cli.v1
--> stdout text/json
--> report JSON atomique optionnel
+-> E5RuntimeArtifactDirectoryLoader
+-> E5LocalContextRuntime
+-> ContextEngine.attach_e5_*()
+-> E5ContextEngineStatus
+-> CLI/report existants
+-> décision humaine future
 ```
 
-## Usage
-
-```bash
-PYTHONPATH=src python3 -m context.e5_context_engine_cli \
-  --report-file /tmp/e5_context_engine_status.json \
-  /tmp/autodoc_e5_dry_run
-
-PYTHONPATH=src python3 -m context.e5_context_engine_cli \
-  --format json \
-  --report-file /tmp/e5_context_engine_status.json \
-  /tmp/autodoc_e5_dry_run
-```
-
-`--report-file` persiste le même payload JSON que la sortie `--format json` :
+## Fichiers modifiés / ajoutés
 
 ```text
-schema: missipy.e5.context_engine_cli.v1
-intake: missipy.e5.context_engine_intake.v1
-status: missipy.e5.context_engine_status.v1
+doc/LOCAL_CONTEXT_LOOP_DESIGN.md
+doc/CHANGELOG_PHASE5_12_LOCAL_CONTEXT_LOOP_DESIGN.md
+doc/docs/architecture/00_global.dot
+doc/docs/architecture/context/35_context_engine_contract_lock.dot
+doc/docs/architecture/context/36_local_context_loop_design.dot
 ```
 
-## Frontière IO
-
-L'écriture fichier est volontairement limitée à la CLI :
+## Frontières conservées
 
 ```text
-context.e5_context_engine_cli
--> _write_report()
--> fichier JSON atomique
-```
-
-Le domaine, le `ContextEngine`, le runtime E5 et les contrats d'attachement ne savent pas écrire ce fichier.
-
-## Ce que ça ne fait pas
-
-```text
-pas de nouvelle CLI
-pas d'autoload E5
-pas de Scheduler vivant
+pas de nouvelle CLI en 5.12
+pas de serveur
 pas de daemon
+pas de watcher fichier
+pas de polling
 pas de réseau
 pas d'API GitHub
 pas de token
-pas de polling
 pas de Qdrant
+pas de stockage persistant
 pas de LLM
-pas d'appel OpenVINO
+pas d'appel OpenVINO caché
 ```
+
+## Dépendances
 
 Aucune bibliothèque hors stdlib Python n'est ajoutée.
 
-## Application
-
-Extraire l'archive à la racine du dépôt :
+## Tests conseillés
 
 ```bash
-tar -xzf autodoc_phase5_9_e5_context_engine_cli_report.tar.gz
-```
-
-## Tests recommandés
-
-```bash
-PYTHONPATH=src pytest -q tests/context/test_e5_context_engine_cli.py
-PYTHONPATH=src pytest -q tests/context/test_e5_context_engine_status.py
-PYTHONPATH=src pytest -q tests/context/test_e5_context_engine_intake.py
-PYTHONPATH=src pytest -q tests/context/test_context_engine.py::test_context_engine_uses_event_path_for_snapshot
-PYTHONPATH=src pytest -q tests/context
 PYTHONPATH=src pytest -q tests/docs/test_dot_links.py::test_dot_urls_resolve_to_existing_dot_sources
+PYTHONPATH=src pytest -q tests/context
 PYTHONPATH=src pytest -q tests/rules
 PYTHONPATH=src pytest -q
+```
 
-PYTHONPATH=src python3 -m context.e5_context_engine_cli --help
+## Graphviz
+
+```bash
+dot -Tsvg doc/docs/architecture/00_global.dot >/tmp/00_global.svg
+dot -Tsvg doc/docs/architecture/context/35_context_engine_contract_lock.dot >/tmp/35_context_engine_contract_lock.svg
+dot -Tsvg doc/docs/architecture/context/36_local_context_loop_design.dot >/tmp/36_local_context_loop_design.svg
+rm -f /tmp/00_global.svg /tmp/35_context_engine_contract_lock.svg /tmp/36_local_context_loop_design.svg
+```
+
+## code_rule
+
+```text
+code_rule_review: done
+code_rule_update_required: false
+code_rule_reason: 5.12 formalise une boucle locale documentaire sans nouvelle règle de programmation.
 ```

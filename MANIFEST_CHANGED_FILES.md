@@ -1,25 +1,33 @@
-# Manifest — Phase 5.9
+# Manifest — Phase 5.12 — Local context loop design
 
-Changed files included in this archive:
+## Added
+
+```text
+doc/LOCAL_CONTEXT_LOOP_DESIGN.md
+doc/CHANGELOG_PHASE5_12_LOCAL_CONTEXT_LOOP_DESIGN.md
+doc/docs/architecture/context/36_local_context_loop_design.dot
+```
+
+## Modified
+
+```text
+doc/docs/architecture/00_global.dot
+doc/docs/architecture/context/35_context_engine_contract_lock.dot
+```
+
+## Root package files
 
 ```text
 README.md
 MANIFEST_CHANGED_FILES.md
-PHASE5_9_TEST_REPORT.md
-doc/CHANGELOG_PHASE5_9_E5_CONTEXT_ENGINE_CLI_REPORT.md
-doc/docs/architecture/00_global.dot
-doc/docs/architecture/context/32_e5_context_engine_cli.dot
-doc/docs/architecture/context/33_e5_context_engine_cli_report.dot
-src/context/e5_context_engine_cli.py
-tests/context/test_e5_context_engine_cli.py
+PHASE5_12_TEST_REPORT.md
 ```
 
-Archive constraints:
+## Excluded
 
 ```text
-complete files only
-no patch script
 no SVG
 no __pycache__
-no external dependency
+no patch script
+no generated cache
 ```
