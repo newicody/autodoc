@@ -37,6 +37,19 @@ from .e5_context_engine_status import (
     inspect_e5_inference_context,
 )
 
+
+from .source_candidate_store import (
+    SourceCandidateReportPolicy,
+    SourceCandidateStorePolicy,
+    SourceCandidateStoreReport,
+    SourceCandidateStoreSnapshot,
+    SourceCandidateStoreWriteResult,
+    load_source_candidate_store,
+    source_candidate_store_snapshot_from_json_dict,
+    upsert_source_candidate,
+    write_source_candidate_store,
+    write_source_candidate_store_report,
+)
 from .source_candidate import (
     SourceCandidate,
     SourceCandidateCreationResult,
@@ -68,6 +81,16 @@ __all__ = [
     "allowed_source_candidate_statuses",
     "apply_source_candidate_decision",
     "build_source_candidate",
+    "SourceCandidateReportPolicy",
+    "SourceCandidateStorePolicy",
+    "SourceCandidateStoreReport",
+    "SourceCandidateStoreSnapshot",
+    "SourceCandidateStoreWriteResult",
+    "load_source_candidate_store",
+    "source_candidate_store_snapshot_from_json_dict",
+    "upsert_source_candidate",
+    "write_source_candidate_store",
+    "write_source_candidate_store_report",
     "attach_e5_runtime_context",
     "attach_e5_artifact_dir_to_context",
     "E5ContextAttachmentResult",

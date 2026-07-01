@@ -1,97 +1,65 @@
-# Phase 5.14 — SourceCandidate local contract
+# autodoc — Phase 5.15 — SourceCandidate local storage/report
 
-This archive adds the local `SourceCandidate` contract.
+Cette archive ajoute la bordure IO locale `SourceCandidate` : store JSON atomique,
+upsert par `candidate_id`, rechargement du snapshot et rapport optionnel.
 
-## Purpose
-
-Phase 5.14 introduces the local business object that will later connect the local
-context loop to storage, reports and GitHub projection:
+## Contenu
 
 ```text
-raw local input / artifact-dir / future GitHub projection
--> SourceCandidateInput
--> SourceCandidate
--> SourceCandidateDecision
--> immutable status transition
-```
-
-No persistent storage is introduced in this phase.
-
-## Files
-
-```text
-README.md
-MANIFEST_CHANGED_FILES.md
-PHASE5_14_TEST_REPORT.md
-doc/SOURCE_CANDIDATE_CONTRACT.md
-doc/CHANGELOG_PHASE5_14_SOURCE_CANDIDATE_CONTRACT.md
-doc/docs/architecture/00_global.dot
-doc/docs/architecture/context/37_local_context_loop_cli.dot
-doc/docs/architecture/context/38_source_candidate_contract.dot
+src/context/source_candidate_store.py
+tests/context/test_source_candidate_store.py
 src/context/__init__.py
-src/context/local_context_loop_cli.py
-src/context/source_candidate.py
-tests/context/test_source_candidate.py
+doc/SOURCE_CANDIDATE_STORAGE_REPORT.md
+doc/CHANGELOG_PHASE5_15_SOURCE_CANDIDATE_STORAGE_REPORT.md
+doc/docs/architecture/00_global.dot
+doc/docs/architecture/context/38_source_candidate_contract.dot
+doc/docs/architecture/context/39_source_candidate_storage_report.dot
 ```
 
-## New contracts
+## Exemple d'usage
+
+```python
+from context.source_candidate import SourceCandidateInput, build_source_candidate
+from context.source_candidate_store import SourceCandidateStorePolicy, upsert_source_candidate
+
+candidate = build_source_candidate(
+    SourceCandidateInput(title="Artifact E5", body="Contexte local prêt.")
+).candidate
+
+result = upsert_source_candidate(
+    SourceCandidateStorePolicy(path="/tmp/source_candidates.json"),
+    candidate,
+)
+```
+
+## Dépendances
+
+Aucune bibliothèque hors stdlib Python n'est ajoutée.
+
+## Frontières conservées
 
 ```text
-SourceCandidateOrigin
-SourceCandidateInput
-SourceCandidatePolicy
-SourceCandidateDecision
-SourceCandidate
-SourceCandidateCreationResult
-build_source_candidate()
-apply_source_candidate_decision()
-allowed_source_candidate_statuses()
-allowed_source_candidate_decisions()
+pas de base de données
+pas de serveur
+pas de daemon
+pas de watcher
+pas de polling
+pas de réseau
+pas d'API GitHub
+pas de token
+pas de Qdrant
+pas de LLM
+pas d'appel OpenVINO
 ```
 
-## GitHub namespace note
-
-`SourceCandidatePolicy.default_repository` defaults to:
-
-```text
-newicody/autodoc
-```
-
-This is only serialized metadata for future projection. Phase 5.14 performs no
-GitHub API call and uses no token.
-
-## Included Phase 5.13 hygiene fix
-
-`src/context/local_context_loop_cli.py` is included to collapse a duplicated
-`_write_report` function header to a single definition.
-
-## Boundaries
-
-```text
-no persistent storage
-no SourceCandidate report writer yet
-no GitHub API
-no token
-no network
-no daemon
-no live Scheduler
-no Qdrant
-no LLM
-no OpenVINO call
-```
-
-## Dependencies
-
-No non-stdlib Python dependency was added.
-
-## Tests
+## Tests recommandés
 
 ```bash
-tar -xzf /path/to/autodoc_phase5_14_source_candidate_contract.tar.gz
+tar -xzf /chemin/vers/autodoc_phase5_15_source_candidate_storage_report.tar.gz
 
+PYTHONPATH=src pytest -q tests/context/test_source_candidate_store.py
 PYTHONPATH=src pytest -q tests/context/test_source_candidate.py
 PYTHONPATH=src pytest -q tests/context/test_local_context_loop_cli.py
-PYTHONPATH=src pytest -q tests/context/test_context_engine_contract_lock.py
 PYTHONPATH=src pytest -q tests/context
 PYTHONPATH=src pytest -q tests/docs/test_dot_links.py::test_dot_urls_resolve_to_existing_dot_sources
 PYTHONPATH=src pytest -q tests/rules
@@ -103,5 +71,5 @@ PYTHONPATH=src pytest -q
 ```text
 code_rule_review: done
 code_rule_update_required: false
-code_rule_reason: 5.14 adds immutable local SourceCandidate contracts and a small CLI hygiene fix; no new programming rule is required.
+code_rule_reason: 5.15 ajoute une bordure IO locale explicite avec JSON atomique ; aucune règle de programmation nouvelle n'est nécessaire.
 ```
