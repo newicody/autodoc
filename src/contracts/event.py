@@ -31,6 +31,8 @@ class EventType(Enum):
     # SourceCandidate local — Phase 6.1-r1 live path
     SOURCE_CANDIDATE_INTAKE = auto()
     SOURCE_CANDIDATE_INTAKE_RESULT = auto()
+    SOURCE_CANDIDATE_REVIEW = auto()
+    SOURCE_CANDIDATE_REVIEW_RESULT = auto()
 
     # Politique kernel
     POLICY_DENIED = auto()
