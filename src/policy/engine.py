@@ -16,6 +16,7 @@ def _default_destinations() -> frozenset[str]:
             "context.collector",
             "inference",
             "lifecycle",
+            "source_candidate",
         }
     )
 
@@ -29,7 +30,9 @@ class PolicyConfig:
     """Configuration immuable du PolicyEngine minimal.
 
     Cette configuration reste volontairement simple : elle protège seulement les
-    invariants du micro-kernel, sans introduire de logique métier.
+    invariants du micro-kernel, sans introduire de logique métier. La destination
+    ``source_candidate`` est ajoutée en Phase 6.1-r1 pour permettre un chemin
+    Scheduler vivant vers l'intake SourceCandidate sans contourner la queue.
     """
 
     min_priority: int = -1_000
@@ -42,9 +45,8 @@ class PolicyConfig:
 class PolicyEngine:
     """Barrière d'autorisation minimale avant l'entrée en queue.
 
-    Le Scheduler délègue ici la validation des événements. La politique vérifie
-    uniquement des invariants de kernel : source, priorité, destination,
-    shutdown et backend d'inférence déclaré.
+    La politique vérifie uniquement des invariants de kernel : source, priorité,
+    destination, shutdown et backend d'inférence déclaré.
     """
 
     def __init__(self, config: PolicyConfig | None = None) -> None:
@@ -59,19 +61,16 @@ class PolicyEngine:
 
         if not event.source:
             return Decision.deny("event source is required", "event.source.required")
-
         if event.priority < self.config.min_priority:
             return Decision.deny(
                 f"priority {event.priority} is lower than {self.config.min_priority}",
                 "event.priority.too_low",
             )
-
         if event.priority > self.config.max_priority:
             return Decision.deny(
                 f"priority {event.priority} is higher than {self.config.max_priority}",
                 "event.priority.too_high",
             )
-
         if event.type is EventType.SHUTDOWN and event.source != "kernel":
             return Decision.deny("only kernel can request shutdown", "shutdown.source.kernel_only")
 
@@ -81,7 +80,6 @@ class PolicyEngine:
 
         if event.type is EventType.INFERENCE_REQUEST:
             return self._decide_inference(event)
-
         return Decision.allow()
 
     def _decide_destination(
@@ -91,11 +89,9 @@ class PolicyEngine:
     ) -> Decision:
         if event.dest in self.config.allowed_destinations:
             return Decision.allow(rule="event.destination.kernel")
-
         if self.config.allow_registered_component_destinations:
             if event.dest in frozenset(registered_components):
                 return Decision.allow(rule="event.destination.component")
-
         return Decision.deny(
             f"destination {event.dest!r} is not allowed",
             "event.destination.denied",
@@ -107,11 +103,9 @@ class PolicyEngine:
                 "INFERENCE_REQUEST payload must be InferenceRequest",
                 "inference.payload.type",
             )
-
         if event.payload.model not in self.config.allowed_inference_models:
             return Decision.deny(
                 f"inference model {event.payload.model!r} is not allowed",
                 "inference.model.denied",
             )
-
         return Decision.allow(rule="inference.model.allowed")

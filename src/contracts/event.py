@@ -11,7 +11,7 @@ from typing import Any
 
 
 class EventType(Enum):
-    """Types d'événements connus du micro-kernel Phase 1.2bis."""
+    """Types d'événements connus du micro-kernel."""
 
     # Cycle de vie
     LOAD = auto()
@@ -24,9 +24,13 @@ class EventType(Enum):
     CONTEXT_REQUEST = auto()
     CONTEXT_REPLY = auto()
 
-    # Inférence future
+    # Inférence
     INFERENCE_REQUEST = auto()
     INFERENCE_RESULT = auto()
+
+    # SourceCandidate local — Phase 6.1-r1 live path
+    SOURCE_CANDIDATE_INTAKE = auto()
+    SOURCE_CANDIDATE_INTAKE_RESULT = auto()
 
     # Politique kernel
     POLICY_DENIED = auto()

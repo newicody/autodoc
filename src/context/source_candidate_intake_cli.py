@@ -1,31 +1,35 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from contracts.event import Event, EventType, Request
+from kernel.dispatcher import Dispatcher
+from kernel.event_bus import EventBus
+from kernel.queue import PriorityQueue
+from kernel.registry import Registry
+from kernel.scheduler import Scheduler
+
 from .source_candidate import (
-    SourceCandidate,
-    SourceCandidateCreationResult,
     SourceCandidateDecision,
     SourceCandidateInput,
     SourceCandidateOrigin,
     SourceCandidatePolicy,
     allowed_source_candidate_decisions,
     allowed_source_candidate_statuses,
-    apply_source_candidate_decision,
-    build_source_candidate,
 )
-from .source_candidate_store import (
-    SourceCandidateReportPolicy,
-    SourceCandidateStorePolicy,
-    SourceCandidateStoreWriteResult,
-    upsert_source_candidate,
+from .source_candidate_handlers import SourceCandidateIntakeHandler
+from .source_candidate_intake import (
+    SourceCandidateIntakeCommand,
+    SourceCandidateIntakeResult,
+    run_source_candidate_intake,
 )
+from .source_candidate_store import SourceCandidateReportPolicy, SourceCandidateStorePolicy
 
-_INTAKE_SCHEMA = "missipy.source_candidate.intake_cli.v1"
 _ALLOWED_FORMATS = frozenset({"text", "json"})
 
 
@@ -40,79 +44,11 @@ class SourceCandidateIntakeRenderPolicy:
             raise ValueError("output_format must be text or json")
 
 
-@dataclass(frozen=True, slots=True)
-class SourceCandidateIntakeCommand:
-    """Commande normalisée avant création et upsert local d'une SourceCandidate."""
-
-    candidate_input: SourceCandidateInput
-    candidate_policy: SourceCandidatePolicy
-    store_policy: SourceCandidateStorePolicy
-    report_policy: SourceCandidateReportPolicy
-    render_policy: SourceCandidateIntakeRenderPolicy
-    decision: SourceCandidateDecision | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class SourceCandidateIntakeResult:
-    """Résultat stable de l'intake CLI local SourceCandidate."""
-
-    creation: SourceCandidateCreationResult
-    candidate: SourceCandidate
-    write_result: SourceCandidateStoreWriteResult
-    decision: SourceCandidateDecision | None
-    report_path: Path | None
-
-    @property
-    def candidate_id(self) -> str:
-        return self.candidate.candidate_id
-
-    @property
-    def status(self) -> str:
-        return self.candidate.status
-
-    def to_json_dict(self) -> dict[str, object | None]:
-        return {
-            "schema": _INTAKE_SCHEMA,
-            "candidate_id": self.candidate_id,
-            "status": self.status,
-            "terminal": self.candidate.terminal,
-            "actionable": self.candidate.actionable,
-            "decision": self.decision.to_json_dict() if self.decision is not None else None,
-            "store_path": str(self.write_result.path),
-            "report_path": str(self.report_path) if self.report_path is not None else None,
-            "inserted": self.write_result.inserted,
-            "replaced": self.write_result.replaced,
-            "candidate_count": self.write_result.snapshot.candidate_count,
-            "candidate": self.candidate.to_json_dict(),
-            "creation": self.creation.to_json_dict(),
-            "write_result": self.write_result.to_json_dict(),
-        }
-
-    def to_text(self) -> str:
-        lines = [
-            "SourceCandidate intake",
-            f"schema: {_INTAKE_SCHEMA}",
-            f"candidate_id: {self.candidate_id}",
-            f"title: {self.candidate.title}",
-            f"status: {self.status}",
-            f"terminal: {str(self.candidate.terminal).lower()}",
-            f"actionable: {str(self.candidate.actionable).lower()}",
-            f"store_path: {self.write_result.path}",
-            f"inserted: {str(self.write_result.inserted).lower()}",
-            f"replaced: {str(self.write_result.replaced).lower()}",
-            f"candidate_count: {self.write_result.snapshot.candidate_count}",
-        ]
-        if self.decision is not None:
-            lines.append(f"decision: {self.decision.action}")
-        if self.report_path is not None:
-            lines.append(f"report_path: {self.report_path}")
-        return "\n".join(lines)
-
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="source-candidate-intake",
-        description="Create or update one local SourceCandidate in a JSON store.",
+        description="Create or update one local SourceCandidate through the Scheduler live path.",
     )
     parser.add_argument("--store-file", required=True, help="SourceCandidate JSON store file to update.")
     parser.add_argument("--title", required=True, help="Candidate title.")
@@ -174,30 +110,46 @@ def command_from_args(args: argparse.Namespace) -> SourceCandidateIntakeCommand:
             reason=args.reason,
             target_context_id=args.target_context_id,
         )
-    return SourceCandidateIntakeCommand(
+    intake = SourceCandidateIntakeCommand(
         candidate_input=candidate_input,
         candidate_policy=candidate_policy,
         store_policy=SourceCandidateStorePolicy(path=args.store_file, repository=args.repository),
         report_policy=SourceCandidateReportPolicy(path=args.report_file),
-        render_policy=SourceCandidateIntakeRenderPolicy(output_format=args.format),
         decision=decision,
     )
+    return intake
 
 
-def run_source_candidate_intake(command: SourceCandidateIntakeCommand) -> SourceCandidateIntakeResult:
-    creation = build_source_candidate(command.candidate_input, command.candidate_policy)
-    candidate = creation.candidate
-    if command.decision is not None:
-        candidate = apply_source_candidate_decision(candidate, command.decision)
-    report_policy = command.report_policy if command.report_policy.path is not None else None
-    write_result = upsert_source_candidate(command.store_policy, candidate, report=report_policy)
-    return SourceCandidateIntakeResult(
-        creation=creation,
-        candidate=candidate,
-        write_result=write_result,
-        decision=command.decision,
-        report_path=command.report_policy.path,
+async def run_source_candidate_intake_via_scheduler(
+    command: SourceCandidateIntakeCommand,
+) -> SourceCandidateIntakeResult:
+    """Exécute l'intake par le chemin Scheduler vivant local."""
+
+    registry = Registry()
+    bus = EventBus()
+    dispatcher = Dispatcher(bus)
+    dispatcher.register(EventType.SOURCE_CANDIDATE_INTAKE, SourceCandidateIntakeHandler(bus))
+    scheduler = Scheduler(PriorityQueue(), dispatcher, bus, registry, context_interval=60.0)
+
+    loop = asyncio.get_running_loop()
+    reply = loop.create_future()
+    event = Event(
+        EventType.SOURCE_CANDIDATE_INTAKE,
+        source="source_candidate.intake_cli",
+        dest="source_candidate",
+        payload=command,
+        request=Request(reply=reply),
     )
+    scheduler_task = asyncio.create_task(scheduler.run(), name="source-candidate-intake-scheduler")
+    try:
+        await scheduler.emit(event)
+        result = await asyncio.wait_for(reply, timeout=event.request.timeout if event.request else 5.0)
+        if not isinstance(result, SourceCandidateIntakeResult):
+            raise ValueError("SOURCE_CANDIDATE_INTAKE result must be SourceCandidateIntakeResult")
+        return result
+    finally:
+        await scheduler.shutdown()
+        await scheduler_task
 
 
 def render_source_candidate_intake_result(
@@ -216,8 +168,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         command = command_from_args(args)
-        result = run_source_candidate_intake(command)
-        print(render_source_candidate_intake_result(result, command.render_policy))
+        render_policy = SourceCandidateIntakeRenderPolicy(output_format=args.format)
+        result = asyncio.run(run_source_candidate_intake_via_scheduler(command))
+        print(render_source_candidate_intake_result(result, render_policy))
     except ValueError as exc:
         parser.error(str(exc))
     return 0
