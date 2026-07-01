@@ -471,8 +471,6 @@ Aucun code destiné à devenir composant durable ne doit appeler directement :
 
     un store persistant ;
 
-sans passer par une commande typée et une frontière un store persistant ;
-
 sans passer par une commande typée et une frontière d'adaptation déclarée.
 
 Les appels directs restent autorisés uniquement dans :
