@@ -1,17 +1,19 @@
-# Manifest — Phase 5.15 — SourceCandidate local storage/report
+# Manifest — Phase 5.16 — GitHub projection design
+
+Changed files included in this archive:
 
 ```text
 README.md
 MANIFEST_CHANGED_FILES.md
-PHASE5_15_TEST_REPORT.md
-doc/SOURCE_CANDIDATE_STORAGE_REPORT.md
-doc/CHANGELOG_PHASE5_15_SOURCE_CANDIDATE_STORAGE_REPORT.md
+PHASE5_16_TEST_REPORT.md
+doc/GITHUB_PROJECTION_DESIGN.md
+doc/CHANGELOG_PHASE5_16_GITHUB_PROJECTION_DESIGN.md
 doc/docs/architecture/00_global.dot
-doc/docs/architecture/context/38_source_candidate_contract.dot
 doc/docs/architecture/context/39_source_candidate_storage_report.dot
-src/context/__init__.py
-src/context/source_candidate_store.py
-tests/context/test_source_candidate_store.py
+doc/docs/architecture/context/40_github_projection_design.dot
 ```
 
-Archives : fichiers complets à écraser, aucun script patch.
+No Python runtime file is changed in this phase.
+No generated SVG is included.
+No `__pycache__` is included.
+No patch script is included.
