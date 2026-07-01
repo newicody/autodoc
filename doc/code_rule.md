@@ -812,3 +812,146 @@ search_commands_bounded: true|false|n/a
 true : une commande de recherche existe et elle est bornée ;
 false : une commande de recherche existe mais n'est pas bornée ;
 n/a : la phase n'ajoute aucune commande de recherche.
+
+## Addendum Phase 6-r3 — Patch Queue, hygiène de dépôt et développement assisté
+
+Cet addendum formalise le nouveau mode de développement du dépôt. Les changements proposés par IA, outil externe ou session de travail longue ne doivent plus être livrés comme scripts Python modifiant directement le dépôt. Le format normal est un patch Git standard, rangé dans un répertoire versionné.
+
+### 1. Un patch = un répertoire versionné
+
+Chaque patch doit être déposé sous la forme :
+
+```text
+patch/
+  <patch-id>/
+    patch.diff
+    README.md
+    metadata.json
+```
+
+Les patchs plats directement posés dans `patch/*.patch` ou `patch/*.diff` sont interdits. Le répertoire de patch est l’unité de revue, d’application, de test et de commit.
+
+`README.md` décrit l’intention du patch, son scope et ses limites. `metadata.json` peut préciser le sujet de commit, les commandes de test attendues et les notes d’intégration. `patch.diff` reste le patch Git standard applicable par `git apply`.
+
+### 2. Outil d’application autorisé
+
+`apply_patch_queue.py` est l’outil local autorisé pour appliquer les patchs versionnés. Il reste un outil de développement, pas une capacité métier du micro-kernel.
+
+Son rôle est limité à :
+
+```text
+découvrir patch/<patch-id>/
+-> vérifier patch.diff
+-> nettoyer les artefacts générés
+-> appliquer le patch Git
+-> relancer les tests
+-> proposer ou créer le commit
+-> pousser optionnellement via Git SSH
+```
+
+Il ne doit pas contenir de logique métier Autodoc/MissiPy. Il ne remplace pas le Scheduler, le Dispatcher, le PolicyEngine ou les handlers métier.
+
+### 3. SSH sans ssh-agent
+
+L’outil peut effectuer des opérations Git réseau optionnelles sans dépendre de `ssh-agent`.
+
+Les chemins vers clé privée, certificat SSH utilisateur et `known_hosts` doivent venir uniquement de :
+
+```text
+arguments CLI
+variables d’environnement
+.patchqueue.local.json
+```
+
+`.patchqueue.local.json` doit rester ignoré par Git. Aucune clé privée, aucun certificat SSH utilisateur, aucun secret et aucun token ne doivent être versionnés.
+
+L’outil peut construire temporairement `GIT_SSH_COMMAND`, par exemple avec :
+
+```text
+IdentityAgent=none
+IdentitiesOnly=yes
+IdentityFile=<clé privée hors dépôt>
+CertificateFile=<certificat hors dépôt>
+UserKnownHostsFile=<known_hosts hors dépôt>
+StrictHostKeyChecking=yes|accept-new|no
+```
+
+Ce mécanisme est une frontière d’IO Git. Il ne doit pas devenir une dépendance implicite du noyau ni d’un composant métier.
+
+### 4. README racine figé
+
+Le README racine doit rester général, stable et orienté projet. Il ne doit plus être remplacé par un README de phase.
+
+Les README de version, de phase ou de migration doivent vivre dans :
+
+```text
+doc/releases/
+```
+
+La documentation courante détaillée peut vivre dans :
+
+```text
+doc/README_CURRENT.md
+```
+
+Tout patch qui modifie le README racine doit justifier pourquoi une documentation de phase ne suffit pas.
+
+### 5. DOT versionnés, SVG générés
+
+Les sources d’architecture sont les fichiers `.dot`. Les `.svg` sont des artefacts générés localement.
+
+La règle est :
+
+```bash
+make -C doc
+make -C doc clean
+```
+
+avant revue ou push lorsque les graphes sont générés.
+
+Les `.svg`, `.pyo`, caches Python et sorties de build ne doivent pas être versionnés.
+
+### 6. Documentation obligatoire par phase
+
+Chaque patch de phase doit maintenir à jour, selon le scope :
+
+```text
+MANIFEST_CHANGED_FILES.md
+doc/CHANGELOG_*.md
+PHASE*_TEST_REPORT.md
+doc/*CODE_RULE_ALIGNMENT*.md ou bloc code_rule équivalent
+DOT d’architecture si un flux change
+README de phase dans doc/releases/ si nécessaire
+```
+
+Le rapport de phase doit toujours contenir un bloc :
+
+```text
+code_rule_review: done
+code_rule_update_required: true|false
+code_rule_reason: ...
+live_path_status: green|red|n/a
+live_path_uses_real_backend: true|false|n/a
+external_dependencies_added: true|false
+scheduler_modified: true|false
+network_added: true|false
+github_api_added: true|false
+qdrant_added: true|false
+llm_or_openvino_added: true|false
+```
+
+### 7. Tests de règles
+
+Les règles stabilisées doivent être rendues exécutables dans `tests/rules`.
+
+Les tests doivent notamment empêcher :
+
+```text
+- l’ajout de patchs plats sous patch/*.patch ou patch/*.diff ;
+- la versionisation de .svg ou .pyo ;
+- la versionisation de .patchqueue.local.json ;
+- le remplacement du README racine par un README de phase ;
+- l’ajout de logique métier dans apply_patch_queue.py ;
+- l’utilisation de Git réseau sans configuration SSH explicite et hors dépôt ;
+- l’oubli de manifest, changelog ou rapport de test pour une phase structurante.
+```
