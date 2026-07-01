@@ -1,21 +1,12 @@
-# Manifest — Phase 5.17 — Local server boundary
-
-Changed files included in this archive:
+# Manifest — Phase 5.18
 
 ```text
 README.md
 MANIFEST_CHANGED_FILES.md
-PHASE5_17_TEST_REPORT.md
-doc/LOCAL_SERVER_BOUNDARY.md
-doc/CHANGELOG_PHASE5_17_LOCAL_SERVER_BOUNDARY.md
+PHASE5_18_TEST_REPORT.md
+doc/PHASE5_CLOSURE_AUDIT.md
+doc/CHANGELOG_PHASE5_18_PHASE5_CLOSURE.md
 doc/docs/architecture/00_global.dot
-doc/docs/architecture/context/40_github_projection_design.dot
 doc/docs/architecture/context/41_local_server_boundary.dot
-src/context/__init__.py
-src/context/local_server_boundary.py
-tests/context/test_local_server_boundary.py
+doc/docs/architecture/context/42_phase5_closure_audit.dot
 ```
-
-No generated SVGs are included.
-No `__pycache__` directory is included.
-No patch script is included.

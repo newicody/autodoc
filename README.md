@@ -1,79 +1,63 @@
-# Phase 5.17 — Local server boundary
+# Phase 5.18 — Phase 5 closure audit
 
-This archive introduces a contract-only local server boundary for the future local control surface.
+This archive closes Phase 5 as a local E5 context intake and SourceCandidate preparation layer.
 
 ## Goal
 
 ```text
-SourceCandidateStore / ContextEngine / E5 status
--> LocalServerBoundary
--> future loopback API contract
+Phase 4 artifact-dir
+-> local E5 runtime/intake
+-> ContextEngine explicit attachment
+-> status/report
+-> SourceCandidate local contract/store
+-> future GitHub projection design
+-> future local adapter boundary
+-> Phase 5 closure audit
 ```
-
-The server is not implemented in this phase.
 
 ## Main additions
 
 ```text
-src/context/local_server_boundary.py
-tests/context/test_local_server_boundary.py
-doc/LOCAL_SERVER_BOUNDARY.md
+doc/PHASE5_CLOSURE_AUDIT.md
+doc/CHANGELOG_PHASE5_18_PHASE5_CLOSURE.md
+doc/docs/architecture/context/42_phase5_closure_audit.dot
+```
+
+Updated:
+
+```text
+doc/docs/architecture/00_global.dot
 doc/docs/architecture/context/41_local_server_boundary.dot
 ```
 
-## Planned endpoints
+## Boundary statement
 
 ```text
-GET  /status
-POST /source-candidates
-POST /source-candidates/{candidate_id}/decision
-POST /context/e5/intake
-GET  /reports/{report_id}
-```
-
-These endpoints are descriptions only. They do not bind a socket and do not serve HTTP.
-
-## Repository metadata
-
-```text
-newicody/autodoc
-```
-
-This remains local metadata only. No GitHub API is called.
-
-## Boundaries
-
-```text
-no server implementation
-no socket opened
-no Flask/FastAPI dependency
+no Scheduler rewrite
+no Scheduler autoload
+no daemon
+no polling
+no watcher
 no network
 no GitHub API
 no token
-no daemon
-no polling
-no Scheduler autoload
+no server implementation
+no framework selected
 no Qdrant
 no LLM
-no OpenVINO call
+no hidden OpenVINO call
+no persistent database
 ```
 
 ## Dependency statement
 
 No non-stdlib dependency was added.
 
-## Apply
-
-```bash
-tar -xzf autodoc_phase5_17_local_server_boundary.tar.gz
-```
-
 ## Suggested tests
 
 ```bash
-PYTHONPATH=src pytest -q tests/context/test_local_server_boundary.py
-PYTHONPATH=src pytest -q tests/context
 PYTHONPATH=src pytest -q tests/docs/test_dot_links.py::test_dot_urls_resolve_to_existing_dot_sources
+PYTHONPATH=src pytest -q tests/context
 PYTHONPATH=src pytest -q tests/rules
 PYTHONPATH=src pytest -q
 ```
@@ -83,5 +67,5 @@ PYTHONPATH=src pytest -q
 ```text
 code_rule_review: done
 code_rule_update_required: false
-code_rule_reason: 5.17 adds a pure local server boundary contract without implementing IO or adding dependencies; no programming rule update is required.
+code_rule_reason: 5.18 clôture et audite la Phase 5 sans nouvelle règle de programmation.
 ```
