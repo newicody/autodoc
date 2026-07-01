@@ -36,6 +36,19 @@ from .e5_context_engine_status import (
     inspect_e5_context_engine,
     inspect_e5_inference_context,
 )
+
+from .source_candidate import (
+    SourceCandidate,
+    SourceCandidateCreationResult,
+    SourceCandidateDecision,
+    SourceCandidateInput,
+    SourceCandidateOrigin,
+    SourceCandidatePolicy,
+    allowed_source_candidate_decisions,
+    allowed_source_candidate_statuses,
+    apply_source_candidate_decision,
+    build_source_candidate,
+)
 from .engine import (
     ContextEngine,
     E5ContextEngineIntakePolicy,
@@ -45,6 +58,16 @@ from .handlers import ContextRequestHandler
 from .reducer import ContextReducer
 
 __all__ = [
+    "SourceCandidate",
+    "SourceCandidateCreationResult",
+    "SourceCandidateDecision",
+    "SourceCandidateInput",
+    "SourceCandidateOrigin",
+    "SourceCandidatePolicy",
+    "allowed_source_candidate_decisions",
+    "allowed_source_candidate_statuses",
+    "apply_source_candidate_decision",
+    "build_source_candidate",
     "attach_e5_runtime_context",
     "attach_e5_artifact_dir_to_context",
     "E5ContextAttachmentResult",
