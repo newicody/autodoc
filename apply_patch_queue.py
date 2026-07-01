@@ -83,9 +83,92 @@ class PatchQueueOptions:
     archive_applied: bool = False
     fetch_before: bool = False
     push: bool = False
+    status: bool = False
+    status_format: str = "text"
     remote: str = "origin"
     branch: str | None = None
     ssh: SshOptions = SshOptions()
+
+
+@dataclass(frozen=True, slots=True)
+class PatchQueueStatus:
+    """Snapshot court de l'état opérateur du dépôt et de la patch queue.
+
+    Le statut ne révèle jamais les chemins de clés ou de certificats SSH.
+    """
+
+    root: Path
+    branch: str
+    head: str
+    dirty: tuple[str, ...]
+    patch_root: Path
+    patches: tuple[str, ...]
+    flat_patches: tuple[str, ...]
+    tracked_generated: tuple[str, ...]
+    local_generated: tuple[str, ...]
+    local_config_present: bool
+    remote: str
+    remote_url: str | None
+    ssh_configured: bool
+    ssh_cert_configured: bool
+    ssh_agent_disabled: bool
+
+    @property
+    def clean(self) -> bool:
+        return not self.dirty and not self.tracked_generated
+
+    def to_json_dict(self) -> dict[str, object | None]:
+        return {
+            "schema": "missipy.patch_queue.status.v1",
+            "root": str(self.root),
+            "branch": self.branch,
+            "head": self.head,
+            "clean": self.clean,
+            "dirty": list(self.dirty),
+            "patch_root": str(self.patch_root),
+            "patches": list(self.patches),
+            "flat_patches": list(self.flat_patches),
+            "tracked_generated": list(self.tracked_generated),
+            "local_generated": list(self.local_generated),
+            "local_config_present": self.local_config_present,
+            "remote": self.remote,
+            "remote_url": self.remote_url,
+            "ssh_configured": self.ssh_configured,
+            "ssh_cert_configured": self.ssh_cert_configured,
+            "ssh_agent_disabled": self.ssh_agent_disabled,
+        }
+
+    def to_text(self) -> str:
+        lines = [
+            "Patch queue status",
+            f"root: {self.root}",
+            f"branch: {self.branch or '<detached>'}",
+            f"head: {self.head}",
+            f"clean: {str(self.clean).lower()}",
+            f"patch_root: {self.patch_root}",
+            f"patches: {', '.join(self.patches) if self.patches else '<none>'}",
+        ]
+        if self.flat_patches:
+            lines.append("flat_patches_forbidden: " + ", ".join(self.flat_patches))
+        if self.dirty:
+            lines.append("dirty:")
+            lines.extend(f"  {line}" for line in self.dirty)
+        if self.tracked_generated:
+            lines.append("tracked_generated:")
+            lines.extend(f"  {path}" for path in self.tracked_generated)
+        if self.local_generated:
+            lines.append(f"local_generated_count: {len(self.local_generated)}")
+        lines.extend(
+            [
+                f"local_config_present: {str(self.local_config_present).lower()}",
+                f"remote: {self.remote}",
+                f"remote_url: {self.remote_url or '<unknown>'}",
+                f"ssh_configured: {str(self.ssh_configured).lower()}",
+                f"ssh_cert_configured: {str(self.ssh_cert_configured).lower()}",
+                f"ssh_agent_disabled: {str(self.ssh_agent_disabled).lower()}",
+            ]
+        )
+        return "\n".join(lines)
 
 
 def repo_root(start: Path) -> Path:
@@ -481,7 +564,107 @@ def build_ssh_options(args: argparse.Namespace, config: Mapping[str, object]) ->
     )
 
 
+def git_capture_optional(args: Sequence[str], *, root: Path, ssh: SshOptions | None = None) -> str | None:
+    result = subprocess.run(
+        ("git", *args),
+        cwd=root,
+        env=git_env(root, ssh or SshOptions()),
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def tracked_files(root: Path, patterns: Sequence[str]) -> tuple[str, ...]:
+    found: list[str] = []
+    for pattern in patterns:
+        result = subprocess.run(
+            ["git", "ls-files", pattern],
+            cwd=root,
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+        )
+        found.extend(line for line in result.stdout.splitlines() if line.strip())
+    return tuple(sorted(set(found)))
+
+
+def local_generated_files(root: Path) -> tuple[str, ...]:
+    generated: list[str] = []
+    for suffix in GENERATED_FILE_SUFFIXES:
+        for path in root.rglob(f"*{suffix}"):
+            if ".git" in path.parts:
+                continue
+            generated.append(relative_to_root(root, path))
+    return tuple(sorted(generated))
+
+
+def patch_root_inventory(patch_root: Path) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    if not patch_root.exists():
+        return (), ()
+    patches = tuple(
+        sorted(
+            path.name
+            for path in patch_root.iterdir()
+            if path.is_dir() and path.name not in IGNORED_PATCH_DIRS and not path.name.startswith("_")
+        )
+    )
+    flat = tuple(
+        sorted(
+            path.name
+            for path in patch_root.iterdir()
+            if path.is_file() and path.suffix in PATCH_SUFFIXES
+        )
+    )
+    return patches, flat
+
+
+def build_patch_queue_status(options: PatchQueueOptions) -> PatchQueueStatus:
+    patches, flat = patch_root_inventory(options.patch_root)
+    branch = git_capture_optional(("branch", "--show-current"), root=options.root) or ""
+    head = git_capture_optional(("rev-parse", "--short", "HEAD"), root=options.root) or "<unknown>"
+    remote_url = git_capture_optional(("remote", "get-url", options.remote), root=options.root)
+    return PatchQueueStatus(
+        root=options.root,
+        branch=branch,
+        head=head,
+        dirty=git_status(options.root),
+        patch_root=options.patch_root,
+        patches=patches,
+        flat_patches=flat,
+        tracked_generated=tracked_files(options.root, ("*.svg", "*.pyo", LOCAL_CONFIG)),
+        local_generated=local_generated_files(options.root),
+        local_config_present=(options.root / LOCAL_CONFIG).exists(),
+        remote=options.remote,
+        remote_url=remote_url,
+        ssh_configured=options.ssh.key_file is not None or options.ssh.known_hosts_file is not None,
+        ssh_cert_configured=options.ssh.cert_file is not None,
+        ssh_agent_disabled=options.ssh.disable_agent,
+    )
+
+
+def render_patch_queue_status(status: PatchQueueStatus, output_format: str) -> str:
+    if output_format == "json":
+        return json.dumps(status.to_json_dict(), ensure_ascii=False, sort_keys=True, indent=2)
+    if output_format == "text":
+        return status.to_text()
+    raise ValueError("status format must be text or json")
+
+
+def print_patch_queue_status(options: PatchQueueOptions) -> int:
+    status = build_patch_queue_status(options)
+    print(render_patch_queue_status(status, options.status_format))
+    return 0
+
+
 def execute(options: PatchQueueOptions) -> int:
+    if options.status:
+        return print_patch_queue_status(options)
+
     items = discover_patch_items(options.patch_root)
     selected = select_patch_items(items, patch_name=options.patch_name, all_patches=options.all_patches)
     if not selected:
@@ -547,6 +730,8 @@ def parse_args(argv: Sequence[str]) -> PatchQueueOptions:
     parser.add_argument("--archive-applied", action="store_true", help="move applied patch directories to patch/_applied")
     parser.add_argument("--fetch-before", action="store_true", help="run git fetch before applying patches")
     parser.add_argument("--push", action="store_true", help="run git push after a successful commit or apply")
+    parser.add_argument("--status", action="store_true", help="print repository and patch queue state without applying patches")
+    parser.add_argument("--status-format", choices=("text", "json"), default="text", help="output format for --status")
     parser.add_argument("--remote", default=None, help="Git remote for fetch/push; default from config or origin")
     parser.add_argument("--branch", default=None, help="remote branch for fetch/push; default current branch for push")
     parser.add_argument("--ssh-key", help="private SSH key file for Git network operations")
@@ -580,6 +765,8 @@ def parse_args(argv: Sequence[str]) -> PatchQueueOptions:
         archive_applied=args.archive_applied,
         fetch_before=args.fetch_before,
         push=args.push,
+        status=args.status,
+        status_format=args.status_format,
         remote=remote,
         branch=branch,
         ssh=ssh,

@@ -1,0 +1,476 @@
+diff --git a/PHASE6_4_TEST_REPORT.md b/PHASE6_4_TEST_REPORT.md
+new file mode 100644
+index 0000000..0b6273a
+--- /dev/null
++++ b/PHASE6_4_TEST_REPORT.md
+@@ -0,0 +1,33 @@
++# Phase 6.4 Test Report — Patch Queue Status
++
++## Gate
++
++```bash
++PYTHONPATH=src python -m compileall -q src tests
++PYTHONPATH=src pytest -q tests/test_apply_patch_queue_status.py
++PYTHONPATH=src pytest -q tests/rules
++PYTHONPATH=src pytest -q
++```
++
++## Expected result
++
++```text
++status: green
++```
++
++## Rule block
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Phase 6.4 applies the existing Phase 6-r3 patch queue hygiene rules.
++live_path_status: n/a
++live_path_uses_real_backend: n/a
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
+diff --git a/apply_patch_queue.py b/apply_patch_queue.py
+index de69fcd..a8f8fa8 100755
+--- a/apply_patch_queue.py
++++ b/apply_patch_queue.py
+@@ -83,11 +83,94 @@ class PatchQueueOptions:
+     archive_applied: bool = False
+     fetch_before: bool = False
+     push: bool = False
++    status: bool = False
++    status_format: str = "text"
+     remote: str = "origin"
+     branch: str | None = None
+     ssh: SshOptions = SshOptions()
+ 
+ 
++@dataclass(frozen=True, slots=True)
++class PatchQueueStatus:
++    """Snapshot court de l'état opérateur du dépôt et de la patch queue.
++
++    Le statut ne révèle jamais les chemins de clés ou de certificats SSH.
++    """
++
++    root: Path
++    branch: str
++    head: str
++    dirty: tuple[str, ...]
++    patch_root: Path
++    patches: tuple[str, ...]
++    flat_patches: tuple[str, ...]
++    tracked_generated: tuple[str, ...]
++    local_generated: tuple[str, ...]
++    local_config_present: bool
++    remote: str
++    remote_url: str | None
++    ssh_configured: bool
++    ssh_cert_configured: bool
++    ssh_agent_disabled: bool
++
++    @property
++    def clean(self) -> bool:
++        return not self.dirty and not self.tracked_generated
++
++    def to_json_dict(self) -> dict[str, object | None]:
++        return {
++            "schema": "missipy.patch_queue.status.v1",
++            "root": str(self.root),
++            "branch": self.branch,
++            "head": self.head,
++            "clean": self.clean,
++            "dirty": list(self.dirty),
++            "patch_root": str(self.patch_root),
++            "patches": list(self.patches),
++            "flat_patches": list(self.flat_patches),
++            "tracked_generated": list(self.tracked_generated),
++            "local_generated": list(self.local_generated),
++            "local_config_present": self.local_config_present,
++            "remote": self.remote,
++            "remote_url": self.remote_url,
++            "ssh_configured": self.ssh_configured,
++            "ssh_cert_configured": self.ssh_cert_configured,
++            "ssh_agent_disabled": self.ssh_agent_disabled,
++        }
++
++    def to_text(self) -> str:
++        lines = [
++            "Patch queue status",
++            f"root: {self.root}",
++            f"branch: {self.branch or '<detached>'}",
++            f"head: {self.head}",
++            f"clean: {str(self.clean).lower()}",
++            f"patch_root: {self.patch_root}",
++            f"patches: {', '.join(self.patches) if self.patches else '<none>'}",
++        ]
++        if self.flat_patches:
++            lines.append("flat_patches_forbidden: " + ", ".join(self.flat_patches))
++        if self.dirty:
++            lines.append("dirty:")
++            lines.extend(f"  {line}" for line in self.dirty)
++        if self.tracked_generated:
++            lines.append("tracked_generated:")
++            lines.extend(f"  {path}" for path in self.tracked_generated)
++        if self.local_generated:
++            lines.append(f"local_generated_count: {len(self.local_generated)}")
++        lines.extend(
++            [
++                f"local_config_present: {str(self.local_config_present).lower()}",
++                f"remote: {self.remote}",
++                f"remote_url: {self.remote_url or '<unknown>'}",
++                f"ssh_configured: {str(self.ssh_configured).lower()}",
++                f"ssh_cert_configured: {str(self.ssh_cert_configured).lower()}",
++                f"ssh_agent_disabled: {str(self.ssh_agent_disabled).lower()}",
++            ]
++        )
++        return "\n".join(lines)
++
++
+ def repo_root(start: Path) -> Path:
+     result = subprocess.run(
+         ["git", "rev-parse", "--show-toplevel"],
+@@ -481,7 +564,107 @@ def build_ssh_options(args: argparse.Namespace, config: Mapping[str, object]) ->
+     )
+ 
+ 
++def git_capture_optional(args: Sequence[str], *, root: Path, ssh: SshOptions | None = None) -> str | None:
++    result = subprocess.run(
++        ("git", *args),
++        cwd=root,
++        env=git_env(root, ssh or SshOptions()),
++        check=False,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.DEVNULL,
++    )
++    if result.returncode != 0:
++        return None
++    return result.stdout.strip()
++
++
++def tracked_files(root: Path, patterns: Sequence[str]) -> tuple[str, ...]:
++    found: list[str] = []
++    for pattern in patterns:
++        result = subprocess.run(
++            ["git", "ls-files", pattern],
++            cwd=root,
++            check=True,
++            text=True,
++            stdout=subprocess.PIPE,
++        )
++        found.extend(line for line in result.stdout.splitlines() if line.strip())
++    return tuple(sorted(set(found)))
++
++
++def local_generated_files(root: Path) -> tuple[str, ...]:
++    generated: list[str] = []
++    for suffix in GENERATED_FILE_SUFFIXES:
++        for path in root.rglob(f"*{suffix}"):
++            if ".git" in path.parts:
++                continue
++            generated.append(relative_to_root(root, path))
++    return tuple(sorted(generated))
++
++
++def patch_root_inventory(patch_root: Path) -> tuple[tuple[str, ...], tuple[str, ...]]:
++    if not patch_root.exists():
++        return (), ()
++    patches = tuple(
++        sorted(
++            path.name
++            for path in patch_root.iterdir()
++            if path.is_dir() and path.name not in IGNORED_PATCH_DIRS and not path.name.startswith("_")
++        )
++    )
++    flat = tuple(
++        sorted(
++            path.name
++            for path in patch_root.iterdir()
++            if path.is_file() and path.suffix in PATCH_SUFFIXES
++        )
++    )
++    return patches, flat
++
++
++def build_patch_queue_status(options: PatchQueueOptions) -> PatchQueueStatus:
++    patches, flat = patch_root_inventory(options.patch_root)
++    branch = git_capture_optional(("branch", "--show-current"), root=options.root) or ""
++    head = git_capture_optional(("rev-parse", "--short", "HEAD"), root=options.root) or "<unknown>"
++    remote_url = git_capture_optional(("remote", "get-url", options.remote), root=options.root)
++    return PatchQueueStatus(
++        root=options.root,
++        branch=branch,
++        head=head,
++        dirty=git_status(options.root),
++        patch_root=options.patch_root,
++        patches=patches,
++        flat_patches=flat,
++        tracked_generated=tracked_files(options.root, ("*.svg", "*.pyo", LOCAL_CONFIG)),
++        local_generated=local_generated_files(options.root),
++        local_config_present=(options.root / LOCAL_CONFIG).exists(),
++        remote=options.remote,
++        remote_url=remote_url,
++        ssh_configured=options.ssh.key_file is not None or options.ssh.known_hosts_file is not None,
++        ssh_cert_configured=options.ssh.cert_file is not None,
++        ssh_agent_disabled=options.ssh.disable_agent,
++    )
++
++
++def render_patch_queue_status(status: PatchQueueStatus, output_format: str) -> str:
++    if output_format == "json":
++        return json.dumps(status.to_json_dict(), ensure_ascii=False, sort_keys=True, indent=2)
++    if output_format == "text":
++        return status.to_text()
++    raise ValueError("status format must be text or json")
++
++
++def print_patch_queue_status(options: PatchQueueOptions) -> int:
++    status = build_patch_queue_status(options)
++    print(render_patch_queue_status(status, options.status_format))
++    return 0
++
++
+ def execute(options: PatchQueueOptions) -> int:
++    if options.status:
++        return print_patch_queue_status(options)
++
+     items = discover_patch_items(options.patch_root)
+     selected = select_patch_items(items, patch_name=options.patch_name, all_patches=options.all_patches)
+     if not selected:
+@@ -547,6 +730,8 @@ def parse_args(argv: Sequence[str]) -> PatchQueueOptions:
+     parser.add_argument("--archive-applied", action="store_true", help="move applied patch directories to patch/_applied")
+     parser.add_argument("--fetch-before", action="store_true", help="run git fetch before applying patches")
+     parser.add_argument("--push", action="store_true", help="run git push after a successful commit or apply")
++    parser.add_argument("--status", action="store_true", help="print repository and patch queue state without applying patches")
++    parser.add_argument("--status-format", choices=("text", "json"), default="text", help="output format for --status")
+     parser.add_argument("--remote", default=None, help="Git remote for fetch/push; default from config or origin")
+     parser.add_argument("--branch", default=None, help="remote branch for fetch/push; default current branch for push")
+     parser.add_argument("--ssh-key", help="private SSH key file for Git network operations")
+@@ -580,6 +765,8 @@ def parse_args(argv: Sequence[str]) -> PatchQueueOptions:
+         archive_applied=args.archive_applied,
+         fetch_before=args.fetch_before,
+         push=args.push,
++        status=args.status,
++        status_format=args.status_format,
+         remote=remote,
+         branch=branch,
+         ssh=ssh,
+diff --git a/doc/CHANGELOG_PHASE6_4_PATCH_QUEUE_STATUS.md b/doc/CHANGELOG_PHASE6_4_PATCH_QUEUE_STATUS.md
+new file mode 100644
+index 0000000..4269565
+--- /dev/null
++++ b/doc/CHANGELOG_PHASE6_4_PATCH_QUEUE_STATUS.md
+@@ -0,0 +1,22 @@
++# Changelog — Phase 6.4 Patch Queue Status
++
++## Goal
++
++Add a read-only status/preflight command to `apply_patch_queue.py` so an operator can answer “where is the repository now?” before applying the next patch.
++
++## Added
++
++- `python apply_patch_queue.py --status`
++- `python apply_patch_queue.py --status --status-format json`
++- A stable JSON schema: `missipy.patch_queue.status.v1`
++- Detection of versioned patch directories and forbidden flat patch files.
++- Reporting of dirty worktree lines, tracked generated artifacts and local generated artifacts.
++- Redacted SSH configuration status: the command reports whether SSH/cert/local config are configured but never prints key or certificate paths.
++
++## Not added
++
++- No business logic.
++- No Scheduler modification.
++- No GitHub API.
++- No network call in status mode.
++- No external dependency.
+diff --git a/doc/PHASE6_4_CODE_RULE_ALIGNMENT.md b/doc/PHASE6_4_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..dae6fdb
+--- /dev/null
++++ b/doc/PHASE6_4_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,18 @@
++# Phase 6.4 — Code rule alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Phase 6.4 applies the existing Phase 6-r3 patch queue hygiene rules by adding a read-only status/preflight command to the local development tool.
++live_path_status: n/a
++live_path_uses_real_backend: n/a
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++`apply_patch_queue.py` remains a development tool. It does not become a kernel component and does not contain Autodoc/MissiPy business logic.
+diff --git a/doc/docs/architecture/context/45_patch_queue_status.dot b/doc/docs/architecture/context/45_patch_queue_status.dot
+new file mode 100644
+index 0000000..74e82e5
+--- /dev/null
++++ b/doc/docs/architecture/context/45_patch_queue_status.dot
+@@ -0,0 +1,17 @@
++digraph patch_queue_status {
++  rankdir=LR;
++  node [shape=box];
++
++  operator [label="operator"];
++  cli [label="apply_patch_queue.py --status"];
++  git [label="git status / branch / head"];
++  patch_root [label="patch/<id>/ inventory"];
++  generated [label="generated artifact scan"];
++  report [label="PatchQueueStatus\ntext/json"];
++
++  operator -> cli;
++  cli -> git;
++  cli -> patch_root;
++  cli -> generated;
++  cli -> report;
++}
+diff --git a/doc/releases/README_PHASE6_4_PATCH_QUEUE_STATUS.md b/doc/releases/README_PHASE6_4_PATCH_QUEUE_STATUS.md
+new file mode 100644
+index 0000000..e460fc7
+--- /dev/null
++++ b/doc/releases/README_PHASE6_4_PATCH_QUEUE_STATUS.md
+@@ -0,0 +1,12 @@
++# Phase 6.4 — Patch Queue Status
++
++This phase adds a read-only preflight command to the local patch queue tool:
++
++```bash
++python apply_patch_queue.py --status
++python apply_patch_queue.py --status --status-format json
++```
++
++The command is intended to be run before applying a patch so the operator can see the current branch, HEAD, dirty worktree, available patch directories, forbidden flat patches, tracked generated artifacts and redacted SSH configuration status.
++
++It performs no network call and applies no patch.
+diff --git a/tests/rules/test_patch_queue_status_rule.py b/tests/rules/test_patch_queue_status_rule.py
+new file mode 100644
+index 0000000..bc628dc
+--- /dev/null
++++ b/tests/rules/test_patch_queue_status_rule.py
+@@ -0,0 +1,20 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++SCRIPT = ROOT / "apply_patch_queue.py"
++SOURCE = SCRIPT.read_text(encoding="utf-8")
++
++
++def test_patch_queue_has_status_command() -> None:
++    assert "--status" in SOURCE
++    assert "PatchQueueStatus" in SOURCE
++    assert "missipy.patch_queue.status.v1" in SOURCE
++
++
++def test_patch_queue_status_does_not_render_private_ssh_paths() -> None:
++    render_section = SOURCE.split("def render_patch_queue_status", 1)[1]
++    assert "ssh_key" not in render_section
++    assert "key_file" not in render_section
++    assert "cert_file" not in render_section
+diff --git a/tests/test_apply_patch_queue_status.py b/tests/test_apply_patch_queue_status.py
+new file mode 100644
+index 0000000..d32af1a
+--- /dev/null
++++ b/tests/test_apply_patch_queue_status.py
+@@ -0,0 +1,87 @@
++from __future__ import annotations
++
++import json
++import os
++import subprocess
++import sys
++from pathlib import Path
++
++
++def _git(repo: Path, *args: str) -> None:
++    subprocess.run(["git", *args], cwd=repo, check=True)
++
++
++def _init_repo(repo: Path) -> None:
++    _git(repo, "init", "-q")
++    _git(repo, "config", "user.email", "test@example.com")
++    _git(repo, "config", "user.name", "Test")
++    (repo / "tracked.txt").write_text("ok\n", encoding="utf-8")
++    _git(repo, "add", "tracked.txt")
++    _git(repo, "commit", "-q", "-m", "baseline")
++
++
++def test_status_json_reports_patch_queue_without_secret_paths(tmp_path: Path) -> None:
++    repo = tmp_path / "repo"
++    repo.mkdir()
++    _init_repo(repo)
++    patch_dir = repo / "patch" / "0002-demo"
++    patch_dir.mkdir(parents=True)
++    (patch_dir / "patch.diff").write_text("", encoding="utf-8")
++    key = tmp_path / "id_ed25519_autodoc"
++    cert = tmp_path / "id_ed25519_autodoc-cert.pub"
++    key.write_text("not-a-real-key\n", encoding="utf-8")
++    cert.write_text("not-a-real-cert\n", encoding="utf-8")
++    key.chmod(0o600)
++    (repo / ".patchqueue.local.json").write_text(
++        json.dumps(
++            {
++                "ssh_key": str(key),
++                "ssh_cert": str(cert),
++                "remote": "origin",
++            }
++        ),
++        encoding="utf-8",
++    )
++
++    env = dict(os.environ)
++    env["PYTHONPATH"] = os.getcwd()
++    result = subprocess.run(
++        [sys.executable, str(Path(os.getcwd()) / "apply_patch_queue.py"), "--status", "--status-format", "json"],
++        cwd=repo,
++        env=env,
++        check=True,
++        text=True,
++        stdout=subprocess.PIPE,
++    )
++
++    payload = json.loads(result.stdout)
++    assert payload["schema"] == "missipy.patch_queue.status.v1"
++    assert payload["patches"] == ["0002-demo"]
++    assert payload["local_config_present"] is True
++    assert payload["ssh_configured"] is True
++    assert payload["ssh_cert_configured"] is True
++    assert str(key) not in result.stdout
++    assert str(cert) not in result.stdout
++
++
++def test_status_text_reports_flat_patch_files(tmp_path: Path) -> None:
++    repo = tmp_path / "repo"
++    repo.mkdir()
++    _init_repo(repo)
++    patch_root = repo / "patch"
++    patch_root.mkdir()
++    (patch_root / "bad.patch").write_text("", encoding="utf-8")
++
++    env = dict(os.environ)
++    env["PYTHONPATH"] = os.getcwd()
++    result = subprocess.run(
++        [sys.executable, str(Path(os.getcwd()) / "apply_patch_queue.py"), "--status"],
++        cwd=repo,
++        env=env,
++        check=True,
++        text=True,
++        stdout=subprocess.PIPE,
++    )
++
++    assert "Patch queue status" in result.stdout
++    assert "flat_patches_forbidden: bad.patch" in result.stdout
