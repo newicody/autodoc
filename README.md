@@ -1,53 +1,81 @@
-# Phase 5.16 — GitHub projection design pour `newicody/autodoc`
+# Phase 5.17 — Local server boundary
 
-This archive contains only the files changed for Phase 5.16.
+This archive introduces a contract-only local server boundary for the future local control surface.
 
 ## Goal
 
-Formalize the future GitHub projection contract without implementing GitHub access:
-
 ```text
-SourceCandidateStore
--> GitHub projection payload future
--> newicody/autodoc status/comment/label/PR future
+SourceCandidateStore / ContextEngine / E5 status
+-> LocalServerBoundary
+-> future loopback API contract
 ```
 
-The local machine remains authoritative. GitHub remains a future workflow, validation and synchronization surface.
+The server is not implemented in this phase.
 
-## Files
+## Main additions
 
-See `MANIFEST_CHANGED_FILES.md`.
+```text
+src/context/local_server_boundary.py
+tests/context/test_local_server_boundary.py
+doc/LOCAL_SERVER_BOUNDARY.md
+doc/docs/architecture/context/41_local_server_boundary.dot
+```
+
+## Planned endpoints
+
+```text
+GET  /status
+POST /source-candidates
+POST /source-candidates/{candidate_id}/decision
+POST /context/e5/intake
+GET  /reports/{report_id}
+```
+
+These endpoints are descriptions only. They do not bind a socket and do not serve HTTP.
+
+## Repository metadata
+
+```text
+newicody/autodoc
+```
+
+This remains local metadata only. No GitHub API is called.
 
 ## Boundaries
 
 ```text
-pas d'API GitHub
-pas de token
-pas de réseau
-pas de polling
-pas de serveur / daemon
-pas de base de données
-pas de Qdrant
-pas de LLM
-pas d'appel OpenVINO
+no server implementation
+no socket opened
+no Flask/FastAPI dependency
+no network
+no GitHub API
+no token
+no daemon
+no polling
+no Scheduler autoload
+no Qdrant
+no LLM
+no OpenVINO call
 ```
 
-## Dependencies
+## Dependency statement
 
-Aucune bibliothèque hors stdlib Python n'est ajoutée.
+No non-stdlib dependency was added.
 
-## Suggested checks after extraction
+## Apply
 
 ```bash
-PYTHONPATH=src pytest -q tests/docs/test_dot_links.py::test_dot_urls_resolve_to_existing_dot_sources
+tar -xzf autodoc_phase5_17_local_server_boundary.tar.gz
+```
+
+## Suggested tests
+
+```bash
+PYTHONPATH=src pytest -q tests/context/test_local_server_boundary.py
 PYTHONPATH=src pytest -q tests/context
+PYTHONPATH=src pytest -q tests/docs/test_dot_links.py::test_dot_urls_resolve_to_existing_dot_sources
 PYTHONPATH=src pytest -q tests/rules
 PYTHONPATH=src pytest -q
-
-dot -Tsvg doc/docs/architecture/00_global.dot >/tmp/00_global.svg
-dot -Tsvg doc/docs/architecture/context/39_source_candidate_storage_report.dot >/tmp/39_source_candidate_storage_report.svg
-dot -Tsvg doc/docs/architecture/context/40_github_projection_design.dot >/tmp/40_github_projection_design.svg
-rm -f /tmp/00_global.svg /tmp/39_source_candidate_storage_report.svg /tmp/40_github_projection_design.svg
 ```
 
 ## code_rule
@@ -55,5 +83,5 @@ rm -f /tmp/00_global.svg /tmp/39_source_candidate_storage_report.svg /tmp/40_git
 ```text
 code_rule_review: done
 code_rule_update_required: false
-code_rule_reason: 5.16 formalise une projection GitHub future documentaire sans nouvelle règle de programmation.
+code_rule_reason: 5.17 adds a pure local server boundary contract without implementing IO or adding dependencies; no programming rule update is required.
 ```

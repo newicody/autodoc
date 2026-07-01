@@ -62,6 +62,14 @@ from .source_candidate import (
     apply_source_candidate_decision,
     build_source_candidate,
 )
+
+from .local_server_boundary import (
+    LocalServerBoundary,
+    LocalServerBoundaryPolicy,
+    LocalServerEndpoint,
+    build_local_server_boundary,
+    default_local_server_endpoints,
+)
 from .engine import (
     ContextEngine,
     E5ContextEngineIntakePolicy,
@@ -71,6 +79,11 @@ from .handlers import ContextRequestHandler
 from .reducer import ContextReducer
 
 __all__ = [
+    "LocalServerBoundary",
+    "LocalServerBoundaryPolicy",
+    "LocalServerEndpoint",
+    "build_local_server_boundary",
+    "default_local_server_endpoints",
     "SourceCandidate",
     "SourceCandidateCreationResult",
     "SourceCandidateDecision",
