@@ -166,3 +166,44 @@ def test_context_package_does_not_export_context_engine_cli_boundary() -> None:
 
     assert not hasattr(context, "run_e5_context_engine")
     assert not hasattr(context, "build_e5_context_engine_parser")
+
+
+def test_context_engine_cli_writes_report_file(tmp_path: Path) -> None:
+    directory = _artifact_dir(tmp_path)
+    report = tmp_path / "context_engine_report.json"
+    stdout = StringIO()
+    stderr = StringIO()
+
+    code = run_e5_context_engine([
+        "--format",
+        "json",
+        "--report-file",
+        str(report),
+        str(directory),
+    ], stdout=stdout, stderr=stderr)
+
+    assert code == 0
+    assert stderr.getvalue() == ""
+    stdout_payload = json.loads(stdout.getvalue())
+    report_payload = json.loads(report.read_text(encoding="utf-8"))
+    assert report_payload == stdout_payload
+    assert report_payload["schema"] == "missipy.e5.context_engine_cli.v1"
+    assert report_payload["status"]["attached"] is True
+
+
+def test_context_engine_cli_report_file_failure_returns_error(tmp_path: Path) -> None:
+    directory = _artifact_dir(tmp_path)
+    target_directory = tmp_path / "report.json"
+    target_directory.mkdir()
+    stdout = StringIO()
+    stderr = StringIO()
+
+    code = run_e5_context_engine([
+        "--report-file",
+        str(target_directory),
+        str(directory),
+    ], stdout=stdout, stderr=stderr)
+
+    assert code == 1
+    assert stdout.getvalue() == ""
+    assert "failed to write report" in stderr.getvalue()

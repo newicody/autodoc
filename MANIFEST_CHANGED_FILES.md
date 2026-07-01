@@ -1,26 +1,25 @@
-# Manifest — Phase 5.8
+# Manifest — Phase 5.9
 
-Archive : `autodoc_phase5_8_e5_context_engine_cli.tar.gz`
-
-Fichiers complets à copier à la racine du dépôt :
+Changed files included in this archive:
 
 ```text
 README.md
 MANIFEST_CHANGED_FILES.md
-PHASE5_8_TEST_REPORT.md
-doc/CHANGELOG_PHASE5_8_E5_CONTEXT_ENGINE_CLI.md
+PHASE5_9_TEST_REPORT.md
+doc/CHANGELOG_PHASE5_9_E5_CONTEXT_ENGINE_CLI_REPORT.md
 doc/docs/architecture/00_global.dot
-doc/docs/architecture/context/31_e5_context_engine_status.dot
 doc/docs/architecture/context/32_e5_context_engine_cli.dot
+doc/docs/architecture/context/33_e5_context_engine_cli_report.dot
 src/context/e5_context_engine_cli.py
 tests/context/test_e5_context_engine_cli.py
 ```
 
-## Exclusions vérifiées
+Archive constraints:
 
 ```text
-aucun SVG
-aucun __pycache__
-aucun script patch
-archive .tar.gz
+complete files only
+no patch script
+no SVG
+no __pycache__
+no external dependency
 ```

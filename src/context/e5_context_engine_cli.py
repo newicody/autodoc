@@ -26,6 +26,17 @@ class E5ContextEngineCliRenderPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class E5ContextEngineCliReportPolicy:
+    """Politique d'écriture optionnelle du rapport CLI ContextEngine."""
+
+    path: Path | None = None
+
+    def __post_init__(self) -> None:
+        if self.path is not None and not self.path.name:
+            raise ValueError("report_file must target a filename")
+
+
+@dataclass(frozen=True, slots=True)
 class E5ContextEngineCliCommand:
     """Commande typée : artifact-dir Phase 4 -> ContextEngine -> statut E5."""
 
@@ -33,6 +44,7 @@ class E5ContextEngineCliCommand:
     intake: E5ContextEngineIntakePolicy = E5ContextEngineIntakePolicy()
     status: E5ContextEngineStatusPolicy = E5ContextEngineStatusPolicy()
     render: E5ContextEngineCliRenderPolicy = E5ContextEngineCliRenderPolicy()
+    report: E5ContextEngineCliReportPolicy = E5ContextEngineCliReportPolicy()
 
     def __post_init__(self) -> None:
         if not str(self.artifact_dir).strip():
@@ -52,6 +64,7 @@ def build_e5_context_engine_parser() -> argparse.ArgumentParser:
     parser.add_argument("--include-context-text", action="store_true", help="Inclut context_text dans la feature E5 attachée.")
     parser.add_argument("--hide-prompt-text", action="store_true", help="N'inclut pas prompt_text dans la feature E5 attachée.")
     parser.add_argument("--require-ready", action="store_true", help="Échoue si le contexte E5 attaché n'est pas prêt.")
+    parser.add_argument("--report-file", help="Écrit le payload CLI JSON dans un fichier atomique optionnel.")
     return parser
 
 
@@ -80,6 +93,7 @@ def command_from_args(args: argparse.Namespace) -> E5ContextEngineCliCommand:
         ),
         status=E5ContextEngineStatusPolicy(component_name=args.component_name),
         render=E5ContextEngineCliRenderPolicy(output_format=args.format),
+        report=E5ContextEngineCliReportPolicy(path=_optional_output_file(args.report_file, "--report-file")),
     )
 
 
@@ -99,11 +113,18 @@ def run_e5_context_engine(
         engine = ContextEngine()
         intake = engine.attach_e5_artifact_dir(command.artifact_dir, command.intake)
         status = inspect_e5_context_engine(engine, command.status)
+        payload = _payload(command, intake, status)
     except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
         err.write(f"missipy-e5-context-engine failed: {exc}\n")
         return 1
 
-    _write_output(out, command, intake, status)
+    try:
+        _write_report(command.report, payload)
+    except OSError as exc:
+        err.write(f"missipy-e5-context-engine failed to write report: {exc}\n")
+        return 1
+
+    _write_output(out, command, payload)
     return 0
 
 
@@ -115,16 +136,39 @@ def main() -> int:
 def _write_output(
     out: TextIO,
     command: E5ContextEngineCliCommand,
-    intake: E5ContextEngineIntakeResult,
-    status: object,
+    payload: dict[str, object],
 ) -> None:
-    payload = _payload(command, intake, status)
     if command.render.output_format == "json":
         out.write(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         out.write("\n")
         return
     out.write(_to_text(payload))
     out.write("\n")
+
+
+def _optional_output_file(value: str | None, option_name: str) -> Path | None:
+    if value is None:
+        return None
+    path = Path(value)
+    if not path.name:
+        raise ValueError(f"{option_name} must target a filename")
+    return path
+
+
+def _write_report(policy: E5ContextEngineCliReportPolicy, payload: dict[str, object]) -> None:
+    if policy.path is None:
+        return
+    target = policy.path
+    temporary = target.with_name(f".{target.name}.tmp")
+    try:
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(target)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 def _payload(command: E5ContextEngineCliCommand, intake: E5ContextEngineIntakeResult, status: object) -> dict[str, object]:

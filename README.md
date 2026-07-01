@@ -1,37 +1,55 @@
-# Phase 5.8 — E5 ContextEngine manual CLI intake
+# Phase 5.9 — E5 ContextEngine CLI report file
 
-Cette archive ajoute une bordure CLI locale autour des contrats déjà posés en 5.6 et 5.7.
+Cette archive étend la bordure CLI manuelle de la Phase 5.8 sans créer une nouvelle surface de commande.
 
-La chaîne visée :
+La chaîne visée reste :
 
 ```text
 artifact-dir Phase 4
 -> ContextEngine.attach_e5_artifact_dir()
 -> inspect_e5_context_engine()
--> sortie text/json
+-> payload missipy.e5.context_engine_cli.v1
+-> stdout text/json
+-> report JSON atomique optionnel
 ```
 
 ## Usage
 
 ```bash
-PYTHONPATH=src python3 -m context.e5_context_engine_cli /tmp/autodoc_e5_dry_run
-PYTHONPATH=src python3 -m context.e5_context_engine_cli --format json /tmp/autodoc_e5_dry_run
+PYTHONPATH=src python3 -m context.e5_context_engine_cli \
+  --report-file /tmp/e5_context_engine_status.json \
+  /tmp/autodoc_e5_dry_run
+
+PYTHONPATH=src python3 -m context.e5_context_engine_cli \
+  --format json \
+  --report-file /tmp/e5_context_engine_status.json \
+  /tmp/autodoc_e5_dry_run
 ```
 
-Options utiles :
+`--report-file` persiste le même payload JSON que la sortie `--format json` :
 
 ```text
---component-name NAME
---priority INT
---include-context-text
---hide-prompt-text
---require-ready
---format text|json
+schema: missipy.e5.context_engine_cli.v1
+intake: missipy.e5.context_engine_intake.v1
+status: missipy.e5.context_engine_status.v1
 ```
+
+## Frontière IO
+
+L'écriture fichier est volontairement limitée à la CLI :
+
+```text
+context.e5_context_engine_cli
+-> _write_report()
+-> fichier JSON atomique
+```
+
+Le domaine, le `ContextEngine`, le runtime E5 et les contrats d'attachement ne savent pas écrire ce fichier.
 
 ## Ce que ça ne fait pas
 
 ```text
+pas de nouvelle CLI
 pas d'autoload E5
 pas de Scheduler vivant
 pas de daemon
@@ -44,8 +62,6 @@ pas de LLM
 pas d'appel OpenVINO
 ```
 
-Cette CLI construit un `ContextEngine` éphémère pour vérifier l'intake local ; elle ne modifie pas le micro-kernel vivant.
-
 Aucune bibliothèque hors stdlib Python n'est ajoutée.
 
 ## Application
@@ -53,7 +69,7 @@ Aucune bibliothèque hors stdlib Python n'est ajoutée.
 Extraire l'archive à la racine du dépôt :
 
 ```bash
-tar -xzf autodoc_phase5_8_e5_context_engine_cli.tar.gz
+tar -xzf autodoc_phase5_9_e5_context_engine_cli_report.tar.gz
 ```
 
 ## Tests recommandés
