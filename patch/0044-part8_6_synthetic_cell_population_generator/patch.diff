@@ -1,0 +1,633 @@
+diff --git a/src/context/cell_snapshot_synthetic.py b/src/context/cell_snapshot_synthetic.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/cell_snapshot_synthetic.py
+@@ -0,0 +1,198 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from datetime import datetime, timedelta, timezone
++import random
++from typing import Iterator
++
++from context.cell_snapshot import CellSnapshot
++
++
++CELL_SYNTHETIC_POPULATION_SCHEMA = "missipy.cell_synthetic_population.v1"
++
++
++@dataclass(frozen=True, slots=True)
++class SyntheticCellClassProfile:
++    """Expected behavior profile for synthetic cell generation."""
++
++    source_class: str
++    expected_lifetime: float
++    base_cost: float
++    score_bias: float
++
++    def __post_init__(self) -> None:
++        if not self.source_class:
++            raise ValueError("source_class must be non-empty")
++        if self.expected_lifetime <= 0:
++            raise ValueError("expected_lifetime must be > 0")
++        if self.base_cost < 0:
++            raise ValueError("base_cost must be >= 0")
++
++
++DEFAULT_SYNTHETIC_CELL_PROFILES = (
++    SyntheticCellClassProfile(
++        source_class="scheduler.short_task",
++        expected_lifetime=2.0,
++        base_cost=1.0,
++        score_bias=0.90,
++    ),
++    SyntheticCellClassProfile(
++        source_class="llm.answer",
++        expected_lifetime=45.0,
++        base_cost=12.0,
++        score_bias=0.70,
++    ),
++    SyntheticCellClassProfile(
++        source_class="ingest.batch",
++        expected_lifetime=120.0,
++        base_cost=30.0,
++        score_bias=0.80,
++    ),
++    SyntheticCellClassProfile(
++        source_class="recorder.write",
++        expected_lifetime=5.0,
++        base_cost=2.0,
++        score_bias=0.95,
++    ),
++)
++
++
++@dataclass(frozen=True, slots=True)
++class SyntheticCellPopulationConfig:
++    """Deterministic configuration for synthetic cell snapshot production."""
++
++    population_size: int = 32
++    tick_count: int = 10
++    tick_seconds: float = 1.0
++    seed: int = 42
++    base_observed_at: str = "2026-07-03T10:00:00Z"
++    profiles: tuple[SyntheticCellClassProfile, ...] = DEFAULT_SYNTHETIC_CELL_PROFILES
++    schema: str = CELL_SYNTHETIC_POPULATION_SCHEMA
++
++    def __post_init__(self) -> None:
++        if self.schema != CELL_SYNTHETIC_POPULATION_SCHEMA:
++            raise ValueError(f"unsupported synthetic population schema: {self.schema!r}")
++        if self.population_size <= 0:
++            raise ValueError("population_size must be > 0")
++        if self.tick_count < 0:
++            raise ValueError("tick_count must be >= 0")
++        if self.tick_seconds <= 0:
++            raise ValueError("tick_seconds must be > 0")
++        if not self.profiles:
++            raise ValueError("profiles must not be empty")
++
++
++@dataclass(frozen=True, slots=True)
++class SyntheticCellSeed:
++    """Stable synthetic cell identity and behavior seed."""
++
++    cell_id: str
++    source_task_id: str
++    source_component_id: str
++    profile: SyntheticCellClassProfile
++    birth_tick: int
++    lifetime_factor: float
++    cost_factor: float
++    score_noise: float
++
++
++def build_synthetic_cell_seeds(config: SyntheticCellPopulationConfig) -> tuple[SyntheticCellSeed, ...]:
++    rng = random.Random(config.seed)
++    seeds: list[SyntheticCellSeed] = []
++
++    for index in range(config.population_size):
++        profile = config.profiles[index % len(config.profiles)]
++        birth_tick = rng.randint(0, max(config.tick_count, 1))
++        lifetime_factor = rng.uniform(0.65, 1.65)
++        cost_factor = rng.uniform(0.75, 1.75)
++        score_noise = rng.uniform(-0.12, 0.12)
++
++        seeds.append(
++            SyntheticCellSeed(
++                cell_id=f"synthetic-cell-{index:04d}",
++                source_task_id=f"synthetic-task-{index:04d}",
++                source_component_id=f"synthetic-component-{index % len(config.profiles):02d}",
++                profile=profile,
++                birth_tick=birth_tick,
++                lifetime_factor=lifetime_factor,
++                cost_factor=cost_factor,
++                score_noise=score_noise,
++            )
++        )
++
++    return tuple(seeds)
++
++
++def generate_synthetic_cell_snapshots(config: SyntheticCellPopulationConfig) -> Iterator[CellSnapshot]:
++    """Generate deterministic synthetic cell snapshots.
++
++    The generator emits the same `missipy.cell.v1` contract that the real
++    EventBus/recorder consumer will later emit. It is therefore useful for
++    developing replay readers and visualization without connecting to the live
++    system.
++    """
++
++    base_time = _parse_utc_timestamp(config.base_observed_at)
++    seeds = build_synthetic_cell_seeds(config)
++
++    for tick in range(config.tick_count):
++        observed_at = _format_utc_timestamp(base_time + timedelta(seconds=tick * config.tick_seconds))
++
++        for seed in seeds:
++            if tick < seed.birth_tick:
++                continue
++
++            age = (tick - seed.birth_tick) * config.tick_seconds
++            expected_lifetime = seed.profile.expected_lifetime * seed.lifetime_factor
++            state = _synthetic_lifecycle_state(age=age, expected_lifetime=expected_lifetime)
++            score = _clamp(seed.profile.score_bias + seed.score_noise - _health_penalty(age, expected_lifetime), 0.0, 1.0)
++            cost = seed.profile.base_cost * seed.cost_factor * (1.0 + age / expected_lifetime)
++
++            yield CellSnapshot(
++                cell_id=seed.cell_id,
++                source_task_id=seed.source_task_id,
++                source_component_id=seed.source_component_id,
++                source_class=seed.profile.source_class,
++                score=round(score, 6),
++                age=round(age, 6),
++                cost=round(cost, 6),
++                lifecycle_state=state,
++                observed_at=observed_at,
++            )
++
++
++def _synthetic_lifecycle_state(*, age: float, expected_lifetime: float) -> str:
++    ratio = age / expected_lifetime
++    if age == 0:
++        return "created"
++    if ratio < 0.15:
++        return "queued"
++    if ratio < 0.75:
++        return "running"
++    if ratio < 1.00:
++        return "waiting"
++    if ratio < 1.35:
++        return "completed"
++    return "dropped"
++
++
++def _health_penalty(age: float, expected_lifetime: float) -> float:
++    ratio = age / expected_lifetime
++    if ratio <= 1.0:
++        return 0.0
++    return min(0.50, (ratio - 1.0) * 0.35)
++
++
++def _parse_utc_timestamp(value: str) -> datetime:
++    if not value.endswith("Z"):
++        raise ValueError("base_observed_at must be a UTC timestamp ending with Z")
++    parsed = datetime.fromisoformat(value.removesuffix("Z") + "+00:00")
++    return parsed.astimezone(timezone.utc)
++
++
++def _format_utc_timestamp(value: datetime) -> str:
++    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
++
++
++def _clamp(value: float, lower: float, upper: float) -> float:
++    return max(lower, min(upper, value))
+diff --git a/tools/generate_synthetic_cell_journal.py b/tools/generate_synthetic_cell_journal.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tools/generate_synthetic_cell_journal.py
+@@ -0,0 +1,39 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++from pathlib import Path
++
++from context.cell_snapshot_journal import write_cell_snapshots_jsonl
++from context.cell_snapshot_synthetic import (
++    SyntheticCellPopulationConfig,
++    generate_synthetic_cell_snapshots,
++)
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description="Generate a synthetic missipy.cell.v1 JSONL journal.")
++    parser.add_argument("--output", required=True, help="Output JSONL path.")
++    parser.add_argument("--population-size", type=int, default=32)
++    parser.add_argument("--tick-count", type=int, default=10)
++    parser.add_argument("--tick-seconds", type=float, default=1.0)
++    parser.add_argument("--seed", type=int, default=42)
++    parser.add_argument("--base-observed-at", default="2026-07-03T10:00:00Z")
++    parser.add_argument("--strict", action="store_true")
++    args = parser.parse_args()
++
++    config = SyntheticCellPopulationConfig(
++        population_size=args.population_size,
++        tick_count=args.tick_count,
++        tick_seconds=args.tick_seconds,
++        seed=args.seed,
++        base_observed_at=args.base_observed_at,
++    )
++    snapshots = generate_synthetic_cell_snapshots(config)
++    result = write_cell_snapshots_jsonl(Path(args.output), snapshots, strict=args.strict)
++    print(result.to_json_dict())
++    return 0 if result.errors == () else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/context/test_cell_snapshot_synthetic.py b/tests/context/test_cell_snapshot_synthetic.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_cell_snapshot_synthetic.py
+@@ -0,0 +1,71 @@
++from __future__ import annotations
++
++from context.cell_snapshot import CELL_SNAPSHOT_SCHEMA, CellSnapshot
++from context.cell_snapshot_synthetic import (
++    CELL_SYNTHETIC_POPULATION_SCHEMA,
++    SyntheticCellPopulationConfig,
++    build_synthetic_cell_seeds,
++    generate_synthetic_cell_snapshots,
++)
++
++
++def test_synthetic_population_config_declares_versioned_schema() -> None:
++    config = SyntheticCellPopulationConfig(population_size=4, tick_count=3)
++
++    assert config.schema == CELL_SYNTHETIC_POPULATION_SCHEMA
++    assert config.schema == "missipy.cell_synthetic_population.v1"
++
++
++def test_synthetic_population_generation_is_deterministic() -> None:
++    config = SyntheticCellPopulationConfig(population_size=8, tick_count=4, seed=123)
++
++    first = tuple(generate_synthetic_cell_snapshots(config))
++    second = tuple(generate_synthetic_cell_snapshots(config))
++
++    assert first == second
++
++
++def test_synthetic_population_outputs_cell_snapshot_contract() -> None:
++    config = SyntheticCellPopulationConfig(population_size=4, tick_count=4, seed=7)
++
++    snapshots = tuple(generate_synthetic_cell_snapshots(config))
++
++    assert snapshots
++    assert all(isinstance(snapshot, CellSnapshot) for snapshot in snapshots)
++    assert {snapshot.schema for snapshot in snapshots} == {CELL_SNAPSHOT_SCHEMA}
++
++
++def test_synthetic_population_uses_expected_lifetime_classes() -> None:
++    config = SyntheticCellPopulationConfig(population_size=8, tick_count=8, seed=3)
++    snapshots = tuple(generate_synthetic_cell_snapshots(config))
++
++    source_classes = {snapshot.source_class for snapshot in snapshots}
++
++    assert "scheduler.short_task" in source_classes
++    assert "llm.answer" in source_classes
++    assert "ingest.batch" in source_classes
++    assert "recorder.write" in source_classes
++
++
++def test_synthetic_population_seeds_are_stable() -> None:
++    config = SyntheticCellPopulationConfig(population_size=5, tick_count=5, seed=99)
++
++    seeds = build_synthetic_cell_seeds(config)
++
++    assert [seed.cell_id for seed in seeds] == [
++        "synthetic-cell-0000",
++        "synthetic-cell-0001",
++        "synthetic-cell-0002",
++        "synthetic-cell-0003",
++        "synthetic-cell-0004",
++    ]
++
++
++def test_synthetic_population_age_and_cost_are_non_negative() -> None:
++    config = SyntheticCellPopulationConfig(population_size=16, tick_count=10, seed=12)
++
++    snapshots = tuple(generate_synthetic_cell_snapshots(config))
++
++    assert all(snapshot.age >= 0 for snapshot in snapshots)
++    assert all(snapshot.cost >= 0 for snapshot in snapshots)
++    assert all(0 <= snapshot.score <= 1 for snapshot in snapshots)
+diff --git a/tests/tools/test_generate_synthetic_cell_journal.py b/tests/tools/test_generate_synthetic_cell_journal.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/tools/test_generate_synthetic_cell_journal.py
+@@ -0,0 +1,41 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++import subprocess
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "generate_synthetic_cell_journal.py"
++
++
++def test_generate_synthetic_cell_journal_cli_writes_jsonl(tmp_path: Path) -> None:
++    output = tmp_path / "cells.jsonl"
++
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--output",
++            str(output),
++            "--population-size",
++            "4",
++            "--tick-count",
++            "4",
++            "--seed",
++            "11",
++        ],
++        cwd=ROOT,
++        env={"PYTHONPATH": "src:."},
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    result = json.loads(completed.stdout.replace("'", '"'))
++    lines = output.read_text(encoding="utf-8").splitlines()
++
++    assert result["written_count"] == len(lines)
++    assert lines
++    assert json.loads(lines[0])["schema"] == "missipy.cell.v1"
+diff --git a/tests/rules/test_synthetic_cell_population_rule.py b/tests/rules/test_synthetic_cell_population_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_synthetic_cell_population_rule.py
+@@ -0,0 +1,51 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_synthetic_cell_population_declares_versioned_schema() -> None:
++    source = _read("src/context/cell_snapshot_synthetic.py")
++    assert 'CELL_SYNTHETIC_POPULATION_SCHEMA = "missipy.cell_synthetic_population.v1"' in source
++    assert "SyntheticCellPopulationConfig" in source
++    assert "generate_synthetic_cell_snapshots" in source
++
++
++def test_synthetic_cell_population_emits_cell_contract_not_renderer_contract() -> None:
++    source = _read("src/context/cell_snapshot_synthetic.py")
++    assert "CellSnapshot" in source
++    forbidden = [
++        "vispy",
++        "Scheduler",
++        "EventBus",
++        "requests",
++        "urllib",
++        "httpx",
++        "OPENAI_API_KEY",
++    ]
++    for token in forbidden:
++        assert token not in source
++
++
++def test_synthetic_cell_population_documentation_keeps_it_replaceable() -> None:
++    doc = _read("doc/contracts/SYNTHETIC_CELL_POPULATION_GENERATOR_V1.md")
++    assert "missipy.cell_synthetic_population.v1" in doc
++    assert "same missipy.cell.v1" in doc
++    assert "replaceable" in doc
++    assert "faux flux" in doc
++    assert "true bus" in doc
++
++
++def test_synthetic_cell_population_manifest_has_no_renderer_dependency() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PART8_6_SYNTHETIC_CELL_POPULATION_GENERATOR.md")
++    assert "src/context/cell_snapshot_synthetic.py" in manifest
++    assert "tools/generate_synthetic_cell_journal.py" in manifest
++    assert "VisPy" not in manifest
++    assert ".dot" not in manifest
++    assert ".svg" not in manifest
+diff --git a/doc/contracts/SYNTHETIC_CELL_POPULATION_GENERATOR_V1.md b/doc/contracts/SYNTHETIC_CELL_POPULATION_GENERATOR_V1.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/contracts/SYNTHETIC_CELL_POPULATION_GENERATOR_V1.md
+@@ -0,0 +1,58 @@
++# Synthetic Cell Population Generator v1
++
++```text
++schema: missipy.cell_synthetic_population.v1
++output line schema: missipy.cell.v1
++```
++
++The synthetic cell population generator creates deterministic observation data
++for the cell lens before the real EventBus/recorder consumer exists.
++
++It is replaceable.
++
++The faux flux and the true bus path must produce the same missipy.cell.v1
++journal so the visualizer does not need to be rewritten.
++
++## Purpose
++
++```text
++synthetic generator
++→ missipy.cell.v1 snapshots
++→ JSONL journal
++→ replay/tail reader
++→ future VisPy viewer
++```
++
++## Boundary rule
++
++The generator does not subscribe to EventBus, does not call Scheduler, does not
++emit commands, and does not import rendering code.
++
++It is a development and test data source for the observation path.
++
++## Determinism
++
++The generator uses an explicit seed and a fixed base timestamp by default.
++
++The same configuration produces the same snapshots.
++
++## Source classes
++
++Default profiles include:
++
++```text
++scheduler.short_task
++llm.answer
++ingest.batch
++recorder.write
++```
++
++These profiles have different expected lifetimes so future health mapping can
++test that slow is not always unhealthy.
++
++## Replacement rule
++
++When the real EventBus/recorder consumer is ready, the synthetic generator is
++removed from the live chain. It may remain as a test fixture and demo source.
++
++The visualizer must continue to read the same journal contract.
+diff --git a/doc/releases/README_PART8_6_SYNTHETIC_CELL_POPULATION_GENERATOR.md b/doc/releases/README_PART8_6_SYNTHETIC_CELL_POPULATION_GENERATOR.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PART8_6_SYNTHETIC_CELL_POPULATION_GENERATOR.md
+@@ -0,0 +1,20 @@
++# Part 8.6 — Synthetic Cell Population Generator
++
++Part 8.6 adds a deterministic synthetic generator for `missipy.cell.v1`
++snapshots.
++
++## Added
++
++- Synthetic source class profiles.
++- Deterministic synthetic cell seed generation.
++- Synthetic snapshot generator.
++- CLI for generating a JSONL journal.
++- Tests and contract documentation.
++
++## Not added
++
++- No EventBus consumer.
++- No recorder stream integration.
++- No VisPy.
++- No mobile SSE.
++- No optimization loop.
+diff --git a/doc/changelogs/CHANGELOG_PART8_6_SYNTHETIC_CELL_POPULATION_GENERATOR.md b/doc/changelogs/CHANGELOG_PART8_6_SYNTHETIC_CELL_POPULATION_GENERATOR.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PART8_6_SYNTHETIC_CELL_POPULATION_GENERATOR.md
+@@ -0,0 +1,24 @@
++# Changelog — Part 8.6 Synthetic Cell Population Generator
++
++## Added
++
++- `CELL_SYNTHETIC_POPULATION_SCHEMA`
++- `SyntheticCellClassProfile`
++- `SyntheticCellPopulationConfig`
++- `SyntheticCellSeed`
++- `build_synthetic_cell_seeds`
++- `generate_synthetic_cell_snapshots`
++- `tools/generate_synthetic_cell_journal.py`
++
++## Behavior
++
++The generator emits deterministic `missipy.cell.v1` snapshots suitable for
++JSONL journaling and later visualization.
++
++## Not changed
++
++- No Scheduler path.
++- No EventBus subscription.
++- No recorder core modification.
++- No renderer dependency.
++- No network dependency.
+diff --git a/doc/code-rules/PART8_6_SYNTHETIC_CELL_POPULATION_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PART8_6_SYNTHETIC_CELL_POPULATION_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PART8_6_SYNTHETIC_CELL_POPULATION_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,21 @@
++# Part 8.6 Synthetic Cell Population Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: The patch adds a deterministic synthetic observation producer that emits the existing missipy.cell.v1 contract. It does not add rendering, network, EventBus, Scheduler, recorder core, or command paths.
++
++live_path_status: synthetic observation fixture only
++live_path_uses_real_backend: false
++external_dependencies_added: false
++scheduler_modified: false
++eventbus_modified: false
++recorder_core_modified: false
++network_added: false
++github_api_added: false
++vispy_added: false
++llm_or_openvino_added: false
++```
++
++The generator is intentionally replaceable by the future real EventBus/recorder
++consumer because both paths produce the same journal contract.
+diff --git a/doc/reports/phase8/PART8_6_SYNTHETIC_CELL_POPULATION_GENERATOR_TEST_REPORT.md b/doc/reports/phase8/PART8_6_SYNTHETIC_CELL_POPULATION_GENERATOR_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase8/PART8_6_SYNTHETIC_CELL_POPULATION_GENERATOR_TEST_REPORT.md
+@@ -0,0 +1,21 @@
++# Part 8.6 Synthetic Cell Population Generator Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/context/test_cell_snapshot_synthetic.py
++PYTHONPATH=src:. pytest -q tests/tools/test_generate_synthetic_cell_journal.py
++PYTHONPATH=src:. pytest -q tests/rules/test_synthetic_cell_population_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Expected
++
++```text
++synthetic generator tests: pass
++tool tests: pass
++rules: pass
++full suite: pass
++```
+diff --git a/doc/manifests/MANIFEST_PART8_6_SYNTHETIC_CELL_POPULATION_GENERATOR.md b/doc/manifests/MANIFEST_PART8_6_SYNTHETIC_CELL_POPULATION_GENERATOR.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PART8_6_SYNTHETIC_CELL_POPULATION_GENERATOR.md
+@@ -0,0 +1,23 @@
++# Manifest — Part 8.6 Synthetic Cell Population Generator
++
++## Added
++
++- `src/context/cell_snapshot_synthetic.py`
++- `tools/generate_synthetic_cell_journal.py`
++- `tests/context/test_cell_snapshot_synthetic.py`
++- `tests/tools/test_generate_synthetic_cell_journal.py`
++- `tests/rules/test_synthetic_cell_population_rule.py`
++- `doc/contracts/SYNTHETIC_CELL_POPULATION_GENERATOR_V1.md`
++- `doc/releases/README_PART8_6_SYNTHETIC_CELL_POPULATION_GENERATOR.md`
++- `doc/changelogs/CHANGELOG_PART8_6_SYNTHETIC_CELL_POPULATION_GENERATOR.md`
++- `doc/code-rules/PART8_6_SYNTHETIC_CELL_POPULATION_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase8/PART8_6_SYNTHETIC_CELL_POPULATION_GENERATOR_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PART8_6_SYNTHETIC_CELL_POPULATION_GENERATOR.md`
++
++## Modified
++
++- None.
++
++## Runtime dependencies
++
++- None added.
