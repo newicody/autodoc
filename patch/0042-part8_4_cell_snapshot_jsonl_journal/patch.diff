@@ -1,0 +1,455 @@
+diff --git a/src/context/cell_snapshot_journal.py b/src/context/cell_snapshot_journal.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/cell_snapshot_journal.py
+@@ -0,0 +1,98 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Iterable
++
++from context.cell_snapshot import CellSnapshot
++
++
++CELL_SNAPSHOT_JOURNAL_SCHEMA = "missipy.cell_snapshot_journal.v1"
++
++
++@dataclass(frozen=True, slots=True)
++class CellSnapshotJournalWriteResult:
++    """Result of a best-effort cell snapshot journal write."""
++
++    path: str
++    attempted_count: int
++    written_count: int
++    dropped_count: int
++    errors: tuple[str, ...] = ()
++    schema: str = CELL_SNAPSHOT_JOURNAL_SCHEMA
++
++    @property
++    def ok(self) -> bool:
++        return not self.errors and self.written_count == self.attempted_count
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "attempted_count": self.attempted_count,
++            "dropped_count": self.dropped_count,
++            "errors": list(self.errors),
++            "path": self.path,
++            "schema": self.schema,
++            "written_count": self.written_count,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class CellSnapshotJournalWriter:
++    """Append-only JSONL writer for observation snapshots.
++
++    This writer is a boundary utility. It materializes immutable snapshots for
++    visualization and analysis consumers, but it is not part of the decision
++    path and does not emit commands.
++    """
++
++    path: Path
++    strict: bool = False
++
++    def append(self, snapshot: CellSnapshot) -> CellSnapshotJournalWriteResult:
++        return self.append_many((snapshot,))
++
++    def append_many(self, snapshots: Iterable[CellSnapshot]) -> CellSnapshotJournalWriteResult:
++        materialized = tuple(snapshots)
++        attempted = len(materialized)
++
++        try:
++            self.path.parent.mkdir(parents=True, exist_ok=True)
++            with self.path.open("a", encoding="utf-8") as handle:
++                written = 0
++                errors: list[str] = []
++                for index, snapshot in enumerate(materialized):
++                    if not isinstance(snapshot, CellSnapshot):
++                        message = f"item {index} is not a CellSnapshot"
++                        if self.strict:
++                            raise TypeError(message)
++                        errors.append(message)
++                        continue
++                    handle.write(snapshot.to_json_line())
++                    written += 1
++
++            return CellSnapshotJournalWriteResult(
++                path=str(self.path),
++                attempted_count=attempted,
++                written_count=written,
++                dropped_count=attempted - written,
++                errors=tuple(errors),
++            )
++        except Exception as exc:
++            if self.strict:
++                raise
++            return CellSnapshotJournalWriteResult(
++                path=str(self.path),
++                attempted_count=attempted,
++                written_count=0,
++                dropped_count=attempted,
++                errors=(f"{type(exc).__name__}: {exc}",),
++            )
++
++
++def write_cell_snapshots_jsonl(
++    path: Path,
++    snapshots: Iterable[CellSnapshot],
++    *,
++    strict: bool = False,
++) -> CellSnapshotJournalWriteResult:
++    return CellSnapshotJournalWriter(path=path, strict=strict).append_many(snapshots)
+diff --git a/tests/context/test_cell_snapshot_journal.py b/tests/context/test_cell_snapshot_journal.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_cell_snapshot_journal.py
+@@ -0,0 +1,90 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++import pytest
++
++from context.cell_snapshot import CellSnapshot
++from context.cell_snapshot_journal import (
++    CELL_SNAPSHOT_JOURNAL_SCHEMA,
++    CellSnapshotJournalWriter,
++    write_cell_snapshots_jsonl,
++)
++
++
++def _snapshot(index: int, *, state: str = "running") -> CellSnapshot:
++    return CellSnapshot(
++        cell_id=f"cell-{index}",
++        source_task_id=f"task-{index}",
++        source_component_id="component-a",
++        source_class="llm.answer",
++        score=0.5 + index,
++        age=float(index),
++        cost=float(index * 2),
++        lifecycle_state=state,
++        observed_at=f"2026-07-03T10:00:0{index}Z",
++    )
++
++
++def test_cell_snapshot_journal_appends_json_lines(tmp_path: Path) -> None:
++    path = tmp_path / "cells.jsonl"
++    result = CellSnapshotJournalWriter(path).append(_snapshot(1))
++
++    lines = path.read_text(encoding="utf-8").splitlines()
++
++    assert result.ok is True
++    assert result.schema == CELL_SNAPSHOT_JOURNAL_SCHEMA
++    assert len(lines) == 1
++    assert json.loads(lines[0])["schema"] == "missipy.cell.v1"
++    assert json.loads(lines[0])["cell_id"] == "cell-1"
++
++
++def test_cell_snapshot_journal_preserves_append_order(tmp_path: Path) -> None:
++    path = tmp_path / "cells.jsonl"
++    writer = CellSnapshotJournalWriter(path)
++
++    writer.append_many([_snapshot(1), _snapshot(2, state="completed")])
++
++    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
++    assert [row["cell_id"] for row in rows] == ["cell-1", "cell-2"]
++    assert rows[1]["lifecycle_state"] == "completed"
++
++
++def test_cell_snapshot_journal_creates_parent_directory(tmp_path: Path) -> None:
++    path = tmp_path / "nested" / "cells.jsonl"
++
++    result = write_cell_snapshots_jsonl(path, [_snapshot(1)])
++
++    assert result.written_count == 1
++    assert path.exists()
++
++
++def test_cell_snapshot_journal_is_best_effort_for_invalid_items(tmp_path: Path) -> None:
++    path = tmp_path / "cells.jsonl"
++    writer = CellSnapshotJournalWriter(path)
++
++    result = writer.append_many([_snapshot(1), object()])  # type: ignore[list-item]
++
++    assert result.attempted_count == 2
++    assert result.written_count == 1
++    assert result.dropped_count == 1
++    assert result.errors
++
++
++def test_cell_snapshot_journal_strict_mode_rejects_invalid_items(tmp_path: Path) -> None:
++    path = tmp_path / "cells.jsonl"
++    writer = CellSnapshotJournalWriter(path, strict=True)
++
++    with pytest.raises(TypeError):
++        writer.append_many([object()])  # type: ignore[list-item]
++
++
++def test_cell_snapshot_journal_best_effort_on_write_error(tmp_path: Path) -> None:
++    writer = CellSnapshotJournalWriter(tmp_path)
++
++    result = writer.append(_snapshot(1))
++
++    assert result.written_count == 0
++    assert result.dropped_count == 1
++    assert result.errors
+diff --git a/tests/rules/test_cell_snapshot_journal_rule.py b/tests/rules/test_cell_snapshot_journal_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_cell_snapshot_journal_rule.py
+@@ -0,0 +1,51 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_cell_snapshot_journal_declares_versioned_journal_schema() -> None:
++    source = _read("src/context/cell_snapshot_journal.py")
++    assert 'CELL_SNAPSHOT_JOURNAL_SCHEMA = "missipy.cell_snapshot_journal.v1"' in source
++    assert "CellSnapshotJournalWriter" in source
++    assert "CellSnapshotJournalWriteResult" in source
++
++
++def test_cell_snapshot_journal_is_boundary_only() -> None:
++    source = _read("src/context/cell_snapshot_journal.py")
++    forbidden = [
++        "vispy",
++        "Scheduler",
++        "EventBus",
++        "requests",
++        "urllib",
++        "httpx",
++        "subprocess",
++        "OPENAI_API_KEY",
++    ]
++    for token in forbidden:
++        assert token not in source
++
++
++def test_cell_snapshot_journal_documentation_keeps_observation_and_command_separate() -> None:
++    doc = _read("doc/contracts/CELL_SNAPSHOT_JOURNAL_CONTRACT_V1.md")
++    assert "missipy.cell_snapshot_journal.v1" in doc
++    assert "best-effort" in doc
++    assert "EventBus / recorder / replay" in doc
++    assert "not a command path" in doc
++    assert "must not block the Scheduler" in doc
++
++
++def test_cell_snapshot_journal_manifest_has_no_renderer_dependency() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PART8_4_CELL_SNAPSHOT_JSONL_JOURNAL.md")
++    assert "src/context/cell_snapshot_journal.py" in manifest
++    assert "VisPy" not in manifest
++    assert "requirements" not in manifest
++    assert ".dot" not in manifest
++    assert ".svg" not in manifest
+diff --git a/doc/contracts/CELL_SNAPSHOT_JOURNAL_CONTRACT_V1.md b/doc/contracts/CELL_SNAPSHOT_JOURNAL_CONTRACT_V1.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/contracts/CELL_SNAPSHOT_JOURNAL_CONTRACT_V1.md
+@@ -0,0 +1,62 @@
++# Cell Snapshot JSONL Journal Contract v1
++
++```text
++schema: missipy.cell_snapshot_journal.v1
++line schema: missipy.cell.v1
++```
++
++The cell snapshot journal is the first materialized observation boundary for
++the cell-population visualization track.
++
++It is best-effort and append-only.
++
++## Purpose
++
++```text
++EventBus / recorder / replay
++→ cell snapshot journal
++→ VisPy, future mobile view, analysis scripts
++```
++
++The journal is not a command path. It does not schedule, cancel, mutate, or
++decide work.
++
++## File format
++
++The journal is JSONL.
++
++Each line is a serialized `missipy.cell.v1` snapshot.
++
++```json
++{"schema":"missipy.cell.v1","cell_id":"..."}
++```
++
++The file-level writer result uses:
++
++```text
++missipy.cell_snapshot_journal.v1
++```
++
++## Boundary rule
++
++The writer is a recorder-boundary utility. It may perform disk I/O.
++
++It must not block the Scheduler. It must not be required for deterministic
++execution. It must not emit commands.
++
++Under load or failure, observation data may be dropped, sampled, or aggregated
++by later implementations.
++
++## Versioning rule
++
++Changing the line schema requires a new `missipy.cell.*` version.
++
++Changing journal semantics requires a new `missipy.cell_snapshot_journal.*`
++version.
++
++## Current implementation
++
++Part 8.4 only adds the JSONL writer.
++
++It does not yet connect to the real EventBus or recorder stream. The real
++consumer is introduced in a later patch using this same contract.
+diff --git a/doc/releases/README_PART8_4_CELL_SNAPSHOT_JSONL_JOURNAL.md b/doc/releases/README_PART8_4_CELL_SNAPSHOT_JSONL_JOURNAL.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PART8_4_CELL_SNAPSHOT_JSONL_JOURNAL.md
+@@ -0,0 +1,20 @@
++# Part 8.4 — Cell Snapshot JSONL Journal
++
++Part 8.4 adds the append-only JSONL writer for `missipy.cell.v1` snapshots.
++
++## Added
++
++- `src/context/cell_snapshot_journal.py`
++- Best-effort writer result.
++- Append-only JSONL writer.
++- Tests for append order, parent directory creation, invalid item handling, and write failure handling.
++- Journal contract documentation.
++
++## Not added
++
++- No real EventBus consumer.
++- No recorder stream integration.
++- No replay/tail reader.
++- No VisPy.
++- No mobile view.
++- No optimization loop.
+diff --git a/doc/changelogs/CHANGELOG_PART8_4_CELL_SNAPSHOT_JSONL_JOURNAL.md b/doc/changelogs/CHANGELOG_PART8_4_CELL_SNAPSHOT_JSONL_JOURNAL.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PART8_4_CELL_SNAPSHOT_JSONL_JOURNAL.md
+@@ -0,0 +1,20 @@
++# Changelog — Part 8.4 Cell Snapshot JSONL Journal
++
++## Added
++
++- `CELL_SNAPSHOT_JOURNAL_SCHEMA`
++- `CellSnapshotJournalWriteResult`
++- `CellSnapshotJournalWriter`
++- `write_cell_snapshots_jsonl`
++
++## Behavior
++
++The writer appends serialized `missipy.cell.v1` snapshots to a JSONL file.
++Writes are best-effort by default and strict only when explicitly requested.
++
++## Not changed
++
++- No Scheduler path.
++- No EventBus subscription.
++- No recorder core modification.
++- No renderer dependency.
+diff --git a/doc/code-rules/PART8_4_CELL_SNAPSHOT_JOURNAL_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PART8_4_CELL_SNAPSHOT_JOURNAL_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PART8_4_CELL_SNAPSHOT_JOURNAL_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,20 @@
++# Part 8.4 Cell Snapshot Journal Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: The patch adds an observation-boundary JSONL writer for missipy.cell.v1 snapshots. Disk I/O is confined to a journal writer module. It does not modify Scheduler, EventBus, recorder core, replay core, rendering, server, or external APIs.
++
++live_path_status: observation boundary utility only
++live_path_uses_real_backend: local file writer
++external_dependencies_added: false
++scheduler_modified: false
++eventbus_modified: false
++recorder_core_modified: false
++network_added: false
++github_api_added: false
++vispy_added: false
++llm_or_openvino_added: false
++```
++
++The real bus/recorder consumer is intentionally left for a later patch.
+diff --git a/doc/reports/phase8/PART8_4_CELL_SNAPSHOT_JSONL_JOURNAL_TEST_REPORT.md b/doc/reports/phase8/PART8_4_CELL_SNAPSHOT_JSONL_JOURNAL_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase8/PART8_4_CELL_SNAPSHOT_JSONL_JOURNAL_TEST_REPORT.md
+@@ -0,0 +1,19 @@
++# Part 8.4 Cell Snapshot JSONL Journal Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/context/test_cell_snapshot_journal.py
++PYTHONPATH=src:. pytest -q tests/rules/test_cell_snapshot_journal_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Expected
++
++```text
++journal tests: pass
++rules: pass
++full suite: pass
++```
+diff --git a/doc/manifests/MANIFEST_PART8_4_CELL_SNAPSHOT_JSONL_JOURNAL.md b/doc/manifests/MANIFEST_PART8_4_CELL_SNAPSHOT_JSONL_JOURNAL.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PART8_4_CELL_SNAPSHOT_JSONL_JOURNAL.md
+@@ -0,0 +1,21 @@
++# Manifest — Part 8.4 Cell Snapshot JSONL Journal
++
++## Added
++
++- `src/context/cell_snapshot_journal.py`
++- `tests/context/test_cell_snapshot_journal.py`
++- `tests/rules/test_cell_snapshot_journal_rule.py`
++- `doc/contracts/CELL_SNAPSHOT_JOURNAL_CONTRACT_V1.md`
++- `doc/releases/README_PART8_4_CELL_SNAPSHOT_JSONL_JOURNAL.md`
++- `doc/changelogs/CHANGELOG_PART8_4_CELL_SNAPSHOT_JSONL_JOURNAL.md`
++- `doc/code-rules/PART8_4_CELL_SNAPSHOT_JOURNAL_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase8/PART8_4_CELL_SNAPSHOT_JSONL_JOURNAL_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PART8_4_CELL_SNAPSHOT_JSONL_JOURNAL.md`
++
++## Modified
++
++- None.
++
++## Runtime dependencies
++
++- None added.
