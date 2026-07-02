@@ -1,0 +1,1011 @@
+diff --git a/tools/roadmap_b_aider_orchestrator.py b/tools/roadmap_b_aider_orchestrator.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tools/roadmap_b_aider_orchestrator.py
+@@ -0,0 +1,577 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++import json
++import os
++import re
++import shlex
++import subprocess
++import time
++from dataclasses import dataclass, field
++from pathlib import Path
++from typing import Sequence
++
++
++ROOT = Path(__file__).resolve().parents[1]
++
++ROADMAP_B_STEPS: tuple[dict[str, str], ...] = (
++    {
++        "id": "part8_1_local_data_contract",
++        "title": "Local data contract",
++        "goal": "Define stable local data directories, manifests, generated artifacts policy and source-of-truth rules.",
++        "risk": "low",
++    },
++    {
++        "id": "part8_2_document_model",
++        "title": "Document model",
++        "goal": "Add Document, DocumentChunk, Artifact and OperatorDecision local models.",
++        "risk": "medium",
++    },
++    {
++        "id": "part8_3_incremental_file_scan",
++        "title": "Incremental file scanner",
++        "goal": "Scan local files, hash them, detect changes and write local scan manifests.",
++        "risk": "medium",
++    },
++    {
++        "id": "part8_4_context_bundle_builder",
++        "title": "Context bundle builder",
++        "goal": "Build small auditable context bundles from documents without embeddings yet.",
++        "risk": "medium",
++    },
++    {
++        "id": "part8_5_retrieval_evaluation_set",
++        "title": "Retrieval evaluation set",
++        "goal": "Create local evaluation fixtures for known questions, expected files and expected context.",
++        "risk": "medium",
++    },
++    {
++        "id": "part8_6_operator_feedback_loop",
++        "title": "Operator feedback loop",
++        "goal": "Record accept, reject and needs-more-context decisions and replay them locally.",
++        "risk": "medium",
++    },
++)
++
++DEFAULT_CONTEXT_FILES: tuple[str, ...] = (
++    "README.md",
++    "doc/maintenance/ROADMAP_B_LOCK.md",
++    "doc/maintenance/PHASE7_FREEZE_HANDOFF_CONTRACT.md",
++    "doc/maintenance/PHASE7_CLOSURE_REPORT.md",
++)
++
++DEFAULT_TEST_COMMANDS: tuple[str, ...] = (
++    "PYTHONPATH=src:. python -m compileall -q src tests tools",
++    "PYTHONPATH=src:. pytest -q tests/rules",
++    "PYTHONPATH=src:. pytest -q",
++)
++
++SENSITIVE_RULE_PATHS: tuple[str, ...] = ("tests/rules/", "doc/code-rules/")
++SENSITIVE_DEPENDENCY_FILES: tuple[str, ...] = (
++    "pyproject.toml",
++    "requirements.txt",
++    "requirements-dev.txt",
++    "setup.py",
++    "setup.cfg",
++    "Pipfile",
++    "poetry.lock",
++    "uv.lock",
++)
++SENSITIVE_RUNTIME_PATHS: tuple[str, ...] = ("src/kernel/scheduler.py", "src/scheduler/")
++
++
++@dataclass(frozen=True)
++class CommandResult:
++    command: tuple[str, ...]
++    returncode: int
++    output: str
++
++
++@dataclass(frozen=True)
++class PatchInspection:
++    patch_id: str
++    warnings: tuple[str, ...]
++    added_line_count: int
++    removed_line_count: int
++
++    @property
++    def requires_operator_validation(self) -> bool:
++        return bool(self.warnings)
++
++
++@dataclass
++class OrchestratorStepResult:
++    step_id: str
++    title: str
++    status: str
++    patch_id: str | None = None
++    notes: list[str] = field(default_factory=list)
++
++
++@dataclass
++class OrchestratorRunReport:
++    started_at_epoch: float
++    max_minutes: int
++    max_steps: int
++    results: list[OrchestratorStepResult] = field(default_factory=list)
++
++    @property
++    def elapsed_minutes(self) -> float:
++        return (time.time() - self.started_at_epoch) / 60.0
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": "missipy.roadmap_b_aider_orchestrator_run_report.v1",
++            "elapsed_minutes": self.elapsed_minutes,
++            "max_minutes": self.max_minutes,
++            "max_steps": self.max_steps,
++            "results": [
++                {
++                    "step_id": result.step_id,
++                    "title": result.title,
++                    "status": result.status,
++                    "patch_id": result.patch_id,
++                    "notes": result.notes,
++                }
++                for result in self.results
++            ],
++        }
++
++
++def build_aider_command(
++    *,
++    message_file: Path,
++    edit_files: Sequence[str],
++    read_files: Sequence[str],
++    yes_always: bool = False,
++    extra_args: Sequence[str] = (),
++) -> list[str]:
++    command = [
++        os.environ.get("AIDER_BIN", "aider"),
++        "--message-file",
++        str(message_file),
++        "--no-auto-commits",
++        "--no-stream",
++        "--no-auto-test",
++        "--no-auto-lint",
++    ]
++    if yes_always:
++        command.append("--yes-always")
++    command.extend(extra_args)
++    for read_file in read_files:
++        command.extend(["--read", read_file])
++    for edit_file in edit_files:
++        command.extend(["--file", edit_file])
++    return command
++
++
++def build_aider_prompt(
++    *,
++    patch_number: int,
++    step: dict[str, str],
++    repo_snapshot: str,
++    conversation_context: str,
++    last_failure: str | None = None,
++) -> str:
++    patch_id_hint = f"{patch_number:04d}-part8_roadmap_b_{step['id']}"
++    failure_block = ""
++    if last_failure:
++        failure_block = f"""
++# Previous failure to fix first
++
++{last_failure[:16000]}
++"""
++
++    return f"""
++You are Aider operating inside the Autodoc/MissiPy git repository.
++
++You must create a patch bundle only. Do not apply the patch to source files
++outside the patch bundle.
++
++Create exactly this directory:
++
++patch/{patch_id_hint}/
++  README.md
++  metadata.json
++  patch.diff
++
++Roadmap is locked to Roadmap B:
++- build a robust local-first foundation before real external integration
++- local server/repo remains source of truth
++- GitHub/external surfaces are synchronization/review surfaces only
++- no remote mutation by default
++- no Scheduler path unless explicitly approved
++
++Patch rules:
++- use the existing patch queue contract
++- patch.diff must be applicable by apply_patch_queue.py
++- keep increments small
++- add tests and docs for the new behavior
++- keep Markdown under existing doc/ subdirectories
++- do not version generated context SVG files
++- if adding DOT, do not reference code_rule inside DOT labels or nodes
++- no network code
++- no token/authorization handling
++- no dependency additions unless explicitly justified
++- no significant rules changes unless explicitly justified
++- no broad retroactive refactor unless explicitly justified
++
++Current step:
++id: {step['id']}
++title: {step['title']}
++goal: {step['goal']}
++risk: {step['risk']}
++
++{failure_block}
++
++Conversation/project context:
++
++{conversation_context[:24000]}
++
++Repository snapshot:
++
++{repo_snapshot[:30000]}
++"""
++
++
++def estimate_run_minutes(step_count: int) -> int:
++    return max(20, step_count * 30)
++
++
++def select_roadmap_steps(*, max_steps: int) -> tuple[dict[str, str], ...]:
++    return ROADMAP_B_STEPS[:max_steps]
++
++
++def next_patch_number(patch_root: Path) -> int:
++    numbers: list[int] = []
++    if patch_root.exists():
++        for child in patch_root.iterdir():
++            match = re.match(r"^(\d{4})-", child.name)
++            if match:
++                numbers.append(int(match.group(1)))
++    return max(numbers, default=37) + 1
++
++
++def inspect_patch_bundle(patch_dir: Path, *, max_changed_lines: int = 1200) -> PatchInspection:
++    diff_path = patch_dir / "patch.diff"
++    warnings: list[str] = []
++    if not diff_path.exists():
++        return PatchInspection(
++            patch_id=patch_dir.name,
++            warnings=("missing patch.diff",),
++            added_line_count=0,
++            removed_line_count=0,
++        )
++
++    text = diff_path.read_text(encoding="utf-8", errors="replace")
++    added = [line for line in text.splitlines() if line.startswith("+") and not line.startswith("+++")]
++    removed = [line for line in text.splitlines() if line.startswith("-") and not line.startswith("---")]
++
++    for marker in SENSITIVE_RULE_PATHS:
++        if marker in text:
++            warnings.append(f"sensitive rules path touched: {marker}")
++    for file_name in SENSITIVE_DEPENDENCY_FILES:
++        if f" b/{file_name}" in text or f"+++ b/{file_name}" in text:
++            warnings.append(f"dependency file touched: {file_name}")
++    for marker in SENSITIVE_RUNTIME_PATHS:
++        if marker in text:
++            warnings.append(f"sensitive runtime path touched: {marker}")
++    if len(added) + len(removed) > max_changed_lines:
++        warnings.append(f"large patch: {len(added) + len(removed)} changed lines")
++
++    return PatchInspection(
++        patch_id=patch_dir.name,
++        warnings=tuple(warnings),
++        added_line_count=len(added),
++        removed_line_count=len(removed),
++    )
++
++
++def parse_git_status_paths(status: str) -> tuple[str, ...]:
++    paths: list[str] = []
++    for line in status.splitlines():
++        if not line:
++            continue
++        paths.append(line[3:] if len(line) > 3 else line)
++    return tuple(paths)
++
++
++def require_clean_worktree(*, allow_patch_dirs: bool = True) -> None:
++    status = run_command(["git", "status", "--short"]).output.strip()
++    if not status:
++        return
++    blocked = []
++    for path in parse_git_status_paths(status):
++        if allow_patch_dirs and path.startswith("patch/"):
++            continue
++        blocked.append(path)
++    if blocked:
++        raise RuntimeError("working tree is not clean outside allowed patch dirs: " + ", ".join(blocked))
++
++
++def run_command(command: Sequence[str], *, timeout: int | None = None) -> CommandResult:
++    completed = subprocess.run(
++        list(command),
++        cwd=str(ROOT),
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.STDOUT,
++        timeout=timeout,
++    )
++    return CommandResult(tuple(command), completed.returncode, completed.stdout)
++
++
++def run_command_checked(command: Sequence[str], *, timeout: int | None = None) -> CommandResult:
++    result = run_command(command, timeout=timeout)
++    print("$ " + " ".join(shlex.quote(part) for part in command))
++    if result.output:
++        print(result.output)
++    if result.returncode != 0:
++        raise RuntimeError(f"command failed: {' '.join(command)}")
++    return result
++
++
++def repo_snapshot() -> str:
++    commands = (
++        ("git", "log", "--oneline", "-12"),
++        ("git", "status", "--short"),
++        ("find", "src", "tests", "tools", "doc", "-maxdepth", "3", "-type", "f"),
++    )
++    chunks: list[str] = []
++    for command in commands:
++        result = run_command(command)
++        chunks.append(f"## {' '.join(command)}\n{result.output[:20000]}")
++    return "\n\n".join(chunks)
++
++
++def load_context_files(paths: Sequence[str]) -> str:
++    chunks: list[str] = []
++    for raw_path in paths:
++        path = ROOT / raw_path
++        if path.exists():
++            chunks.append(f"# {raw_path}\n{path.read_text(encoding='utf-8', errors='replace')[:20000]}")
++    return "\n\n".join(chunks)
++
++
++def write_text(path: Path, text: str) -> Path:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(text, encoding="utf-8")
++    return path
++
++
++def write_run_report(path: Path, report: OrchestratorRunReport) -> Path:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(
++        json.dumps(report.to_json_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
++        encoding="utf-8",
++    )
++    return path
++
++
++def maybe_request_operator_approval(inspection: PatchInspection, *, assume_yes: bool = False) -> None:
++    if not inspection.requires_operator_validation:
++        return
++    print("Validation opérateur requise pour " + inspection.patch_id)
++    for warning in inspection.warnings:
++        print("- " + warning)
++    if assume_yes:
++        return
++    answer = input("Appliquer malgré ces alertes ? [yes/no] ").strip().lower()
++    if answer not in {"yes", "y", "oui", "o"}:
++        raise RuntimeError("operator refused sensitive patch")
++
++
++def apply_patch_queue(patch_id: str) -> None:
++    run_command_checked(["python", "apply_patch_queue.py", "--patch", patch_id, "--dry-run"])
++    run_command_checked(["python", "apply_patch_queue.py", "--patch", patch_id, "--commit", "--push"])
++
++
++def archive_patch_bundle(patch_dir: Path) -> None:
++    run_command_checked(["git", "add", str(patch_dir)])
++    diff = run_command(["git", "diff", "--cached", "--quiet"])
++    if diff.returncode == 0:
++        return
++    run_command_checked(["git", "commit", "-m", f"archive patch bundle {patch_dir.name}"])
++    run_command_checked(["git", "push"])
++
++
++def run_default_tests() -> tuple[bool, str]:
++    chunks: list[str] = []
++    for command_text in DEFAULT_TEST_COMMANDS:
++        command = shlex.split(command_text)
++        result = run_command(command)
++        chunks.append("$ " + command_text + "\n" + result.output)
++        print("$ " + command_text)
++        if result.output:
++            print(result.output)
++        if result.returncode != 0:
++            return False, "\n".join(chunks)
++    return True, "\n".join(chunks)
++
++
++def run_docs_svg_policy_if_present() -> None:
++    tool = ROOT / "tools" / "docs_svg_build_policy.py"
++    if tool.exists():
++        run_command_checked(
++            [
++                "python",
++                "tools/docs_svg_build_policy.py",
++                "--root",
++                ".",
++                "--clean",
++                "--check",
++                "--report-file",
++                "doc/maintenance/docs_svg_build_policy_report.json",
++            ]
++        )
++
++
++def discover_created_patch_dirs(before: set[str]) -> tuple[Path, ...]:
++    patch_root = ROOT / "patch"
++    if not patch_root.exists():
++        return ()
++    after = {child.name for child in patch_root.iterdir() if child.is_dir()}
++    return tuple(patch_root / name for name in sorted(after - before))
++
++
++def run_aider_for_step(
++    *,
++    step: dict[str, str],
++    patch_number: int,
++    context_files: Sequence[str],
++    last_failure: str | None,
++    timeout: int,
++    yes_always: bool,
++    extra_args: Sequence[str],
++) -> tuple[Path, str]:
++    patch_root = ROOT / "patch"
++    patch_root.mkdir(exist_ok=True)
++    prompt = build_aider_prompt(
++        patch_number=patch_number,
++        step=step,
++        repo_snapshot=repo_snapshot(),
++        conversation_context=load_context_files(context_files),
++        last_failure=last_failure,
++    )
++    prompt_file = write_text(ROOT / "doc" / "maintenance" / "roadmap_b_aider_prompt.md", prompt)
++    before = {child.name for child in patch_root.iterdir() if child.is_dir()}
++    patch_id_hint = f"{patch_number:04d}-part8_roadmap_b_{step['id']}"
++    edit_files = [
++        f"patch/{patch_id_hint}/README.md",
++        f"patch/{patch_id_hint}/metadata.json",
++        f"patch/{patch_id_hint}/patch.diff",
++    ]
++    command = build_aider_command(
++        message_file=prompt_file,
++        edit_files=edit_files,
++        read_files=context_files,
++        yes_always=yes_always,
++        extra_args=extra_args,
++    )
++    result = run_command_checked(command, timeout=timeout)
++    created = discover_created_patch_dirs(before)
++    if created:
++        return created[-1], result.output
++    fallback = patch_root / patch_id_hint
++    if fallback.exists():
++        return fallback, result.output
++    raise RuntimeError("aider did not create a patch bundle")
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Roadmap B orchestrator using Python + Aider + apply_patch_queue.py")
++    parser.add_argument("--max-minutes", type=int, default=180)
++    parser.add_argument("--max-steps", type=int, default=1)
++    parser.add_argument("--aider-timeout", type=int, default=3600)
++    parser.add_argument("--no-aider", action="store_true", help="plan only; print prompts but do not call aider")
++    parser.add_argument("--aider-yes-always", action="store_true", help="pass --yes-always to aider")
++    parser.add_argument("--assume-yes", action="store_true", help="auto-approve orchestrator warnings")
++    parser.add_argument("--archive-patch-bundles", action="store_true", help="commit/push patch bundle before applying it")
++    parser.add_argument("--context-file", action="append", default=list(DEFAULT_CONTEXT_FILES))
++    parser.add_argument("--aider-extra-arg", action="append", default=[])
++    args = parser.parse_args(argv)
++
++    steps = select_roadmap_steps(max_steps=args.max_steps)
++    estimate = estimate_run_minutes(len(steps))
++    print(f"Roadmap B steps selected: {len(steps)}")
++    print(f"Estimated minutes: {estimate}")
++    print(f"Budget minutes: {args.max_minutes}")
++    if estimate > args.max_minutes and not args.assume_yes:
++        answer = input("Estimation supérieure au budget. Continuer ? [yes/no] ").strip().lower()
++        if answer not in {"yes", "y", "oui", "o"}:
++            return 1
++
++    require_clean_worktree(allow_patch_dirs=True)
++    report = OrchestratorRunReport(started_at_epoch=time.time(), max_minutes=args.max_minutes, max_steps=args.max_steps)
++    last_failure: str | None = None
++
++    for step in steps:
++        if report.elapsed_minutes >= args.max_minutes:
++            break
++        patch_number = next_patch_number(ROOT / "patch")
++        if args.no_aider:
++            prompt = build_aider_prompt(
++                patch_number=patch_number,
++                step=step,
++                repo_snapshot=repo_snapshot(),
++                conversation_context=load_context_files(args.context_file),
++                last_failure=last_failure,
++            )
++            print(prompt)
++            report.results.append(OrchestratorStepResult(step_id=step["id"], title=step["title"], status="planned"))
++            continue
++
++        try:
++            patch_dir, aider_output = run_aider_for_step(
++                step=step,
++                patch_number=patch_number,
++                context_files=args.context_file,
++                last_failure=last_failure,
++                timeout=args.aider_timeout,
++                yes_always=args.aider_yes_always,
++                extra_args=args.aider_extra_arg,
++            )
++            inspection = inspect_patch_bundle(patch_dir)
++            maybe_request_operator_approval(inspection, assume_yes=args.assume_yes)
++            if args.archive_patch_bundles:
++                archive_patch_bundle(patch_dir)
++            apply_patch_queue(patch_dir.name)
++            run_docs_svg_policy_if_present()
++            ok, test_output = run_default_tests()
++            if not ok:
++                last_failure = test_output
++                report.results.append(
++                    OrchestratorStepResult(
++                        step_id=step["id"],
++                        title=step["title"],
++                        status="failed_tests",
++                        patch_id=patch_dir.name,
++                        notes=[test_output[-4000:]],
++                    )
++                )
++                break
++            last_failure = None
++            report.results.append(
++                OrchestratorStepResult(
++                    step_id=step["id"],
++                    title=step["title"],
++                    status="passed",
++                    patch_id=patch_dir.name,
++                    notes=[aider_output[-1000:]],
++                )
++            )
++        except Exception as exc:
++            last_failure = str(exc)
++            report.results.append(OrchestratorStepResult(step_id=step["id"], title=step["title"], status="error", notes=[str(exc)]))
++            break
++        finally:
++            write_run_report(ROOT / "doc" / "maintenance" / "roadmap_b_aider_orchestrator_run_report.json", report)
++
++    for result in report.results:
++        print(f"{result.status}: {result.step_id} {result.patch_id or ''}")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_roadmap_b_aider_orchestrator.py b/tests/tools/test_roadmap_b_aider_orchestrator.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/tools/test_roadmap_b_aider_orchestrator.py
+@@ -0,0 +1,112 @@
++from __future__ import annotations
++
++from pathlib import Path
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOLS = ROOT / "tools"
++if str(TOOLS) not in sys.path:
++    sys.path.insert(0, str(TOOLS))
++
++from roadmap_b_aider_orchestrator import (  # noqa: E402
++    build_aider_command,
++    build_aider_prompt,
++    estimate_run_minutes,
++    inspect_patch_bundle,
++    next_patch_number,
++    parse_git_status_paths,
++    select_roadmap_steps,
++)
++
++
++def test_select_roadmap_steps_limits_steps() -> None:
++    steps = select_roadmap_steps(max_steps=2)
++
++    assert len(steps) == 2
++    assert steps[0]["id"] == "part8_1_local_data_contract"
++
++
++def test_estimate_run_minutes_has_minimum() -> None:
++    assert estimate_run_minutes(0) == 20
++    assert estimate_run_minutes(2) == 60
++
++
++def test_next_patch_number_uses_existing_patch_dirs(tmp_path: Path) -> None:
++    (tmp_path / "0038-a").mkdir()
++    (tmp_path / "0039-b").mkdir()
++    (tmp_path / "not-a-patch").mkdir()
++
++    assert next_patch_number(tmp_path) == 40
++
++
++def test_build_aider_command_uses_message_file_and_disables_auto_commits(tmp_path: Path) -> None:
++    command = build_aider_command(
++        message_file=tmp_path / "prompt.md",
++        edit_files=["patch/0040-x/patch.diff"],
++        read_files=["README.md"],
++        yes_always=True,
++        extra_args=["--model", "test/model"],
++    )
++
++    assert command[0] == "aider"
++    assert "--message-file" in command
++    assert "--no-auto-commits" in command
++    assert "--yes-always" in command
++    assert "--read" in command
++    assert "--file" in command
++    assert "--model" in command
++
++
++def test_build_aider_prompt_requires_patch_bundle() -> None:
++    prompt = build_aider_prompt(
++        patch_number=40,
++        step={
++            "id": "demo",
++            "title": "Demo",
++            "goal": "Create demo",
++            "risk": "low",
++        },
++        repo_snapshot="repo",
++        conversation_context="context",
++    )
++
++    assert "patch/0040-part8_roadmap_b_demo/" in prompt
++    assert "patch.diff must be applicable by apply_patch_queue.py" in prompt
++    assert "Roadmap B" in prompt
++
++
++def test_inspect_patch_bundle_detects_sensitive_changes(tmp_path: Path) -> None:
++    patch_dir = tmp_path / "0040-demo"
++    patch_dir.mkdir()
++    (patch_dir / "patch.diff").write_text(
++        "\n".join(
++            [
++                "diff --git a/tests/rules/test_x.py b/tests/rules/test_x.py",
++                "+++ b/tests/rules/test_x.py",
++                "+assert True",
++                "diff --git a/requirements.txt b/requirements.txt",
++                "+++ b/requirements.txt",
++                "+newlib",
++                "diff --git a/src/kernel/scheduler.py b/src/kernel/scheduler.py",
++                "+++ b/src/kernel/scheduler.py",
++                "+change",
++            ]
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++
++    inspection = inspect_patch_bundle(patch_dir)
++
++    assert inspection.requires_operator_validation is True
++    assert any("rules" in warning for warning in inspection.warnings)
++    assert any("dependency" in warning for warning in inspection.warnings)
++    assert any("runtime" in warning for warning in inspection.warnings)
++
++
++def test_parse_git_status_paths() -> None:
++    assert parse_git_status_paths("?? patch/0038-x\n M README.md\n") == (
++        "patch/0038-x",
++        "README.md",
++    )
+diff --git a/tests/rules/test_roadmap_b_aider_orchestrator_rule.py b/tests/rules/test_roadmap_b_aider_orchestrator_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_roadmap_b_aider_orchestrator_rule.py
+@@ -0,0 +1,51 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_roadmap_b_aider_orchestrator_uses_apply_patch_queue() -> None:
++    source = _read("tools/roadmap_b_aider_orchestrator.py")
++    assert "apply_patch_queue.py" in source
++    assert "--dry-run" in source
++    assert "--commit" in source
++    assert "--push" in source
++
++
++def test_roadmap_b_aider_orchestrator_disables_aider_auto_commits() -> None:
++    source = _read("tools/roadmap_b_aider_orchestrator.py")
++    assert "--no-auto-commits" in source
++    assert "--message-file" in source
++
++
++def test_roadmap_b_aider_orchestrator_requires_validation_for_sensitive_changes() -> None:
++    source = _read("tools/roadmap_b_aider_orchestrator.py")
++    assert "SENSITIVE_RULE_PATHS" in source
++    assert "SENSITIVE_DEPENDENCY_FILES" in source
++    assert "SENSITIVE_RUNTIME_PATHS" in source
++    assert "operator refused sensitive patch" in source
++
++
++def test_roadmap_b_aider_orchestrator_keeps_roadmap_b_locked() -> None:
++    lock = _read("doc/maintenance/ROADMAP_B_LOCK.md")
++    assert "Roadmap B" in lock
++    assert "local repository / local server = source of truth" in lock
++    assert "GitHub is not the source of truth" in lock
++
++
++def test_roadmap_b_aider_orchestrator_manifest_uses_post_migration_path() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PART8_0_ROADMAP_B_AIDER_ORCHESTRATOR.md")
++    assert "tools/roadmap_b_aider_orchestrator.py" in manifest
++    assert "src/kernel/scheduler.py" not in manifest
++
++
++def test_roadmap_b_aider_orchestrator_does_not_add_dot_or_svg() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PART8_0_ROADMAP_B_AIDER_ORCHESTRATOR.md")
++    assert ".dot" not in manifest
++    assert ".svg" not in manifest
+diff --git a/doc/maintenance/ROADMAP_B_LOCK.md b/doc/maintenance/ROADMAP_B_LOCK.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/maintenance/ROADMAP_B_LOCK.md
+@@ -0,0 +1,58 @@
++# Roadmap B Lock
++
++Roadmap B is the active development direction.
++
++The goal is to build a robust local-first foundation before opening real
++external integrations.
++
++## Source of truth
++
++```text
++local repository / local server = source of truth
++GitHub / external systems = review and synchronization surfaces
++```
++
++GitHub is not the source of truth.
++
++## Priority order
++
++```text
++1. local data contract
++2. local document model
++3. incremental file scan
++4. context bundle builder
++5. retrieval evaluation set
++6. operator feedback loop
++7. only then: real read-only external integration
++```
++
++## Closed boundaries
++
++```text
++external service calls: closed by default
++remote mutation: closed by default
++Scheduler execution: closed by default
++new dependencies: operator approval required
++rules changes: operator approval required
++large retroactive refactors: operator approval required
++```
++
++## Development method
++
++Every automated step must produce a patch bundle:
++
++```text
++patch/<patch-id>/
++  README.md
++  metadata.json
++  patch.diff
++```
++
++The patch is then applied through:
++
++```bash
++python apply_patch_queue.py --patch <patch-id> --dry-run
++python apply_patch_queue.py --patch <patch-id> --commit --push
++```
++
++Tests run after each applied step.
+diff --git a/doc/maintenance/ROADMAP_B_AIDER_ORCHESTRATOR.md b/doc/maintenance/ROADMAP_B_AIDER_ORCHESTRATOR.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/maintenance/ROADMAP_B_AIDER_ORCHESTRATOR.md
+@@ -0,0 +1,47 @@
++# Roadmap B Aider Orchestrator
++
++The Roadmap B orchestrator is a Python script that uses Aider to produce patch
++bundles, then applies them through the existing patch queue.
++
++Aider is only used as a patch-bundle author. It should not be treated as the
++source of truth and should not directly mutate the final development path.
++
++## Plan-only run
++
++```bash
++python tools/roadmap_b_aider_orchestrator.py   --no-aider   --max-steps 1   --max-minutes 180
++```
++
++## One automated step
++
++```bash
++python tools/roadmap_b_aider_orchestrator.py   --max-steps 1   --max-minutes 180   --archive-patch-bundles
++```
++
++## With a specific Aider model
++
++```bash
++python tools/roadmap_b_aider_orchestrator.py   --max-steps 1   --aider-extra-arg --model   --aider-extra-arg openai/gpt-5.5
++```
++
++## Validation gates
++
++The orchestrator requests operator validation if the patch touches:
++
++```text
++tests/rules/
++doc/code-rules/
++dependency files
++Scheduler/runtime paths
++large retroactive diffs
++```
++
++## Generated reports
++
++```text
++doc/maintenance/roadmap_b_aider_prompt.md
++doc/maintenance/roadmap_b_aider_orchestrator_run_report.json
++```
++
++These generated files are operator artifacts. Version them only when the operator
++wants to preserve the run.
+diff --git a/doc/releases/README_PART8_0_ROADMAP_B_AIDER_ORCHESTRATOR.md b/doc/releases/README_PART8_0_ROADMAP_B_AIDER_ORCHESTRATOR.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PART8_0_ROADMAP_B_AIDER_ORCHESTRATOR.md
+@@ -0,0 +1,16 @@
++# Part 8.0 — Roadmap B Aider Orchestrator
++
++Part 8.0 adds a Python orchestrator for Roadmap B.
++
++It uses Aider to create patch bundles, then applies them with the existing
++`apply_patch_queue.py` workflow.
++
++The orchestrator is conservative:
++
++```text
++one small step by default
++Aider auto-commits disabled
++patch queue remains authoritative
++tests run after each step
++operator approval required for sensitive changes
++```
+diff --git a/doc/changelogs/CHANGELOG_PART8_0_ROADMAP_B_AIDER_ORCHESTRATOR.md b/doc/changelogs/CHANGELOG_PART8_0_ROADMAP_B_AIDER_ORCHESTRATOR.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PART8_0_ROADMAP_B_AIDER_ORCHESTRATOR.md
+@@ -0,0 +1,28 @@
++# Changelog — Part 8.0 Roadmap B Aider Orchestrator
++
++## Added
++
++- `tools/roadmap_b_aider_orchestrator.py`
++  - Selects Roadmap B steps.
++  - Builds Aider prompts.
++  - Asks Aider to create patch bundles.
++  - Inspects generated patch diffs.
++  - Applies patches with `apply_patch_queue.py`.
++  - Runs tests after each step.
++  - Requests operator approval for sensitive changes.
++
++- `doc/maintenance/ROADMAP_B_LOCK.md`
++  - Locks Roadmap B as the current development direction.
++
++- `doc/maintenance/ROADMAP_B_AIDER_ORCHESTRATOR.md`
++  - Documents usage and validation gates.
++
++- Tests for tools and rules.
++
++## Not added
++
++- No Scheduler integration.
++- No external service adapter.
++- No remote mutation.
++- No DOT.
++- No SVG.
+diff --git a/doc/code-rules/PART8_0_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PART8_0_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PART8_0_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,20 @@
++# Part 8.0 Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Part 8.0 adds a Python orchestrator for Roadmap B using Aider as a patch-bundle author. It preserves apply_patch_queue.py as the authoritative application path, disables Aider auto-commits and requires operator approval for rules, dependencies, Scheduler/runtime paths and large retroactive changes.
++
++live_path_status: operator tool
++live_path_uses_real_backend: local CLI only
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++The orchestrator may call Aider locally. It does not add a runtime dependency to
++the application path.
+diff --git a/doc/reports/phase8/PART8_0_TEST_REPORT.md b/doc/reports/phase8/PART8_0_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase8/PART8_0_TEST_REPORT.md
+@@ -0,0 +1,19 @@
++# Part 8.0 Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/tools/test_roadmap_b_aider_orchestrator.py
++PYTHONPATH=src:. pytest -q tests/rules/test_roadmap_b_aider_orchestrator_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Expected
++
++```text
++Roadmap B Aider orchestrator tests: pass
++rules: pass
++full suite: pass
++```
+diff --git a/doc/manifests/MANIFEST_PART8_0_ROADMAP_B_AIDER_ORCHESTRATOR.md b/doc/manifests/MANIFEST_PART8_0_ROADMAP_B_AIDER_ORCHESTRATOR.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PART8_0_ROADMAP_B_AIDER_ORCHESTRATOR.md
+@@ -0,0 +1,23 @@
++# Manifest — Part 8.0 Roadmap B Aider Orchestrator
++
++## Added
++
++- `tools/roadmap_b_aider_orchestrator.py`
++- `tests/tools/test_roadmap_b_aider_orchestrator.py`
++- `tests/rules/test_roadmap_b_aider_orchestrator_rule.py`
++- `doc/maintenance/ROADMAP_B_LOCK.md`
++- `doc/maintenance/ROADMAP_B_AIDER_ORCHESTRATOR.md`
++- `doc/releases/README_PART8_0_ROADMAP_B_AIDER_ORCHESTRATOR.md`
++- `doc/changelogs/CHANGELOG_PART8_0_ROADMAP_B_AIDER_ORCHESTRATOR.md`
++- `doc/code-rules/PART8_0_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase8/PART8_0_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PART8_0_ROADMAP_B_AIDER_ORCHESTRATOR.md`
++
++## Modified
++
++- None.
++
++## Generated artifacts
++
++- `doc/maintenance/roadmap_b_aider_prompt.md` may be generated by the orchestrator.
++- `doc/maintenance/roadmap_b_aider_orchestrator_run_report.json` may be generated by the orchestrator.
