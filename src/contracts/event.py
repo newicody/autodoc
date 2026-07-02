@@ -33,6 +33,8 @@ class EventType(Enum):
     SOURCE_CANDIDATE_INTAKE_RESULT = auto()
     SOURCE_CANDIDATE_REVIEW = auto()
     SOURCE_CANDIDATE_REVIEW_RESULT = auto()
+    SOURCE_CANDIDATE_DECISION = auto()
+    SOURCE_CANDIDATE_DECISION_RESULT = auto()
 
     # Politique kernel
     POLICY_DENIED = auto()
