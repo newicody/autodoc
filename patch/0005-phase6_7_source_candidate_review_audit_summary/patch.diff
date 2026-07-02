@@ -1,0 +1,678 @@
+diff --git a/src/context/source_candidate_review_audit.py b/src/context/source_candidate_review_audit.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/context/source_candidate_review_audit.py
+@@ -0,0 +1,265 @@
++from __future__ import annotations
++
++import json
++from collections.abc import Iterable, Mapping
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any
++
++from .source_candidate import SourceCandidateDecision
++from .source_candidate_review import SourceCandidateReviewItem, SourceCandidateReviewResult
++
++_REVIEW_AUDIT_SCHEMA = "missipy.source_candidate.review_audit.v1"
++_AUDIT_SCHEMA = "missipy.source_candidate.decision_audit.v1"
++
++
++@dataclass(frozen=True, slots=True)
++class SourceCandidateReviewAuditPolicy:
++    """Politique locale d'enrichissement audit pour une review SourceCandidate."""
++
++    audit_paths: tuple[Path | str, ...] = ()
++    audit_dir: Path | str | None = None
++
++    def __post_init__(self) -> None:
++        object.__setattr__(self, "audit_paths", tuple(Path(path) for path in self.audit_paths))
++        if self.audit_dir is not None:
++            object.__setattr__(self, "audit_dir", Path(self.audit_dir))
++
++    def to_json_dict(self) -> dict[str, object | None]:
++        return {
++            "audit_paths": [str(path) for path in self.audit_paths],
++            "audit_dir": str(self.audit_dir) if self.audit_dir is not None else None,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class SourceCandidateDecisionSummary:
++    """Résumé stable de la décision stockée sur une candidate."""
++
++    action: str = ""
++    reason: str = ""
++    target_context_id: str | None = None
++    resulting_status: str = ""
++
++    @classmethod
++    def from_decision(
++        cls,
++        decision: SourceCandidateDecision | None,
++    ) -> "SourceCandidateDecisionSummary | None":
++        if decision is None:
++            return None
++        payload = decision.to_json_dict()
++        return cls(
++            action=str(payload["action"]),
++            reason=str(payload["reason"]),
++            target_context_id=(
++                str(payload["target_context_id"])
++                if payload["target_context_id"] is not None
++                else None
++            ),
++            resulting_status=str(payload["resulting_status"]),
++        )
++
++    def to_json_dict(self) -> dict[str, object | None]:
++        return {
++            "action": self.action,
++            "reason": self.reason,
++            "target_context_id": self.target_context_id,
++            "resulting_status": self.resulting_status,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class SourceCandidateAuditSummary:
++    """Résumé stable d'un rapport audit local lu depuis disque."""
++
++    path: Path | str
++    action: str
++    before_status: str
++    after_status: str
++    reason: str = ""
++    target_context_id: str | None = None
++
++    def __post_init__(self) -> None:
++        object.__setattr__(self, "path", Path(self.path))
++
++    def to_json_dict(self) -> dict[str, object | None]:
++        return {
++            "path": str(self.path),
++            "action": self.action,
++            "before_status": self.before_status,
++            "after_status": self.after_status,
++            "reason": self.reason,
++            "target_context_id": self.target_context_id,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class SourceCandidateReviewAuditItem:
++    """Projection opérateur enrichie avec décision et audit local."""
++
++    item: SourceCandidateReviewItem
++    decision: SourceCandidateDecisionSummary | None = None
++    audit: SourceCandidateAuditSummary | None = None
++
++    @property
++    def candidate_id(self) -> str:
++        return self.item.candidate.candidate_id
++
++    @property
++    def audit_present(self) -> bool:
++        return self.audit is not None
++
++    def to_json_dict(self) -> dict[str, object | None]:
++        payload = self.item.to_json_dict()
++        payload["decision_summary"] = (
++            self.decision.to_json_dict() if self.decision is not None else None
++        )
++        payload["audit_present"] = self.audit_present
++        payload["audit_summary"] = self.audit.to_json_dict() if self.audit is not None else None
++        return payload
++
++
++@dataclass(frozen=True, slots=True)
++class SourceCandidateReviewAuditResult:
++    """Résultat de review enrichi par les audits locaux disponibles."""
++
++    review: SourceCandidateReviewResult
++    items: tuple[SourceCandidateReviewAuditItem, ...]
++    policy: SourceCandidateReviewAuditPolicy
++    audit_count: int
++
++    def __post_init__(self) -> None:
++        if not isinstance(self.items, tuple):
++            object.__setattr__(self, "items", tuple(self.items))
++        if self.audit_count < 0:
++            raise ValueError("audit_count must be >= 0")
++
++    @property
++    def returned_count(self) -> int:
++        return len(self.items)
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": _REVIEW_AUDIT_SCHEMA,
++            "review": self.review.to_json_dict(),
++            "returned_count": self.returned_count,
++            "audit_count": self.audit_count,
++            "policy": self.policy.to_json_dict(),
++            "items": [item.to_json_dict() for item in self.items],
++        }
++
++    def to_text(self) -> str:
++        lines = [
++            "SourceCandidate review audit summary",
++            f"store: {self.review.store_path}",
++            f"returned: {self.returned_count}/{self.review.matched_count} matched ({self.review.snapshot_count} total)",
++            f"audits indexed: {self.audit_count}",
++        ]
++        if not self.items:
++            lines.append("No SourceCandidate to review.")
++            return "\n".join(lines)
++        for item in self.items:
++            lines.append(
++                f"- {item.candidate_id} [{item.item.candidate.status}] {item.item.candidate.title}"
++            )
++            if item.decision is not None:
++                lines.append(f"  decision: {item.decision.action} -> {item.decision.resulting_status}")
++                if item.decision.reason:
++                    lines.append(f"  reason: {item.decision.reason}")
++                if item.decision.target_context_id:
++                    lines.append(f"  target_context_id: {item.decision.target_context_id}")
++            if item.audit is not None:
++                lines.append(f"  audit: {item.audit.path}")
++            if item.item.body_preview:
++                lines.append(f"  {item.item.body_preview}")
++        return "\n".join(lines)
++
++
++def enrich_source_candidate_review_with_audit(
++    review: SourceCandidateReviewResult,
++    policy: SourceCandidateReviewAuditPolicy | None = None,
++) -> SourceCandidateReviewAuditResult:
++    """Ajoute les résumés de décision et d'audit à une review existante."""
++    effective_policy = policy or SourceCandidateReviewAuditPolicy()
++    audits = _load_audits(effective_policy)
++    items = tuple(
++        SourceCandidateReviewAuditItem(
++            item=item,
++            decision=SourceCandidateDecisionSummary.from_decision(item.candidate.decision),
++            audit=audits.get(item.candidate.candidate_id),
++        )
++        for item in review.items
++    )
++    return SourceCandidateReviewAuditResult(
++        review=review,
++        items=items,
++        policy=effective_policy,
++        audit_count=len(audits),
++    )
++
++
++def _load_audits(
++    policy: SourceCandidateReviewAuditPolicy,
++) -> dict[str, SourceCandidateAuditSummary]:
++    audits: dict[str, SourceCandidateAuditSummary] = {}
++    for path in _audit_paths(policy):
++        summary = _read_audit(path)
++        if summary is None:
++            continue
++        candidate_id = _read_candidate_id(path)
++        if candidate_id is None:
++            continue
++        audits.setdefault(candidate_id, summary)
++    return audits
++
++
++def _audit_paths(policy: SourceCandidateReviewAuditPolicy) -> tuple[Path, ...]:
++    paths = list(Path(path) for path in policy.audit_paths)
++    if policy.audit_dir is not None and Path(policy.audit_dir).exists():
++        paths.extend(sorted(Path(policy.audit_dir).rglob("*.json")))
++    return tuple(sorted(set(paths)))
++
++
++def _read_candidate_id(path: Path) -> str | None:
++    payload = _read_json(path)
++    if payload is None:
++        return None
++    candidate_id = payload.get("candidate_id")
++    return candidate_id if isinstance(candidate_id, str) and candidate_id else None
++
++
++def _read_audit(path: Path) -> SourceCandidateAuditSummary | None:
++    payload = _read_json(path)
++    if payload is None or payload.get("schema") != _AUDIT_SCHEMA:
++        return None
++    return SourceCandidateAuditSummary(
++        path=path,
++        action=_string(payload, "action"),
++        before_status=_string(payload, "before_status"),
++        after_status=_string(payload, "after_status"),
++        reason=_string(payload, "reason"),
++        target_context_id=_optional_string(payload, "target_context_id"),
++    )
++
++
++def _read_json(path: Path) -> Mapping[str, Any] | None:
++    if not path.exists() or not path.is_file():
++        return None
++    try:
++        payload = json.loads(path.read_text(encoding="utf-8"))
++    except (OSError, json.JSONDecodeError):
++        return None
++    return payload if isinstance(payload, Mapping) else None
++
++
++def _string(payload: Mapping[str, Any], key: str) -> str:
++    value = payload.get(key, "")
++    return value if isinstance(value, str) else str(value)
++
++
++def _optional_string(payload: Mapping[str, Any], key: str) -> str | None:
++    value = payload.get(key)
++    if value is None:
++        return None
++    return value if isinstance(value, str) else str(value)
+diff --git a/src/context/source_candidate_review_audit_cli.py b/src/context/source_candidate_review_audit_cli.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/context/source_candidate_review_audit_cli.py
+@@ -0,0 +1,95 @@
++from __future__ import annotations
++
++import argparse
++import asyncio
++import json
++from collections.abc import Sequence
++from pathlib import Path
++
++from .source_candidate import allowed_source_candidate_statuses
++from .source_candidate_review import SourceCandidateReviewCommand, SourceCandidateReviewPolicy
++from .source_candidate_review_audit import (
++    SourceCandidateReviewAuditPolicy,
++    SourceCandidateReviewAuditResult,
++    enrich_source_candidate_review_with_audit,
++)
++from .source_candidate_review_cli import run_source_candidate_review_via_scheduler
++from .source_candidate_store import SourceCandidateStorePolicy
++
++
++def build_parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser(
++        description="Review local SourceCandidate store with decision/audit summaries."
++    )
++    parser.add_argument("--store-file", required=True, help="Path to source_candidates.json")
++    parser.add_argument("--repository", default="newicody/autodoc")
++    parser.add_argument("--include-terminal", action="store_true")
++    parser.add_argument(
++        "--status",
++        action="append",
++        choices=allowed_source_candidate_statuses(),
++        default=[],
++        help="Filter by status. May be repeated.",
++    )
++    parser.add_argument("--limit", type=int, default=50)
++    parser.add_argument("--body-preview-chars", type=int, default=160)
++    parser.add_argument("--audit-file", action="append", default=[])
++    parser.add_argument("--audit-dir")
++    parser.add_argument("--format", choices=("text", "json"), default="text")
++    return parser
++
++
++def command_from_args(args: argparse.Namespace) -> SourceCandidateReviewCommand:
++    return SourceCandidateReviewCommand(
++        store_policy=SourceCandidateStorePolicy(
++            path=args.store_file,
++            repository=args.repository,
++        ),
++        review_policy=SourceCandidateReviewPolicy(
++            include_terminal=args.include_terminal,
++            status_filter=tuple(args.status or ()),
++            limit=args.limit,
++            body_preview_chars=args.body_preview_chars,
++        ),
++    )
++
++
++def audit_policy_from_args(args: argparse.Namespace) -> SourceCandidateReviewAuditPolicy:
++    return SourceCandidateReviewAuditPolicy(
++        audit_paths=tuple(Path(path) for path in args.audit_file),
++        audit_dir=Path(args.audit_dir) if args.audit_dir else None,
++    )
++
++
++async def run_source_candidate_review_audit_via_scheduler(
++    command: SourceCandidateReviewCommand,
++    audit_policy: SourceCandidateReviewAuditPolicy,
++) -> SourceCandidateReviewAuditResult:
++    review = await run_source_candidate_review_via_scheduler(command)
++    return enrich_source_candidate_review_with_audit(review, audit_policy)
++
++
++def render_source_candidate_review_audit_result(
++    result: SourceCandidateReviewAuditResult,
++    output_format: str,
++) -> str:
++    if output_format == "json":
++        return json.dumps(result.to_json_dict(), ensure_ascii=False, sort_keys=True, indent=2)
++    if output_format == "text":
++        return result.to_text()
++    raise ValueError("format must be text or json")
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    parser = build_parser()
++    args = parser.parse_args(argv)
++    command = command_from_args(args)
++    result = asyncio.run(
++        run_source_candidate_review_audit_via_scheduler(command, audit_policy_from_args(args))
++    )
++    print(render_source_candidate_review_audit_result(result, args.format))
++    return 0
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())
+diff --git a/tests/context/test_source_candidate_review_audit.py b/tests/context/test_source_candidate_review_audit.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/context/test_source_candidate_review_audit.py
+@@ -0,0 +1,109 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++from context.source_candidate import SourceCandidateDecision, SourceCandidateInput, build_source_candidate
++from context.source_candidate_decision import (
++    SourceCandidateDecisionAuditPolicy,
++    SourceCandidateDecisionCommand,
++    run_source_candidate_decision,
++)
++from context.source_candidate_review import (
++    SourceCandidateReviewCommand,
++    SourceCandidateReviewPolicy,
++    run_source_candidate_review,
++)
++from context.source_candidate_review_audit import (
++    SourceCandidateReviewAuditPolicy,
++    enrich_source_candidate_review_with_audit,
++)
++from context.source_candidate_review_audit_cli import main
++from context.source_candidate_store import SourceCandidateStorePolicy, upsert_source_candidate
++
++
++def _store_with_decided_candidate(tmp_path: Path) -> tuple[SourceCandidateStorePolicy, str, Path]:
++    store_policy = SourceCandidateStorePolicy(tmp_path / "source_candidates.json")
++    candidate = build_source_candidate(
++        SourceCandidateInput(title="Review audit target", body="Review this audit trail")
++    ).candidate
++    upsert_source_candidate(store_policy, candidate)
++    audit_path = tmp_path / "audit" / "decision.json"
++    result = run_source_candidate_decision(
++        SourceCandidateDecisionCommand(
++            store_policy=store_policy,
++            candidate_id=candidate.candidate_id,
++            decision=SourceCandidateDecision(action="archive", reason="done"),
++            audit_policy=SourceCandidateDecisionAuditPolicy(audit_path),
++        )
++    )
++    return store_policy, result.candidate_id, audit_path
++
++
++def test_review_audit_summary_uses_stored_decision_and_audit_file(tmp_path: Path) -> None:
++    store_policy, candidate_id, audit_path = _store_with_decided_candidate(tmp_path)
++    review = run_source_candidate_review(
++        SourceCandidateReviewCommand(
++            store_policy=store_policy,
++            review_policy=SourceCandidateReviewPolicy(include_terminal=True),
++        )
++    )
++
++    result = enrich_source_candidate_review_with_audit(
++        review,
++        SourceCandidateReviewAuditPolicy(audit_paths=(audit_path,)),
++    )
++
++    payload = result.to_json_dict()
++    assert payload["schema"] == "missipy.source_candidate.review_audit.v1"
++    assert result.audit_count == 1
++    assert result.items[0].candidate_id == candidate_id
++    assert result.items[0].decision is not None
++    assert result.items[0].decision.action == "archive"
++    assert result.items[0].audit is not None
++    assert result.items[0].audit.path == audit_path
++    assert payload["items"][0]["audit_present"] is True
++    assert payload["items"][0]["decision_summary"]["reason"] == "done"
++    assert "audit:" in result.to_text()
++
++
++def test_review_audit_summary_handles_missing_audit_file(tmp_path: Path) -> None:
++    store_policy, _candidate_id, _audit_path = _store_with_decided_candidate(tmp_path)
++    review = run_source_candidate_review(
++        SourceCandidateReviewCommand(
++            store_policy=store_policy,
++            review_policy=SourceCandidateReviewPolicy(include_terminal=True),
++        )
++    )
++
++    result = enrich_source_candidate_review_with_audit(
++        review,
++        SourceCandidateReviewAuditPolicy(audit_paths=(tmp_path / "missing.json",)),
++    )
++
++    assert result.audit_count == 0
++    assert result.items[0].decision is not None
++    assert result.items[0].audit is None
++    assert result.items[0].to_json_dict()["audit_present"] is False
++
++
++def test_review_audit_cli_renders_json_summary(tmp_path: Path, capsys) -> None:
++    store_policy, candidate_id, audit_path = _store_with_decided_candidate(tmp_path)
++
++    exit_code = main(
++        [
++            "--store-file",
++            str(store_policy.path),
++            "--include-terminal",
++            "--audit-file",
++            str(audit_path),
++            "--format",
++            "json",
++        ]
++    )
++
++    assert exit_code == 0
++    payload = json.loads(capsys.readouterr().out)
++    assert payload["audit_count"] == 1
++    assert payload["items"][0]["candidate_id"] == candidate_id
++    assert payload["items"][0]["audit_summary"]["path"] == str(audit_path)
+diff --git a/tests/rules/test_source_candidate_review_audit_rule.py b/tests/rules/test_source_candidate_review_audit_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_source_candidate_review_audit_rule.py
+@@ -0,0 +1,27 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_source_candidate_review_audit_is_local_projection_only() -> None:
++    source = _read("src/context/source_candidate_review_audit.py").lower()
++    for token in ("requests", "qdrant", "openvino", "subprocess"):
++        assert token not in source
++
++
++def test_source_candidate_review_audit_cli_reuses_review_scheduler_path() -> None:
++    cli = _read("src/context/source_candidate_review_audit_cli.py")
++    assert "run_source_candidate_review_via_scheduler" in cli
++    assert "Scheduler(" not in cli
++
++
++def test_phase6_7_documents_review_audit_summary() -> None:
++    assert (ROOT / "PHASE6_7_TEST_REPORT.md").exists()
++    assert (ROOT / "doc/CHANGELOG_PHASE6_7_SOURCE_CANDIDATE_REVIEW_AUDIT.md").exists()
++    assert (ROOT / "doc/docs/architecture/context/48_source_candidate_review_audit_summary.dot").exists()
+diff --git a/doc/docs/architecture/context/48_source_candidate_review_audit_summary.dot b/doc/docs/architecture/context/48_source_candidate_review_audit_summary.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/context/48_source_candidate_review_audit_summary.dot
+@@ -0,0 +1,20 @@
++digraph source_candidate_review_audit_summary {
++  rankdir=LR;
++  node [shape=box];
++
++  cli [label="review audit CLI"];
++  review_cli [label="review live path\nScheduler/Dispatcher/Handler"];
++  store [label="SourceCandidateStore\nJSON réel"];
++  review [label="SourceCandidateReviewResult"];
++  audit_reader [label="audit summary reader\nlocal JSON only"];
++  audit_files [label="decision audit JSON\noptional"];
++  output [label="operator projection\ntext/json"];
++
++  cli -> review_cli;
++  review_cli -> store;
++  store -> review;
++  cli -> audit_reader;
++  audit_files -> audit_reader;
++  review -> audit_reader;
++  audit_reader -> output;
++}
+diff --git a/doc/CHANGELOG_PHASE6_7_SOURCE_CANDIDATE_REVIEW_AUDIT.md b/doc/CHANGELOG_PHASE6_7_SOURCE_CANDIDATE_REVIEW_AUDIT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_PHASE6_7_SOURCE_CANDIDATE_REVIEW_AUDIT.md
+@@ -0,0 +1,17 @@
++# Phase 6.7 — SourceCandidate Review Audit Summary
++
++## Added
++
++- Added `src/context/source_candidate_review_audit.py` as a pure local projection layer over an existing `SourceCandidateReviewResult`.
++- Added `src/context/source_candidate_review_audit_cli.py`, reusing the existing review Scheduler live path before enriching the result with local audit summaries.
++- Added tests for stored decision summaries, audit file summaries, missing audit files, and CLI JSON output.
++- Added rule tests to keep the feature local-only and tied to the existing review live path.
++- Added architecture DOT for the review audit projection.
++
++## Boundaries
++
++- No network.
++- No external backend.
++- No automatic decision.
++- No Scheduler modification.
++- No write to the SourceCandidate store.
+diff --git a/doc/PHASE6_7_CODE_RULE_ALIGNMENT.md b/doc/PHASE6_7_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/PHASE6_7_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,18 @@
++# Phase 6.7 Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Phase 6.7 applies existing Phase 6 patch-queue and live-path rules. It adds a local projection over existing review and decision audit contracts.
++live_path_status: green
++live_path_uses_real_backend: true
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++The CLI reuses the existing SourceCandidate review Scheduler path and performs only a local read of optional audit JSON files after the review result is produced.
+diff --git a/doc/releases/README_PHASE6_7_SOURCE_CANDIDATE_REVIEW_AUDIT.md b/doc/releases/README_PHASE6_7_SOURCE_CANDIDATE_REVIEW_AUDIT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/releases/README_PHASE6_7_SOURCE_CANDIDATE_REVIEW_AUDIT.md
+@@ -0,0 +1,19 @@
++# Phase 6.7 — SourceCandidate Review Audit Summary
++
++Phase 6.7 adds an operator projection that combines:
++
++- the local SourceCandidate review queue;
++- the decision stored on each candidate;
++- optional local decision audit JSON files.
++
++The feature is intentionally local-only. It does not contact a remote service and does not change the Scheduler.
++
++Example:
++
++```bash
++PYTHONPATH=src python -m context.source_candidate_review_audit_cli \
++  --store-file /tmp/source_candidates.json \
++  --include-terminal \
++  --audit-dir /tmp/source_candidate_audits \
++  --format json
++```
+diff --git a/PHASE6_7_TEST_REPORT.md b/PHASE6_7_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE6_7_TEST_REPORT.md
+@@ -0,0 +1,31 @@
++# Phase 6.7 Test Report — SourceCandidate Review Audit Summary
++
++## Scope
++
++Add a local operator projection that enriches SourceCandidate review output with decision and audit summaries.
++
++## Expected gate
++
++```bash
++PYTHONPATH=src python -m compileall -q src tests
++PYTHONPATH=src pytest -q tests/context/test_source_candidate_review_audit.py
++PYTHONPATH=src pytest -q tests/rules
++PYTHONPATH=src pytest -q
++```
++
++## Code rule block
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Existing patch queue and live-path rules cover this local projection.
++live_path_status: green
++live_path_uses_real_backend: true
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
+diff --git a/MANIFEST_PHASE6_7_CHANGED_FILES.md b/MANIFEST_PHASE6_7_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/MANIFEST_PHASE6_7_CHANGED_FILES.md
+@@ -0,0 +1,17 @@
++# Phase 6.7 Changed Files
++
++## Added
++
++- `src/context/source_candidate_review_audit.py`
++- `src/context/source_candidate_review_audit_cli.py`
++- `tests/context/test_source_candidate_review_audit.py`
++- `tests/rules/test_source_candidate_review_audit_rule.py`
++- `doc/docs/architecture/context/48_source_candidate_review_audit_summary.dot`
++- `doc/CHANGELOG_PHASE6_7_SOURCE_CANDIDATE_REVIEW_AUDIT.md`
++- `doc/PHASE6_7_CODE_RULE_ALIGNMENT.md`
++- `doc/releases/README_PHASE6_7_SOURCE_CANDIDATE_REVIEW_AUDIT.md`
++- `PHASE6_7_TEST_REPORT.md`
++
++## Modified
++
++None.
