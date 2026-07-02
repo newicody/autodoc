@@ -1,0 +1,660 @@
+diff --git a/src/context/source_candidate_external_probe_operator_summary.py b/src/context/source_candidate_external_probe_operator_summary.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/source_candidate_external_probe_operator_summary.py
+@@ -0,0 +1,208 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any, Mapping, Sequence
++import json
++import os
++import tempfile
++
++
++_SUMMARY_SCHEMA = "missipy.source_candidate.external_probe_operator_summary.v1"
++_INDEX_SCHEMA = "missipy.source_candidate.external_probe_artifact_index.v1"
++
++
++@dataclass(frozen=True)
++class SourceCandidateExternalProbeOperatorSummaryItem:
++    repository: str
++    bundle_path: str
++    status: str
++    read_only: bool
++    external_call_performed: bool
++    probe_allowed: bool
++    artifact_count: int
++    byte_count: int
++    reason: str
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "repository": self.repository,
++            "bundle_path": self.bundle_path,
++            "status": self.status,
++            "read_only": self.read_only,
++            "external_call_performed": self.external_call_performed,
++            "probe_allowed": self.probe_allowed,
++            "artifact_count": self.artifact_count,
++            "byte_count": self.byte_count,
++            "reason": self.reason,
++        }
++
++
++@dataclass(frozen=True)
++class SourceCandidateExternalProbeOperatorSummary:
++    index_path: Path | None
++    bundle_count: int
++    ready_count: int
++    check_count: int
++    blocked_count: int
++    total_artifact_count: int
++    total_byte_count: int
++    items: tuple[SourceCandidateExternalProbeOperatorSummaryItem, ...]
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": _SUMMARY_SCHEMA,
++            "index_path": str(self.index_path) if self.index_path is not None else None,
++            "bundle_count": self.bundle_count,
++            "ready_count": self.ready_count,
++            "check_count": self.check_count,
++            "blocked_count": self.blocked_count,
++            "total_artifact_count": self.total_artifact_count,
++            "total_byte_count": self.total_byte_count,
++            "items": [item.to_json_dict() for item in self.items],
++        }
++
++
++def build_source_candidate_external_probe_operator_summary_from_index_payload(
++    payload: Mapping[str, Any],
++    *,
++    index_path: Path | None = None,
++) -> SourceCandidateExternalProbeOperatorSummary:
++    if payload.get("schema") != _INDEX_SCHEMA:
++        raise ValueError("external probe artifact index schema mismatch")
++
++    raw_entries = payload.get("entries")
++    if not isinstance(raw_entries, Sequence) or isinstance(raw_entries, (str, bytes, bytearray)):
++        raise ValueError("external probe artifact index entries must be a list")
++
++    items = tuple(_item_from_index_entry(entry) for entry in raw_entries if isinstance(entry, Mapping))
++
++    return SourceCandidateExternalProbeOperatorSummary(
++        index_path=index_path,
++        bundle_count=len(items),
++        ready_count=sum(1 for item in items if item.status == "ready"),
++        check_count=sum(1 for item in items if item.status == "check"),
++        blocked_count=sum(1 for item in items if item.status == "blocked"),
++        total_artifact_count=sum(item.artifact_count for item in items),
++        total_byte_count=sum(item.byte_count for item in items),
++        items=items,
++    )
++
++
++def build_source_candidate_external_probe_operator_summary_from_index_file(
++    index_path: Path,
++) -> SourceCandidateExternalProbeOperatorSummary:
++    return build_source_candidate_external_probe_operator_summary_from_index_payload(
++        _read_json_object(index_path),
++        index_path=index_path,
++    )
++
++
++def write_source_candidate_external_probe_operator_summary(
++    path: Path,
++    summary: SourceCandidateExternalProbeOperatorSummary,
++) -> Path:
++    _atomic_write_json(path, summary.to_json_dict())
++    return path
++
++
++def read_source_candidate_external_probe_operator_summary(path: Path) -> dict[str, Any]:
++    payload = _read_json_object(path)
++    if payload.get("schema") != _SUMMARY_SCHEMA:
++        raise ValueError("external probe operator summary schema mismatch")
++    return dict(payload)
++
++
++def render_source_candidate_external_probe_operator_summary(
++    summary: SourceCandidateExternalProbeOperatorSummary,
++) -> str:
++    lines = [
++        "external probe operator summary",
++        f"index_path: {summary.index_path or '<memory>'}",
++        f"bundle_count: {summary.bundle_count}",
++        f"ready_count: {summary.ready_count}",
++        f"check_count: {summary.check_count}",
++        f"blocked_count: {summary.blocked_count}",
++        f"total_artifact_count: {summary.total_artifact_count}",
++        f"total_byte_count: {summary.total_byte_count}",
++    ]
++    for item in summary.items:
++        lines.append(
++            f"- {item.status}: {item.repository} "
++            f"{item.bundle_path} artifacts={item.artifact_count} bytes={item.byte_count} "
++            f"reason={item.reason}"
++        )
++    return "\n".join(lines)
++
++
++def _item_from_index_entry(entry: Mapping[str, Any]) -> SourceCandidateExternalProbeOperatorSummaryItem:
++    read_only = bool(entry.get("read_only"))
++    external_call_performed = bool(entry.get("external_call_performed"))
++    probe_allowed = bool(entry.get("probe_allowed"))
++    status, reason = _status_and_reason(
++        read_only=read_only,
++        external_call_performed=external_call_performed,
++        probe_allowed=probe_allowed,
++    )
++
++    return SourceCandidateExternalProbeOperatorSummaryItem(
++        repository=_string(entry.get("repository"), default="<unknown>"),
++        bundle_path=_string(entry.get("bundle_path"), default="<unknown>"),
++        status=status,
++        read_only=read_only,
++        external_call_performed=external_call_performed,
++        probe_allowed=probe_allowed,
++        artifact_count=_int(entry.get("artifact_count")),
++        byte_count=_int(entry.get("byte_count")),
++        reason=reason,
++    )
++
++
++def _status_and_reason(
++    *,
++    read_only: bool,
++    external_call_performed: bool,
++    probe_allowed: bool,
++) -> tuple[str, str]:
++    if external_call_performed:
++        return "blocked", "external call was already performed"
++    if not read_only:
++        return "blocked", "bundle is not marked read-only"
++    if not probe_allowed:
++        return "check", "probe was not allowed"
++    return "ready", "read-only probe bundle is ready for operator review"
++
++
++def _read_json_object(path: Path) -> Mapping[str, Any]:
++    payload = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(payload, Mapping):
++        raise ValueError(f"JSON payload must be an object: {path}")
++    return payload
++
++
++def _string(raw: object, *, default: str) -> str:
++    if isinstance(raw, str) and raw.strip():
++        return raw
++    return default
++
++
++def _int(raw: object) -> int:
++    if isinstance(raw, int):
++        return raw
++    return 0
++
++
++def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
++    with tempfile.NamedTemporaryFile(
++        "w",
++        encoding="utf-8",
++        dir=str(path.parent),
++        prefix=f".{path.name}.",
++        suffix=".tmp",
++        delete=False,
++    ) as handle:
++        tmp_name = handle.name
++        handle.write(text)
++    os.replace(tmp_name, path)
+diff --git a/tools/source_candidate_external_probe_operator_summary_cli.py b/tools/source_candidate_external_probe_operator_summary_cli.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tools/source_candidate_external_probe_operator_summary_cli.py
+@@ -0,0 +1,45 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[1]
++SRC = ROOT / "src"
++if str(SRC) not in sys.path:
++    sys.path.insert(0, str(SRC))
++
++from context.source_candidate_external_probe_operator_summary import (  # noqa: E402
++    build_source_candidate_external_probe_operator_summary_from_index_file,
++    render_source_candidate_external_probe_operator_summary,
++    write_source_candidate_external_probe_operator_summary,
++)
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Summarize local SourceCandidate external probe bundle indexes.")
++    parser.add_argument("--index", type=Path, required=True, help="external probe artifact index JSON")
++    parser.add_argument(
++        "--output",
++        type=Path,
++        default=Path("doc/maintenance/source_candidate_external_probe_operator_summary.json"),
++        help="summary JSON output path",
++    )
++    parser.add_argument("--json", action="store_true", help="print JSON summary")
++    args = parser.parse_args(argv)
++
++    summary = build_source_candidate_external_probe_operator_summary_from_index_file(args.index)
++    write_source_candidate_external_probe_operator_summary(args.output, summary)
++
++    if args.json:
++        print(json.dumps(summary.to_json_dict(), ensure_ascii=False, indent=2, sort_keys=True))
++    else:
++        print(render_source_candidate_external_probe_operator_summary(summary))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/context/test_source_candidate_external_probe_operator_summary.py b/tests/context/test_source_candidate_external_probe_operator_summary.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_source_candidate_external_probe_operator_summary.py
+@@ -0,0 +1,105 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++from context.source_candidate_external_probe_operator_summary import (
++    build_source_candidate_external_probe_operator_summary_from_index_file,
++    build_source_candidate_external_probe_operator_summary_from_index_payload,
++    read_source_candidate_external_probe_operator_summary,
++    render_source_candidate_external_probe_operator_summary,
++    write_source_candidate_external_probe_operator_summary,
++)
++
++
++def _index_payload() -> dict[str, object]:
++    return {
++        "schema": "missipy.source_candidate.external_probe_artifact_index.v1",
++        "root": "/tmp/repo",
++        "scan_root": "/tmp/repo/bundles",
++        "bundle_count": 3,
++        "total_artifact_count": 9,
++        "total_byte_count": 600,
++        "entries": [
++            {
++                "schema": "missipy.source_candidate.external_probe_artifact_index_entry.v1",
++                "bundle_path": "bundles/ready",
++                "manifest_path": "bundles/ready/manifest.json",
++                "repository": "newicody/autodoc",
++                "read_only": True,
++                "external_call_performed": False,
++                "probe_allowed": True,
++                "artifact_count": 3,
++                "byte_count": 100,
++            },
++            {
++                "schema": "missipy.source_candidate.external_probe_artifact_index_entry.v1",
++                "bundle_path": "bundles/check",
++                "manifest_path": "bundles/check/manifest.json",
++                "repository": "newicody/autodoc",
++                "read_only": True,
++                "external_call_performed": False,
++                "probe_allowed": False,
++                "artifact_count": 3,
++                "byte_count": 200,
++            },
++            {
++                "schema": "missipy.source_candidate.external_probe_artifact_index_entry.v1",
++                "bundle_path": "bundles/blocked",
++                "manifest_path": "bundles/blocked/manifest.json",
++                "repository": "newicody/autodoc",
++                "read_only": True,
++                "external_call_performed": True,
++                "probe_allowed": True,
++                "artifact_count": 3,
++                "byte_count": 300,
++            },
++        ],
++    }
++
++
++def test_external_probe_operator_summary_counts_statuses() -> None:
++    summary = build_source_candidate_external_probe_operator_summary_from_index_payload(_index_payload())
++
++    assert summary.bundle_count == 3
++    assert summary.ready_count == 1
++    assert summary.check_count == 1
++    assert summary.blocked_count == 1
++    assert summary.total_artifact_count == 9
++    assert summary.total_byte_count == 600
++
++
++def test_external_probe_operator_summary_builds_from_file(tmp_path: Path) -> None:
++    index_path = tmp_path / "index.json"
++    index_path.write_text(json.dumps(_index_payload()) + "\n", encoding="utf-8")
++
++    summary = build_source_candidate_external_probe_operator_summary_from_index_file(index_path)
++
++    assert summary.index_path == index_path
++    assert summary.items[0].status == "ready"
++    assert summary.items[1].status == "check"
++    assert summary.items[2].status == "blocked"
++
++
++def test_external_probe_operator_summary_writes_and_reads_json(tmp_path: Path) -> None:
++    output = tmp_path / "summary.json"
++    summary = build_source_candidate_external_probe_operator_summary_from_index_payload(_index_payload())
++
++    returned = write_source_candidate_external_probe_operator_summary(output, summary)
++    payload = read_source_candidate_external_probe_operator_summary(output)
++
++    assert returned == output
++    assert payload["schema"] == "missipy.source_candidate.external_probe_operator_summary.v1"
++    assert payload["ready_count"] == 1
++
++
++def test_external_probe_operator_summary_render_is_stable() -> None:
++    text = render_source_candidate_external_probe_operator_summary(
++        build_source_candidate_external_probe_operator_summary_from_index_payload(_index_payload())
++    )
++
++    assert "external probe operator summary" in text
++    assert "ready_count: 1" in text
++    assert "check_count: 1" in text
++    assert "blocked_count: 1" in text
++    assert "newicody/autodoc" in text
+diff --git a/tests/tools/test_source_candidate_external_probe_operator_summary_cli.py b/tests/tools/test_source_candidate_external_probe_operator_summary_cli.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/tools/test_source_candidate_external_probe_operator_summary_cli.py
+@@ -0,0 +1,70 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOLS = ROOT / "tools"
++if str(TOOLS) not in sys.path:
++    sys.path.insert(0, str(TOOLS))
++
++from source_candidate_external_probe_operator_summary_cli import main  # noqa: E402
++
++
++def _write_index(path: Path) -> None:
++    path.write_text(
++        json.dumps(
++            {
++                "schema": "missipy.source_candidate.external_probe_artifact_index.v1",
++                "root": "/tmp/repo",
++                "scan_root": "/tmp/repo/bundles",
++                "bundle_count": 1,
++                "total_artifact_count": 3,
++                "total_byte_count": 123,
++                "entries": [
++                    {
++                        "schema": "missipy.source_candidate.external_probe_artifact_index_entry.v1",
++                        "bundle_path": "bundles/one",
++                        "manifest_path": "bundles/one/manifest.json",
++                        "repository": "newicody/autodoc",
++                        "read_only": True,
++                        "external_call_performed": False,
++                        "probe_allowed": True,
++                        "artifact_count": 3,
++                        "byte_count": 123,
++                    }
++                ],
++            }
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++
++
++def test_external_probe_operator_summary_cli_writes_summary(tmp_path: Path, capsys) -> None:
++    index = tmp_path / "index.json"
++    output = tmp_path / "summary.json"
++    _write_index(index)
++
++    exit_code = main(["--index", str(index), "--output", str(output)])
++
++    captured = capsys.readouterr()
++    assert exit_code == 0
++    assert "external probe operator summary" in captured.out
++    assert output.exists()
++    assert json.loads(output.read_text(encoding="utf-8"))["ready_count"] == 1
++
++
++def test_external_probe_operator_summary_cli_prints_json(tmp_path: Path, capsys) -> None:
++    index = tmp_path / "index.json"
++    output = tmp_path / "summary.json"
++    _write_index(index)
++
++    exit_code = main(["--index", str(index), "--output", str(output), "--json"])
++
++    payload = json.loads(capsys.readouterr().out)
++    assert exit_code == 0
++    assert payload["schema"] == "missipy.source_candidate.external_probe_operator_summary.v1"
++    assert payload["bundle_count"] == 1
+diff --git a/tests/rules/test_source_candidate_external_probe_operator_summary_rule.py b/tests/rules/test_source_candidate_external_probe_operator_summary_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_source_candidate_external_probe_operator_summary_rule.py
+@@ -0,0 +1,38 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_external_probe_operator_summary_is_local_only() -> None:
++    source = _read("src/context/source_candidate_external_probe_operator_summary.py").lower()
++    cli = _read("tools/source_candidate_external_probe_operator_summary_cli.py").lower()
++    forbidden = ("requests", "urllib", "httpx", "subprocess", "authorization")
++    for forbidden_text in forbidden:
++        assert forbidden_text not in source
++        assert forbidden_text not in cli
++
++
++def test_external_probe_operator_summary_uses_index_schema() -> None:
++    source = _read("src/context/source_candidate_external_probe_operator_summary.py")
++    assert "missipy.source_candidate.external_probe_artifact_index.v1" in source
++    assert "ready_count" in source
++    assert "blocked_count" in source
++
++
++def test_external_probe_operator_summary_manifest_uses_post_migration_path() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PHASE7_16_CHANGED_FILES.md")
++    assert "src/kernel/scheduler.py" not in manifest
++    assert "src/context/source_candidate_external_probe_operator_summary.py" in manifest
++
++
++def test_external_probe_operator_summary_does_not_add_dot_or_svg() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PHASE7_16_CHANGED_FILES.md")
++    assert ".dot" not in manifest
++    assert ".svg" not in manifest
+diff --git a/doc/maintenance/EXTERNAL_PROBE_OPERATOR_SUMMARY.md b/doc/maintenance/EXTERNAL_PROBE_OPERATOR_SUMMARY.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/maintenance/EXTERNAL_PROBE_OPERATOR_SUMMARY.md
+@@ -0,0 +1,33 @@
++# External probe operator summary
++
++Phase 7.16 adds a local operator summary for external probe artifact indexes.
++
++The summary reads:
++
++```text
++source_candidate_external_probe_artifact_index.json
++```
++
++and writes:
++
++```text
++source_candidate_external_probe_operator_summary.json
++```
++
++## Example
++
++```bash
++python tools/source_candidate_external_probe_operator_summary_cli.py \
++  --index doc/maintenance/source_candidate_external_probe_artifact_index.json \
++  --output doc/maintenance/source_candidate_external_probe_operator_summary.json
++```
++
++## Status meanings
++
++```text
++ready   = read-only, no external call already performed, probe allowed
++check   = read-only, no external call already performed, probe not allowed
++blocked = not read-only or external call already performed
++```
++
++The summary is local-only and does not inspect external services.
+diff --git a/doc/releases/README_PHASE7_16_EXTERNAL_PROBE_OPERATOR_SUMMARY.md b/doc/releases/README_PHASE7_16_EXTERNAL_PROBE_OPERATOR_SUMMARY.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PHASE7_16_EXTERNAL_PROBE_OPERATOR_SUMMARY.md
+@@ -0,0 +1,13 @@
++# Phase 7.16 — External Probe Operator Summary
++
++Phase 7.16 adds a local operator summary for external probe artifact indexes.
++
++It groups indexed bundles into:
++
++```text
++ready
++check
++blocked
++```
++
++so the operator can review the local probe handoff state quickly.
+diff --git a/doc/changelogs/CHANGELOG_PHASE7_16_EXTERNAL_PROBE_OPERATOR_SUMMARY.md b/doc/changelogs/CHANGELOG_PHASE7_16_EXTERNAL_PROBE_OPERATOR_SUMMARY.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PHASE7_16_EXTERNAL_PROBE_OPERATOR_SUMMARY.md
+@@ -0,0 +1,21 @@
++# Changelog — Phase 7.16 External Probe Operator Summary
++
++## Added
++
++- `src/context/source_candidate_external_probe_operator_summary.py`
++  - Reads external probe artifact indexes.
++  - Produces ready/check/blocked operator summaries.
++  - Writes JSON and renders text.
++
++- `tools/source_candidate_external_probe_operator_summary_cli.py`
++  - CLI for summary generation.
++
++- Tests for context, CLI and rules.
++
++## Not added
++
++- No external call.
++- No network.
++- No Scheduler change.
++- No DOT.
++- No SVG.
+diff --git a/doc/code-rules/PHASE7_16_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PHASE7_16_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PHASE7_16_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,19 @@
++# Phase 7.16 Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Phase 7.16 adds a local operator summary for external probe artifact indexes. It reads local JSON, writes local JSON and does not contact external services, mutate remote state, modify the Scheduler or add DOT/SVG artifacts.
++
++live_path_status: n/a
++live_path_uses_real_backend: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++The phase gives the operator a compact local status view of external probe bundles.
+diff --git a/doc/reports/phase7/PHASE7_16_TEST_REPORT.md b/doc/reports/phase7/PHASE7_16_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase7/PHASE7_16_TEST_REPORT.md
+@@ -0,0 +1,19 @@
++# Phase 7.16 Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/context/test_source_candidate_external_probe_operator_summary.py
++PYTHONPATH=src:. pytest -q tests/tools/test_source_candidate_external_probe_operator_summary_cli.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Expected
++
++```text
++external probe operator summary tests: pass
++rules: pass
++full suite: pass
++```
+diff --git a/doc/manifests/MANIFEST_PHASE7_16_CHANGED_FILES.md b/doc/manifests/MANIFEST_PHASE7_16_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PHASE7_16_CHANGED_FILES.md
+@@ -0,0 +1,23 @@
++# Manifest — Phase 7.16 External Probe Operator Summary
++
++## Added
++
++- `src/context/source_candidate_external_probe_operator_summary.py`
++- `tools/source_candidate_external_probe_operator_summary_cli.py`
++- `tests/context/test_source_candidate_external_probe_operator_summary.py`
++- `tests/tools/test_source_candidate_external_probe_operator_summary_cli.py`
++- `tests/rules/test_source_candidate_external_probe_operator_summary_rule.py`
++- `doc/maintenance/EXTERNAL_PROBE_OPERATOR_SUMMARY.md`
++- `doc/releases/README_PHASE7_16_EXTERNAL_PROBE_OPERATOR_SUMMARY.md`
++- `doc/changelogs/CHANGELOG_PHASE7_16_EXTERNAL_PROBE_OPERATOR_SUMMARY.md`
++- `doc/code-rules/PHASE7_16_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase7/PHASE7_16_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PHASE7_16_CHANGED_FILES.md`
++
++## Modified
++
++- None.
++
++## Generated artifacts
++
++- `doc/maintenance/source_candidate_external_probe_operator_summary.json` may be generated by the CLI.

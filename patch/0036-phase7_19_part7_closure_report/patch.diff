@@ -1,0 +1,564 @@
+diff --git a/src/context/source_candidate_phase7_closure_report.py b/src/context/source_candidate_phase7_closure_report.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/source_candidate_phase7_closure_report.py
+@@ -0,0 +1,164 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Sequence
++import json
++import os
++import tempfile
++
++
++_CLOSURE_SCHEMA = "missipy.source_candidate.phase7_closure_report.v1"
++
++
++DEFAULT_PHASE7_CLOSURE_ARTIFACTS: tuple[str, ...] = (
++    "README.md",
++    "src/context/source_candidate_external_projection_contract.py",
++    "src/context/source_candidate_github_projection_payload.py",
++    "src/context/source_candidate_remote_mutation_gate.py",
++    "src/context/source_candidate_github_adapter.py",
++    "src/context/source_candidate_github_export_bundle.py",
++    "src/context/source_candidate_operator_external_review_report.py",
++    "src/context/source_candidate_read_only_external_probe.py",
++    "src/context/source_candidate_external_probe_bundle.py",
++    "src/context/source_candidate_external_probe_artifact_index.py",
++    "src/context/source_candidate_external_probe_operator_summary.py",
++    "src/context/source_candidate_external_probe_local_audit_trail.py",
++    "src/context/source_candidate_external_probe_local_replay.py",
++    "tools/source_candidate_external_probe_bundle_cli.py",
++    "tools/source_candidate_external_probe_artifact_index_cli.py",
++    "tools/source_candidate_external_probe_operator_summary_cli.py",
++    "tools/source_candidate_external_probe_local_audit_trail_cli.py",
++    "tools/source_candidate_external_probe_local_replay_cli.py",
++    "tools/docs_svg_build_policy.py",
++    "doc/runbooks/SOURCE_CANDIDATE_EXTERNAL_PROBE_BUNDLE_RUNBOOK.md",
++    "doc/maintenance/DOCS_SVG_BUILD_POLICY.md",
++)
++
++
++@dataclass(frozen=True)
++class SourceCandidatePhase7ClosureArtifact:
++    path: str
++    exists: bool
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "path": self.path,
++            "exists": self.exists,
++        }
++
++
++@dataclass(frozen=True)
++class SourceCandidatePhase7ClosureReport:
++    root: Path
++    phase: str
++    status: str
++    artifact_count: int
++    missing_count: int
++    local_only: bool
++    remote_mutation_enabled: bool
++    scheduler_modified: bool
++    network_enabled: bool
++    next_phase: str
++    artifacts: tuple[SourceCandidatePhase7ClosureArtifact, ...]
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": _CLOSURE_SCHEMA,
++            "root": str(self.root),
++            "phase": self.phase,
++            "status": self.status,
++            "artifact_count": self.artifact_count,
++            "missing_count": self.missing_count,
++            "local_only": self.local_only,
++            "remote_mutation_enabled": self.remote_mutation_enabled,
++            "scheduler_modified": self.scheduler_modified,
++            "network_enabled": self.network_enabled,
++            "next_phase": self.next_phase,
++            "artifacts": [artifact.to_json_dict() for artifact in self.artifacts],
++        }
++
++
++def build_source_candidate_phase7_closure_report(
++    root: Path,
++    *,
++    required_artifacts: Sequence[str] = DEFAULT_PHASE7_CLOSURE_ARTIFACTS,
++) -> SourceCandidatePhase7ClosureReport:
++    root = root.resolve()
++    artifacts = tuple(
++        SourceCandidatePhase7ClosureArtifact(
++            path=artifact_path,
++            exists=(root / artifact_path).exists(),
++        )
++        for artifact_path in required_artifacts
++    )
++    missing_count = sum(1 for artifact in artifacts if not artifact.exists)
++
++    return SourceCandidatePhase7ClosureReport(
++        root=root,
++        phase="7",
++        status="closed" if missing_count == 0 else "incomplete",
++        artifact_count=len(artifacts),
++        missing_count=missing_count,
++        local_only=True,
++        remote_mutation_enabled=False,
++        scheduler_modified=False,
++        network_enabled=False,
++        next_phase="8",
++        artifacts=artifacts,
++    )
++
++
++def write_source_candidate_phase7_closure_report(
++    path: Path,
++    report: SourceCandidatePhase7ClosureReport,
++) -> Path:
++    _atomic_write_json(path, report.to_json_dict())
++    return path
++
++
++def read_source_candidate_phase7_closure_report(path: Path) -> dict[str, object]:
++    payload = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(payload, dict):
++        raise ValueError("phase 7 closure report must be a JSON object")
++    if payload.get("schema") != _CLOSURE_SCHEMA:
++        raise ValueError("phase 7 closure report schema mismatch")
++    return payload
++
++
++def render_source_candidate_phase7_closure_report(
++    report: SourceCandidatePhase7ClosureReport,
++) -> str:
++    lines = [
++        "source candidate phase 7 closure report",
++        f"root: {report.root}",
++        f"phase: {report.phase}",
++        f"status: {report.status}",
++        f"artifact_count: {report.artifact_count}",
++        f"missing_count: {report.missing_count}",
++        f"local_only: {report.local_only}",
++        f"remote_mutation_enabled: {report.remote_mutation_enabled}",
++        f"scheduler_modified: {report.scheduler_modified}",
++        f"network_enabled: {report.network_enabled}",
++        f"next_phase: {report.next_phase}",
++    ]
++    for artifact in report.artifacts:
++        marker = "ok" if artifact.exists else "missing"
++        lines.append(f"- {marker}: {artifact.path}")
++    return "\n".join(lines)
++
++
++def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
++    with tempfile.NamedTemporaryFile(
++        "w",
++        encoding="utf-8",
++        dir=str(path.parent),
++        prefix=f".{path.name}.",
++        suffix=".tmp",
++        delete=False,
++    ) as handle:
++        tmp_name = handle.name
++        handle.write(text)
++    os.replace(tmp_name, path)
+diff --git a/tools/source_candidate_phase7_closure_report_cli.py b/tools/source_candidate_phase7_closure_report_cli.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tools/source_candidate_phase7_closure_report_cli.py
+@@ -0,0 +1,49 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[1]
++SRC = ROOT / "src"
++if str(SRC) not in sys.path:
++    sys.path.insert(0, str(SRC))
++
++from context.source_candidate_phase7_closure_report import (  # noqa: E402
++    build_source_candidate_phase7_closure_report,
++    render_source_candidate_phase7_closure_report,
++    write_source_candidate_phase7_closure_report,
++)
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Build the local SourceCandidate Phase 7 closure report.")
++    parser.add_argument("--root", type=Path, default=Path("."), help="repository root")
++    parser.add_argument(
++        "--output",
++        type=Path,
++        default=Path("doc/maintenance/source_candidate_phase7_closure_report.json"),
++        help="closure report JSON output path",
++    )
++    parser.add_argument("--json", action="store_true", help="print JSON report")
++    parser.add_argument("--strict", action="store_true", help="return non-zero when required artifacts are missing")
++    args = parser.parse_args(argv)
++
++    report = build_source_candidate_phase7_closure_report(args.root)
++    write_source_candidate_phase7_closure_report(args.output, report)
++
++    if args.json:
++        print(json.dumps(report.to_json_dict(), ensure_ascii=False, indent=2, sort_keys=True))
++    else:
++        print(render_source_candidate_phase7_closure_report(report))
++
++    if args.strict and report.missing_count:
++        return 1
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/context/test_source_candidate_phase7_closure_report.py b/tests/context/test_source_candidate_phase7_closure_report.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_source_candidate_phase7_closure_report.py
+@@ -0,0 +1,69 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++from context.source_candidate_phase7_closure_report import (
++    build_source_candidate_phase7_closure_report,
++    read_source_candidate_phase7_closure_report,
++    render_source_candidate_phase7_closure_report,
++    write_source_candidate_phase7_closure_report,
++)
++
++
++def test_phase7_closure_report_closes_when_required_artifacts_exist(tmp_path: Path) -> None:
++    (tmp_path / "a.txt").write_text("a\n", encoding="utf-8")
++    (tmp_path / "nested").mkdir()
++    (tmp_path / "nested" / "b.txt").write_text("b\n", encoding="utf-8")
++
++    report = build_source_candidate_phase7_closure_report(
++        tmp_path,
++        required_artifacts=("a.txt", "nested/b.txt"),
++    )
++
++    assert report.status == "closed"
++    assert report.artifact_count == 2
++    assert report.missing_count == 0
++    assert report.local_only is True
++    assert report.remote_mutation_enabled is False
++    assert report.scheduler_modified is False
++    assert report.network_enabled is False
++    assert report.next_phase == "8"
++
++
++def test_phase7_closure_report_is_incomplete_when_artifact_is_missing(tmp_path: Path) -> None:
++    (tmp_path / "a.txt").write_text("a\n", encoding="utf-8")
++
++    report = build_source_candidate_phase7_closure_report(
++        tmp_path,
++        required_artifacts=("a.txt", "missing.txt"),
++    )
++
++    assert report.status == "incomplete"
++    assert report.missing_count == 1
++    assert [artifact.path for artifact in report.artifacts if not artifact.exists] == ["missing.txt"]
++
++
++def test_phase7_closure_report_writes_and_reads_json(tmp_path: Path) -> None:
++    output = tmp_path / "closure.json"
++    report = build_source_candidate_phase7_closure_report(tmp_path, required_artifacts=())
++
++    returned = write_source_candidate_phase7_closure_report(output, report)
++    payload = read_source_candidate_phase7_closure_report(output)
++
++    assert returned == output
++    assert payload["schema"] == "missipy.source_candidate.phase7_closure_report.v1"
++    assert payload["status"] == "closed"
++
++
++def test_phase7_closure_report_render_is_stable(tmp_path: Path) -> None:
++    report = build_source_candidate_phase7_closure_report(
++        tmp_path,
++        required_artifacts=("missing.txt",),
++    )
++
++    text = render_source_candidate_phase7_closure_report(report)
++
++    assert "source candidate phase 7 closure report" in text
++    assert "status: incomplete" in text
++    assert "- missing: missing.txt" in text
+diff --git a/tests/tools/test_source_candidate_phase7_closure_report_cli.py b/tests/tools/test_source_candidate_phase7_closure_report_cli.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/tools/test_source_candidate_phase7_closure_report_cli.py
+@@ -0,0 +1,38 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOLS = ROOT / "tools"
++if str(TOOLS) not in sys.path:
++    sys.path.insert(0, str(TOOLS))
++
++from source_candidate_phase7_closure_report_cli import main  # noqa: E402
++
++
++def test_phase7_closure_report_cli_writes_report(tmp_path: Path, capsys) -> None:
++    output = tmp_path / "closure.json"
++
++    exit_code = main(["--root", str(ROOT), "--output", str(output)])
++
++    captured = capsys.readouterr()
++    assert exit_code == 0
++    assert "source candidate phase 7 closure report" in captured.out
++    assert output.exists()
++    assert json.loads(output.read_text(encoding="utf-8"))["schema"] == (
++        "missipy.source_candidate.phase7_closure_report.v1"
++    )
++
++
++def test_phase7_closure_report_cli_prints_json(tmp_path: Path, capsys) -> None:
++    output = tmp_path / "closure.json"
++
++    exit_code = main(["--root", str(ROOT), "--output", str(output), "--json"])
++
++    payload = json.loads(capsys.readouterr().out)
++    assert exit_code == 0
++    assert payload["schema"] == "missipy.source_candidate.phase7_closure_report.v1"
++    assert payload["phase"] == "7"
+diff --git a/tests/rules/test_source_candidate_phase7_closure_report_rule.py b/tests/rules/test_source_candidate_phase7_closure_report_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_source_candidate_phase7_closure_report_rule.py
+@@ -0,0 +1,39 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_phase7_closure_report_is_local_only() -> None:
++    source = _read("src/context/source_candidate_phase7_closure_report.py").lower()
++    cli = _read("tools/source_candidate_phase7_closure_report_cli.py").lower()
++    forbidden = ("requests", "urllib", "httpx", "subprocess", "authorization")
++    for forbidden_text in forbidden:
++        assert forbidden_text not in source
++        assert forbidden_text not in cli
++
++
++def test_phase7_closure_report_freezes_remote_boundaries() -> None:
++    source = _read("src/context/source_candidate_phase7_closure_report.py")
++    assert "remote_mutation_enabled=False" in source
++    assert "scheduler_modified=False" in source
++    assert "network_enabled=False" in source
++    assert "local_only=True" in source
++
++
++def test_phase7_closure_report_manifest_uses_post_migration_path() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PHASE7_19_CHANGED_FILES.md")
++    assert "src/kernel/scheduler.py" not in manifest
++    assert "src/context/source_candidate_phase7_closure_report.py" in manifest
++
++
++def test_phase7_closure_report_does_not_add_dot_or_svg() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PHASE7_19_CHANGED_FILES.md")
++    assert ".dot" not in manifest
++    assert ".svg" not in manifest
+diff --git a/doc/maintenance/PHASE7_CLOSURE_REPORT.md b/doc/maintenance/PHASE7_CLOSURE_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/maintenance/PHASE7_CLOSURE_REPORT.md
+@@ -0,0 +1,52 @@
++# Phase 7 Closure Report
++
++Phase 7 closes the local SourceCandidate external-probe preparation path.
++
++The phase stays local-first:
++
++```text
++no external service call
++no token handling
++no remote mutation
++no Scheduler execution
++```
++
++## Closure command
++
++```bash
++python tools/source_candidate_phase7_closure_report_cli.py \
++  --root . \
++  --output doc/maintenance/source_candidate_phase7_closure_report.json \
++  --strict
++```
++
++## What Phase 7 delivered
++
++```text
++external projection contract
++GitHub-shaped dry-run payload
++remote mutation gate
++fake-only GitHub adapter boundary
++local GitHub export bundle
++operator review report
++read-only external probe
++external probe bundle
++bundle CLI
++SVG build policy
++runbook
++artifact index
++operator summary
++local audit trail
++local replay
++```
++
++## Next
++
++Phase 8 may open one of these directions:
++
++```text
++real read-only GitHub integration
++GitHub Project orchestrator contract
++Scheduler-facing ingestion queue
++Copilot/artifact synchronization bridge
++```
+diff --git a/doc/releases/README_PHASE7_19_PART7_CLOSURE_REPORT.md b/doc/releases/README_PHASE7_19_PART7_CLOSURE_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PHASE7_19_PART7_CLOSURE_REPORT.md
+@@ -0,0 +1,6 @@
++# Phase 7.19 — Part 7 Closure Report
++
++Phase 7.19 adds a local closure report for Part 7.
++
++It verifies the presence of key Phase 7 artifacts and records that the completed
++path remains local-only, with network, Scheduler and remote mutation disabled.
+diff --git a/doc/changelogs/CHANGELOG_PHASE7_19_PART7_CLOSURE_REPORT.md b/doc/changelogs/CHANGELOG_PHASE7_19_PART7_CLOSURE_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PHASE7_19_PART7_CLOSURE_REPORT.md
+@@ -0,0 +1,22 @@
++# Changelog — Phase 7.19 Part 7 Closure Report
++
++## Added
++
++- `src/context/source_candidate_phase7_closure_report.py`
++  - Builds a local closure report for Phase 7.
++  - Checks required artifact presence.
++  - Records local-only boundary flags.
++
++- `tools/source_candidate_phase7_closure_report_cli.py`
++  - CLI for writing the closure report.
++  - Supports `--strict`.
++
++- Tests for context, CLI and rules.
++
++## Not added
++
++- No external call.
++- No network.
++- No Scheduler change.
++- No DOT.
++- No SVG.
+diff --git a/doc/code-rules/PHASE7_19_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PHASE7_19_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PHASE7_19_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,17 @@
++# Phase 7.19 Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Phase 7.19 adds a local closure report for Part 7. It checks local artifact presence and records local-only boundary flags. It does not contact external services, mutate remote state, modify the Scheduler or add DOT/SVG artifacts.
++
++live_path_status: n/a
++live_path_uses_real_backend: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
+diff --git a/doc/reports/phase7/PHASE7_19_TEST_REPORT.md b/doc/reports/phase7/PHASE7_19_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase7/PHASE7_19_TEST_REPORT.md
+@@ -0,0 +1,19 @@
++# Phase 7.19 Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/context/test_source_candidate_phase7_closure_report.py
++PYTHONPATH=src:. pytest -q tests/tools/test_source_candidate_phase7_closure_report_cli.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Expected
++
++```text
++phase 7 closure report tests: pass
++rules: pass
++full suite: pass
++```
+diff --git a/doc/manifests/MANIFEST_PHASE7_19_CHANGED_FILES.md b/doc/manifests/MANIFEST_PHASE7_19_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PHASE7_19_CHANGED_FILES.md
+@@ -0,0 +1,23 @@
++# Manifest — Phase 7.19 Part 7 Closure Report
++
++## Added
++
++- `src/context/source_candidate_phase7_closure_report.py`
++- `tools/source_candidate_phase7_closure_report_cli.py`
++- `tests/context/test_source_candidate_phase7_closure_report.py`
++- `tests/tools/test_source_candidate_phase7_closure_report_cli.py`
++- `tests/rules/test_source_candidate_phase7_closure_report_rule.py`
++- `doc/maintenance/PHASE7_CLOSURE_REPORT.md`
++- `doc/releases/README_PHASE7_19_PART7_CLOSURE_REPORT.md`
++- `doc/changelogs/CHANGELOG_PHASE7_19_PART7_CLOSURE_REPORT.md`
++- `doc/code-rules/PHASE7_19_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase7/PHASE7_19_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PHASE7_19_CHANGED_FILES.md`
++
++## Modified
++
++- None.
++
++## Generated artifacts
++
++- `doc/maintenance/source_candidate_phase7_closure_report.json` may be generated by the CLI.

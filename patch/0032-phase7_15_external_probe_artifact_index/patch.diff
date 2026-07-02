@@ -1,0 +1,655 @@
+diff --git a/src/context/source_candidate_external_probe_artifact_index.py b/src/context/source_candidate_external_probe_artifact_index.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/source_candidate_external_probe_artifact_index.py
+@@ -0,0 +1,193 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any, Mapping, Sequence
++import json
++import os
++import tempfile
++
++
++_INDEX_SCHEMA = "missipy.source_candidate.external_probe_artifact_index.v1"
++_ENTRY_SCHEMA = "missipy.source_candidate.external_probe_artifact_index_entry.v1"
++_BUNDLE_SCHEMA = "missipy.source_candidate.external_probe_bundle.v1"
++
++
++@dataclass(frozen=True)
++class SourceCandidateExternalProbeArtifactIndexEntry:
++    bundle_path: Path
++    manifest_path: Path
++    repository: str
++    read_only: bool
++    external_call_performed: bool
++    probe_allowed: bool
++    artifact_count: int
++    byte_count: int
++
++    def to_json_dict(self, root: Path) -> dict[str, object]:
++        return {
++            "schema": _ENTRY_SCHEMA,
++            "bundle_path": self.bundle_path.resolve().relative_to(root.resolve()).as_posix(),
++            "manifest_path": self.manifest_path.resolve().relative_to(root.resolve()).as_posix(),
++            "repository": self.repository,
++            "read_only": self.read_only,
++            "external_call_performed": self.external_call_performed,
++            "probe_allowed": self.probe_allowed,
++            "artifact_count": self.artifact_count,
++            "byte_count": self.byte_count,
++        }
++
++
++@dataclass(frozen=True)
++class SourceCandidateExternalProbeArtifactIndex:
++    root: Path
++    scan_root: Path
++    bundle_count: int
++    total_artifact_count: int
++    total_byte_count: int
++    entries: tuple[SourceCandidateExternalProbeArtifactIndexEntry, ...]
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": _INDEX_SCHEMA,
++            "root": str(self.root),
++            "scan_root": str(self.scan_root),
++            "bundle_count": self.bundle_count,
++            "total_artifact_count": self.total_artifact_count,
++            "total_byte_count": self.total_byte_count,
++            "entries": [entry.to_json_dict(self.root) for entry in self.entries],
++        }
++
++
++def build_source_candidate_external_probe_artifact_index(
++    root: Path,
++    *,
++    scan_root: Path,
++) -> SourceCandidateExternalProbeArtifactIndex:
++    """Build a local index of SourceCandidate external probe bundles."""
++
++    root = root.resolve()
++    resolved_scan_root = scan_root if scan_root.is_absolute() else root / scan_root
++    resolved_scan_root = resolved_scan_root.resolve()
++
++    entries: list[SourceCandidateExternalProbeArtifactIndexEntry] = []
++    if resolved_scan_root.exists():
++        for manifest_path in sorted(resolved_scan_root.rglob("manifest.json")):
++            payload = _try_read_json_object(manifest_path)
++            if payload is None or payload.get("schema") != _BUNDLE_SCHEMA:
++                continue
++            entries.append(_entry_from_manifest(root, manifest_path, payload))
++
++    return SourceCandidateExternalProbeArtifactIndex(
++        root=root,
++        scan_root=resolved_scan_root,
++        bundle_count=len(entries),
++        total_artifact_count=sum(entry.artifact_count for entry in entries),
++        total_byte_count=sum(entry.byte_count for entry in entries),
++        entries=tuple(entries),
++    )
++
++
++def write_source_candidate_external_probe_artifact_index(
++    path: Path,
++    index: SourceCandidateExternalProbeArtifactIndex,
++) -> Path:
++    _atomic_write_json(path, index.to_json_dict())
++    return path
++
++
++def read_source_candidate_external_probe_artifact_index(path: Path) -> dict[str, Any]:
++    payload = _read_json_object(path)
++    if payload.get("schema") != _INDEX_SCHEMA:
++        raise ValueError("external probe artifact index schema mismatch")
++    return dict(payload)
++
++
++def render_source_candidate_external_probe_artifact_index(
++    index: SourceCandidateExternalProbeArtifactIndex,
++) -> str:
++    lines = [
++        "external probe artifact index",
++        f"root: {index.root}",
++        f"scan_root: {index.scan_root}",
++        f"bundle_count: {index.bundle_count}",
++        f"total_artifact_count: {index.total_artifact_count}",
++        f"total_byte_count: {index.total_byte_count}",
++    ]
++    for entry in index.entries:
++        status = "PASS" if entry.read_only and not entry.external_call_performed and entry.probe_allowed else "CHECK"
++        lines.append(
++            f"- {status}: {entry.repository} "
++            f"{entry.bundle_path.relative_to(index.root).as_posix()} "
++            f"artifacts={entry.artifact_count} bytes={entry.byte_count}"
++        )
++    return "\n".join(lines)
++
++
++def _entry_from_manifest(
++    root: Path,
++    manifest_path: Path,
++    payload: Mapping[str, Any],
++) -> SourceCandidateExternalProbeArtifactIndexEntry:
++    bundle_path = _path_from_payload(payload.get("path"), fallback=manifest_path.parent)
++    if not bundle_path.is_absolute():
++        bundle_path = (root / bundle_path).resolve()
++
++    return SourceCandidateExternalProbeArtifactIndexEntry(
++        bundle_path=bundle_path,
++        manifest_path=manifest_path.resolve(),
++        repository=_string(payload.get("repository"), default="<unknown>"),
++        read_only=bool(payload.get("read_only")),
++        external_call_performed=bool(payload.get("external_call_performed")),
++        probe_allowed=bool(payload.get("probe_allowed")),
++        artifact_count=_int(payload.get("artifact_count")),
++        byte_count=_int(payload.get("byte_count")),
++    )
++
++
++def _path_from_payload(raw: object, *, fallback: Path) -> Path:
++    if isinstance(raw, str) and raw.strip():
++        return Path(raw)
++    return fallback
++
++
++def _try_read_json_object(path: Path) -> Mapping[str, Any] | None:
++    try:
++        return _read_json_object(path)
++    except (OSError, json.JSONDecodeError, ValueError):
++        return None
++
++
++def _read_json_object(path: Path) -> Mapping[str, Any]:
++    payload = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(payload, Mapping):
++        raise ValueError(f"JSON payload must be an object: {path}")
++    return payload
++
++
++def _string(raw: object, *, default: str) -> str:
++    if isinstance(raw, str) and raw.strip():
++        return raw
++    return default
++
++
++def _int(raw: object) -> int:
++    if isinstance(raw, int):
++        return raw
++    return 0
++
++
++def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
++    with tempfile.NamedTemporaryFile(
++        "w",
++        encoding="utf-8",
++        dir=str(path.parent),
++        prefix=f".{path.name}.",
++        suffix=".tmp",
++        delete=False,
++    ) as handle:
++        tmp_name = handle.name
++        handle.write(text)
++    os.replace(tmp_name, path)
+diff --git a/tools/source_candidate_external_probe_artifact_index_cli.py b/tools/source_candidate_external_probe_artifact_index_cli.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tools/source_candidate_external_probe_artifact_index_cli.py
+@@ -0,0 +1,49 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[1]
++SRC = ROOT / "src"
++if str(SRC) not in sys.path:
++    sys.path.insert(0, str(SRC))
++
++from context.source_candidate_external_probe_artifact_index import (  # noqa: E402
++    build_source_candidate_external_probe_artifact_index,
++    render_source_candidate_external_probe_artifact_index,
++    write_source_candidate_external_probe_artifact_index,
++)
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Index local SourceCandidate external probe bundles.")
++    parser.add_argument("--root", type=Path, default=Path("."), help="repository root")
++    parser.add_argument("--scan-root", type=Path, required=True, help="directory containing probe bundles")
++    parser.add_argument(
++        "--output",
++        type=Path,
++        default=Path("doc/maintenance/source_candidate_external_probe_artifact_index.json"),
++        help="index JSON output path",
++    )
++    parser.add_argument("--json", action="store_true", help="print JSON index")
++    args = parser.parse_args(argv)
++
++    index = build_source_candidate_external_probe_artifact_index(
++        args.root,
++        scan_root=args.scan_root,
++    )
++    write_source_candidate_external_probe_artifact_index(args.output, index)
++
++    if args.json:
++        print(json.dumps(index.to_json_dict(), ensure_ascii=False, indent=2, sort_keys=True))
++    else:
++        print(render_source_candidate_external_probe_artifact_index(index))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/context/test_source_candidate_external_probe_artifact_index.py b/tests/context/test_source_candidate_external_probe_artifact_index.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_source_candidate_external_probe_artifact_index.py
+@@ -0,0 +1,98 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++from context.source_candidate_external_probe_artifact_index import (
++    build_source_candidate_external_probe_artifact_index,
++    read_source_candidate_external_probe_artifact_index,
++    render_source_candidate_external_probe_artifact_index,
++    write_source_candidate_external_probe_artifact_index,
++)
++
++
++def _write_bundle(path: Path, *, repository: str = "newicody/autodoc", allowed: bool = True) -> None:
++    path.mkdir(parents=True)
++    (path / "manifest.json").write_text(
++        json.dumps(
++            {
++                "schema": "missipy.source_candidate.external_probe_bundle.v1",
++                "path": str(path),
++                "manifest_path": str(path / "manifest.json"),
++                "repository": repository,
++                "read_only": True,
++                "external_call_performed": False,
++                "probe_allowed": allowed,
++                "artifact_count": 3,
++                "byte_count": 123,
++                "artifacts": [],
++            }
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++
++
++def test_external_probe_artifact_index_discovers_bundle_manifests(tmp_path: Path) -> None:
++    scan_root = tmp_path / "bundles"
++    _write_bundle(scan_root / "one")
++    _write_bundle(scan_root / "two", repository="newicody/other", allowed=False)
++
++    index = build_source_candidate_external_probe_artifact_index(
++        tmp_path,
++        scan_root=scan_root,
++    )
++
++    assert index.bundle_count == 2
++    assert index.total_artifact_count == 6
++    assert index.total_byte_count == 246
++    assert {entry.repository for entry in index.entries} == {"newicody/autodoc", "newicody/other"}
++
++
++def test_external_probe_artifact_index_ignores_non_bundle_manifests(tmp_path: Path) -> None:
++    scan_root = tmp_path / "bundles"
++    _write_bundle(scan_root / "valid")
++    invalid = scan_root / "invalid"
++    invalid.mkdir(parents=True)
++    (invalid / "manifest.json").write_text(
++        json.dumps({"schema": "other.schema"}) + "\n",
++        encoding="utf-8",
++    )
++
++    index = build_source_candidate_external_probe_artifact_index(
++        tmp_path,
++        scan_root=scan_root,
++    )
++
++    assert index.bundle_count == 1
++    assert index.entries[0].repository == "newicody/autodoc"
++
++
++def test_external_probe_artifact_index_writes_and_reads_json(tmp_path: Path) -> None:
++    scan_root = tmp_path / "bundles"
++    output = tmp_path / "index.json"
++    _write_bundle(scan_root / "one")
++
++    index = build_source_candidate_external_probe_artifact_index(
++        tmp_path,
++        scan_root=scan_root,
++    )
++    returned = write_source_candidate_external_probe_artifact_index(output, index)
++    payload = read_source_candidate_external_probe_artifact_index(output)
++
++    assert returned == output
++    assert payload["schema"] == "missipy.source_candidate.external_probe_artifact_index.v1"
++    assert payload["bundle_count"] == 1
++
++
++def test_external_probe_artifact_index_render_is_stable(tmp_path: Path) -> None:
++    scan_root = tmp_path / "bundles"
++    _write_bundle(scan_root / "one")
++
++    text = render_source_candidate_external_probe_artifact_index(
++        build_source_candidate_external_probe_artifact_index(tmp_path, scan_root=scan_root)
++    )
++
++    assert "external probe artifact index" in text
++    assert "bundle_count: 1" in text
++    assert "newicody/autodoc" in text
+diff --git a/tests/tools/test_source_candidate_external_probe_artifact_index_cli.py b/tests/tools/test_source_candidate_external_probe_artifact_index_cli.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/tools/test_source_candidate_external_probe_artifact_index_cli.py
+@@ -0,0 +1,72 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOLS = ROOT / "tools"
++if str(TOOLS) not in sys.path:
++    sys.path.insert(0, str(TOOLS))
++
++from source_candidate_external_probe_artifact_index_cli import main  # noqa: E402
++
++
++def _write_bundle(path: Path) -> None:
++    path.mkdir(parents=True)
++    (path / "manifest.json").write_text(
++        json.dumps(
++            {
++                "schema": "missipy.source_candidate.external_probe_bundle.v1",
++                "path": str(path),
++                "manifest_path": str(path / "manifest.json"),
++                "repository": "newicody/autodoc",
++                "read_only": True,
++                "external_call_performed": False,
++                "probe_allowed": True,
++                "artifact_count": 3,
++                "byte_count": 123,
++                "artifacts": [],
++            }
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++
++
++def test_external_probe_artifact_index_cli_writes_index(tmp_path: Path, capsys) -> None:
++    scan_root = tmp_path / "bundles"
++    output = tmp_path / "index.json"
++    _write_bundle(scan_root / "one")
++
++    exit_code = main(["--root", str(tmp_path), "--scan-root", str(scan_root), "--output", str(output)])
++
++    captured = capsys.readouterr()
++    assert exit_code == 0
++    assert "external probe artifact index" in captured.out
++    assert output.exists()
++    assert json.loads(output.read_text(encoding="utf-8"))["bundle_count"] == 1
++
++
++def test_external_probe_artifact_index_cli_prints_json(tmp_path: Path, capsys) -> None:
++    scan_root = tmp_path / "bundles"
++    output = tmp_path / "index.json"
++    _write_bundle(scan_root / "one")
++
++    exit_code = main(
++        [
++            "--root",
++            str(tmp_path),
++            "--scan-root",
++            str(scan_root),
++            "--output",
++            str(output),
++            "--json",
++        ]
++    )
++
++    payload = json.loads(capsys.readouterr().out)
++    assert exit_code == 0
++    assert payload["schema"] == "missipy.source_candidate.external_probe_artifact_index.v1"
++    assert payload["bundle_count"] == 1
+diff --git a/tests/rules/test_source_candidate_external_probe_artifact_index_rule.py b/tests/rules/test_source_candidate_external_probe_artifact_index_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_source_candidate_external_probe_artifact_index_rule.py
+@@ -0,0 +1,37 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_external_probe_artifact_index_is_local_only() -> None:
++    source = _read("src/context/source_candidate_external_probe_artifact_index.py").lower()
++    cli = _read("tools/source_candidate_external_probe_artifact_index_cli.py").lower()
++    forbidden = ("requests", "urllib", "httpx", "subprocess", "authorization")
++    for forbidden_text in forbidden:
++        assert forbidden_text not in source
++        assert forbidden_text not in cli
++
++
++def test_external_probe_artifact_index_reads_bundle_manifests_only() -> None:
++    source = _read("src/context/source_candidate_external_probe_artifact_index.py")
++    assert 'rglob("manifest.json")' in source
++    assert "missipy.source_candidate.external_probe_bundle.v1" in source
++
++
++def test_external_probe_artifact_index_manifest_uses_post_migration_path() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PHASE7_15_CHANGED_FILES.md")
++    assert "src/kernel/scheduler.py" not in manifest
++    assert "src/context/source_candidate_external_probe_artifact_index.py" in manifest
++
++
++def test_external_probe_artifact_index_does_not_add_dot_or_svg() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PHASE7_15_CHANGED_FILES.md")
++    assert ".dot" not in manifest
++    assert ".svg" not in manifest
+diff --git a/doc/maintenance/EXTERNAL_PROBE_ARTIFACT_INDEX.md b/doc/maintenance/EXTERNAL_PROBE_ARTIFACT_INDEX.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/maintenance/EXTERNAL_PROBE_ARTIFACT_INDEX.md
+@@ -0,0 +1,33 @@
++# External probe artifact index
++
++Phase 7.15 adds a local index for SourceCandidate external probe bundles.
++
++The index scans a local directory for bundle manifests with schema:
++
++```text
++missipy.source_candidate.external_probe_bundle.v1
++```
++
++It writes a JSON index containing repository, read-only status, external-call
++status and artifact counts.
++
++## Example
++
++```bash
++python tools/source_candidate_external_probe_artifact_index_cli.py \
++  --root . \
++  --scan-root /tmp/source_candidate_external_probe_bundles \
++  --output doc/maintenance/source_candidate_external_probe_artifact_index.json
++```
++
++## JSON output
++
++```bash
++python tools/source_candidate_external_probe_artifact_index_cli.py \
++  --root . \
++  --scan-root /tmp/source_candidate_external_probe_bundles \
++  --output doc/maintenance/source_candidate_external_probe_artifact_index.json \
++  --json
++```
++
++The indexer is local-only and does not inspect external services.
+diff --git a/doc/releases/README_PHASE7_15_EXTERNAL_PROBE_ARTIFACT_INDEX.md b/doc/releases/README_PHASE7_15_EXTERNAL_PROBE_ARTIFACT_INDEX.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PHASE7_15_EXTERNAL_PROBE_ARTIFACT_INDEX.md
+@@ -0,0 +1,7 @@
++# Phase 7.15 — External Probe Artifact Index
++
++Phase 7.15 adds a local artifact index for external probe bundles.
++
++It discovers local `manifest.json` files with schema
++`missipy.source_candidate.external_probe_bundle.v1`, summarizes them and writes
++a deterministic index JSON.
+diff --git a/doc/changelogs/CHANGELOG_PHASE7_15_EXTERNAL_PROBE_ARTIFACT_INDEX.md b/doc/changelogs/CHANGELOG_PHASE7_15_EXTERNAL_PROBE_ARTIFACT_INDEX.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PHASE7_15_EXTERNAL_PROBE_ARTIFACT_INDEX.md
+@@ -0,0 +1,28 @@
++# Changelog — Phase 7.15 External Probe Artifact Index
++
++## Added
++
++- `src/context/source_candidate_external_probe_artifact_index.py`
++  - Scans local bundle directories.
++  - Reads bundle manifests.
++  - Produces a deterministic index.
++
++- `tools/source_candidate_external_probe_artifact_index_cli.py`
++  - CLI for writing and rendering the index.
++
++- `tests/context/test_source_candidate_external_probe_artifact_index.py`
++  - Covers discovery, filtering, JSON IO and rendering.
++
++- `tests/tools/test_source_candidate_external_probe_artifact_index_cli.py`
++  - Covers CLI text and JSON output.
++
++- `tests/rules/test_source_candidate_external_probe_artifact_index_rule.py`
++  - Ensures the indexer remains local-only and does not add DOT/SVG artifacts.
++
++## Not added
++
++- No external calls.
++- No network.
++- No Scheduler change.
++- No DOT.
++- No SVG.
+diff --git a/doc/code-rules/PHASE7_15_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PHASE7_15_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PHASE7_15_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,19 @@
++# Phase 7.15 Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Phase 7.15 adds a local artifact index for external probe bundles. It scans local manifest.json files, writes a local JSON index and does not contact external services, mutate remote state, modify the Scheduler or add DOT/SVG artifacts.
++
++live_path_status: n/a
++live_path_uses_real_backend: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++The phase makes external probe bundles easier to audit locally.
+diff --git a/doc/reports/phase7/PHASE7_15_TEST_REPORT.md b/doc/reports/phase7/PHASE7_15_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase7/PHASE7_15_TEST_REPORT.md
+@@ -0,0 +1,30 @@
++# Phase 7.15 Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/context/test_source_candidate_external_probe_artifact_index.py
++PYTHONPATH=src:. pytest -q tests/tools/test_source_candidate_external_probe_artifact_index_cli.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Expected
++
++```text
++external probe artifact index tests: pass
++rules: pass
++full suite: pass
++```
++
++## Scope
++
++```text
++local index only
++no network
++no remote mutation
++no Scheduler change
++no DOT
++no SVG
++```
+diff --git a/doc/manifests/MANIFEST_PHASE7_15_CHANGED_FILES.md b/doc/manifests/MANIFEST_PHASE7_15_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PHASE7_15_CHANGED_FILES.md
+@@ -0,0 +1,23 @@
++# Manifest — Phase 7.15 External Probe Artifact Index
++
++## Added
++
++- `src/context/source_candidate_external_probe_artifact_index.py`
++- `tools/source_candidate_external_probe_artifact_index_cli.py`
++- `tests/context/test_source_candidate_external_probe_artifact_index.py`
++- `tests/tools/test_source_candidate_external_probe_artifact_index_cli.py`
++- `tests/rules/test_source_candidate_external_probe_artifact_index_rule.py`
++- `doc/maintenance/EXTERNAL_PROBE_ARTIFACT_INDEX.md`
++- `doc/releases/README_PHASE7_15_EXTERNAL_PROBE_ARTIFACT_INDEX.md`
++- `doc/changelogs/CHANGELOG_PHASE7_15_EXTERNAL_PROBE_ARTIFACT_INDEX.md`
++- `doc/code-rules/PHASE7_15_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase7/PHASE7_15_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PHASE7_15_CHANGED_FILES.md`
++
++## Modified
++
++- None.
++
++## Generated artifacts
++
++- `doc/maintenance/source_candidate_external_probe_artifact_index.json` may be generated by the CLI.

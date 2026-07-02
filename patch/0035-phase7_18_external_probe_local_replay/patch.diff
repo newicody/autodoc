@@ -1,0 +1,647 @@
+diff --git a/src/context/source_candidate_external_probe_local_replay.py b/src/context/source_candidate_external_probe_local_replay.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/source_candidate_external_probe_local_replay.py
+@@ -0,0 +1,211 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any, Mapping
++import json
++import os
++import tempfile
++
++
++_REPLAY_REPORT_SCHEMA = "missipy.source_candidate.external_probe_local_replay_report.v1"
++_AUDIT_EVENT_SCHEMA = "missipy.source_candidate.external_probe_local_audit_event.v1"
++
++
++@dataclass(frozen=True)
++class SourceCandidateExternalProbeLocalReplayItem:
++    event_id: str
++    created_at: str
++    summary_path: str
++    status: str
++    ready_count: int
++    check_count: int
++    blocked_count: int
++    reason: str
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "event_id": self.event_id,
++            "created_at": self.created_at,
++            "summary_path": self.summary_path,
++            "status": self.status,
++            "ready_count": self.ready_count,
++            "check_count": self.check_count,
++            "blocked_count": self.blocked_count,
++            "reason": self.reason,
++        }
++
++
++@dataclass(frozen=True)
++class SourceCandidateExternalProbeLocalReplayReport:
++    audit_log_path: Path
++    event_count: int
++    replayed_count: int
++    ready_event_count: int
++    check_event_count: int
++    blocked_event_count: int
++    latest_event_id: str | None
++    items: tuple[SourceCandidateExternalProbeLocalReplayItem, ...]
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": _REPLAY_REPORT_SCHEMA,
++            "audit_log_path": str(self.audit_log_path),
++            "event_count": self.event_count,
++            "replayed_count": self.replayed_count,
++            "ready_event_count": self.ready_event_count,
++            "check_event_count": self.check_event_count,
++            "blocked_event_count": self.blocked_event_count,
++            "latest_event_id": self.latest_event_id,
++            "items": [item.to_json_dict() for item in self.items],
++        }
++
++
++def build_source_candidate_external_probe_local_replay_report(
++    audit_log_path: Path,
++    *,
++    limit: int | None = None,
++) -> SourceCandidateExternalProbeLocalReplayReport:
++    events = read_source_candidate_external_probe_local_replay_events(audit_log_path)
++    selected = events[-limit:] if limit is not None and limit >= 0 else events
++    items = tuple(_item_from_event(event) for event in selected)
++    latest_event_id = _string(events[-1].get("event_id"), default=None) if events else None
++
++    return SourceCandidateExternalProbeLocalReplayReport(
++        audit_log_path=audit_log_path,
++        event_count=len(events),
++        replayed_count=len(items),
++        ready_event_count=sum(1 for item in items if item.status == "ready"),
++        check_event_count=sum(1 for item in items if item.status == "check"),
++        blocked_event_count=sum(1 for item in items if item.status == "blocked"),
++        latest_event_id=latest_event_id,
++        items=items,
++    )
++
++
++def read_source_candidate_external_probe_local_replay_events(
++    audit_log_path: Path,
++) -> tuple[dict[str, Any], ...]:
++    if not audit_log_path.exists():
++        return ()
++
++    events: list[dict[str, Any]] = []
++    for line_number, line in enumerate(audit_log_path.read_text(encoding="utf-8").splitlines(), start=1):
++        if not line.strip():
++            continue
++        payload = json.loads(line)
++        if not isinstance(payload, Mapping):
++            raise ValueError(f"audit replay line {line_number} must be a JSON object")
++        if payload.get("schema") != _AUDIT_EVENT_SCHEMA:
++            raise ValueError(f"audit replay line {line_number} schema mismatch")
++        events.append(dict(payload))
++    return tuple(events)
++
++
++def write_source_candidate_external_probe_local_replay_report(
++    path: Path,
++    report: SourceCandidateExternalProbeLocalReplayReport,
++) -> Path:
++    _atomic_write_json(path, report.to_json_dict())
++    return path
++
++
++def read_source_candidate_external_probe_local_replay_report(path: Path) -> dict[str, Any]:
++    payload = _read_json_object(path)
++    if payload.get("schema") != _REPLAY_REPORT_SCHEMA:
++        raise ValueError("external probe local replay report schema mismatch")
++    return dict(payload)
++
++
++def render_source_candidate_external_probe_local_replay_report(
++    report: SourceCandidateExternalProbeLocalReplayReport,
++) -> str:
++    lines = [
++        "external probe local replay",
++        f"audit_log_path: {report.audit_log_path}",
++        f"event_count: {report.event_count}",
++        f"replayed_count: {report.replayed_count}",
++        f"ready_event_count: {report.ready_event_count}",
++        f"check_event_count: {report.check_event_count}",
++        f"blocked_event_count: {report.blocked_event_count}",
++        f"latest_event_id: {report.latest_event_id or '<none>'}",
++    ]
++    for item in report.items:
++        lines.append(
++            f"- {item.status}: {item.created_at} {item.event_id} "
++            f"ready={item.ready_count} check={item.check_count} blocked={item.blocked_count} "
++            f"reason={item.reason}"
++        )
++    return "\n".join(lines)
++
++
++def _item_from_event(event: Mapping[str, Any]) -> SourceCandidateExternalProbeLocalReplayItem:
++    ready_count = _int(event.get("ready_count"))
++    check_count = _int(event.get("check_count"))
++    blocked_count = _int(event.get("blocked_count"))
++    status, reason = _status_and_reason(
++        ready_count=ready_count,
++        check_count=check_count,
++        blocked_count=blocked_count,
++    )
++
++    return SourceCandidateExternalProbeLocalReplayItem(
++        event_id=_string(event.get("event_id"), default="<unknown>") or "<unknown>",
++        created_at=_string(event.get("created_at"), default="<unknown>") or "<unknown>",
++        summary_path=_string(event.get("summary_path"), default="<unknown>") or "<unknown>",
++        status=status,
++        ready_count=ready_count,
++        check_count=check_count,
++        blocked_count=blocked_count,
++        reason=reason,
++    )
++
++
++def _status_and_reason(
++    *,
++    ready_count: int,
++    check_count: int,
++    blocked_count: int,
++) -> tuple[str, str]:
++    if blocked_count > 0:
++        return "blocked", "one or more bundles were blocked"
++    if check_count > 0:
++        return "check", "one or more bundles require operator review"
++    if ready_count > 0:
++        return "ready", "all replayed bundles are ready"
++    return "check", "no ready bundle was recorded"
++
++
++def _read_json_object(path: Path) -> Mapping[str, Any]:
++    payload = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(payload, Mapping):
++        raise ValueError(f"JSON payload must be an object: {path}")
++    return payload
++
++
++def _string(raw: object, *, default: str | None) -> str | None:
++    if isinstance(raw, str) and raw.strip():
++        return raw
++    return default
++
++
++def _int(raw: object) -> int:
++    if isinstance(raw, int):
++        return raw
++    return 0
++
++
++def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
++    with tempfile.NamedTemporaryFile(
++        "w",
++        encoding="utf-8",
++        dir=str(path.parent),
++        prefix=f".{path.name}.",
++        suffix=".tmp",
++        delete=False,
++    ) as handle:
++        tmp_name = handle.name
++        handle.write(text)
++    os.replace(tmp_name, path)
+diff --git a/tools/source_candidate_external_probe_local_replay_cli.py b/tools/source_candidate_external_probe_local_replay_cli.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tools/source_candidate_external_probe_local_replay_cli.py
+@@ -0,0 +1,54 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[1]
++SRC = ROOT / "src"
++if str(SRC) not in sys.path:
++    sys.path.insert(0, str(SRC))
++
++from context.source_candidate_external_probe_local_replay import (  # noqa: E402
++    build_source_candidate_external_probe_local_replay_report,
++    render_source_candidate_external_probe_local_replay_report,
++    write_source_candidate_external_probe_local_replay_report,
++)
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Replay local SourceCandidate external probe audit events.")
++    parser.add_argument(
++        "--audit-log",
++        type=Path,
++        default=Path("doc/maintenance/source_candidate_external_probe_local_audit.jsonl"),
++        help="local JSONL audit log path",
++    )
++    parser.add_argument(
++        "--report",
++        type=Path,
++        default=Path("doc/maintenance/source_candidate_external_probe_local_replay_report.json"),
++        help="local replay report output path",
++    )
++    parser.add_argument("--limit", type=int, default=None, help="optional number of latest events to replay")
++    parser.add_argument("--json", action="store_true", help="print JSON report")
++    args = parser.parse_args(argv)
++
++    report = build_source_candidate_external_probe_local_replay_report(
++        args.audit_log,
++        limit=args.limit,
++    )
++    write_source_candidate_external_probe_local_replay_report(args.report, report)
++
++    if args.json:
++        print(json.dumps(report.to_json_dict(), ensure_ascii=False, indent=2, sort_keys=True))
++    else:
++        print(render_source_candidate_external_probe_local_replay_report(report))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/context/test_source_candidate_external_probe_local_replay.py b/tests/context/test_source_candidate_external_probe_local_replay.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_source_candidate_external_probe_local_replay.py
+@@ -0,0 +1,96 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++from context.source_candidate_external_probe_local_replay import (
++    build_source_candidate_external_probe_local_replay_report,
++    read_source_candidate_external_probe_local_replay_report,
++    render_source_candidate_external_probe_local_replay_report,
++    write_source_candidate_external_probe_local_replay_report,
++)
++
++
++def _event(event_id: str, *, ready: int, check: int, blocked: int) -> dict[str, object]:
++    return {
++        "schema": "missipy.source_candidate.external_probe_local_audit_event.v1",
++        "event_id": event_id,
++        "created_at": f"2026-07-02T10:0{event_id}+00:00",
++        "event_kind": "external_probe_operator_summary_recorded",
++        "summary_path": f"summary-{event_id}.json",
++        "bundle_count": ready + check + blocked,
++        "ready_count": ready,
++        "check_count": check,
++        "blocked_count": blocked,
++        "total_artifact_count": 3,
++        "total_byte_count": 123,
++    }
++
++
++def _write_audit(path: Path) -> None:
++    path.write_text(
++        "\n".join(
++            json.dumps(payload)
++            for payload in (
++                _event("1", ready=1, check=0, blocked=0),
++                _event("2", ready=1, check=1, blocked=0),
++                _event("3", ready=1, check=0, blocked=1),
++            )
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++
++
++def test_local_replay_report_counts_statuses(tmp_path: Path) -> None:
++    audit_log = tmp_path / "audit.jsonl"
++    _write_audit(audit_log)
++
++    report = build_source_candidate_external_probe_local_replay_report(audit_log)
++
++    assert report.event_count == 3
++    assert report.replayed_count == 3
++    assert report.ready_event_count == 1
++    assert report.check_event_count == 1
++    assert report.blocked_event_count == 1
++    assert report.latest_event_id == "3"
++
++
++def test_local_replay_report_can_limit_latest_events(tmp_path: Path) -> None:
++    audit_log = tmp_path / "audit.jsonl"
++    _write_audit(audit_log)
++
++    report = build_source_candidate_external_probe_local_replay_report(audit_log, limit=2)
++
++    assert report.event_count == 3
++    assert report.replayed_count == 2
++    assert report.ready_event_count == 0
++    assert report.check_event_count == 1
++    assert report.blocked_event_count == 1
++
++
++def test_local_replay_report_writes_and_reads_json(tmp_path: Path) -> None:
++    audit_log = tmp_path / "audit.jsonl"
++    output = tmp_path / "replay.json"
++    _write_audit(audit_log)
++
++    report = build_source_candidate_external_probe_local_replay_report(audit_log)
++    returned = write_source_candidate_external_probe_local_replay_report(output, report)
++    payload = read_source_candidate_external_probe_local_replay_report(output)
++
++    assert returned == output
++    assert payload["schema"] == "missipy.source_candidate.external_probe_local_replay_report.v1"
++    assert payload["event_count"] == 3
++
++
++def test_local_replay_report_render_is_stable(tmp_path: Path) -> None:
++    audit_log = tmp_path / "audit.jsonl"
++    _write_audit(audit_log)
++
++    text = render_source_candidate_external_probe_local_replay_report(
++        build_source_candidate_external_probe_local_replay_report(audit_log)
++    )
++
++    assert "external probe local replay" in text
++    assert "event_count: 3" in text
++    assert "latest_event_id: 3" in text
+diff --git a/tests/tools/test_source_candidate_external_probe_local_replay_cli.py b/tests/tools/test_source_candidate_external_probe_local_replay_cli.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/tools/test_source_candidate_external_probe_local_replay_cli.py
+@@ -0,0 +1,62 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOLS = ROOT / "tools"
++if str(TOOLS) not in sys.path:
++    sys.path.insert(0, str(TOOLS))
++
++from source_candidate_external_probe_local_replay_cli import main  # noqa: E402
++
++
++def _write_audit(path: Path) -> None:
++    path.write_text(
++        json.dumps(
++            {
++                "schema": "missipy.source_candidate.external_probe_local_audit_event.v1",
++                "event_id": "one",
++                "created_at": "2026-07-02T10:00:00+00:00",
++                "event_kind": "external_probe_operator_summary_recorded",
++                "summary_path": "summary.json",
++                "bundle_count": 1,
++                "ready_count": 1,
++                "check_count": 0,
++                "blocked_count": 0,
++                "total_artifact_count": 3,
++                "total_byte_count": 123,
++            }
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++
++
++def test_local_replay_cli_writes_report(tmp_path: Path, capsys) -> None:
++    audit_log = tmp_path / "audit.jsonl"
++    report = tmp_path / "report.json"
++    _write_audit(audit_log)
++
++    exit_code = main(["--audit-log", str(audit_log), "--report", str(report)])
++
++    captured = capsys.readouterr()
++    assert exit_code == 0
++    assert "external probe local replay" in captured.out
++    assert report.exists()
++    assert json.loads(report.read_text(encoding="utf-8"))["event_count"] == 1
++
++
++def test_local_replay_cli_prints_json(tmp_path: Path, capsys) -> None:
++    audit_log = tmp_path / "audit.jsonl"
++    report = tmp_path / "report.json"
++    _write_audit(audit_log)
++
++    exit_code = main(["--audit-log", str(audit_log), "--report", str(report), "--json"])
++
++    payload = json.loads(capsys.readouterr().out)
++    assert exit_code == 0
++    assert payload["schema"] == "missipy.source_candidate.external_probe_local_replay_report.v1"
++    assert payload["event_count"] == 1
+diff --git a/tests/rules/test_source_candidate_external_probe_local_replay_rule.py b/tests/rules/test_source_candidate_external_probe_local_replay_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_source_candidate_external_probe_local_replay_rule.py
+@@ -0,0 +1,38 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_external_probe_local_replay_is_local_only() -> None:
++    source = _read("src/context/source_candidate_external_probe_local_replay.py").lower()
++    cli = _read("tools/source_candidate_external_probe_local_replay_cli.py").lower()
++    forbidden = ("requests", "urllib", "httpx", "subprocess", "authorization")
++    for forbidden_text in forbidden:
++        assert forbidden_text not in source
++        assert forbidden_text not in cli
++
++
++def test_external_probe_local_replay_uses_audit_event_schema() -> None:
++    source = _read("src/context/source_candidate_external_probe_local_replay.py")
++    assert "missipy.source_candidate.external_probe_local_audit_event.v1" in source
++    assert "ready_event_count" in source
++    assert "blocked_event_count" in source
++
++
++def test_external_probe_local_replay_manifest_uses_post_migration_path() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PHASE7_18_CHANGED_FILES.md")
++    assert "src/kernel/scheduler.py" not in manifest
++    assert "src/context/source_candidate_external_probe_local_replay.py" in manifest
++
++
++def test_external_probe_local_replay_does_not_add_dot_or_svg() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PHASE7_18_CHANGED_FILES.md")
++    assert ".dot" not in manifest
++    assert ".svg" not in manifest
+diff --git a/doc/maintenance/EXTERNAL_PROBE_LOCAL_REPLAY.md b/doc/maintenance/EXTERNAL_PROBE_LOCAL_REPLAY.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/maintenance/EXTERNAL_PROBE_LOCAL_REPLAY.md
+@@ -0,0 +1,34 @@
++# External probe local replay
++
++Phase 7.18 adds a local replay report for the external probe audit trail.
++
++The replay reads:
++
++```text
++doc/maintenance/source_candidate_external_probe_local_audit.jsonl
++```
++
++and writes:
++
++```text
++doc/maintenance/source_candidate_external_probe_local_replay_report.json
++```
++
++## Example
++
++```bash
++python tools/source_candidate_external_probe_local_replay_cli.py \
++  --audit-log doc/maintenance/source_candidate_external_probe_local_audit.jsonl \
++  --report doc/maintenance/source_candidate_external_probe_local_replay_report.json
++```
++
++## Latest events only
++
++```bash
++python tools/source_candidate_external_probe_local_replay_cli.py \
++  --audit-log doc/maintenance/source_candidate_external_probe_local_audit.jsonl \
++  --report doc/maintenance/source_candidate_external_probe_local_replay_report.json \
++  --limit 10
++```
++
++The replay is local-only and does not inspect external services.
+diff --git a/doc/releases/README_PHASE7_18_EXTERNAL_PROBE_LOCAL_REPLAY.md b/doc/releases/README_PHASE7_18_EXTERNAL_PROBE_LOCAL_REPLAY.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PHASE7_18_EXTERNAL_PROBE_LOCAL_REPLAY.md
+@@ -0,0 +1,6 @@
++# Phase 7.18 — External Probe Local Replay
++
++Phase 7.18 adds local replay for the external probe audit trail.
++
++It rebuilds ready/check/blocked counts from JSONL audit events so the operator
++can inspect the local history deterministically.
+diff --git a/doc/changelogs/CHANGELOG_PHASE7_18_EXTERNAL_PROBE_LOCAL_REPLAY.md b/doc/changelogs/CHANGELOG_PHASE7_18_EXTERNAL_PROBE_LOCAL_REPLAY.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PHASE7_18_EXTERNAL_PROBE_LOCAL_REPLAY.md
+@@ -0,0 +1,21 @@
++# Changelog — Phase 7.18 External Probe Local Replay
++
++## Added
++
++- `src/context/source_candidate_external_probe_local_replay.py`
++  - Reads local JSONL audit events.
++  - Produces replay reports.
++  - Supports latest-event limits.
++
++- `tools/source_candidate_external_probe_local_replay_cli.py`
++  - CLI for local replay reports.
++
++- Tests for context, CLI and rules.
++
++## Not added
++
++- No external call.
++- No network.
++- No Scheduler change.
++- No DOT.
++- No SVG.
+diff --git a/doc/code-rules/PHASE7_18_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PHASE7_18_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PHASE7_18_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,17 @@
++# Phase 7.18 Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Phase 7.18 adds local replay for external probe JSONL audit events. It reads local files, writes local replay reports and does not contact external services, mutate remote state, modify the Scheduler or add DOT/SVG artifacts.
++
++live_path_status: n/a
++live_path_uses_real_backend: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
+diff --git a/doc/reports/phase7/PHASE7_18_TEST_REPORT.md b/doc/reports/phase7/PHASE7_18_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase7/PHASE7_18_TEST_REPORT.md
+@@ -0,0 +1,19 @@
++# Phase 7.18 Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/context/test_source_candidate_external_probe_local_replay.py
++PYTHONPATH=src:. pytest -q tests/tools/test_source_candidate_external_probe_local_replay_cli.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Expected
++
++```text
++external probe local replay tests: pass
++rules: pass
++full suite: pass
++```
+diff --git a/doc/manifests/MANIFEST_PHASE7_18_CHANGED_FILES.md b/doc/manifests/MANIFEST_PHASE7_18_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PHASE7_18_CHANGED_FILES.md
+@@ -0,0 +1,23 @@
++# Manifest — Phase 7.18 External Probe Local Replay
++
++## Added
++
++- `src/context/source_candidate_external_probe_local_replay.py`
++- `tools/source_candidate_external_probe_local_replay_cli.py`
++- `tests/context/test_source_candidate_external_probe_local_replay.py`
++- `tests/tools/test_source_candidate_external_probe_local_replay_cli.py`
++- `tests/rules/test_source_candidate_external_probe_local_replay_rule.py`
++- `doc/maintenance/EXTERNAL_PROBE_LOCAL_REPLAY.md`
++- `doc/releases/README_PHASE7_18_EXTERNAL_PROBE_LOCAL_REPLAY.md`
++- `doc/changelogs/CHANGELOG_PHASE7_18_EXTERNAL_PROBE_LOCAL_REPLAY.md`
++- `doc/code-rules/PHASE7_18_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase7/PHASE7_18_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PHASE7_18_CHANGED_FILES.md`
++
++## Modified
++
++- None.
++
++## Generated artifacts
++
++- `doc/maintenance/source_candidate_external_probe_local_replay_report.json` may be generated by the CLI.
