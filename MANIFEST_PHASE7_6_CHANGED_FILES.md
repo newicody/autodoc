@@ -2,6 +2,7 @@
 
 ## Added
 
+- `tools/__init__.py`
 - `tools/markdown_doc_layout.py`
 - `tests/tools/test_markdown_doc_layout.py`
 - `tests/rules/test_markdown_doc_layout_rule.py`
