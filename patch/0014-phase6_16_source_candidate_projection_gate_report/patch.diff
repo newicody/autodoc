@@ -1,0 +1,424 @@
+diff --git a/src/context/source_candidate_projection_gate_report.py b/src/context/source_candidate_projection_gate_report.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/source_candidate_projection_gate_report.py
+@@ -0,0 +1,108 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++import json
++import os
++import tempfile
++
++from .source_candidate_projection_gate import (
++    SourceCandidateProjectionGatePolicy,
++    SourceCandidateProjectionGateResult,
++    render_source_candidate_projection_gate,
++    run_source_candidate_projection_gate,
++)
++
++
++_REPORT_SCHEMA = "missipy.source_candidate.projection_gate_report.v1"
++
++
++@dataclass(frozen=True)
++class SourceCandidateProjectionGateReportPolicy:
++    """Local report policy for projection gate results."""
++
++    output_path: Path
++    include_text: bool = True
++
++
++@dataclass(frozen=True)
++class SourceCandidateProjectionGateReport:
++    output_path: Path
++    byte_count: int
++    passed: bool
++    issue_count: int
++    item_count: int
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": _REPORT_SCHEMA,
++            "output_path": str(self.output_path),
++            "byte_count": self.byte_count,
++            "passed": self.passed,
++            "issue_count": self.issue_count,
++            "item_count": self.item_count,
++        }
++
++
++def build_source_candidate_projection_gate_report_payload(
++    result: SourceCandidateProjectionGateResult,
++    *,
++    include_text: bool = True,
++) -> dict[str, object]:
++    payload: dict[str, object] = {
++        "schema": _REPORT_SCHEMA,
++        "gate_result": result.to_json_dict(),
++    }
++    if include_text:
++        payload["text"] = render_source_candidate_projection_gate(result)
++    return payload
++
++
++def write_source_candidate_projection_gate_report(
++    result: SourceCandidateProjectionGateResult,
++    policy: SourceCandidateProjectionGateReportPolicy,
++) -> SourceCandidateProjectionGateReport:
++    """Write a projection gate result report atomically."""
++
++    if not str(policy.output_path).strip():
++        raise ValueError("output_path must not be empty")
++
++    payload = build_source_candidate_projection_gate_report_payload(
++        result,
++        include_text=policy.include_text,
++    )
++    text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
++    _atomic_write_text(policy.output_path, text)
++
++    return SourceCandidateProjectionGateReport(
++        output_path=policy.output_path,
++        byte_count=policy.output_path.stat().st_size,
++        passed=result.passed,
++        issue_count=result.issue_count,
++        item_count=result.item_count,
++    )
++
++
++def run_source_candidate_projection_gate_report(
++    *,
++    bundle_path: Path,
++    report_policy: SourceCandidateProjectionGateReportPolicy,
++    gate_policy: SourceCandidateProjectionGatePolicy | None = None,
++) -> SourceCandidateProjectionGateReport:
++    result = run_source_candidate_projection_gate(bundle_path, gate_policy)
++    return write_source_candidate_projection_gate_report(result, report_policy)
++
++
++def _atomic_write_text(path: Path, text: str) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with tempfile.NamedTemporaryFile(
++        "w",
++        encoding="utf-8",
++        dir=str(path.parent),
++        prefix=f".{path.name}.",
++        suffix=".tmp",
++        delete=False,
++    ) as handle:
++        tmp_name = handle.name
++        handle.write(text)
++    os.replace(tmp_name, path)
+diff --git a/tests/context/test_source_candidate_projection_gate_report.py b/tests/context/test_source_candidate_projection_gate_report.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_source_candidate_projection_gate_report.py
+@@ -0,0 +1,104 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++from context.source_candidate_projection_gate import run_source_candidate_projection_gate
++from context.source_candidate_projection_gate_report import (
++    SourceCandidateProjectionGateReportPolicy,
++    build_source_candidate_projection_gate_report_payload,
++    run_source_candidate_projection_gate_report,
++    write_source_candidate_projection_gate_report,
++)
++
++
++def _write_bundle(path: Path) -> None:
++    path.mkdir(parents=True)
++    preview_path = path / "projection_preview.json"
++    manifest_path = path / "manifest.json"
++    preview_path.write_text(
++        json.dumps(
++            {
++                "schema": "missipy.source_candidate.projection_preview.v1",
++                "target_name": "operator_project_surface",
++                "source_report_schema": "missipy.source_candidate.operator_report.v1",
++                "item_count": 1,
++                "items": [
++                    {
++                        "candidate_id": "candidate-a",
++                        "title": "Ready",
++                        "status": "new",
++                        "decision_action": "inspect",
++                        "decision_reason": "check",
++                        "target_context_id": None,
++                        "audit_present": True,
++                        "recommended_action": "inspect",
++                        "labels": ["status:new"],
++                    }
++                ],
++            }
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++    manifest_path.write_text(
++        json.dumps(
++            {
++                "schema": "missipy.source_candidate.projection_bundle.v1",
++                "path": str(path),
++                "manifest_path": str(manifest_path),
++                "preview_path": str(preview_path),
++                "item_count": 1,
++                "target_name": "operator_project_surface",
++                "source_report_schema": "missipy.source_candidate.operator_report.v1",
++                "artifacts": [],
++            }
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++
++
++def test_gate_report_payload_can_include_text(tmp_path: Path) -> None:
++    bundle = tmp_path / "bundle"
++    _write_bundle(bundle)
++    result = run_source_candidate_projection_gate(bundle)
++
++    payload = build_source_candidate_projection_gate_report_payload(result)
++
++    assert payload["schema"] == "missipy.source_candidate.projection_gate_report.v1"
++    assert payload["gate_result"]["passed"] is True
++    assert "projection gate: PASS" in payload["text"]
++
++
++def test_gate_report_writes_json_atomically(tmp_path: Path) -> None:
++    bundle = tmp_path / "bundle"
++    output = tmp_path / "reports" / "gate_report.json"
++    _write_bundle(bundle)
++    result = run_source_candidate_projection_gate(bundle)
++
++    report = write_source_candidate_projection_gate_report(
++        result,
++        SourceCandidateProjectionGateReportPolicy(output_path=output),
++    )
++
++    payload = json.loads(output.read_text(encoding="utf-8"))
++    assert report.output_path == output
++    assert report.byte_count > 0
++    assert report.passed is True
++    assert payload["schema"] == "missipy.source_candidate.projection_gate_report.v1"
++
++
++def test_gate_report_can_be_run_from_bundle_path(tmp_path: Path) -> None:
++    bundle = tmp_path / "bundle"
++    output = tmp_path / "gate_report.json"
++    _write_bundle(bundle)
++
++    report = run_source_candidate_projection_gate_report(
++        bundle_path=bundle,
++        report_policy=SourceCandidateProjectionGateReportPolicy(output_path=output),
++    )
++
++    assert report.passed is True
++    assert report.item_count == 1
++    assert output.exists()
+diff --git a/tests/rules/test_source_candidate_projection_gate_report_rule.py b/tests/rules/test_source_candidate_projection_gate_report_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_source_candidate_projection_gate_report_rule.py
+@@ -0,0 +1,30 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_projection_gate_report_is_local_only() -> None:
++    source = _read("src/context/source_candidate_projection_gate_report.py").lower()
++    forbidden = ("requests", "qdrant", "openvino", "subprocess")
++    for token in forbidden:
++        assert token not in source
++
++
++def test_projection_gate_report_does_not_modify_scheduler() -> None:
++    manifest = _read("MANIFEST_PHASE6_16_CHANGED_FILES.md")
++    assert "src/kernel/scheduler.py" not in manifest
++    assert "src/context/source_candidate_projection_gate_report.py" in manifest
++
++
++def test_projection_gate_report_has_architecture_source_only() -> None:
++    dot = ROOT / "doc/docs/architecture/context/56_source_candidate_projection_gate_report.dot"
++    svg = ROOT / "doc/docs/architecture/context/56_source_candidate_projection_gate_report.svg"
++    assert dot.exists()
++    assert not svg.exists()
+diff --git a/doc/docs/architecture/context/56_source_candidate_projection_gate_report.dot b/doc/docs/architecture/context/56_source_candidate_projection_gate_report.dot
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/docs/architecture/context/56_source_candidate_projection_gate_report.dot
+@@ -0,0 +1,13 @@
++digraph source_candidate_projection_gate_report {
++  graph [rankdir=LR, label="Phase 6.16 SourceCandidate projection gate report", labelloc=t];
++  node [shape=box];
++
++  bundle [label="projection bundle"];
++  gate [label="projection gate\nPASS / FAIL"];
++  report [label="projection_gate_report.json\natomic local artifact"];
++  closure [label="future handoff dry-run\nnot external", style=dashed];
++
++  bundle -> gate;
++  gate -> report;
++  report -> closure [style=dashed];
++}
+diff --git a/doc/CHANGELOG_PHASE6_16_SOURCE_CANDIDATE_PROJECTION_GATE_REPORT.md b/doc/CHANGELOG_PHASE6_16_SOURCE_CANDIDATE_PROJECTION_GATE_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/CHANGELOG_PHASE6_16_SOURCE_CANDIDATE_PROJECTION_GATE_REPORT.md
+@@ -0,0 +1,27 @@
++# Changelog — Phase 6.16 SourceCandidate Projection Gate Report
++
++## Added
++
++- `src/context/source_candidate_projection_gate_report.py`
++  - Builds and writes a local JSON report from a projection gate result.
++  - Supports optional embedded text rendering.
++  - Uses atomic local writes.
++
++- `tests/context/test_source_candidate_projection_gate_report.py`
++  - Covers payload rendering, atomic report writing and end-to-end report generation.
++
++- `tests/rules/test_source_candidate_projection_gate_report_rule.py`
++  - Ensures the phase remains local-only and does not modify Scheduler.
++
++- `doc/docs/architecture/context/56_source_candidate_projection_gate_report.dot`
++  - Documents the local gate report artifact flow.
++
++## Not added
++
++- No external API.
++- No network.
++- No project tracker mutation.
++- No Qdrant.
++- No LLM/OpenVINO.
++- No Scheduler change.
++- No new CLI.
+diff --git a/doc/PHASE6_16_CODE_RULE_ALIGNMENT.md b/doc/PHASE6_16_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/PHASE6_16_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,19 @@
++# Phase 6.16 Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Phase 6.16 adds a local report artifact for projection gate results. It does not introduce a new scheduler path or external backend.
++
++live_path_status: n/a
++live_path_uses_real_backend: true
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++The phase keeps projection readiness local and auditable.
+diff --git a/doc/releases/README_PHASE6_16_SOURCE_CANDIDATE_PROJECTION_GATE_REPORT.md b/doc/releases/README_PHASE6_16_SOURCE_CANDIDATE_PROJECTION_GATE_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PHASE6_16_SOURCE_CANDIDATE_PROJECTION_GATE_REPORT.md
+@@ -0,0 +1,12 @@
++# Phase 6.16 — SourceCandidate Projection Gate Report
++
++Phase 6.16 adds a local JSON report artifact for projection gate results.
++
++The report embeds:
++
++```text
++gate_result
++optional text rendering
++```
++
++This makes the gate result reusable by a future handoff dry-run without contacting any external system.
+diff --git a/PHASE6_16_TEST_REPORT.md b/PHASE6_16_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/PHASE6_16_TEST_REPORT.md
+@@ -0,0 +1,36 @@
++# Phase 6.16 Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src python -m compileall -q src tests
++PYTHONPATH=src pytest -q tests/context/test_source_candidate_projection_gate_report.py
++PYTHONPATH=src pytest -q tests/rules
++PYTHONPATH=src pytest -q
++```
++
++## Expected
++
++```text
++projection gate report tests: pass
++rules: pass
++full suite: pass
++```
++
++## Code rule block
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Local-only projection gate report; no new scheduler path or external backend.
++
++live_path_status: n/a
++live_path_uses_real_backend: true
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
+diff --git a/MANIFEST_PHASE6_16_CHANGED_FILES.md b/MANIFEST_PHASE6_16_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/MANIFEST_PHASE6_16_CHANGED_FILES.md
+@@ -0,0 +1,21 @@
++# Manifest — Phase 6.16 SourceCandidate Projection Gate Report
++
++## Added
++
++- `src/context/source_candidate_projection_gate_report.py`
++- `tests/context/test_source_candidate_projection_gate_report.py`
++- `tests/rules/test_source_candidate_projection_gate_report_rule.py`
++- `doc/docs/architecture/context/56_source_candidate_projection_gate_report.dot`
++- `doc/CHANGELOG_PHASE6_16_SOURCE_CANDIDATE_PROJECTION_GATE_REPORT.md`
++- `doc/PHASE6_16_CODE_RULE_ALIGNMENT.md`
++- `doc/releases/README_PHASE6_16_SOURCE_CANDIDATE_PROJECTION_GATE_REPORT.md`
++- `PHASE6_16_TEST_REPORT.md`
++- `MANIFEST_PHASE6_16_CHANGED_FILES.md`
++
++## Modified
++
++- None.
++
++## Generated artifacts
++
++- No SVG is versioned.

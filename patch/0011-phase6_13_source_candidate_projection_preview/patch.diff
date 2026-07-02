@@ -1,0 +1,534 @@
+diff --git a/src/context/source_candidate_projection_preview.py b/src/context/source_candidate_projection_preview.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/source_candidate_projection_preview.py
+@@ -0,0 +1,220 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any, Mapping, Sequence
++import json
++import os
++import tempfile
++
++
++_PREVIEW_SCHEMA = "missipy.source_candidate.projection_preview.v1"
++
++
++@dataclass(frozen=True)
++class SourceCandidateProjectionPreviewPolicy:
++    """Local policy for building an operator projection preview.
++
++    The preview is only a local artifact. It does not contact any external
++    tracker and it does not mutate the SourceCandidate store.
++    """
++
++    target_name: str = "operator_project_surface"
++    max_items: int = 50
++    include_terminal: bool = False
++
++
++@dataclass(frozen=True)
++class SourceCandidateProjectionPreviewItem:
++    candidate_id: str
++    title: str
++    status: str
++    decision_action: str | None
++    decision_reason: str | None
++    target_context_id: str | None
++    audit_present: bool
++    recommended_action: str
++    labels: tuple[str, ...]
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "candidate_id": self.candidate_id,
++            "title": self.title,
++            "status": self.status,
++            "decision_action": self.decision_action,
++            "decision_reason": self.decision_reason,
++            "target_context_id": self.target_context_id,
++            "audit_present": self.audit_present,
++            "recommended_action": self.recommended_action,
++            "labels": list(self.labels),
++        }
++
++
++@dataclass(frozen=True)
++class SourceCandidateProjectionPreview:
++    target_name: str
++    source_report_schema: str
++    item_count: int
++    items: tuple[SourceCandidateProjectionPreviewItem, ...]
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": _PREVIEW_SCHEMA,
++            "target_name": self.target_name,
++            "source_report_schema": self.source_report_schema,
++            "item_count": self.item_count,
++            "items": [item.to_json_dict() for item in self.items],
++        }
++
++
++def build_source_candidate_projection_preview(
++    report_payload: Mapping[str, Any],
++    policy: SourceCandidateProjectionPreviewPolicy | None = None,
++) -> SourceCandidateProjectionPreview:
++    """Build a stable local projection preview from an operator report payload."""
++
++    active_policy = policy or SourceCandidateProjectionPreviewPolicy()
++    if active_policy.max_items <= 0:
++        raise ValueError("max_items must be greater than zero")
++    if not active_policy.target_name.strip():
++        raise ValueError("target_name must not be empty")
++
++    raw_items = _coerce_items(report_payload.get("items", ()))
++    preview_items: list[SourceCandidateProjectionPreviewItem] = []
++
++    for raw in raw_items:
++        item = _build_item(raw)
++        if not active_policy.include_terminal and _is_terminal_status(item.status):
++            continue
++        preview_items.append(item)
++        if len(preview_items) >= active_policy.max_items:
++            break
++
++    return SourceCandidateProjectionPreview(
++        target_name=active_policy.target_name,
++        source_report_schema=str(report_payload.get("schema", "unknown")),
++        item_count=len(preview_items),
++        items=tuple(preview_items),
++    )
++
++
++def write_source_candidate_projection_preview(
++    path: Path,
++    preview: SourceCandidateProjectionPreview,
++) -> Path:
++    """Write a projection preview JSON artifact atomically."""
++
++    path.parent.mkdir(parents=True, exist_ok=True)
++    payload = json.dumps(preview.to_json_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n"
++
++    with tempfile.NamedTemporaryFile(
++        "w",
++        encoding="utf-8",
++        dir=str(path.parent),
++        prefix=f".{path.name}.",
++        suffix=".tmp",
++        delete=False,
++    ) as handle:
++        tmp_name = handle.name
++        handle.write(payload)
++
++    os.replace(tmp_name, path)
++    return path
++
++
++def read_operator_report(path: Path) -> dict[str, Any]:
++    payload = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(payload, dict):
++        raise ValueError("operator report must be a JSON object")
++    return payload
++
++
++def _coerce_items(raw: object) -> tuple[Mapping[str, Any], ...]:
++    if raw is None:
++        return ()
++    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
++        raise ValueError("operator report items must be a list")
++    items: list[Mapping[str, Any]] = []
++    for item in raw:
++        if not isinstance(item, Mapping):
++            raise ValueError("operator report item must be an object")
++        items.append(item)
++    return tuple(items)
++
++
++def _build_item(raw: Mapping[str, Any]) -> SourceCandidateProjectionPreviewItem:
++    decision = _mapping(raw.get("decision_summary"))
++    audit = _mapping(raw.get("audit_summary"))
++
++    candidate_id = _string_value(raw, "candidate_id", "id")
++    title = _string_value(raw, "title", default=candidate_id)
++    status = _string_value(raw, "status", default="unknown")
++
++    decision_action = _optional_string(decision.get("action") or raw.get("decision_action"))
++    decision_reason = _optional_string(decision.get("reason") or raw.get("decision_reason"))
++    target_context_id = _optional_string(
++        decision.get("target_context_id") or raw.get("target_context_id")
++    )
++    audit_present = bool(raw.get("audit_present") or audit.get("present"))
++
++    recommended_action = _recommended_action(
++        status=status,
++        decision_action=decision_action,
++        audit_present=audit_present,
++    )
++
++    return SourceCandidateProjectionPreviewItem(
++        candidate_id=candidate_id,
++        title=title,
++        status=status,
++        decision_action=decision_action,
++        decision_reason=decision_reason,
++        target_context_id=target_context_id,
++        audit_present=audit_present,
++        recommended_action=recommended_action,
++        labels=_labels(status, decision_action, audit_present),
++    )
++
++
++def _mapping(raw: object) -> Mapping[str, Any]:
++    return raw if isinstance(raw, Mapping) else {}
++
++
++def _string_value(raw: Mapping[str, Any], *keys: str, default: str | None = None) -> str:
++    for key in keys:
++        value = raw.get(key)
++        if isinstance(value, str) and value.strip():
++            return value
++    if default is not None:
++        return default
++    raise ValueError(f"missing string field: {'/'.join(keys)}")
++
++
++def _optional_string(value: object) -> str | None:
++    if isinstance(value, str) and value.strip():
++        return value
++    return None
++
++
++def _is_terminal_status(status: str) -> bool:
++    return status in {"archived", "merged", "promoted", "rejected"}
++
++
++def _recommended_action(status: str, decision_action: str | None, audit_present: bool) -> str:
++    if _is_terminal_status(status):
++        return "none"
++    if decision_action == "relaunch":
++        return "relaunch"
++    if decision_action in {"promote", "merge"} and not audit_present:
++        return "write-audit"
++    if status in {"new", "analyzed"}:
++        return "inspect"
++    return "review"
++
++
++def _labels(status: str, decision_action: str | None, audit_present: bool) -> tuple[str, ...]:
++    labels = [f"status:{status}"]
++    if decision_action:
++        labels.append(f"decision:{decision_action}")
++    labels.append("audit:present" if audit_present else "audit:missing")
++    return tuple(labels)
+diff --git a/tests/context/test_source_candidate_projection_preview.py b/tests/context/test_source_candidate_projection_preview.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_source_candidate_projection_preview.py
+@@ -0,0 +1,93 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++import pytest
++
++from context.source_candidate_projection_preview import (
++    SourceCandidateProjectionPreviewPolicy,
++    build_source_candidate_projection_preview,
++    read_operator_report,
++    write_source_candidate_projection_preview,
++)
++
++
++def _report() -> dict[str, object]:
++    return {
++        "schema": "missipy.source_candidate.operator_report.v1",
++        "items": [
++            {
++                "candidate_id": "candidate-a",
++                "title": "Inspect this",
++                "status": "new",
++                "decision_summary": {"action": "inspect", "reason": "needs review"},
++                "audit_present": False,
++            },
++            {
++                "candidate_id": "candidate-b",
++                "title": "Already archived",
++                "status": "archived",
++                "decision_summary": {"action": "archive", "reason": "done"},
++                "audit_present": True,
++            },
++        ],
++    }
++
++
++def test_projection_preview_filters_terminal_items_by_default() -> None:
++    preview = build_source_candidate_projection_preview(_report())
++
++    assert preview.item_count == 1
++    assert preview.source_report_schema == "missipy.source_candidate.operator_report.v1"
++    assert preview.items[0].candidate_id == "candidate-a"
++    assert preview.items[0].recommended_action == "inspect"
++    assert preview.items[0].labels == ("status:new", "decision:inspect", "audit:missing")
++
++
++def test_projection_preview_can_include_terminal_items() -> None:
++    preview = build_source_candidate_projection_preview(
++        _report(),
++        SourceCandidateProjectionPreviewPolicy(include_terminal=True),
++    )
++
++    assert preview.item_count == 2
++    assert preview.items[1].recommended_action == "none"
++
++
++def test_projection_preview_limit_is_stable() -> None:
++    preview = build_source_candidate_projection_preview(
++        _report(),
++        SourceCandidateProjectionPreviewPolicy(max_items=1, include_terminal=True),
++    )
++
++    assert preview.item_count == 1
++    assert [item.candidate_id for item in preview.items] == ["candidate-a"]
++
++
++def test_projection_preview_rejects_invalid_policy() -> None:
++    with pytest.raises(ValueError, match="max_items"):
++        build_source_candidate_projection_preview(
++            _report(),
++            SourceCandidateProjectionPreviewPolicy(max_items=0),
++        )
++
++
++def test_projection_preview_writes_atomically(tmp_path: Path) -> None:
++    path = tmp_path / "projection" / "preview.json"
++    preview = build_source_candidate_projection_preview(_report())
++
++    returned = write_source_candidate_projection_preview(path, preview)
++    reloaded = json.loads(path.read_text(encoding="utf-8"))
++
++    assert returned == path
++    assert reloaded["schema"] == "missipy.source_candidate.projection_preview.v1"
++    assert reloaded["item_count"] == 1
++
++
++def test_read_operator_report_requires_object(tmp_path: Path) -> None:
++    path = tmp_path / "report.json"
++    path.write_text("[]\n", encoding="utf-8")
++
++    with pytest.raises(ValueError, match="JSON object"):
++        read_operator_report(path)
+diff --git a/tests/rules/test_source_candidate_projection_preview_rule.py b/tests/rules/test_source_candidate_projection_preview_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_source_candidate_projection_preview_rule.py
+@@ -0,0 +1,28 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_projection_preview_is_local_and_additive() -> None:
++    source = _read("src/context/source_candidate_projection_preview.py").lower()
++    forbidden = ("requests", "qdrant", "openvino", "subprocess")
++    for token in forbidden:
++        assert token not in source
++
++
++def test_projection_preview_does_not_modify_scheduler() -> None:
++    manifest = _read("MANIFEST_PHASE6_13_CHANGED_FILES.md")
++    assert "src/kernel/scheduler.py" not in manifest
++    assert "src/context/source_candidate_projection_preview.py" in manifest
++
++
++def test_projection_preview_has_architecture_source_only() -> None:
++    assert (ROOT / "doc/docs/architecture/context/53_source_candidate_projection_preview.dot").exists()
++    assert not (ROOT / "doc/docs/architecture/context/53_source_candidate_projection_preview.svg").exists()
+diff --git a/doc/docs/architecture/context/53_source_candidate_projection_preview.dot b/doc/docs/architecture/context/53_source_candidate_projection_preview.dot
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/docs/architecture/context/53_source_candidate_projection_preview.dot
+@@ -0,0 +1,13 @@
++digraph source_candidate_projection_preview {
++  graph [rankdir=LR, label="Phase 6.13 SourceCandidate projection preview", labelloc=t];
++  node [shape=box];
++
++  report [label="operator_report.json\nlocal artifact"];
++  preview [label="SourceCandidateProjectionPreview\npure projection"];
++  file [label="projection_preview.json\natomic local write"];
++  external [label="future external surface\nnot contacted", style=dashed];
++
++  report -> preview;
++  preview -> file;
++  preview -> external [label="preview only", style=dashed];
++}
+diff --git a/doc/CHANGELOG_PHASE6_13_SOURCE_CANDIDATE_PROJECTION_PREVIEW.md b/doc/CHANGELOG_PHASE6_13_SOURCE_CANDIDATE_PROJECTION_PREVIEW.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/CHANGELOG_PHASE6_13_SOURCE_CANDIDATE_PROJECTION_PREVIEW.md
+@@ -0,0 +1,26 @@
++# Changelog — Phase 6.13 SourceCandidate Projection Preview
++
++## Added
++
++- `src/context/source_candidate_projection_preview.py`
++  - Builds a local projection preview from an operator report payload.
++  - Writes a stable JSON artifact atomically.
++  - Keeps the preview local and side-effect bounded.
++
++- `tests/context/test_source_candidate_projection_preview.py`
++  - Covers terminal filtering, limit handling, JSON serialization and invalid payload handling.
++
++- `tests/rules/test_source_candidate_projection_preview_rule.py`
++  - Ensures the phase stays local and additive.
++
++- `doc/docs/architecture/context/53_source_candidate_projection_preview.dot`
++  - Documents the local preview flow.
++
++## Not added
++
++- No external API.
++- No network call.
++- No project tracker mutation.
++- No Qdrant.
++- No LLM/OpenVINO.
++- No Scheduler change.
+diff --git a/doc/PHASE6_13_CODE_RULE_ALIGNMENT.md b/doc/PHASE6_13_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/PHASE6_13_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,19 @@
++# Phase 6.13 Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Phase 6.13 adds a local projection preview artifact on top of the operator report. It does not introduce a new durable scheduler path or external backend.
++
++live_path_status: n/a
++live_path_uses_real_backend: n/a
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++The phase is additive and local-only. It prepares a future projection surface without contacting or mutating any external system.
+diff --git a/doc/releases/README_PHASE6_13_SOURCE_CANDIDATE_PROJECTION_PREVIEW.md b/doc/releases/README_PHASE6_13_SOURCE_CANDIDATE_PROJECTION_PREVIEW.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PHASE6_13_SOURCE_CANDIDATE_PROJECTION_PREVIEW.md
+@@ -0,0 +1,24 @@
++# Phase 6.13 — SourceCandidate Projection Preview
++
++Phase 6.13 adds a local projection preview generated from the operator report.
++
++The preview is intended to make the future external project surface explicit before any external API is introduced.
++
++## Scope
++
++```text
++operator_report payload
++-> projection preview dataclass
++-> projection_preview.json
++```
++
++## Out of scope
++
++```text
++external API
++network
++project tracker mutation
++Qdrant
++LLM/OpenVINO
++Scheduler modification
++```
+diff --git a/PHASE6_13_TEST_REPORT.md b/PHASE6_13_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/PHASE6_13_TEST_REPORT.md
+@@ -0,0 +1,36 @@
++# Phase 6.13 Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src python -m compileall -q src tests
++PYTHONPATH=src pytest -q tests/context/test_source_candidate_projection_preview.py
++PYTHONPATH=src pytest -q tests/rules
++PYTHONPATH=src pytest -q
++```
++
++## Expected
++
++```text
++projection preview tests: pass
++rules: pass
++full suite: pass
++```
++
++## Code rule block
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Local-only projection preview; no new scheduler path or external backend.
++
++live_path_status: n/a
++live_path_uses_real_backend: n/a
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
+diff --git a/MANIFEST_PHASE6_13_CHANGED_FILES.md b/MANIFEST_PHASE6_13_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/MANIFEST_PHASE6_13_CHANGED_FILES.md
+@@ -0,0 +1,21 @@
++# Manifest — Phase 6.13 SourceCandidate Projection Preview
++
++## Added
++
++- `src/context/source_candidate_projection_preview.py`
++- `tests/context/test_source_candidate_projection_preview.py`
++- `tests/rules/test_source_candidate_projection_preview_rule.py`
++- `doc/docs/architecture/context/53_source_candidate_projection_preview.dot`
++- `doc/CHANGELOG_PHASE6_13_SOURCE_CANDIDATE_PROJECTION_PREVIEW.md`
++- `doc/PHASE6_13_CODE_RULE_ALIGNMENT.md`
++- `doc/releases/README_PHASE6_13_SOURCE_CANDIDATE_PROJECTION_PREVIEW.md`
++- `PHASE6_13_TEST_REPORT.md`
++- `MANIFEST_PHASE6_13_CHANGED_FILES.md`
++
++## Modified
++
++- None.
++
++## Generated artifacts
++
++- No SVG is versioned.

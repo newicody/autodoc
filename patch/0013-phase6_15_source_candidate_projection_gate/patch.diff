@@ -1,0 +1,509 @@
+diff --git a/src/context/source_candidate_projection_gate.py b/src/context/source_candidate_projection_gate.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/source_candidate_projection_gate.py
+@@ -0,0 +1,190 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any, Mapping
++import json
++
++
++_BUNDLE_SCHEMA = "missipy.source_candidate.projection_bundle.v1"
++_PREVIEW_SCHEMA = "missipy.source_candidate.projection_preview.v1"
++_GATE_SCHEMA = "missipy.source_candidate.projection_gate.v1"
++
++
++@dataclass(frozen=True)
++class SourceCandidateProjectionGatePolicy:
++    """Local validation policy for projection bundles."""
++
++    require_items: bool = False
++    require_audit_present: bool = False
++
++
++@dataclass(frozen=True)
++class SourceCandidateProjectionGateIssue:
++    severity: str
++    code: str
++    message: str
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "severity": self.severity,
++            "code": self.code,
++            "message": self.message,
++        }
++
++
++@dataclass(frozen=True)
++class SourceCandidateProjectionGateResult:
++    bundle_path: Path
++    manifest_path: Path
++    preview_path: Path | None
++    passed: bool
++    item_count: int
++    issue_count: int
++    issues: tuple[SourceCandidateProjectionGateIssue, ...]
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": _GATE_SCHEMA,
++            "bundle_path": str(self.bundle_path),
++            "manifest_path": str(self.manifest_path),
++            "preview_path": str(self.preview_path) if self.preview_path is not None else None,
++            "passed": self.passed,
++            "item_count": self.item_count,
++            "issue_count": self.issue_count,
++            "issues": [issue.to_json_dict() for issue in self.issues],
++        }
++
++
++def run_source_candidate_projection_gate(
++    bundle_path: Path,
++    policy: SourceCandidateProjectionGatePolicy | None = None,
++) -> SourceCandidateProjectionGateResult:
++    """Validate a local projection bundle before any external handoff."""
++
++    active_policy = policy or SourceCandidateProjectionGatePolicy()
++    manifest_path = bundle_path / "manifest.json"
++    issues: list[SourceCandidateProjectionGateIssue] = []
++
++    manifest = _read_json_object(manifest_path, issues, "manifest")
++    preview_path = _preview_path_from_manifest(bundle_path, manifest, issues)
++
++    preview: Mapping[str, Any] = {}
++    if preview_path is not None:
++        preview = _read_json_object(preview_path, issues, "preview")
++
++    item_count = _validate_payloads(
++        manifest=manifest,
++        preview=preview,
++        policy=active_policy,
++        issues=issues,
++    )
++
++    return SourceCandidateProjectionGateResult(
++        bundle_path=bundle_path,
++        manifest_path=manifest_path,
++        preview_path=preview_path,
++        passed=not any(issue.severity == "error" for issue in issues),
++        item_count=item_count,
++        issue_count=len(issues),
++        issues=tuple(issues),
++    )
++
++
++def render_source_candidate_projection_gate(result: SourceCandidateProjectionGateResult) -> str:
++    status = "PASS" if result.passed else "FAIL"
++    lines = [
++        f"projection gate: {status}",
++        f"bundle: {result.bundle_path}",
++        f"items: {result.item_count}",
++        f"issues: {result.issue_count}",
++    ]
++    for issue in result.issues:
++        lines.append(f"- {issue.severity}:{issue.code}: {issue.message}")
++    return "\n".join(lines)
++
++
++def _read_json_object(
++    path: Path,
++    issues: list[SourceCandidateProjectionGateIssue],
++    role: str,
++) -> Mapping[str, Any]:
++    if not path.exists():
++        issues.append(_error(f"{role}_missing", f"{role} file is missing: {path}"))
++        return {}
++    try:
++        parsed = json.loads(path.read_text(encoding="utf-8"))
++    except json.JSONDecodeError as exc:
++        issues.append(_error(f"{role}_invalid_json", f"{role} file is invalid JSON: {exc}"))
++        return {}
++    if not isinstance(parsed, Mapping):
++        issues.append(_error(f"{role}_not_object", f"{role} JSON payload must be an object"))
++        return {}
++    return parsed
++
++
++def _preview_path_from_manifest(
++    bundle_path: Path,
++    manifest: Mapping[str, Any],
++    issues: list[SourceCandidateProjectionGateIssue],
++) -> Path | None:
++    raw = manifest.get("preview_path")
++    if not isinstance(raw, str) or not raw.strip():
++        issues.append(_error("preview_path_missing", "manifest preview_path is missing"))
++        return None
++    path = Path(raw)
++    if not path.is_absolute():
++        path = bundle_path / path
++    return path
++
++
++def _validate_payloads(
++    *,
++    manifest: Mapping[str, Any],
++    preview: Mapping[str, Any],
++    policy: SourceCandidateProjectionGatePolicy,
++    issues: list[SourceCandidateProjectionGateIssue],
++) -> int:
++    if manifest.get("schema") != _BUNDLE_SCHEMA:
++        issues.append(_error("manifest_schema", "manifest schema is not projection_bundle.v1"))
++    if preview.get("schema") != _PREVIEW_SCHEMA:
++        issues.append(_error("preview_schema", "preview schema is not projection_preview.v1"))
++
++    manifest_count = _int_value(manifest.get("item_count"))
++    preview_count = _int_value(preview.get("item_count"))
++    raw_items = preview.get("items")
++    actual_count = len(raw_items) if isinstance(raw_items, list) else 0
++
++    if not isinstance(raw_items, list):
++        issues.append(_error("preview_items", "preview items must be a list"))
++    if preview_count != actual_count:
++        issues.append(_error("preview_item_count", "preview item_count does not match items length"))
++    if manifest_count != preview_count:
++        issues.append(_error("manifest_item_count", "manifest item_count does not match preview item_count"))
++
++    if policy.require_items and actual_count <= 0:
++        issues.append(_error("items_required", "at least one projection item is required"))
++
++    if policy.require_audit_present and isinstance(raw_items, list):
++        missing = [
++            item.get("candidate_id", "<unknown>")
++            for item in raw_items
++            if isinstance(item, Mapping) and not bool(item.get("audit_present"))
++        ]
++        if missing:
++            issues.append(
++                _error(
++                    "audit_required",
++                    "audit is required for all projection items: " + ", ".join(map(str, missing)),
++                )
++            )
++
++    return actual_count
++
++
++def _int_value(raw: object) -> int:
++    return raw if isinstance(raw, int) and raw >= 0 else -1
++
++
++def _error(code: str, message: str) -> SourceCandidateProjectionGateIssue:
++    return SourceCandidateProjectionGateIssue(severity="error", code=code, message=message)
+diff --git a/tests/context/test_source_candidate_projection_gate.py b/tests/context/test_source_candidate_projection_gate.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_source_candidate_projection_gate.py
+@@ -0,0 +1,100 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++from context.source_candidate_projection_gate import (
++    SourceCandidateProjectionGatePolicy,
++    render_source_candidate_projection_gate,
++    run_source_candidate_projection_gate,
++)
++
++
++def _write_bundle(path: Path, *, audit_present: bool = True) -> None:
++    path.mkdir(parents=True)
++    preview_path = path / "projection_preview.json"
++    manifest_path = path / "manifest.json"
++
++    preview_path.write_text(
++        json.dumps(
++            {
++                "schema": "missipy.source_candidate.projection_preview.v1",
++                "target_name": "operator_project_surface",
++                "source_report_schema": "missipy.source_candidate.operator_report.v1",
++                "item_count": 1,
++                "items": [
++                    {
++                        "candidate_id": "candidate-a",
++                        "title": "Ready",
++                        "status": "new",
++                        "decision_action": "inspect",
++                        "decision_reason": "check",
++                        "target_context_id": None,
++                        "audit_present": audit_present,
++                        "recommended_action": "inspect",
++                        "labels": ["status:new"],
++                    }
++                ],
++            }
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++    manifest_path.write_text(
++        json.dumps(
++            {
++                "schema": "missipy.source_candidate.projection_bundle.v1",
++                "path": str(path),
++                "manifest_path": str(manifest_path),
++                "preview_path": str(preview_path),
++                "item_count": 1,
++                "target_name": "operator_project_surface",
++                "source_report_schema": "missipy.source_candidate.operator_report.v1",
++                "artifacts": [],
++            }
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++
++
++def test_projection_gate_passes_valid_bundle(tmp_path: Path) -> None:
++    bundle = tmp_path / "bundle"
++    _write_bundle(bundle)
++
++    result = run_source_candidate_projection_gate(bundle)
++
++    assert result.passed is True
++    assert result.issue_count == 0
++    assert result.item_count == 1
++    assert result.to_json_dict()["schema"] == "missipy.source_candidate.projection_gate.v1"
++
++
++def test_projection_gate_reports_missing_manifest(tmp_path: Path) -> None:
++    result = run_source_candidate_projection_gate(tmp_path / "missing")
++
++    assert result.passed is False
++    assert any(issue.code == "manifest_missing" for issue in result.issues)
++
++
++def test_projection_gate_can_require_audits(tmp_path: Path) -> None:
++    bundle = tmp_path / "bundle"
++    _write_bundle(bundle, audit_present=False)
++
++    result = run_source_candidate_projection_gate(
++        bundle,
++        SourceCandidateProjectionGatePolicy(require_audit_present=True),
++    )
++
++    assert result.passed is False
++    assert any(issue.code == "audit_required" for issue in result.issues)
++
++
++def test_projection_gate_render_is_stable(tmp_path: Path) -> None:
++    bundle = tmp_path / "bundle"
++    _write_bundle(bundle)
++
++    rendered = render_source_candidate_projection_gate(run_source_candidate_projection_gate(bundle))
++
++    assert "projection gate: PASS" in rendered
++    assert "items: 1" in rendered
+diff --git a/tests/rules/test_source_candidate_projection_gate_rule.py b/tests/rules/test_source_candidate_projection_gate_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_source_candidate_projection_gate_rule.py
+@@ -0,0 +1,30 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_projection_gate_is_local_only() -> None:
++    source = _read("src/context/source_candidate_projection_gate.py").lower()
++    forbidden = ("requests", "qdrant", "openvino", "subprocess")
++    for token in forbidden:
++        assert token not in source
++
++
++def test_projection_gate_does_not_modify_scheduler() -> None:
++    manifest = _read("MANIFEST_PHASE6_15_CHANGED_FILES.md")
++    assert "src/kernel/scheduler.py" not in manifest
++    assert "src/context/source_candidate_projection_gate.py" in manifest
++
++
++def test_projection_gate_has_architecture_source_only() -> None:
++    dot = ROOT / "doc/docs/architecture/context/55_source_candidate_projection_gate.dot"
++    svg = ROOT / "doc/docs/architecture/context/55_source_candidate_projection_gate.svg"
++    assert dot.exists()
++    assert not svg.exists()
+diff --git a/doc/docs/architecture/context/55_source_candidate_projection_gate.dot b/doc/docs/architecture/context/55_source_candidate_projection_gate.dot
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/docs/architecture/context/55_source_candidate_projection_gate.dot
+@@ -0,0 +1,18 @@
++digraph source_candidate_projection_gate {
++  graph [rankdir=LR, label="Phase 6.15 SourceCandidate projection gate", labelloc=t];
++  node [shape=box];
++
++  bundle [label="projection bundle directory"];
++  manifest [label="manifest.json"];
++  preview [label="projection_preview.json"];
++  gate [label="SourceCandidateProjectionGate\nlocal validation"];
++  result [label="projection_gate_result\nPASS / FAIL"];
++  future [label="future external handoff\nblocked until PASS", style=dashed];
++
++  bundle -> manifest;
++  bundle -> preview;
++  manifest -> gate;
++  preview -> gate;
++  gate -> result;
++  result -> future [style=dashed];
++}
+diff --git a/doc/CHANGELOG_PHASE6_15_SOURCE_CANDIDATE_PROJECTION_GATE.md b/doc/CHANGELOG_PHASE6_15_SOURCE_CANDIDATE_PROJECTION_GATE.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/CHANGELOG_PHASE6_15_SOURCE_CANDIDATE_PROJECTION_GATE.md
+@@ -0,0 +1,26 @@
++# Changelog — Phase 6.15 SourceCandidate Projection Gate
++
++## Added
++
++- `src/context/source_candidate_projection_gate.py`
++  - Validates local projection bundles before any future external handoff.
++  - Checks manifest schema, preview schema, item counts and optional audit requirements.
++  - Renders a stable text summary.
++
++- `tests/context/test_source_candidate_projection_gate.py`
++  - Covers valid bundles, missing manifest, audit requirement and rendering.
++
++- `tests/rules/test_source_candidate_projection_gate_rule.py`
++  - Ensures the phase stays local-only and does not modify Scheduler.
++
++- `doc/docs/architecture/context/55_source_candidate_projection_gate.dot`
++  - Documents the projection gate flow.
++
++## Not added
++
++- No external API.
++- No network.
++- No project tracker mutation.
++- No Qdrant.
++- No LLM/OpenVINO.
++- No Scheduler change.
+diff --git a/doc/PHASE6_15_CODE_RULE_ALIGNMENT.md b/doc/PHASE6_15_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/PHASE6_15_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,19 @@
++# Phase 6.15 Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Phase 6.15 adds a local validation gate for projection bundles before any future external handoff. It does not introduce a new scheduler path or external backend.
++
++live_path_status: n/a
++live_path_uses_real_backend: true
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++The phase keeps projection readiness local and explicit.
+diff --git a/doc/releases/README_PHASE6_15_SOURCE_CANDIDATE_PROJECTION_GATE.md b/doc/releases/README_PHASE6_15_SOURCE_CANDIDATE_PROJECTION_GATE.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PHASE6_15_SOURCE_CANDIDATE_PROJECTION_GATE.md
+@@ -0,0 +1,15 @@
++# Phase 6.15 — SourceCandidate Projection Gate
++
++Phase 6.15 adds a local validation gate for projection bundles.
++
++The gate validates:
++
++```text
++manifest schema
++preview schema
++manifest/preview item count consistency
++optional non-empty item requirement
++optional audit-present requirement
++```
++
++It prepares a future handoff boundary without contacting any external system.
+diff --git a/PHASE6_15_TEST_REPORT.md b/PHASE6_15_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/PHASE6_15_TEST_REPORT.md
+@@ -0,0 +1,36 @@
++# Phase 6.15 Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src python -m compileall -q src tests
++PYTHONPATH=src pytest -q tests/context/test_source_candidate_projection_gate.py
++PYTHONPATH=src pytest -q tests/rules
++PYTHONPATH=src pytest -q
++```
++
++## Expected
++
++```text
++projection gate tests: pass
++rules: pass
++full suite: pass
++```
++
++## Code rule block
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Local-only projection bundle gate; no new scheduler path or external backend.
++
++live_path_status: n/a
++live_path_uses_real_backend: true
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
+diff --git a/MANIFEST_PHASE6_15_CHANGED_FILES.md b/MANIFEST_PHASE6_15_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/MANIFEST_PHASE6_15_CHANGED_FILES.md
+@@ -0,0 +1,21 @@
++# Manifest — Phase 6.15 SourceCandidate Projection Gate
++
++## Added
++
++- `src/context/source_candidate_projection_gate.py`
++- `tests/context/test_source_candidate_projection_gate.py`
++- `tests/rules/test_source_candidate_projection_gate_rule.py`
++- `doc/docs/architecture/context/55_source_candidate_projection_gate.dot`
++- `doc/CHANGELOG_PHASE6_15_SOURCE_CANDIDATE_PROJECTION_GATE.md`
++- `doc/PHASE6_15_CODE_RULE_ALIGNMENT.md`
++- `doc/releases/README_PHASE6_15_SOURCE_CANDIDATE_PROJECTION_GATE.md`
++- `PHASE6_15_TEST_REPORT.md`
++- `MANIFEST_PHASE6_15_CHANGED_FILES.md`
++
++## Modified
++
++- None.
++
++## Generated artifacts
++
++- No SVG is versioned.

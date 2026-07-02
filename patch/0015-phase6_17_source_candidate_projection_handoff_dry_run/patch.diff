@@ -1,0 +1,532 @@
+diff --git a/src/context/source_candidate_projection_handoff_dry_run.py b/src/context/source_candidate_projection_handoff_dry_run.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/source_candidate_projection_handoff_dry_run.py
+@@ -0,0 +1,197 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any, Mapping
++import json
++import os
++import tempfile
++
++from .source_candidate_projection_gate import SourceCandidateProjectionGatePolicy
++from .source_candidate_projection_gate_report import (
++    SourceCandidateProjectionGateReportPolicy,
++    run_source_candidate_projection_gate_report,
++)
++
++
++_HANDOFF_SCHEMA = "missipy.source_candidate.projection_handoff_dry_run.v1"
++
++
++@dataclass(frozen=True)
++class SourceCandidateProjectionHandoffDryRunPolicy:
++    """Local handoff dry-run policy.
++
++    A handoff dry-run is a local bundle proving what would be handed over later.
++    It never contacts an external surface.
++    """
++
++    path: Path
++    manifest_name: str = "handoff_manifest.json"
++    preview_name: str = "projection_preview.json"
++    gate_report_name: str = "projection_gate_report.json"
++    require_items: bool = False
++    require_audit_present: bool = False
++
++
++@dataclass(frozen=True)
++class SourceCandidateProjectionHandoffArtifact:
++    role: str
++    path: Path
++    byte_count: int
++    schema: str | None
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "role": self.role,
++            "path": str(self.path),
++            "byte_count": self.byte_count,
++            "schema": self.schema,
++        }
++
++
++@dataclass(frozen=True)
++class SourceCandidateProjectionHandoffDryRun:
++    path: Path
++    manifest_path: Path
++    passed: bool
++    item_count: int
++    artifact_count: int
++    byte_count: int
++    artifacts: tuple[SourceCandidateProjectionHandoffArtifact, ...]
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": _HANDOFF_SCHEMA,
++            "path": str(self.path),
++            "manifest_path": str(self.manifest_path),
++            "passed": self.passed,
++            "item_count": self.item_count,
++            "artifact_count": self.artifact_count,
++            "byte_count": self.byte_count,
++            "artifacts": [artifact.to_json_dict() for artifact in self.artifacts],
++        }
++
++
++def build_source_candidate_projection_handoff_dry_run(
++    projection_bundle_path: Path,
++    policy: SourceCandidateProjectionHandoffDryRunPolicy,
++) -> SourceCandidateProjectionHandoffDryRun:
++    """Build a local handoff dry-run bundle from a projection bundle."""
++
++    _validate_names(policy)
++    policy.path.mkdir(parents=True, exist_ok=True)
++
++    preview_source = _preview_path(projection_bundle_path)
++    preview_target = policy.path / policy.preview_name
++    gate_report_target = policy.path / policy.gate_report_name
++    manifest_path = policy.path / policy.manifest_name
++
++    _copy_text(preview_source, preview_target)
++
++    gate_report = run_source_candidate_projection_gate_report(
++        bundle_path=projection_bundle_path,
++        report_policy=SourceCandidateProjectionGateReportPolicy(output_path=gate_report_target),
++        gate_policy=SourceCandidateProjectionGatePolicy(
++            require_items=policy.require_items,
++            require_audit_present=policy.require_audit_present,
++        ),
++    )
++
++    preview_artifact = _artifact("projection_preview", preview_target)
++    gate_report_artifact = _artifact("projection_gate_report", gate_report_target)
++
++    manifest_payload = {
++        "schema": _HANDOFF_SCHEMA,
++        "path": str(policy.path),
++        "manifest_path": str(manifest_path),
++        "projection_bundle_path": str(projection_bundle_path),
++        "passed": gate_report.passed,
++        "item_count": gate_report.item_count,
++        "artifacts": [
++            preview_artifact.to_json_dict(),
++            gate_report_artifact.to_json_dict(),
++        ],
++    }
++    _atomic_write_json(manifest_path, manifest_payload)
++    manifest_artifact = _artifact("handoff_manifest", manifest_path)
++
++    artifacts = (manifest_artifact, preview_artifact, gate_report_artifact)
++    return SourceCandidateProjectionHandoffDryRun(
++        path=policy.path,
++        manifest_path=manifest_path,
++        passed=gate_report.passed,
++        item_count=gate_report.item_count,
++        artifact_count=len(artifacts),
++        byte_count=sum(artifact.byte_count for artifact in artifacts),
++        artifacts=artifacts,
++    )
++
++
++def _validate_names(policy: SourceCandidateProjectionHandoffDryRunPolicy) -> None:
++    names = (policy.manifest_name, policy.preview_name, policy.gate_report_name)
++    if any(not name.strip() for name in names):
++        raise ValueError("handoff artifact names must not be empty")
++    if len(set(names)) != len(names):
++        raise ValueError("handoff artifact names must be distinct")
++
++
++def _preview_path(bundle_path: Path) -> Path:
++    manifest_path = bundle_path / "manifest.json"
++    manifest = _read_json_object(manifest_path)
++    raw = manifest.get("preview_path")
++    if not isinstance(raw, str) or not raw.strip():
++        raise ValueError("projection bundle manifest preview_path is missing")
++    path = Path(raw)
++    if not path.is_absolute():
++        path = bundle_path / path
++    if not path.exists():
++        raise ValueError(f"projection preview is missing: {path}")
++    return path
++
++
++def _read_json_object(path: Path) -> Mapping[str, Any]:
++    payload = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(payload, Mapping):
++        raise ValueError(f"JSON payload must be an object: {path}")
++    return payload
++
++
++def _copy_text(source: Path, target: Path) -> None:
++    _atomic_write_text(target, source.read_text(encoding="utf-8"))
++
++
++def _artifact(role: str, path: Path) -> SourceCandidateProjectionHandoffArtifact:
++    schema: str | None = None
++    if path.suffix == ".json":
++        try:
++            payload = json.loads(path.read_text(encoding="utf-8"))
++        except json.JSONDecodeError:
++            payload = None
++        if isinstance(payload, dict) and isinstance(payload.get("schema"), str):
++            schema = payload["schema"]
++    return SourceCandidateProjectionHandoffArtifact(
++        role=role,
++        path=path,
++        byte_count=path.stat().st_size,
++        schema=schema,
++    )
++
++
++def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
++    text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
++    _atomic_write_text(path, text)
++
++
++def _atomic_write_text(path: Path, text: str) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with tempfile.NamedTemporaryFile(
++        "w",
++        encoding="utf-8",
++        dir=str(path.parent),
++        prefix=f".{path.name}.",
++        suffix=".tmp",
++        delete=False,
++    ) as handle:
++        tmp_name = handle.name
++        handle.write(text)
++    os.replace(tmp_name, path)
+diff --git a/tests/context/test_source_candidate_projection_handoff_dry_run.py b/tests/context/test_source_candidate_projection_handoff_dry_run.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_source_candidate_projection_handoff_dry_run.py
+@@ -0,0 +1,116 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++import pytest
++
++from context.source_candidate_projection_handoff_dry_run import (
++    SourceCandidateProjectionHandoffDryRunPolicy,
++    build_source_candidate_projection_handoff_dry_run,
++)
++
++
++def _write_projection_bundle(path: Path, *, audit_present: bool = True) -> None:
++    path.mkdir(parents=True)
++    preview_path = path / "projection_preview.json"
++    manifest_path = path / "manifest.json"
++    preview_path.write_text(
++        json.dumps(
++            {
++                "schema": "missipy.source_candidate.projection_preview.v1",
++                "target_name": "operator_project_surface",
++                "source_report_schema": "missipy.source_candidate.operator_report.v1",
++                "item_count": 1,
++                "items": [
++                    {
++                        "candidate_id": "candidate-a",
++                        "title": "Ready",
++                        "status": "new",
++                        "decision_action": "inspect",
++                        "decision_reason": "check",
++                        "target_context_id": None,
++                        "audit_present": audit_present,
++                        "recommended_action": "inspect",
++                        "labels": ["status:new"],
++                    }
++                ],
++            },
++            ensure_ascii=False,
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++    manifest_path.write_text(
++        json.dumps(
++            {
++                "schema": "missipy.source_candidate.projection_bundle.v1",
++                "path": str(path),
++                "manifest_path": str(manifest_path),
++                "preview_path": str(preview_path),
++                "item_count": 1,
++                "target_name": "operator_project_surface",
++                "source_report_schema": "missipy.source_candidate.operator_report.v1",
++                "artifacts": [],
++            },
++            ensure_ascii=False,
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++
++
++def test_handoff_dry_run_writes_local_bundle(tmp_path: Path) -> None:
++    source_bundle = tmp_path / "projection_bundle"
++    handoff_dir = tmp_path / "handoff"
++    _write_projection_bundle(source_bundle)
++
++    result = build_source_candidate_projection_handoff_dry_run(
++        source_bundle,
++        SourceCandidateProjectionHandoffDryRunPolicy(path=handoff_dir),
++    )
++
++    assert result.passed is True
++    assert result.item_count == 1
++    assert result.artifact_count == 3
++    assert result.byte_count > 0
++    assert (handoff_dir / "handoff_manifest.json").exists()
++    assert (handoff_dir / "projection_preview.json").exists()
++    assert (handoff_dir / "projection_gate_report.json").exists()
++
++    manifest = json.loads((handoff_dir / "handoff_manifest.json").read_text(encoding="utf-8"))
++    assert manifest["schema"] == "missipy.source_candidate.projection_handoff_dry_run.v1"
++    assert manifest["passed"] is True
++
++
++def test_handoff_dry_run_can_fail_gate_without_external_effects(tmp_path: Path) -> None:
++    source_bundle = tmp_path / "projection_bundle"
++    handoff_dir = tmp_path / "handoff"
++    _write_projection_bundle(source_bundle, audit_present=False)
++
++    result = build_source_candidate_projection_handoff_dry_run(
++        source_bundle,
++        SourceCandidateProjectionHandoffDryRunPolicy(
++            path=handoff_dir,
++            require_audit_present=True,
++        ),
++    )
++
++    assert result.passed is False
++    report = json.loads((handoff_dir / "projection_gate_report.json").read_text(encoding="utf-8"))
++    assert report["gate_result"]["passed"] is False
++
++
++def test_handoff_dry_run_rejects_conflicting_names(tmp_path: Path) -> None:
++    source_bundle = tmp_path / "projection_bundle"
++    _write_projection_bundle(source_bundle)
++
++    with pytest.raises(ValueError, match="distinct"):
++        build_source_candidate_projection_handoff_dry_run(
++            source_bundle,
++            SourceCandidateProjectionHandoffDryRunPolicy(
++                path=tmp_path / "handoff",
++                manifest_name="same.json",
++                preview_name="same.json",
++            ),
++        )
+diff --git a/tests/rules/test_source_candidate_projection_handoff_dry_run_rule.py b/tests/rules/test_source_candidate_projection_handoff_dry_run_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_source_candidate_projection_handoff_dry_run_rule.py
+@@ -0,0 +1,30 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_handoff_dry_run_is_local_only() -> None:
++    source = _read("src/context/source_candidate_projection_handoff_dry_run.py").lower()
++    forbidden = ("requests", "qdrant", "openvino", "subprocess")
++    for token in forbidden:
++        assert token not in source
++
++
++def test_handoff_dry_run_does_not_modify_scheduler() -> None:
++    manifest = _read("MANIFEST_PHASE6_17_CHANGED_FILES.md")
++    assert "src/kernel/scheduler.py" not in manifest
++    assert "src/context/source_candidate_projection_handoff_dry_run.py" in manifest
++
++
++def test_handoff_dry_run_has_architecture_source_only() -> None:
++    dot = ROOT / "doc/docs/architecture/context/57_source_candidate_projection_handoff_dry_run.dot"
++    svg = ROOT / "doc/docs/architecture/context/57_source_candidate_projection_handoff_dry_run.svg"
++    assert dot.exists()
++    assert not svg.exists()
+diff --git a/doc/docs/architecture/context/57_source_candidate_projection_handoff_dry_run.dot b/doc/docs/architecture/context/57_source_candidate_projection_handoff_dry_run.dot
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/docs/architecture/context/57_source_candidate_projection_handoff_dry_run.dot
+@@ -0,0 +1,18 @@
++digraph source_candidate_projection_handoff_dry_run {
++  graph [rankdir=LR, label="Phase 6.17 SourceCandidate projection handoff dry-run", labelloc=t];
++  node [shape=box];
++
++  bundle [label="projection bundle"];
++  preview [label="projection_preview.json"];
++  gate [label="projection gate report"];
++  manifest [label="handoff_manifest.json"];
++  dryrun [label="handoff dry-run bundle\nlocal only"];
++  future [label="future external handoff\nnot contacted", style=dashed];
++
++  bundle -> preview;
++  bundle -> gate;
++  preview -> dryrun;
++  gate -> dryrun;
++  dryrun -> manifest;
++  dryrun -> future [style=dashed];
++}
+diff --git a/doc/CHANGELOG_PHASE6_17_SOURCE_CANDIDATE_PROJECTION_HANDOFF_DRY_RUN.md b/doc/CHANGELOG_PHASE6_17_SOURCE_CANDIDATE_PROJECTION_HANDOFF_DRY_RUN.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/CHANGELOG_PHASE6_17_SOURCE_CANDIDATE_PROJECTION_HANDOFF_DRY_RUN.md
+@@ -0,0 +1,28 @@
++# Changelog — Phase 6.17 SourceCandidate Projection Handoff Dry-Run
++
++## Added
++
++- `src/context/source_candidate_projection_handoff_dry_run.py`
++  - Builds a local handoff dry-run bundle from a projection bundle.
++  - Copies the projection preview.
++  - Writes a projection gate report.
++  - Writes a handoff manifest.
++
++- `tests/context/test_source_candidate_projection_handoff_dry_run.py`
++  - Covers successful handoff dry-run creation, failing gate result and invalid policy.
++
++- `tests/rules/test_source_candidate_projection_handoff_dry_run_rule.py`
++  - Ensures the phase remains local-only and does not modify Scheduler.
++
++- `doc/docs/architecture/context/57_source_candidate_projection_handoff_dry_run.dot`
++  - Documents the local handoff dry-run flow.
++
++## Not added
++
++- No external API.
++- No network.
++- No project tracker mutation.
++- No Qdrant.
++- No LLM/OpenVINO.
++- No Scheduler change.
++- No new CLI.
+diff --git a/doc/PHASE6_17_CODE_RULE_ALIGNMENT.md b/doc/PHASE6_17_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/PHASE6_17_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,19 @@
++# Phase 6.17 Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Phase 6.17 adds a local handoff dry-run bundle built from projection artifacts. It does not introduce a new scheduler path or external backend.
++
++live_path_status: n/a
++live_path_uses_real_backend: true
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++The phase keeps future handoff preparation explicit and local.
+diff --git a/doc/releases/README_PHASE6_17_SOURCE_CANDIDATE_PROJECTION_HANDOFF_DRY_RUN.md b/doc/releases/README_PHASE6_17_SOURCE_CANDIDATE_PROJECTION_HANDOFF_DRY_RUN.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PHASE6_17_SOURCE_CANDIDATE_PROJECTION_HANDOFF_DRY_RUN.md
+@@ -0,0 +1,13 @@
++# Phase 6.17 — SourceCandidate Projection Handoff Dry-Run
++
++Phase 6.17 adds a local handoff dry-run bundle.
++
++The bundle contains:
++
++```text
++handoff_manifest.json
++projection_preview.json
++projection_gate_report.json
++```
++
++It prepares the future external boundary without contacting any external system.
+diff --git a/PHASE6_17_TEST_REPORT.md b/PHASE6_17_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/PHASE6_17_TEST_REPORT.md
+@@ -0,0 +1,36 @@
++# Phase 6.17 Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src python -m compileall -q src tests
++PYTHONPATH=src pytest -q tests/context/test_source_candidate_projection_handoff_dry_run.py
++PYTHONPATH=src pytest -q tests/rules
++PYTHONPATH=src pytest -q
++```
++
++## Expected
++
++```text
++handoff dry-run tests: pass
++rules: pass
++full suite: pass
++```
++
++## Code rule block
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Local-only handoff dry-run bundle; no new scheduler path or external backend.
++
++live_path_status: n/a
++live_path_uses_real_backend: true
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
+diff --git a/MANIFEST_PHASE6_17_CHANGED_FILES.md b/MANIFEST_PHASE6_17_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/MANIFEST_PHASE6_17_CHANGED_FILES.md
+@@ -0,0 +1,21 @@
++# Manifest — Phase 6.17 SourceCandidate Projection Handoff Dry-Run
++
++## Added
++
++- `src/context/source_candidate_projection_handoff_dry_run.py`
++- `tests/context/test_source_candidate_projection_handoff_dry_run.py`
++- `tests/rules/test_source_candidate_projection_handoff_dry_run_rule.py`
++- `doc/docs/architecture/context/57_source_candidate_projection_handoff_dry_run.dot`
++- `doc/CHANGELOG_PHASE6_17_SOURCE_CANDIDATE_PROJECTION_HANDOFF_DRY_RUN.md`
++- `doc/PHASE6_17_CODE_RULE_ALIGNMENT.md`
++- `doc/releases/README_PHASE6_17_SOURCE_CANDIDATE_PROJECTION_HANDOFF_DRY_RUN.md`
++- `PHASE6_17_TEST_REPORT.md`
++- `MANIFEST_PHASE6_17_CHANGED_FILES.md`
++
++## Modified
++
++- None.
++
++## Generated artifacts
++
++- No SVG is versioned.
