@@ -1,0 +1,597 @@
+diff --git a/src/context/source_candidate_read_only_external_probe.py b/src/context/source_candidate_read_only_external_probe.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/source_candidate_read_only_external_probe.py
+@@ -0,0 +1,254 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any, Mapping, Protocol, Sequence
++import json
++import os
++import tempfile
++
++
++_PROBE_REQUEST_SCHEMA = "missipy.source_candidate.read_only_external_probe_request.v1"
++_PROBE_RESULT_SCHEMA = "missipy.source_candidate.read_only_external_probe_result.v1"
++_OPERATOR_REVIEW_SCHEMA = "missipy.source_candidate.operator_external_review_report.v1"
++
++
++@dataclass(frozen=True)
++class SourceCandidateReadOnlyExternalProbeRequest:
++    target_kind: str
++    repository: str
++    dry_run: bool
++    requested_checks: tuple[str, ...]
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": _PROBE_REQUEST_SCHEMA,
++            "target_kind": self.target_kind,
++            "repository": self.repository,
++            "dry_run": self.dry_run,
++            "requested_checks": list(self.requested_checks),
++        }
++
++
++@dataclass(frozen=True)
++class SourceCandidateReadOnlyExternalProbeFinding:
++    severity: str
++    code: str
++    message: str
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "severity": self.severity,
++            "code": self.code,
++            "message": self.message,
++        }
++
++
++@dataclass(frozen=True)
++class SourceCandidateReadOnlyExternalProbeResult:
++    target_kind: str
++    repository: str
++    read_only: bool
++    external_call_performed: bool
++    probe_allowed: bool
++    check_count: int
++    finding_count: int
++    findings: tuple[SourceCandidateReadOnlyExternalProbeFinding, ...]
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": _PROBE_RESULT_SCHEMA,
++            "target_kind": self.target_kind,
++            "repository": self.repository,
++            "read_only": self.read_only,
++            "external_call_performed": self.external_call_performed,
++            "probe_allowed": self.probe_allowed,
++            "check_count": self.check_count,
++            "finding_count": self.finding_count,
++            "findings": [finding.to_json_dict() for finding in self.findings],
++        }
++
++
++class SourceCandidateReadOnlyExternalProbeAdapter(Protocol):
++    """Interface for read-only external probing.
++
++    Phase 7.9 only provides a fake local implementation. A future real adapter
++    must preserve read-only behavior and must never perform mutation.
++    """
++
++    def probe(
++        self,
++        request: SourceCandidateReadOnlyExternalProbeRequest,
++    ) -> SourceCandidateReadOnlyExternalProbeResult:
++        ...
++
++
++@dataclass(frozen=True)
++class FakeSourceCandidateReadOnlyExternalProbeAdapter:
++    """Fake external probe adapter for local tests and operator review."""
++
++    available_repositories: tuple[str, ...] = ()
++    supported_checks: tuple[str, ...] = (
++        "repository_visible",
++        "project_surface_visible",
++        "write_access_not_required",
++    )
++
++    def probe(
++        self,
++        request: SourceCandidateReadOnlyExternalProbeRequest,
++    ) -> SourceCandidateReadOnlyExternalProbeResult:
++        findings: list[SourceCandidateReadOnlyExternalProbeFinding] = []
++
++        if not request.dry_run:
++            findings.append(_error("not_dry_run", "probe request must remain dry-run"))
++
++        if request.repository not in self.available_repositories:
++            findings.append(
++                _warning("repository_not_confirmed", f"repository not confirmed locally: {request.repository}")
++            )
++
++        for check in request.requested_checks:
++            if check not in self.supported_checks:
++                findings.append(_warning("unsupported_check", f"unsupported read-only check: {check}"))
++
++        return SourceCandidateReadOnlyExternalProbeResult(
++            target_kind=request.target_kind,
++            repository=request.repository,
++            read_only=True,
++            external_call_performed=False,
++            probe_allowed=not any(finding.severity == "error" for finding in findings),
++            check_count=len(request.requested_checks),
++            finding_count=len(findings),
++            findings=tuple(findings),
++        )
++
++
++def build_source_candidate_read_only_external_probe_request_from_operator_report(
++    report_payload: Mapping[str, Any],
++    *,
++    requested_checks: Sequence[str] | None = None,
++) -> SourceCandidateReadOnlyExternalProbeRequest:
++    """Build a read-only probe request from an operator external review report."""
++
++    if report_payload.get("schema") != _OPERATOR_REVIEW_SCHEMA:
++        raise ValueError("operator external review report schema mismatch")
++
++    repository = _string(report_payload.get("repository"))
++    dry_run = bool(report_payload.get("dry_run"))
++    recommended_action = _string(report_payload.get("recommended_action"), default="fix_errors")
++
++    checks = tuple(requested_checks) if requested_checks is not None else (
++        "repository_visible",
++        "project_surface_visible",
++        "write_access_not_required",
++    )
++
++    if recommended_action not in {"operator_review", "review_gate_blockers"}:
++        raise ValueError("operator review report is not ready for read-only probe")
++
++    return SourceCandidateReadOnlyExternalProbeRequest(
++        target_kind="github_project_surface",
++        repository=repository,
++        dry_run=dry_run,
++        requested_checks=tuple(_string(check) for check in checks),
++    )
++
++
++def build_source_candidate_read_only_external_probe_request_from_file(
++    report_path: Path,
++    *,
++    requested_checks: Sequence[str] | None = None,
++) -> SourceCandidateReadOnlyExternalProbeRequest:
++    return build_source_candidate_read_only_external_probe_request_from_operator_report(
++        _read_json_object(report_path),
++        requested_checks=requested_checks,
++    )
++
++
++def write_source_candidate_read_only_external_probe_request(
++    path: Path,
++    request: SourceCandidateReadOnlyExternalProbeRequest,
++) -> Path:
++    _atomic_write_json(path, request.to_json_dict())
++    return path
++
++
++def write_source_candidate_read_only_external_probe_result(
++    path: Path,
++    result: SourceCandidateReadOnlyExternalProbeResult,
++) -> Path:
++    _atomic_write_json(path, result.to_json_dict())
++    return path
++
++
++def read_source_candidate_read_only_external_probe_result(path: Path) -> dict[str, Any]:
++    payload = _read_json_object(path)
++    if payload.get("schema") != _PROBE_RESULT_SCHEMA:
++        raise ValueError("read-only external probe result schema mismatch")
++    return dict(payload)
++
++
++def render_source_candidate_read_only_external_probe_result(
++    result: SourceCandidateReadOnlyExternalProbeResult,
++) -> str:
++    status = "PASS" if result.probe_allowed else "FAIL"
++    lines = [
++        f"read-only external probe: {status}",
++        f"target: {result.target_kind}",
++        f"repository: {result.repository}",
++        f"read_only: {result.read_only}",
++        f"external_call_performed: {result.external_call_performed}",
++        f"checks: {result.check_count}",
++        f"findings: {result.finding_count}",
++    ]
++    for finding in result.findings:
++        lines.append(f"- {finding.severity}:{finding.code}: {finding.message}")
++    return "\n".join(lines)
++
++
++def _read_json_object(path: Path) -> Mapping[str, Any]:
++    payload = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(payload, Mapping):
++        raise ValueError(f"JSON payload must be an object: {path}")
++    return payload
++
++
++def _string(raw: object, *, default: str | None = None) -> str:
++    if isinstance(raw, str) and raw.strip():
++        return raw
++    if default is not None:
++        return default
++    raise ValueError("expected non-empty string")
++
++
++def _error(code: str, message: str) -> SourceCandidateReadOnlyExternalProbeFinding:
++    return SourceCandidateReadOnlyExternalProbeFinding(
++        severity="error",
++        code=code,
++        message=message,
++    )
++
++
++def _warning(code: str, message: str) -> SourceCandidateReadOnlyExternalProbeFinding:
++    return SourceCandidateReadOnlyExternalProbeFinding(
++        severity="warning",
++        code=code,
++        message=message,
++    )
++
++
++def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
++    with tempfile.NamedTemporaryFile(
++        "w",
++        encoding="utf-8",
++        dir=str(path.parent),
++        prefix=f".{path.name}.",
++        suffix=".tmp",
++        delete=False,
++    ) as handle:
++        tmp_name = handle.name
++        handle.write(text)
++    os.replace(tmp_name, path)
+diff --git a/tests/context/test_source_candidate_read_only_external_probe.py b/tests/context/test_source_candidate_read_only_external_probe.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_source_candidate_read_only_external_probe.py
+@@ -0,0 +1,123 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++import pytest
++
++from context.source_candidate_read_only_external_probe import (
++    FakeSourceCandidateReadOnlyExternalProbeAdapter,
++    build_source_candidate_read_only_external_probe_request_from_file,
++    build_source_candidate_read_only_external_probe_request_from_operator_report,
++    read_source_candidate_read_only_external_probe_result,
++    render_source_candidate_read_only_external_probe_result,
++    write_source_candidate_read_only_external_probe_request,
++    write_source_candidate_read_only_external_probe_result,
++)
++
++
++def _operator_report(*, recommended_action: str = "operator_review", dry_run: bool = True) -> dict[str, object]:
++    return {
++        "schema": "missipy.source_candidate.operator_external_review_report.v1",
++        "bundle_path": "/tmp/github_export_bundle",
++        "repository": "newicody/autodoc",
++        "dry_run": dry_run,
++        "mutation_allowed": True,
++        "operation_count": 1,
++        "artifact_count": 5,
++        "finding_count": 0,
++        "recommended_action": recommended_action,
++        "findings": [],
++    }
++
++
++def test_read_only_probe_request_builds_from_operator_review() -> None:
++    request = build_source_candidate_read_only_external_probe_request_from_operator_report(
++        _operator_report()
++    )
++
++    assert request.target_kind == "github_project_surface"
++    assert request.repository == "newicody/autodoc"
++    assert request.dry_run is True
++    assert "repository_visible" in request.requested_checks
++
++
++def test_read_only_probe_request_rejects_not_ready_report() -> None:
++    with pytest.raises(ValueError, match="not ready"):
++        build_source_candidate_read_only_external_probe_request_from_operator_report(
++            _operator_report(recommended_action="fix_errors")
++        )
++
++
++def test_fake_read_only_probe_never_performs_external_call() -> None:
++    request = build_source_candidate_read_only_external_probe_request_from_operator_report(
++        _operator_report()
++    )
++    adapter = FakeSourceCandidateReadOnlyExternalProbeAdapter(
++        available_repositories=("newicody/autodoc",)
++    )
++
++    result = adapter.probe(request)
++
++    assert result.read_only is True
++    assert result.external_call_performed is False
++    assert result.probe_allowed is True
++    assert result.finding_count == 0
++
++
++def test_fake_read_only_probe_warns_when_repository_not_confirmed() -> None:
++    request = build_source_candidate_read_only_external_probe_request_from_operator_report(
++        _operator_report()
++    )
++    adapter = FakeSourceCandidateReadOnlyExternalProbeAdapter()
++
++    result = adapter.probe(request)
++
++    assert result.probe_allowed is True
++    assert any(finding.code == "repository_not_confirmed" for finding in result.findings)
++
++
++def test_fake_read_only_probe_blocks_not_dry_run_request() -> None:
++    request = build_source_candidate_read_only_external_probe_request_from_operator_report(
++        _operator_report(dry_run=False)
++    )
++    adapter = FakeSourceCandidateReadOnlyExternalProbeAdapter(
++        available_repositories=("newicody/autodoc",)
++    )
++
++    result = adapter.probe(request)
++
++    assert result.probe_allowed is False
++    assert any(finding.code == "not_dry_run" for finding in result.findings)
++
++
++def test_read_only_probe_json_io(tmp_path: Path) -> None:
++    report_path = tmp_path / "operator_external_review_report.json"
++    request_path = tmp_path / "read_only_probe_request.json"
++    result_path = tmp_path / "read_only_probe_result.json"
++    report_path.write_text(json.dumps(_operator_report()) + "\n", encoding="utf-8")
++
++    request = build_source_candidate_read_only_external_probe_request_from_file(report_path)
++    adapter = FakeSourceCandidateReadOnlyExternalProbeAdapter(
++        available_repositories=("newicody/autodoc",)
++    )
++    result = adapter.probe(request)
++
++    assert write_source_candidate_read_only_external_probe_request(request_path, request) == request_path
++    assert write_source_candidate_read_only_external_probe_result(result_path, result) == result_path
++
++    payload = read_source_candidate_read_only_external_probe_result(result_path)
++    assert payload["schema"] == "missipy.source_candidate.read_only_external_probe_result.v1"
++    assert payload["external_call_performed"] is False
++
++
++def test_read_only_probe_render_is_stable() -> None:
++    request = build_source_candidate_read_only_external_probe_request_from_operator_report(
++        _operator_report()
++    )
++    result = FakeSourceCandidateReadOnlyExternalProbeAdapter().probe(request)
++
++    text = render_source_candidate_read_only_external_probe_result(result)
++
++    assert "read-only external probe: PASS" in text
++    assert "external_call_performed: False" in text
+diff --git a/tests/rules/test_source_candidate_read_only_external_probe_rule.py b/tests/rules/test_source_candidate_read_only_external_probe_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_source_candidate_read_only_external_probe_rule.py
+@@ -0,0 +1,37 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_read_only_external_probe_has_no_network_or_process_calls() -> None:
++    source = _read("src/context/source_candidate_read_only_external_probe.py").lower()
++    forbidden = ("requests", "urllib", "httpx", "subprocess", "token", "authorization")
++    for token in forbidden:
++        assert token not in source
++
++
++def test_read_only_external_probe_is_fake_only_in_phase7_9() -> None:
++    source = _read("src/context/source_candidate_read_only_external_probe.py")
++    assert "FakeSourceCandidateReadOnlyExternalProbeAdapter" in source
++    assert "external_call_performed=False" in source
++    assert "read_only=True" in source
++
++
++def test_read_only_external_probe_uses_post_migration_manifest_path() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PHASE7_9_CHANGED_FILES.md")
++    assert "src/kernel/scheduler.py" not in manifest
++    assert "src/context/source_candidate_read_only_external_probe.py" in manifest
++
++
++def test_read_only_external_probe_has_architecture_source_only() -> None:
++    dot = ROOT / "doc/docs/architecture/context/65_source_candidate_read_only_external_probe.dot"
++    svg = ROOT / "doc/docs/architecture/context/65_source_candidate_read_only_external_probe.svg"
++    assert dot.exists()
++    assert not svg.exists()
+diff --git a/doc/docs/architecture/context/65_source_candidate_read_only_external_probe.dot b/doc/docs/architecture/context/65_source_candidate_read_only_external_probe.dot
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/docs/architecture/context/65_source_candidate_read_only_external_probe.dot
+@@ -0,0 +1,17 @@
++digraph source_candidate_read_only_external_probe {
++  graph [rankdir=LR, label="Phase 7.9 SourceCandidate read-only external probe", labelloc=t];
++  node [shape=box];
++
++  review [label="operator_external_review_report.json"];
++  request [label="read_only_external_probe_request.json"];
++  fake [label="fake read-only probe adapter"];
++  result [label="read_only_external_probe_result.json"];
++  operator [label="operator decision"];
++  api [label="external API\nnot contacted in Phase 7.9", style=dashed];
++
++  review -> request;
++  request -> fake;
++  fake -> result;
++  result -> operator;
++  fake -> api [label="no call", style=dashed];
++}
+diff --git a/doc/releases/README_PHASE7_9_READ_ONLY_EXTERNAL_PROBE.md b/doc/releases/README_PHASE7_9_READ_ONLY_EXTERNAL_PROBE.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PHASE7_9_READ_ONLY_EXTERNAL_PROBE.md
+@@ -0,0 +1,8 @@
++# Phase 7.9 — Read-Only External Probe
++
++Phase 7.9 adds a read-only external probe boundary.
++
++The phase remains fake-only. It converts an operator external review report into
++a probe request, runs a fake read-only adapter, and emits a probe result.
++
++No external service is contacted in this phase.
+diff --git a/doc/changelogs/CHANGELOG_PHASE7_9_READ_ONLY_EXTERNAL_PROBE.md b/doc/changelogs/CHANGELOG_PHASE7_9_READ_ONLY_EXTERNAL_PROBE.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PHASE7_9_READ_ONLY_EXTERNAL_PROBE.md
+@@ -0,0 +1,27 @@
++# Changelog — Phase 7.9 Read-Only External Probe
++
++## Added
++
++- `src/context/source_candidate_read_only_external_probe.py`
++  - Builds read-only probe requests from operator external review reports.
++  - Defines a probe adapter protocol.
++  - Adds a fake local probe adapter.
++  - Writes and renders probe results.
++
++- `tests/context/test_source_candidate_read_only_external_probe.py`
++  - Covers request building, readiness checks, fake probe behavior, JSON IO and rendering.
++
++- `tests/rules/test_source_candidate_read_only_external_probe_rule.py`
++  - Ensures the probe remains fake-only, local and network-free.
++
++- `doc/docs/architecture/context/65_source_candidate_read_only_external_probe.dot`
++  - Documents the read-only external probe boundary.
++
++## Not added
++
++- No real external adapter.
++- No external API calls.
++- No network.
++- No token handling.
++- No remote mutation.
++- No Scheduler change.
+diff --git a/doc/code-rules/PHASE7_9_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PHASE7_9_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PHASE7_9_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,20 @@
++# Phase 7.9 Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Phase 7.9 adds a fake-only read-only external probe boundary from the operator external review report. It does not introduce network access, token handling, real remote mutation, a scheduler path or an external backend.
++
++live_path_status: n/a
++live_path_uses_real_backend: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++The phase formalizes read-only probing before any real external probe adapter is
++introduced.
+diff --git a/doc/reports/phase7/PHASE7_9_TEST_REPORT.md b/doc/reports/phase7/PHASE7_9_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase7/PHASE7_9_TEST_REPORT.md
+@@ -0,0 +1,36 @@
++# Phase 7.9 Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/context/test_source_candidate_read_only_external_probe.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Expected
++
++```text
++read-only external probe tests: pass
++rules: pass
++full suite: pass
++```
++
++## Code rule block
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Fake-only read-only external probe; no network, no token handling, no real remote mutation.
++
++live_path_status: n/a
++live_path_uses_real_backend: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
+diff --git a/doc/manifests/MANIFEST_PHASE7_9_CHANGED_FILES.md b/doc/manifests/MANIFEST_PHASE7_9_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PHASE7_9_CHANGED_FILES.md
+@@ -0,0 +1,21 @@
++# Manifest — Phase 7.9 Read-Only External Probe
++
++## Added
++
++- `src/context/source_candidate_read_only_external_probe.py`
++- `tests/context/test_source_candidate_read_only_external_probe.py`
++- `tests/rules/test_source_candidate_read_only_external_probe_rule.py`
++- `doc/docs/architecture/context/65_source_candidate_read_only_external_probe.dot`
++- `doc/releases/README_PHASE7_9_READ_ONLY_EXTERNAL_PROBE.md`
++- `doc/changelogs/CHANGELOG_PHASE7_9_READ_ONLY_EXTERNAL_PROBE.md`
++- `doc/code-rules/PHASE7_9_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase7/PHASE7_9_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PHASE7_9_CHANGED_FILES.md`
++
++## Modified
++
++- None.
++
++## Generated artifacts
++
++- No SVG is versioned.

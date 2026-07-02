@@ -1,0 +1,489 @@
+diff --git a/tools/dot_remove_code_rule_references.py b/tools/dot_remove_code_rule_references.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tools/dot_remove_code_rule_references.py
+@@ -0,0 +1,181 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++import json
++import re
++from dataclasses import dataclass
++from pathlib import Path
++
++
++_REPORT_SCHEMA = "missipy.dot_code_rule_reference_cleanup.v1"
++_CODE_RULE_PATTERN = re.compile(r"code[_ -]?rule", re.IGNORECASE)
++
++
++@dataclass(frozen=True)
++class DotCodeRuleCleanupChange:
++    path: Path
++    removed_line_count: int
++
++    def to_json_dict(self, root: Path) -> dict[str, object]:
++        return {
++            "path": self.path.resolve().relative_to(root.resolve()).as_posix(),
++            "removed_line_count": self.removed_line_count,
++        }
++
++
++@dataclass(frozen=True)
++class DotCodeRuleCleanupReport:
++    root: Path
++    checked_file_count: int
++    changed_file_count: int
++    removed_line_count: int
++    changes: tuple[DotCodeRuleCleanupChange, ...]
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": _REPORT_SCHEMA,
++            "root": str(self.root),
++            "checked_file_count": self.checked_file_count,
++            "changed_file_count": self.changed_file_count,
++            "removed_line_count": self.removed_line_count,
++            "changes": [change.to_json_dict(self.root) for change in self.changes],
++        }
++
++
++def build_dot_code_rule_cleanup_report(
++    root: Path,
++    *,
++    apply: bool = False,
++    dot_dir: Path | None = None,
++) -> DotCodeRuleCleanupReport:
++    """Remove code_rule clutter from Graphviz DOT architecture diagrams.
++
++    The cleanup is intentionally narrow: it only removes DOT lines mentioning
++    code_rule / code-rule / code rule. It does not touch SVG files.
++    """
++
++    root = root.resolve()
++    scan_root = root / dot_dir if dot_dir is not None and not dot_dir.is_absolute() else dot_dir
++    if scan_root is None:
++        scan_root = root / "doc" / "docs" / "architecture"
++
++    changes: list[DotCodeRuleCleanupChange] = []
++    checked = 0
++
++    for path in sorted(scan_root.rglob("*.dot")):
++        checked += 1
++        original = path.read_text(encoding="utf-8")
++        cleaned, removed_line_count = remove_code_rule_reference_lines(original)
++        if removed_line_count == 0:
++            continue
++
++        if apply:
++            path.write_text(cleaned, encoding="utf-8")
++
++        changes.append(
++            DotCodeRuleCleanupChange(
++                path=path,
++                removed_line_count=removed_line_count,
++            )
++        )
++
++    return DotCodeRuleCleanupReport(
++        root=root,
++        checked_file_count=checked,
++        changed_file_count=len(changes),
++        removed_line_count=sum(change.removed_line_count for change in changes),
++        changes=tuple(changes),
++    )
++
++
++def remove_code_rule_reference_lines(text: str) -> tuple[str, int]:
++    """Return DOT text with code_rule-related lines removed."""
++
++    lines = text.splitlines(keepends=True)
++    kept: list[str] = []
++    removed = 0
++
++    for line in lines:
++        if _CODE_RULE_PATTERN.search(line):
++            removed += 1
++            continue
++        kept.append(line)
++
++    cleaned = "".join(kept)
++    if text.endswith("\n") and cleaned and not cleaned.endswith("\n"):
++        cleaned += "\n"
++    return cleaned, removed
++
++
++def assert_dot_code_rule_references_absent(root: Path, *, dot_dir: Path | None = None) -> None:
++    root = root.resolve()
++    scan_root = root / dot_dir if dot_dir is not None and not dot_dir.is_absolute() else dot_dir
++    if scan_root is None:
++        scan_root = root / "doc" / "docs" / "architecture"
++
++    offenders: list[str] = []
++    for path in sorted(scan_root.rglob("*.dot")):
++        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
++            if _CODE_RULE_PATTERN.search(line):
++                offenders.append(f"{path.relative_to(root).as_posix()}:{lineno}: {line.strip()}")
++
++    if offenders:
++        raise AssertionError("code_rule references remain in DOT files:\n" + "\n".join(offenders))
++
++
++def write_dot_code_rule_cleanup_report(path: Path, report: DotCodeRuleCleanupReport) -> Path:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(
++        json.dumps(report.to_json_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
++        encoding="utf-8",
++    )
++    return path
++
++
++def render_dot_code_rule_cleanup_report(report: DotCodeRuleCleanupReport) -> str:
++    lines = [
++        "dot code_rule cleanup",
++        f"root: {report.root}",
++        f"checked_files: {report.checked_file_count}",
++        f"changed_files: {report.changed_file_count}",
++        f"removed_lines: {report.removed_line_count}",
++    ]
++    for change in report.changes:
++        lines.append(
++            f"- {change.path.relative_to(report.root).as_posix()}: removed {change.removed_line_count} line(s)"
++        )
++    return "\n".join(lines)
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description="Remove code_rule references from DOT architecture graphs.")
++    parser.add_argument("--root", type=Path, default=Path("."), help="repository root")
++    parser.add_argument(
++        "--dot-dir",
++        type=Path,
++        default=Path("doc/docs/architecture"),
++        help="DOT directory relative to root",
++    )
++    parser.add_argument("--apply", action="store_true", help="rewrite DOT files")
++    parser.add_argument("--check", action="store_true", help="fail if code_rule references remain")
++    parser.add_argument(
++        "--report-file",
++        type=Path,
++        default=Path("doc/maintenance/dot_code_rule_cleanup_report.json"),
++        help="JSON cleanup report path",
++    )
++    args = parser.parse_args()
++
++    report = build_dot_code_rule_cleanup_report(args.root, apply=args.apply, dot_dir=args.dot_dir)
++    write_dot_code_rule_cleanup_report(args.report_file, report)
++    print(render_dot_code_rule_cleanup_report(report))
++
++    if args.check:
++        assert_dot_code_rule_references_absent(args.root, dot_dir=args.dot_dir)
++
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_dot_remove_code_rule_references.py b/tests/tools/test_dot_remove_code_rule_references.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/tools/test_dot_remove_code_rule_references.py
+@@ -0,0 +1,80 @@
++from __future__ import annotations
++
++from pathlib import Path
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++if str(ROOT) not in sys.path:
++    sys.path.insert(0, str(ROOT))
++
++from tools.dot_remove_code_rule_references import (  # noqa: E402
++    assert_dot_code_rule_references_absent,
++    build_dot_code_rule_cleanup_report,
++    remove_code_rule_reference_lines,
++)
++
++
++def test_remove_code_rule_reference_lines_removes_only_matching_lines() -> None:
++    source = """digraph x {
++  input -> processor;
++  code_rule [label="code_rule"];
++  processor -> code_rule;
++  processor -> output;
++}
++"""
++
++    cleaned, removed = remove_code_rule_reference_lines(source)
++
++    assert removed == 2
++    assert "code_rule" not in cleaned
++    assert "input -> processor;" in cleaned
++    assert "processor -> output;" in cleaned
++
++
++def test_dot_cleanup_report_can_apply_to_fixture(tmp_path: Path) -> None:
++    dot_dir = tmp_path / "doc" / "docs" / "architecture"
++    dot_dir.mkdir(parents=True)
++    target = dot_dir / "sample.dot"
++    target.write_text(
++        """digraph sample {
++  source -> gate;
++  gate -> code_rule;
++  gate -> report;
++}
++""",
++        encoding="utf-8",
++    )
++
++    report = build_dot_code_rule_cleanup_report(tmp_path, apply=True)
++
++    assert report.checked_file_count == 1
++    assert report.changed_file_count == 1
++    assert report.removed_line_count == 1
++    assert "code_rule" not in target.read_text(encoding="utf-8")
++
++
++def test_dot_cleanup_assertion_reports_remaining_references(tmp_path: Path) -> None:
++    dot_dir = tmp_path / "doc" / "docs" / "architecture"
++    dot_dir.mkdir(parents=True)
++    (dot_dir / "sample.dot").write_text("digraph sample { code_rule -> report; }\n", encoding="utf-8")
++
++    try:
++        assert_dot_code_rule_references_absent(tmp_path)
++    except AssertionError as exc:
++        message = str(exc)
++    else:
++        raise AssertionError("expected code_rule assertion failure")
++
++    assert "sample.dot" in message
++    assert "code_rule" in message
++
++
++def test_dot_cleanup_assertion_passes_after_apply(tmp_path: Path) -> None:
++    dot_dir = tmp_path / "doc" / "docs" / "architecture"
++    dot_dir.mkdir(parents=True)
++    (dot_dir / "sample.dot").write_text("digraph sample { code_rule -> report; }\n", encoding="utf-8")
++
++    build_dot_code_rule_cleanup_report(tmp_path, apply=True)
++
++    assert_dot_code_rule_references_absent(tmp_path)
+diff --git a/tests/rules/test_dot_code_rule_cleanup_rule.py b/tests/rules/test_dot_code_rule_cleanup_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_dot_code_rule_cleanup_rule.py
+@@ -0,0 +1,29 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_dot_code_rule_cleanup_tool_is_local_only() -> None:
++    source = _read("tools/dot_remove_code_rule_references.py").lower()
++    forbidden = ("requests", "urllib", "httpx", "subprocess", "token", "authorization")
++    for token in forbidden:
++        assert token not in source
++
++
++def test_dot_code_rule_cleanup_tool_targets_dot_only() -> None:
++    source = _read("tools/dot_remove_code_rule_references.py")
++    assert 'rglob("*.dot")' in source
++    assert ".svg" not in source
++
++
++def test_dot_code_rule_cleanup_uses_post_migration_manifest_path() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PHASE7_10_CHANGED_FILES.md")
++    assert "src/kernel/scheduler.py" not in manifest
++    assert "tools/dot_remove_code_rule_references.py" in manifest
+diff --git a/doc/maintenance/DOT_CODE_RULE_CLEANUP.md b/doc/maintenance/DOT_CODE_RULE_CLEANUP.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/maintenance/DOT_CODE_RULE_CLEANUP.md
+@@ -0,0 +1,35 @@
++# DOT code_rule cleanup
++
++The architecture DOT files should describe the runtime/control architecture,
++not the documentation-rule audit path. References to `code_rule`, `code-rule`
++or `code rule` overload the diagrams and should be removed from DOT graphs.
++
++## Dry-run
++
++```bash
++python tools/dot_remove_code_rule_references.py \
++  --root . \
++  --report-file doc/maintenance/dot_code_rule_cleanup_report.json
++```
++
++## Apply
++
++```bash
++python tools/dot_remove_code_rule_references.py \
++  --root . \
++  --apply \
++  --check \
++  --report-file doc/maintenance/dot_code_rule_cleanup_report.json
++```
++
++## Validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/tools/test_dot_remove_code_rule_references.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++The cleanup must be committed with `git add -A` so DOT modifications and the
++cleanup report are recorded together.
+diff --git a/doc/releases/README_PHASE7_10_DOT_CODE_RULE_REFERENCE_CLEANUP.md b/doc/releases/README_PHASE7_10_DOT_CODE_RULE_REFERENCE_CLEANUP.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PHASE7_10_DOT_CODE_RULE_REFERENCE_CLEANUP.md
+@@ -0,0 +1,16 @@
++# Phase 7.10 — DOT code_rule Reference Cleanup
++
++Phase 7.10 adds the controlled cleanup step for architecture DOT graphs.
++
++The cleanup removes lines that mention:
++
++```text
++code_rule
++code-rule
++code rule
++```
++
++from `.dot` files under `doc/docs/architecture`.
++
++This keeps diagrams focused on architecture instead of documentation-rule audit
++plumbing.
+diff --git a/doc/changelogs/CHANGELOG_PHASE7_10_DOT_CODE_RULE_REFERENCE_CLEANUP.md b/doc/changelogs/CHANGELOG_PHASE7_10_DOT_CODE_RULE_REFERENCE_CLEANUP.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PHASE7_10_DOT_CODE_RULE_REFERENCE_CLEANUP.md
+@@ -0,0 +1,25 @@
++# Changelog — Phase 7.10 DOT code_rule Reference Cleanup
++
++## Added
++
++- `tools/dot_remove_code_rule_references.py`
++  - Scans DOT architecture files.
++  - Removes lines mentioning `code_rule`, `code-rule` or `code rule`.
++  - Writes a JSON cleanup report.
++  - Provides a `--check` mode.
++
++- `tests/tools/test_dot_remove_code_rule_references.py`
++  - Covers line removal, fixture application, assertion failure and assertion pass.
++
++- `tests/rules/test_dot_code_rule_cleanup_rule.py`
++  - Ensures the cleanup is local-only and DOT-scoped.
++
++- `doc/maintenance/DOT_CODE_RULE_CLEANUP.md`
++  - Documents dry-run, apply and validation commands.
++
++## Not added
++
++- No SVG rewriting.
++- No network.
++- No GitHub API.
++- No Scheduler change.
+diff --git a/doc/code-rules/PHASE7_10_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PHASE7_10_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PHASE7_10_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,20 @@
++# Phase 7.10 Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Phase 7.10 adds local DOT cleanup tooling to remove code_rule references from architecture diagrams. It does not introduce runtime scheduling, network access or an external backend.
++
++live_path_status: n/a
++live_path_uses_real_backend: n/a
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++The phase keeps architecture diagrams lighter by removing documentation-rule
++audit nodes/edges from DOT graphs.
+diff --git a/doc/reports/phase7/PHASE7_10_TEST_REPORT.md b/doc/reports/phase7/PHASE7_10_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase7/PHASE7_10_TEST_REPORT.md
+@@ -0,0 +1,28 @@
++# Phase 7.10 Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/tools/test_dot_remove_code_rule_references.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Cleanup command
++
++```bash
++python tools/dot_remove_code_rule_references.py \
++  --root . \
++  --apply \
++  --check \
++  --report-file doc/maintenance/dot_code_rule_cleanup_report.json
++```
++
++## Expected
++
++```text
++DOT cleanup tool tests: pass
++rules: pass
++full suite: pass after cleanup
++```
+diff --git a/doc/manifests/MANIFEST_PHASE7_10_CHANGED_FILES.md b/doc/manifests/MANIFEST_PHASE7_10_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PHASE7_10_CHANGED_FILES.md
+@@ -0,0 +1,21 @@
++# Manifest — Phase 7.10 DOT code_rule Reference Cleanup
++
++## Added
++
++- `tools/dot_remove_code_rule_references.py`
++- `tests/tools/test_dot_remove_code_rule_references.py`
++- `tests/rules/test_dot_code_rule_cleanup_rule.py`
++- `doc/maintenance/DOT_CODE_RULE_CLEANUP.md`
++- `doc/releases/README_PHASE7_10_DOT_CODE_RULE_REFERENCE_CLEANUP.md`
++- `doc/changelogs/CHANGELOG_PHASE7_10_DOT_CODE_RULE_REFERENCE_CLEANUP.md`
++- `doc/code-rules/PHASE7_10_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase7/PHASE7_10_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PHASE7_10_CHANGED_FILES.md`
++
++## Modified by cleanup command
++
++- DOT files under `doc/docs/architecture/**`.
++
++## Generated artifacts
++
++- `doc/maintenance/dot_code_rule_cleanup_report.json` is generated by the cleanup command and may be committed as cleanup evidence.
