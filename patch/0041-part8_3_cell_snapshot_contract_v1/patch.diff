@@ -1,0 +1,527 @@
+diff --git a/src/context/cell_snapshot.py b/src/context/cell_snapshot.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/cell_snapshot.py
+@@ -0,0 +1,120 @@
++from __future__ import annotations
++
++import json
++import math
++from dataclasses import dataclass
++from typing import Any, Mapping
++
++
++CELL_SNAPSHOT_SCHEMA = "missipy.cell.v1"
++
++CELL_LIFECYCLE_STATES = (
++    "created",
++    "queued",
++    "running",
++    "waiting",
++    "completed",
++    "failed",
++    "cancelled",
++    "dropped",
++)
++
++
++@dataclass(frozen=True, slots=True)
++class CellSnapshot:
++    """Immutable observation snapshot for a task/component activity cell.
++
++    A cell snapshot is a read-only observation contract. It is derived from
++    task/component events and can be consumed by desktop visualization, mobile
++    views, replay tools, or analysis scripts.
++
++    It is not a command, not an action request, and not a mutable runtime handle.
++    """
++
++    cell_id: str
++    source_class: str
++    lifecycle_state: str
++    observed_at: str
++    score: float
++    age: float
++    cost: float
++    source_task_id: str = ""
++    source_component_id: str = ""
++    schema: str = CELL_SNAPSHOT_SCHEMA
++
++    def __post_init__(self) -> None:
++        _require_non_empty("schema", self.schema)
++        if self.schema != CELL_SNAPSHOT_SCHEMA:
++            raise ValueError(f"unsupported cell snapshot schema: {self.schema!r}")
++
++        _require_non_empty("cell_id", self.cell_id)
++        _require_non_empty("source_class", self.source_class)
++        _require_non_empty("lifecycle_state", self.lifecycle_state)
++        _require_non_empty("observed_at", self.observed_at)
++
++        if self.lifecycle_state not in CELL_LIFECYCLE_STATES:
++            raise ValueError(f"unsupported lifecycle_state: {self.lifecycle_state!r}")
++
++        _require_finite_number("score", self.score)
++        _require_finite_number("age", self.age)
++        _require_finite_number("cost", self.cost)
++
++        if self.age < 0:
++            raise ValueError("age must be >= 0")
++        if self.cost < 0:
++            raise ValueError("cost must be >= 0")
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "age": self.age,
++            "cell_id": self.cell_id,
++            "cost": self.cost,
++            "lifecycle_state": self.lifecycle_state,
++            "observed_at": self.observed_at,
++            "schema": self.schema,
++            "score": self.score,
++            "source_class": self.source_class,
++            "source_component_id": self.source_component_id,
++            "source_task_id": self.source_task_id,
++        }
++
++    def to_json_line(self) -> str:
++        return json.dumps(self.to_json_dict(), ensure_ascii=False, sort_keys=True) + "\n"
++
++    @classmethod
++    def from_mapping(cls, mapping: Mapping[str, Any]) -> "CellSnapshot":
++        schema = str(mapping.get("schema", ""))
++        if schema != CELL_SNAPSHOT_SCHEMA:
++            raise ValueError(f"unsupported cell snapshot schema: {schema!r}")
++
++        return cls(
++            cell_id=str(mapping["cell_id"]),
++            source_class=str(mapping["source_class"]),
++            lifecycle_state=str(mapping["lifecycle_state"]),
++            observed_at=str(mapping["observed_at"]),
++            score=float(mapping["score"]),
++            age=float(mapping["age"]),
++            cost=float(mapping["cost"]),
++            source_task_id=str(mapping.get("source_task_id", "")),
++            source_component_id=str(mapping.get("source_component_id", "")),
++            schema=schema,
++        )
++
++    @classmethod
++    def from_json_line(cls, line: str) -> "CellSnapshot":
++        payload = json.loads(line)
++        if not isinstance(payload, dict):
++            raise ValueError("cell snapshot JSON line must contain an object")
++        return cls.from_mapping(payload)
++
++
++def _require_non_empty(name: str, value: str) -> None:
++    if not isinstance(value, str) or not value:
++        raise ValueError(f"{name} must be a non-empty string")
++
++
++def _require_finite_number(name: str, value: float) -> None:
++    if not isinstance(value, (float, int)) or isinstance(value, bool):
++        raise ValueError(f"{name} must be a finite number")
++    if not math.isfinite(float(value)):
++        raise ValueError(f"{name} must be finite")
+diff --git a/tests/context/test_cell_snapshot.py b/tests/context/test_cell_snapshot.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_cell_snapshot.py
+@@ -0,0 +1,123 @@
++from __future__ import annotations
++
++from dataclasses import FrozenInstanceError
++
++import pytest
++
++from context.cell_snapshot import (
++    CELL_SNAPSHOT_SCHEMA,
++    CellSnapshot,
++)
++
++
++def test_cell_snapshot_uses_versioned_schema() -> None:
++    snapshot = CellSnapshot(
++        cell_id="cell-1",
++        source_task_id="task-1",
++        source_component_id="component-1",
++        source_class="llm.answer",
++        score=0.92,
++        age=12.5,
++        cost=4.0,
++        lifecycle_state="running",
++        observed_at="2026-07-03T10:00:00Z",
++    )
++
++    assert snapshot.schema == CELL_SNAPSHOT_SCHEMA
++    assert snapshot.schema == "missipy.cell.v1"
++
++
++def test_cell_snapshot_is_immutable() -> None:
++    snapshot = CellSnapshot(
++        cell_id="cell-1",
++        source_class="ingest.batch",
++        score=1.0,
++        age=0.0,
++        cost=0.0,
++        lifecycle_state="created",
++        observed_at="2026-07-03T10:00:00Z",
++    )
++
++    with pytest.raises(FrozenInstanceError):
++        snapshot.score = 0.0  # type: ignore[misc]
++
++
++def test_cell_snapshot_round_trips_json_line() -> None:
++    snapshot = CellSnapshot(
++        cell_id="cell-1",
++        source_task_id="task-1",
++        source_component_id="component-1",
++        source_class="llm.answer",
++        score=0.8,
++        age=3.0,
++        cost=2.5,
++        lifecycle_state="completed",
++        observed_at="2026-07-03T10:00:00Z",
++    )
++
++    restored = CellSnapshot.from_json_line(snapshot.to_json_line())
++
++    assert restored == snapshot
++
++
++def test_cell_snapshot_rejects_unknown_schema() -> None:
++    with pytest.raises(ValueError, match="unsupported cell snapshot schema"):
++        CellSnapshot.from_mapping(
++            {
++                "schema": "missipy.cell.v2",
++                "cell_id": "cell-1",
++                "source_class": "llm.answer",
++                "score": 1,
++                "age": 0,
++                "cost": 0,
++                "lifecycle_state": "created",
++                "observed_at": "2026-07-03T10:00:00Z",
++            }
++        )
++
++
++@pytest.mark.parametrize("field", ["cell_id", "source_class", "lifecycle_state", "observed_at"])
++def test_cell_snapshot_rejects_empty_required_strings(field: str) -> None:
++    payload = {
++        "cell_id": "cell-1",
++        "source_class": "llm.answer",
++        "score": 1.0,
++        "age": 0.0,
++        "cost": 0.0,
++        "lifecycle_state": "created",
++        "observed_at": "2026-07-03T10:00:00Z",
++    }
++    payload[field] = ""
++
++    with pytest.raises(ValueError):
++        CellSnapshot(**payload)
++
++
++@pytest.mark.parametrize("field", ["age", "cost"])
++def test_cell_snapshot_rejects_negative_non_negative_fields(field: str) -> None:
++    payload = {
++        "cell_id": "cell-1",
++        "source_class": "llm.answer",
++        "score": 1.0,
++        "age": 0.0,
++        "cost": 0.0,
++        "lifecycle_state": "created",
++        "observed_at": "2026-07-03T10:00:00Z",
++    }
++    payload[field] = -1.0
++
++    with pytest.raises(ValueError):
++        CellSnapshot(**payload)
++
++
++def test_cell_snapshot_rejects_unknown_lifecycle_state() -> None:
++    with pytest.raises(ValueError, match="unsupported lifecycle_state"):
++        CellSnapshot(
++            cell_id="cell-1",
++            source_class="llm.answer",
++            score=1.0,
++            age=0.0,
++            cost=0.0,
++            lifecycle_state="mutating",
++            observed_at="2026-07-03T10:00:00Z",
++        )
+diff --git a/tests/rules/test_cell_snapshot_contract_rule.py b/tests/rules/test_cell_snapshot_contract_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_cell_snapshot_contract_rule.py
+@@ -0,0 +1,48 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_cell_snapshot_contract_declares_versioned_schema() -> None:
++    source = _read("src/context/cell_snapshot.py")
++    assert 'CELL_SNAPSHOT_SCHEMA = "missipy.cell.v1"' in source
++    assert "@dataclass(frozen=True, slots=True)" in source
++
++
++def test_cell_snapshot_contract_is_observation_only() -> None:
++    source = _read("src/context/cell_snapshot.py")
++    forbidden = [
++        "vispy",
++        "Scheduler",
++        "EventBus",
++        "requests",
++        "urllib",
++        "httpx",
++        "subprocess",
++        "OPENAI_API_KEY",
++    ]
++    for token in forbidden:
++        assert token not in source
++
++
++def test_cell_snapshot_contract_docs_forbid_commands() -> None:
++    doc = _read("doc/contracts/CELL_SNAPSHOT_CONTRACT_V1.md")
++    assert "missipy.cell.v1" in doc
++    assert "observation-only" in doc
++    assert "not a command" in doc
++    assert "must not import VisPy" in doc
++
++
++def test_cell_snapshot_manifest_has_no_runtime_dependency_additions() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PART8_3_CELL_SNAPSHOT_CONTRACT_V1.md")
++    assert "src/context/cell_snapshot.py" in manifest
++    assert "requirements" not in manifest
++    assert ".dot" not in manifest
++    assert ".svg" not in manifest
+diff --git a/doc/contracts/CELL_SNAPSHOT_CONTRACT_V1.md b/doc/contracts/CELL_SNAPSHOT_CONTRACT_V1.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/contracts/CELL_SNAPSHOT_CONTRACT_V1.md
+@@ -0,0 +1,80 @@
++# Cell Snapshot Contract v1
++
++```text
++schema: missipy.cell.v1
++```
++
++The cell snapshot contract is the first stable observation contract for the
++cell-population visualization track.
++
++It is observation-only.
++
++A cell snapshot is not a command, not an action request, not a live task handle,
++and not a mutable runtime object.
++
++## Purpose
++
++The same immutable snapshot can be consumed by:
++
++```text
++VisPy desktop viewer
++future mobile browser view
++offline analysis scripts
++replay/debug tools
++```
++
++The renderer changes. The contract does not silently change.
++
++## Minimal fields
++
++```text
++schema
++cell_id
++source_task_id
++source_component_id
++source_class
++score
++age
++cost
++lifecycle_state
++observed_at
++```
++
++## Lifecycle states
++
++```text
++created
++queued
++running
++waiting
++completed
++failed
++cancelled
++dropped
++```
++
++## Versioning rule
++
++Future enrichment requires a new schema version such as:
++
++```text
++missipy.cell.v2
++```
++
++Existing `missipy.cell.v1` fields must not be silently repurposed.
++
++## Boundary rule
++
++The contract module must not import VisPy, Scheduler, EventBus, recorder,
++server, network, OpenVINO, or external API clients.
++
++Producer and consumer modules may depend on this contract. This contract must
++not depend on producers or consumers.
++
++## Health rule
++
++The contract stores primitive observation values. It does not define the final
++fitness or optimization policy.
++
++Health mapping belongs to later visualization/replay code and must compare the
++observed lifecycle with the expected lifecycle for the source class.
+diff --git a/doc/releases/README_PART8_3_CELL_SNAPSHOT_CONTRACT_V1.md b/doc/releases/README_PART8_3_CELL_SNAPSHOT_CONTRACT_V1.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PART8_3_CELL_SNAPSHOT_CONTRACT_V1.md
+@@ -0,0 +1,25 @@
++# Part 8.3 — Cell Snapshot Contract v1
++
++Part 8.3 adds the runtime contract for cell-population observation snapshots.
++
++## Added
++
++- `src/context/cell_snapshot.py`
++- Serialization/deserialization tests.
++- Code-rule tests.
++- Contract documentation.
++
++## Scope
++
++This patch defines `missipy.cell.v1` only.
++
++It does not add:
++
++```text
++EventBus consumer
++recorder writer
++JSONL journal
++VisPy viewer
++mobile view
++optimization loop
++```
+diff --git a/doc/changelogs/CHANGELOG_PART8_3_CELL_SNAPSHOT_CONTRACT_V1.md b/doc/changelogs/CHANGELOG_PART8_3_CELL_SNAPSHOT_CONTRACT_V1.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PART8_3_CELL_SNAPSHOT_CONTRACT_V1.md
+@@ -0,0 +1,17 @@
++# Changelog — Part 8.3 Cell Snapshot Contract v1
++
++## Added
++
++- Immutable `CellSnapshot` value object.
++- Schema constant `missipy.cell.v1`.
++- JSON dict and JSON line serialization.
++- Strict validation for schema, lifecycle state, finite score, non-negative age and cost.
++- Contract documentation and tests.
++
++## Not changed
++
++- No Scheduler path.
++- No EventBus path.
++- No recorder path.
++- No renderer path.
++- No dependency addition.
+diff --git a/doc/code-rules/PART8_3_CELL_SNAPSHOT_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PART8_3_CELL_SNAPSHOT_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PART8_3_CELL_SNAPSHOT_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,20 @@
++# Part 8.3 Cell Snapshot Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: The patch introduces the versioned cell observation contract required by the documented Cell Lens roadmap. It is pure, immutable, stdlib-only, and does not add a live path or dependency on EventBus, Scheduler, recorder, VisPy, server, or external APIs.
++
++live_path_status: contract only
++live_path_uses_real_backend: false
++external_dependencies_added: false
++scheduler_modified: false
++eventbus_modified: false
++recorder_modified: false
++network_added: false
++github_api_added: false
++vispy_added: false
++llm_or_openvino_added: false
++```
++
++The contract is intentionally added before any renderer or journal writer.
+diff --git a/doc/reports/phase8/PART8_3_CELL_SNAPSHOT_TEST_REPORT.md b/doc/reports/phase8/PART8_3_CELL_SNAPSHOT_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase8/PART8_3_CELL_SNAPSHOT_TEST_REPORT.md
+@@ -0,0 +1,19 @@
++# Part 8.3 Cell Snapshot Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/context/test_cell_snapshot.py
++PYTHONPATH=src:. pytest -q tests/rules/test_cell_snapshot_contract_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Expected
++
++```text
++cell snapshot tests: pass
++rules: pass
++full suite: pass
++```
+diff --git a/doc/manifests/MANIFEST_PART8_3_CELL_SNAPSHOT_CONTRACT_V1.md b/doc/manifests/MANIFEST_PART8_3_CELL_SNAPSHOT_CONTRACT_V1.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PART8_3_CELL_SNAPSHOT_CONTRACT_V1.md
+@@ -0,0 +1,21 @@
++# Manifest — Part 8.3 Cell Snapshot Contract v1
++
++## Added
++
++- `src/context/cell_snapshot.py`
++- `tests/context/test_cell_snapshot.py`
++- `tests/rules/test_cell_snapshot_contract_rule.py`
++- `doc/contracts/CELL_SNAPSHOT_CONTRACT_V1.md`
++- `doc/releases/README_PART8_3_CELL_SNAPSHOT_CONTRACT_V1.md`
++- `doc/changelogs/CHANGELOG_PART8_3_CELL_SNAPSHOT_CONTRACT_V1.md`
++- `doc/code-rules/PART8_3_CELL_SNAPSHOT_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase8/PART8_3_CELL_SNAPSHOT_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PART8_3_CELL_SNAPSHOT_CONTRACT_V1.md`
++
++## Modified
++
++- None.
++
++## Runtime dependencies
++
++- None added.
