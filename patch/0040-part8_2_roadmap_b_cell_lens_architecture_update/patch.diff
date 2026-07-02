@@ -1,0 +1,615 @@
+diff --git a/doc/maintenance/ROADMAP_B_CELL_LENS_INSERTION.md b/doc/maintenance/ROADMAP_B_CELL_LENS_INSERTION.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/maintenance/ROADMAP_B_CELL_LENS_INSERTION.md
+@@ -0,0 +1,221 @@
++# Roadmap B — Cell Lens Insertion
++
++This document inserts the cell-population visualization track into Roadmap B.
++
++The visualization is a lens, not a lever.
++
++```text
++observation path: EventBus / recorder / replay / journal
++command path: typed command / Scheduler
++```
++
++The two paths must remain separate.
++
++## Active placement
++
++```text
++Phase 8 — Local foundation / contracts / observability
++  8.x Cell snapshot contract missipy.cell.v1
++  8.x EventBus/recorder consumer to JSONL cell snapshot journal
++  8.x Replay/tail reader contract for the cell journal
++
++Phase 9 — Local replay / desktop visualization
++  9.x Synthetic cell population generator
++  9.x VisPy desktop viewer reading the journal
++  9.x Health mapping by expected lifetime per task class
++  9.x Switch synthetic source to real EventBus/recorder output
++
++Phase 10 — Local server
++  10.x SSE stream from the same journal
++  10.x Mobile browser view as a window, not a source of truth
++
++Out of scope
++  X.x Real-time optimization loop
++```
++
++## Step 1 — Cell snapshot contract
++
++Phase: 8.
++
++Schema:
++
++```text
++missipy.cell.v1
++```
++
++Purpose:
++
++```text
++one immutable observation snapshot derived from task/component events
++```
++
++Minimal fields:
++
++```text
++schema
++cell_id
++source_task_id
++source_component_id
++source_class
++score
++age
++cost
++lifecycle_state
++observed_at
++```
++
++Done when:
++
++```text
++- the schema is versioned as missipy.cell.v1
++- snapshots are immutable value objects
++- serialization/deserialization tests exist
++- no VisPy dependency exists in the contract
++- future enrichment requires missipy.cell.v2 or later
++```
++
++Do not:
++
++```text
++- do not encode commands in the snapshot
++- do not make the snapshot mutable
++- do not silently change missipy.cell.v1
++- do not define the contract inside the visualizer
++```
++
++## Step 2 — EventBus/recorder to JSONL snapshot journal
++
++Phase: 8.
++
++Purpose:
++
++```text
++materialize observation snapshots through the existing recorder/replay path
++```
++
++Done when:
++
++```text
++- a consumer derives missipy.cell.v1 snapshots from observation events
++- JSONL output is append-only and ordered enough for replay
++- disk writes are best-effort and confined to the recorder boundary
++- failure to write does not affect scheduling or decisions
++- overload can drop or aggregate observation data
++```
++
++Do not:
++
++```text
++- do not write to the decision path
++- do not block the Scheduler
++- do not invent a second recorder
++- do not use EventBus as a command channel
++```
++
++## Step 3 — VisPy desktop viewer
++
++Phase: 9.
++
++Purpose:
++
++```text
++read the cell journal and render a population of cells
++```
++
++The viewer can be developed against a synthetic generator before the real bus
++consumer exists. The generator must write the same `missipy.cell.v1` journal.
++
++Live mode is only replay that has caught up to the end of the file.
++
++Done when:
++
++```text
++- replay mode reads historical JSONL
++- tail mode reads the same JSONL format
++- synthetic generator produces contract-compliant snapshots
++- no command leaves VisPy
++- health is based on deviation from expected lifetime by source class
++```
++
++Do not:
++
++```text
++- do not connect VisPy directly to the Scheduler
++- do not make VisPy a source of truth
++- do not make graphics imports part of the kernel
++- do not judge health by raw shortness or slowness
++```
++
++## Step 4 — Synthetic source to real bus
++
++Phase: late 9.
++
++Purpose:
++
++```text
++replace synthetic journal production with real EventBus/recorder production
++```
++
++Done when:
++
++```text
++- the real journal uses the same missipy.cell.v1 schema
++- VisPy runs without modification
++- compatibility tests compare synthetic and real snapshots
++- the recorder remains optional for deterministic decisions
++```
++
++Do not:
++
++```text
++- do not rewrite the viewer for the real bus
++- do not change missipy.cell.v1 silently
++- do not bypass the recorder
++```
++
++## Step 5 — Mobile view
++
++Phase: 10.
++
++Purpose:
++
++```text
++stream the same journal over local SSE to a phone browser
++```
++
++The phone is a window. The local machine remains the source of truth.
++
++Done when:
++
++```text
++- local server streams journal snapshots over SSE
++- browser renders a read-only Canvas/WebGL view
++- reconnect is tolerated
++- no command path is exposed by the mobile view
++```
++
++Do not:
++
++```text
++- do not port VisPy to mobile
++- do not create a mobile app in this phase
++- do not make the phone a source of truth
++- do not expose remote mutation
++```
++
++## Step 6 — Real-time optimization loop
++
++Status: out of scope.
++
++It requires:
++
++```text
++- a real flow to optimize
++- a defined fitness function
++- complete ordered observation journal
++- typed command contracts
++- Scheduler command path
++- simulation/replay guardrails
++```
++
++Do not design it now.
+diff --git a/doc/docs/architecture/CELL_LENS_ARCHITECTURE.md b/doc/docs/architecture/CELL_LENS_ARCHITECTURE.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/docs/architecture/CELL_LENS_ARCHITECTURE.md
+@@ -0,0 +1,110 @@
++# Cell Lens Architecture
++
++The cell lens is an observation-only visualization architecture for MissiPy.
++
++It shows a population of cells representing task/component activity without
++becoming part of the command path.
++
++## Strong boundary
++
++```text
++Observation:
++  EventBus
++  recorder
++  replay
++  cell snapshot journal
++  VisPy / browser / analysis scripts
++
++Command:
++  typed command
++  Scheduler
++  kernel command handling
++```
++
++The observation path may lose, aggregate, or delay data under load. The command
++path must remain explicit and typed.
++
++## Lens, not lever
++
++The cell lens may observe:
++
++```text
++task lifecycle
++component origin
++age
++cost
++score
++health estimate
++```
++
++The cell lens must not:
++
++```text
++schedule work
++cancel work
++mutate component state
++publish commands on the EventBus
++be required for deterministic execution
++```
++
++Any future operator action from a visualization must leave the visualization as
++a typed command submitted to the Scheduler. The action must not travel through
++the EventBus.
++
++## Shared snapshot contract
++
++All renderers and analysis tools consume the same versioned contract:
++
++```text
++missipy.cell.v1
++```
++
++Consumers include:
++
++```text
++VisPy desktop viewer
++future local mobile browser view
++offline analysis scripts
++replay/debug tools
++```
++
++If new data is needed, a new version is introduced. Existing fields in
++`missipy.cell.v1` are not silently repurposed.
++
++## Journal as boundary
++
++The journal is the stable bridge between the running system and visualization.
++
++```text
++EventBus observation events
++→ recorder boundary
++→ JSONL cell snapshot journal
++→ replay/tail reader
++→ visualization or analysis
++```
++
++Live mode is only replay that has caught up to the file end.
++
++## Health rule
++
++Health is not raw speed.
++
++A cell is healthy when its observed lifecycle is close to the expected lifecycle
++for its source class.
++
++```text
++LLM response slow but expected: healthy
++short task unexpectedly slow: unhealthy
++long ingestion batch within expected window: healthy
++```
++
++The first implementation may use simple expected lifetime tables by source
++class. Optimization loops are not part of this phase.
++
++## Dependency rule
++
++VisPy is a desktop visualization boundary dependency. It must not be imported by
++kernel, contracts, Scheduler, EventBus, recorder core, or replay core modules.
++
++Core code may define contracts and journal readers. UI code may depend on core
++contracts. Core code must not depend on UI code.
+diff --git a/doc/code-rules/CELL_LENS_OBSERVATION_RULES.md b/doc/code-rules/CELL_LENS_OBSERVATION_RULES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/CELL_LENS_OBSERVATION_RULES.md
+@@ -0,0 +1,72 @@
++# Cell Lens Observation Rules
++
++These rules extend the project code rules for the cell-population visualization
++track.
++
++## Rule 1 — Visualization is observation only
++
++The cell lens observes the system through the observation path.
++
++```text
++EventBus / recorder / replay / journal
++```
++
++It must not command the system.
++
++## Rule 2 — EventBus is not a command channel
++
++The EventBus may carry observation events. It must not be used for visualizer
++actions or system commands.
++
++Any future action must use:
++
++```text
++typed command → Scheduler
++```
++
++## Rule 3 — Snapshot contracts are versioned
++
++The first cell snapshot schema is:
++
++```text
++missipy.cell.v1
++```
++
++Future enrichment requires a new schema version. Existing fields are not
++silently repurposed.
++
++## Rule 4 — Impurity is confined
++
++Disk writes for the cell journal are recorder-boundary effects. Graphics imports
++are visualization-boundary effects.
++
++Kernel, Scheduler, EventBus core, contracts, and replay core must not import
++VisPy.
++
++## Rule 5 — Observation is best-effort
++
++Visualization and snapshot journaling must not be required for deterministic
++execution.
++
++Under load, observation data may be dropped, sampled, or aggregated.
++
++## Rule 6 — Health uses expected lifetime
++
++Cell health is measured against expected lifecycle for the source class, not by
++raw speed.
++
++A slow LLM step may be healthy. A short task that stalls may be unhealthy.
++
++## Rule 7 — Mobile is a window
++
++The mobile view belongs in the local server phase. It receives the same journal
++through local SSE and remains read-only.
++
++The phone is not a source of truth.
++
++## Rule 8 — Optimization loop is out of scope
++
++A real-time optimization loop is not part of the current roadmap.
++
++When it exists later, it must observe via journal/replay and act only through
++typed Scheduler commands.
+diff --git a/doc/releases/README_PART8_2_ROADMAP_B_CELL_LENS_ARCHITECTURE_UPDATE.md b/doc/releases/README_PART8_2_ROADMAP_B_CELL_LENS_ARCHITECTURE_UPDATE.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PART8_2_ROADMAP_B_CELL_LENS_ARCHITECTURE_UPDATE.md
+@@ -0,0 +1,19 @@
++# Part 8.2 — Roadmap B Cell Lens Architecture Update
++
++Part 8.2 updates project and architecture documentation for the cell-population
++visualization track.
++
++## Added
++
++- Roadmap insertion for the cell lens.
++- Strong architecture note for lens/lever separation.
++- Supplemental code rules for observation-only visualization.
++- Rule tests for the new documentation.
++
++## Not added
++
++- No runtime cell contract yet.
++- No recorder implementation yet.
++- No VisPy dependency yet.
++- No mobile server endpoint yet.
++- No optimization loop.
+diff --git a/doc/changelogs/CHANGELOG_PART8_2_ROADMAP_B_CELL_LENS_ARCHITECTURE_UPDATE.md b/doc/changelogs/CHANGELOG_PART8_2_ROADMAP_B_CELL_LENS_ARCHITECTURE_UPDATE.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PART8_2_ROADMAP_B_CELL_LENS_ARCHITECTURE_UPDATE.md
+@@ -0,0 +1,18 @@
++# Changelog — Part 8.2 Roadmap B Cell Lens Architecture Update
++
++## Added
++
++- `doc/maintenance/ROADMAP_B_CELL_LENS_INSERTION.md`
++- `doc/docs/architecture/CELL_LENS_ARCHITECTURE.md`
++- `doc/code-rules/CELL_LENS_OBSERVATION_RULES.md`
++- Tests that guard the new visualisation direction.
++
++## Clarified
++
++- Visualization is a pure observation consumer.
++- EventBus/recorder/replay are the observation path.
++- Scheduler/typed commands are the only command path.
++- `missipy.cell.v1` is the first required snapshot contract.
++- VisPy belongs at the visualization boundary only.
++- Mobile view belongs in Phase 10 as local SSE/browser window.
++- Real-time optimization is out of scope.
+diff --git a/doc/code-rules/PART8_2_CELL_LENS_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PART8_2_CELL_LENS_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PART8_2_CELL_LENS_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,21 @@
++# Part 8.2 Cell Lens Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: true
++code_rule_reason: This patch adds supplemental observation rules for the cell lens. It does not modify runtime paths, but it introduces new architectural guardrails that future patches must obey.
++
++live_path_status: documentation only
++live_path_uses_real_backend: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++vispy_added: false
++```
++
++The new rules are intentionally documented before implementation because
++`missipy.cell.v1` must exist before any renderer or mobile surface consumes
++cell data.
+diff --git a/doc/reports/phase8/PART8_2_CELL_LENS_TEST_REPORT.md b/doc/reports/phase8/PART8_2_CELL_LENS_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase8/PART8_2_CELL_LENS_TEST_REPORT.md
+@@ -0,0 +1,18 @@
++# Part 8.2 Cell Lens Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/rules/test_cell_lens_architecture_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Expected
++
++```text
++cell lens architecture rules: pass
++rules: pass
++full suite: pass
++```
+diff --git a/doc/manifests/MANIFEST_PART8_2_ROADMAP_B_CELL_LENS_ARCHITECTURE_UPDATE.md b/doc/manifests/MANIFEST_PART8_2_ROADMAP_B_CELL_LENS_ARCHITECTURE_UPDATE.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PART8_2_ROADMAP_B_CELL_LENS_ARCHITECTURE_UPDATE.md
+@@ -0,0 +1,21 @@
++# Manifest — Part 8.2 Roadmap B Cell Lens Architecture Update
++
++## Added
++
++- `doc/maintenance/ROADMAP_B_CELL_LENS_INSERTION.md`
++- `doc/docs/architecture/CELL_LENS_ARCHITECTURE.md`
++- `doc/code-rules/CELL_LENS_OBSERVATION_RULES.md`
++- `doc/releases/README_PART8_2_ROADMAP_B_CELL_LENS_ARCHITECTURE_UPDATE.md`
++- `doc/changelogs/CHANGELOG_PART8_2_ROADMAP_B_CELL_LENS_ARCHITECTURE_UPDATE.md`
++- `doc/code-rules/PART8_2_CELL_LENS_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase8/PART8_2_CELL_LENS_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PART8_2_ROADMAP_B_CELL_LENS_ARCHITECTURE_UPDATE.md`
++- `tests/rules/test_cell_lens_architecture_rule.py`
++
++## Modified
++
++- None.
++
++## Runtime changes
++
++- None.
+diff --git a/tests/rules/test_cell_lens_architecture_rule.py b/tests/rules/test_cell_lens_architecture_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_cell_lens_architecture_rule.py
+@@ -0,0 +1,61 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_cell_lens_roadmap_places_steps_in_phases() -> None:
++    doc = _read("doc/maintenance/ROADMAP_B_CELL_LENS_INSERTION.md")
++    assert "Phase 8" in doc
++    assert "missipy.cell.v1" in doc
++    assert "Phase 9" in doc
++    assert "VisPy" in doc
++    assert "Phase 10" in doc
++    assert "SSE" in doc
++    assert "out of scope" in doc
++
++
++def test_cell_lens_architecture_keeps_lens_and_lever_separate() -> None:
++    doc = _read("doc/docs/architecture/CELL_LENS_ARCHITECTURE.md")
++    assert "Lens, not lever" in doc
++    assert "Observation:" in doc
++    assert "Command:" in doc
++    assert "typed command" in doc
++    assert "Scheduler" in doc
++    assert "must not command the system" in doc
++
++
++def test_cell_lens_rules_forbid_eventbus_commands() -> None:
++    rules = _read("doc/code-rules/CELL_LENS_OBSERVATION_RULES.md")
++    assert "EventBus is not a command channel" in rules
++    assert "typed command" in rules
++    assert "Scheduler" in rules
++    assert "missipy.cell.v1" in rules
++
++
++def test_cell_lens_rules_confine_vispy_to_boundary() -> None:
++    rules = _read("doc/code-rules/CELL_LENS_OBSERVATION_RULES.md")
++    assert "Kernel, Scheduler, EventBus core, contracts, and replay core must not import" in rules
++    assert "VisPy" in rules
++
++
++def test_cell_lens_health_is_not_raw_duration() -> None:
++    architecture = _read("doc/docs/architecture/CELL_LENS_ARCHITECTURE.md")
++    rules = _read("doc/code-rules/CELL_LENS_OBSERVATION_RULES.md")
++    assert "Health is not raw speed" in architecture
++    assert "expected lifecycle" in architecture
++    assert "expected lifecycle" in rules
++
++
++def test_cell_lens_manifest_has_no_runtime_or_svg_changes() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PART8_2_ROADMAP_B_CELL_LENS_ARCHITECTURE_UPDATE.md")
++    assert "Runtime changes" in manifest
++    assert "None" in manifest
++    assert ".dot" not in manifest
++    assert ".svg" not in manifest
