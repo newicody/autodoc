@@ -14,6 +14,7 @@ from kernel.scheduler import Scheduler
 
 from .source_candidate import SourceCandidateDecision, allowed_source_candidate_decisions
 from .source_candidate_decision import (
+    SourceCandidateDecisionAuditPolicy,
     SourceCandidateDecisionCommand,
     SourceCandidateDecisionResult,
 )
@@ -32,6 +33,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--reason", default="")
     parser.add_argument("--target-context-id")
     parser.add_argument("--report-file")
+    parser.add_argument("--audit-file")
+    parser.add_argument("--audit-without-candidates", action="store_true")
     parser.add_argument("--format", choices=("text", "json"), default="text")
     return parser
 
@@ -39,6 +42,14 @@ def build_parser() -> argparse.ArgumentParser:
 def command_from_args(args: argparse.Namespace) -> SourceCandidateDecisionCommand:
     report_policy = (
         SourceCandidateReportPolicy(path=args.report_file) if args.report_file else None
+    )
+    audit_policy = (
+        SourceCandidateDecisionAuditPolicy(
+            path=args.audit_file,
+            include_candidates=not args.audit_without_candidates,
+        )
+        if args.audit_file
+        else None
     )
     return SourceCandidateDecisionCommand(
         store_policy=SourceCandidateStorePolicy(
@@ -52,6 +63,7 @@ def command_from_args(args: argparse.Namespace) -> SourceCandidateDecisionComman
             target_context_id=args.target_context_id,
         ),
         report_policy=report_policy,
+        audit_policy=audit_policy,
     )
 
 

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from .source_candidate import (
     SourceCandidate,
@@ -17,6 +19,7 @@ from .source_candidate_store import (
 )
 
 _DECISION_SCHEMA = "missipy.source_candidate.decision.v1"
+_AUDIT_SCHEMA = "missipy.source_candidate.decision_audit.v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,6 +35,7 @@ class SourceCandidateDecisionCommand:
     candidate_id: str
     decision: SourceCandidateDecision
     report_policy: SourceCandidateReportPolicy | None = None
+    audit_policy: SourceCandidateDecisionAuditPolicy | None = None
 
     def __post_init__(self) -> None:
         if not self.candidate_id.strip():
@@ -46,9 +50,12 @@ class SourceCandidateDecisionResult:
     candidate_before: SourceCandidate
     candidate_after: SourceCandidate
     write_result: SourceCandidateStoreWriteResult
+    audit_path: Path | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "store_path", Path(self.store_path))
+        if self.audit_path is not None:
+            object.__setattr__(self, "audit_path", Path(self.audit_path))
 
     @property
     def candidate_id(self) -> str:
@@ -78,6 +85,7 @@ class SourceCandidateDecisionResult:
             "candidate_before": self.candidate_before.to_json_dict(),
             "candidate_after": self.candidate_after.to_json_dict(),
             "write_result": self.write_result.to_json_dict(),
+            "audit_path": str(self.audit_path) if self.audit_path is not None else None,
         }
 
     def to_text(self) -> str:
@@ -95,7 +103,75 @@ class SourceCandidateDecisionResult:
             lines.append(f"target_context_id: {target}")
         if reason:
             lines.append(f"reason: {reason}")
+        if self.audit_path is not None:
+            lines.append(f"audit: {self.audit_path}")
         return "\n".join(lines)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCandidateDecisionAuditPolicy:
+    """Politique de rapport audit local pour une décision opérateur."""
+
+    path: Path | str
+    include_candidates: bool = True
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "path", Path(self.path))
+        if not str(self.path):
+            raise ValueError("audit path must not be empty")
+
+
+@dataclass(frozen=True, slots=True)
+class SourceCandidateDecisionAuditRecord:
+    """Enregistrement stable d'audit après décision locale."""
+
+    result: SourceCandidateDecisionResult
+    include_candidates: bool = True
+
+    def to_json_dict(self) -> dict[str, object]:
+        decision = self.result.candidate_after.decision
+        payload: dict[str, object] = {
+            "schema": _AUDIT_SCHEMA,
+            "operation": "source_candidate_decision",
+            "store_path": str(self.result.store_path),
+            "candidate_id": self.result.candidate_id,
+            "action": self.result.action,
+            "before_status": self.result.before_status,
+            "after_status": self.result.after_status,
+            "reason": decision.reason if decision is not None else "",
+            "target_context_id": decision.target_context_id if decision is not None else None,
+            "write_result": self.result.write_result.to_json_dict(),
+        }
+        if self.include_candidates:
+            payload["candidate_before"] = self.result.candidate_before.to_json_dict()
+            payload["candidate_after"] = self.result.candidate_after.to_json_dict()
+        return payload
+
+
+def write_source_candidate_decision_audit(
+    policy: SourceCandidateDecisionAuditPolicy,
+    result: SourceCandidateDecisionResult,
+) -> Path:
+    """Écrit atomiquement un rapport audit JSON local."""
+
+    path = Path(policy.path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = SourceCandidateDecisionAuditRecord(
+        result=result,
+        include_candidates=policy.include_candidates,
+    )
+    payload = record.to_json_dict()
+    with NamedTemporaryFile(
+        "w",
+        encoding="utf-8",
+        dir=str(path.parent),
+        delete=False,
+    ) as handle:
+        tmp_path = Path(handle.name)
+        json.dump(payload, handle, ensure_ascii=False, sort_keys=True, indent=2)
+        handle.write("\n")
+    tmp_path.replace(path)
+    return path
 
 
 def run_source_candidate_decision(
@@ -114,9 +190,20 @@ def run_source_candidate_decision(
         decided,
         report=command.report_policy,
     )
-    return SourceCandidateDecisionResult(
+    result = SourceCandidateDecisionResult(
         store_path=command.store_policy.path,
         candidate_before=candidate,
         candidate_after=decided,
         write_result=write_result,
+    )
+    if command.audit_policy is None:
+        return result
+
+    audit_path = write_source_candidate_decision_audit(command.audit_policy, result)
+    return SourceCandidateDecisionResult(
+        store_path=result.store_path,
+        candidate_before=result.candidate_before,
+        candidate_after=result.candidate_after,
+        write_result=result.write_result,
+        audit_path=audit_path,
     )
