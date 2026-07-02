@@ -1,0 +1,614 @@
+diff --git a/src/context/cell_snapshot_journal_reader.py b/src/context/cell_snapshot_journal_reader.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/cell_snapshot_journal_reader.py
+@@ -0,0 +1,226 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Iterator
++
++from context.cell_snapshot import CellSnapshot
++
++
++CELL_SNAPSHOT_JOURNAL_READER_SCHEMA = "missipy.cell_snapshot_journal_reader.v1"
++
++
++@dataclass(frozen=True, slots=True)
++class CellSnapshotJournalReadResult:
++    """Best-effort replay read result for a cell snapshot JSONL journal."""
++
++    path: str
++    attempted_lines: int
++    snapshots: tuple[CellSnapshot, ...]
++    dropped_count: int
++    errors: tuple[str, ...] = ()
++    schema: str = CELL_SNAPSHOT_JOURNAL_READER_SCHEMA
++
++    @property
++    def ok(self) -> bool:
++        return not self.errors and self.dropped_count == 0
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "attempted_lines": self.attempted_lines,
++            "dropped_count": self.dropped_count,
++            "errors": list(self.errors),
++            "path": self.path,
++            "schema": self.schema,
++            "snapshot_count": len(self.snapshots),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class CellSnapshotJournalTailResult:
++    """Non-blocking tail read result for a cell snapshot JSONL journal."""
++
++    path: str
++    start_offset: int
++    next_offset: int
++    attempted_lines: int
++    snapshots: tuple[CellSnapshot, ...]
++    dropped_count: int
++    errors: tuple[str, ...] = ()
++    schema: str = CELL_SNAPSHOT_JOURNAL_READER_SCHEMA
++
++    @property
++    def ok(self) -> bool:
++        return not self.errors and self.dropped_count == 0
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "attempted_lines": self.attempted_lines,
++            "dropped_count": self.dropped_count,
++            "errors": list(self.errors),
++            "next_offset": self.next_offset,
++            "path": self.path,
++            "schema": self.schema,
++            "snapshot_count": len(self.snapshots),
++            "start_offset": self.start_offset,
++        }
++
++
++def iter_cell_snapshot_jsonl(
++    path: Path,
++    *,
++    strict: bool = False,
++) -> Iterator[CellSnapshot]:
++    """Replay a complete cell snapshot journal.
++
++    In best-effort mode invalid lines are skipped. In strict mode the first
++    invalid line raises the parsing error.
++    """
++
++    if not path.exists():
++        if strict:
++            raise FileNotFoundError(path)
++        return
++
++    with path.open("r", encoding="utf-8") as handle:
++        for line_number, line in enumerate(handle, start=1):
++            stripped = line.strip()
++            if not stripped:
++                continue
++            try:
++                yield CellSnapshot.from_json_line(stripped)
++            except Exception:
++                if strict:
++                    raise
++                continue
++
++
++def read_cell_snapshot_jsonl(
++    path: Path,
++    *,
++    strict: bool = False,
++    limit: int | None = None,
++) -> CellSnapshotJournalReadResult:
++    """Replay a journal into a read result.
++
++    The result is suitable for offline analysis and for desktop visualization
++    startup before switching to non-blocking tail reads.
++    """
++
++    if limit is not None and limit < 0:
++        raise ValueError("limit must be >= 0")
++
++    snapshots: list[CellSnapshot] = []
++    errors: list[str] = []
++    attempted = 0
++    dropped = 0
++
++    try:
++        if not path.exists():
++            raise FileNotFoundError(path)
++
++        with path.open("r", encoding="utf-8") as handle:
++            for line_number, line in enumerate(handle, start=1):
++                if limit is not None and len(snapshots) >= limit:
++                    break
++
++                stripped = line.strip()
++                if not stripped:
++                    continue
++
++                attempted += 1
++                try:
++                    snapshots.append(CellSnapshot.from_json_line(stripped))
++                except Exception as exc:
++                    dropped += 1
++                    message = f"line {line_number}: {type(exc).__name__}: {exc}"
++                    if strict:
++                        raise ValueError(message) from exc
++                    errors.append(message)
++
++    except Exception as exc:
++        if strict:
++            raise
++        errors.append(f"{type(exc).__name__}: {exc}")
++
++    return CellSnapshotJournalReadResult(
++        path=str(path),
++        attempted_lines=attempted,
++        snapshots=tuple(snapshots),
++        dropped_count=dropped,
++        errors=tuple(errors),
++    )
++
++
++def tail_cell_snapshot_jsonl(
++    path: Path,
++    *,
++    offset: int = 0,
++    strict: bool = False,
++    max_lines: int | None = None,
++) -> CellSnapshotJournalTailResult:
++    """Read new complete lines from a journal starting at a byte offset.
++
++    This function is intentionally non-blocking. A live viewer calls it
++    repeatedly. Live mode is therefore replay that has caught up with the end of
++    the file.
++    """
++
++    if offset < 0:
++        raise ValueError("offset must be >= 0")
++    if max_lines is not None and max_lines < 0:
++        raise ValueError("max_lines must be >= 0")
++
++    snapshots: list[CellSnapshot] = []
++    errors: list[str] = []
++    attempted = 0
++    dropped = 0
++    next_offset = offset
++
++    try:
++        if not path.exists():
++            raise FileNotFoundError(path)
++
++        with path.open("r", encoding="utf-8") as handle:
++            handle.seek(offset)
++
++            while max_lines is None or attempted < max_lines:
++                line_start = handle.tell()
++                line = handle.readline()
++                if line == "":
++                    next_offset = handle.tell()
++                    break
++
++                if not line.endswith("\n"):
++                    next_offset = line_start
++                    break
++
++                next_offset = handle.tell()
++                stripped = line.strip()
++                if not stripped:
++                    continue
++
++                attempted += 1
++                try:
++                    snapshots.append(CellSnapshot.from_json_line(stripped))
++                except Exception as exc:
++                    dropped += 1
++                    message = f"offset {line_start}: {type(exc).__name__}: {exc}"
++                    if strict:
++                        raise ValueError(message) from exc
++                    errors.append(message)
++
++    except Exception as exc:
++        if strict:
++            raise
++        errors.append(f"{type(exc).__name__}: {exc}")
++
++    return CellSnapshotJournalTailResult(
++        path=str(path),
++        start_offset=offset,
++        next_offset=next_offset,
++        attempted_lines=attempted,
++        snapshots=tuple(snapshots),
++        dropped_count=dropped,
++        errors=tuple(errors),
++    )
+diff --git a/tests/context/test_cell_snapshot_journal_reader.py b/tests/context/test_cell_snapshot_journal_reader.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_cell_snapshot_journal_reader.py
+@@ -0,0 +1,124 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++import pytest
++
++from context.cell_snapshot import CellSnapshot
++from context.cell_snapshot_journal import CellSnapshotJournalWriter
++from context.cell_snapshot_journal_reader import (
++    CELL_SNAPSHOT_JOURNAL_READER_SCHEMA,
++    iter_cell_snapshot_jsonl,
++    read_cell_snapshot_jsonl,
++    tail_cell_snapshot_jsonl,
++)
++
++
++def _snapshot(index: int, *, state: str = "running") -> CellSnapshot:
++    return CellSnapshot(
++        cell_id=f"cell-{index}",
++        source_task_id=f"task-{index}",
++        source_component_id="component-a",
++        source_class="llm.answer",
++        score=0.5 + index,
++        age=float(index),
++        cost=float(index * 2),
++        lifecycle_state=state,
++        observed_at=f"2026-07-03T10:00:0{index}Z",
++    )
++
++
++def test_journal_reader_replays_jsonl_in_order(tmp_path: Path) -> None:
++    path = tmp_path / "cells.jsonl"
++    CellSnapshotJournalWriter(path).append_many([_snapshot(1), _snapshot(2, state="completed")])
++
++    result = read_cell_snapshot_jsonl(path)
++
++    assert result.ok is True
++    assert result.schema == CELL_SNAPSHOT_JOURNAL_READER_SCHEMA
++    assert [snapshot.cell_id for snapshot in result.snapshots] == ["cell-1", "cell-2"]
++
++
++def test_journal_iterator_replays_valid_lines(tmp_path: Path) -> None:
++    path = tmp_path / "cells.jsonl"
++    CellSnapshotJournalWriter(path).append_many([_snapshot(1), _snapshot(2)])
++
++    snapshots = tuple(iter_cell_snapshot_jsonl(path))
++
++    assert [snapshot.cell_id for snapshot in snapshots] == ["cell-1", "cell-2"]
++
++
++def test_journal_reader_skips_invalid_lines_best_effort(tmp_path: Path) -> None:
++    path = tmp_path / "cells.jsonl"
++    path.write_text(_snapshot(1).to_json_line() + "not json\n" + _snapshot(2).to_json_line(), encoding="utf-8")
++
++    result = read_cell_snapshot_jsonl(path)
++
++    assert result.ok is False
++    assert result.attempted_lines == 3
++    assert [snapshot.cell_id for snapshot in result.snapshots] == ["cell-1", "cell-2"]
++    assert result.dropped_count == 1
++    assert result.errors
++
++
++def test_journal_reader_strict_mode_raises_on_invalid_line(tmp_path: Path) -> None:
++    path = tmp_path / "cells.jsonl"
++    path.write_text(_snapshot(1).to_json_line() + "not json\n", encoding="utf-8")
++
++    with pytest.raises(ValueError):
++        read_cell_snapshot_jsonl(path, strict=True)
++
++
++def test_journal_reader_missing_file_is_best_effort(tmp_path: Path) -> None:
++    result = read_cell_snapshot_jsonl(tmp_path / "missing.jsonl")
++
++    assert result.snapshots == ()
++    assert result.errors
++
++
++def test_journal_reader_limit_stops_after_valid_snapshot_count(tmp_path: Path) -> None:
++    path = tmp_path / "cells.jsonl"
++    CellSnapshotJournalWriter(path).append_many([_snapshot(1), _snapshot(2), _snapshot(3)])
++
++    result = read_cell_snapshot_jsonl(path, limit=2)
++
++    assert [snapshot.cell_id for snapshot in result.snapshots] == ["cell-1", "cell-2"]
++
++
++def test_journal_tail_reads_only_new_complete_lines(tmp_path: Path) -> None:
++    path = tmp_path / "cells.jsonl"
++    writer = CellSnapshotJournalWriter(path)
++    writer.append(_snapshot(1))
++
++    first = tail_cell_snapshot_jsonl(path)
++    assert [snapshot.cell_id for snapshot in first.snapshots] == ["cell-1"]
++
++    writer.append(_snapshot(2))
++    second = tail_cell_snapshot_jsonl(path, offset=first.next_offset)
++
++    assert second.start_offset == first.next_offset
++    assert [snapshot.cell_id for snapshot in second.snapshots] == ["cell-2"]
++
++
++def test_journal_tail_does_not_consume_incomplete_line(tmp_path: Path) -> None:
++    path = tmp_path / "cells.jsonl"
++    path.write_text(_snapshot(1).to_json_line(), encoding="utf-8")
++    offset = path.stat().st_size
++
++    path.write_text(path.read_text(encoding="utf-8") + json.dumps(_snapshot(2).to_json_dict()), encoding="utf-8")
++
++    result = tail_cell_snapshot_jsonl(path, offset=offset)
++
++    assert result.snapshots == ()
++    assert result.next_offset == offset
++
++
++def test_journal_tail_max_lines_bounds_work(tmp_path: Path) -> None:
++    path = tmp_path / "cells.jsonl"
++    CellSnapshotJournalWriter(path).append_many([_snapshot(1), _snapshot(2), _snapshot(3)])
++
++    result = tail_cell_snapshot_jsonl(path, max_lines=2)
++
++    assert result.attempted_lines == 2
++    assert [snapshot.cell_id for snapshot in result.snapshots] == ["cell-1", "cell-2"]
+diff --git a/tests/rules/test_cell_snapshot_journal_reader_rule.py b/tests/rules/test_cell_snapshot_journal_reader_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_cell_snapshot_journal_reader_rule.py
+@@ -0,0 +1,52 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_cell_snapshot_journal_reader_declares_versioned_schema() -> None:
++    source = _read("src/context/cell_snapshot_journal_reader.py")
++    assert 'CELL_SNAPSHOT_JOURNAL_READER_SCHEMA = "missipy.cell_snapshot_journal_reader.v1"' in source
++    assert "CellSnapshotJournalReadResult" in source
++    assert "CellSnapshotJournalTailResult" in source
++
++
++def test_cell_snapshot_journal_reader_is_observation_only() -> None:
++    source = _read("src/context/cell_snapshot_journal_reader.py")
++    forbidden = [
++        "vispy",
++        "Scheduler",
++        "EventBus",
++        "requests",
++        "urllib",
++        "httpx",
++        "subprocess",
++        "OPENAI_API_KEY",
++    ]
++    for token in forbidden:
++        assert token not in source
++
++
++def test_cell_snapshot_journal_reader_documents_replay_and_tail() -> None:
++    doc = _read("doc/contracts/CELL_SNAPSHOT_JOURNAL_READER_CONTRACT_V1.md")
++    assert "missipy.cell_snapshot_journal_reader.v1" in doc
++    assert "replay" in doc
++    assert "tail" in doc
++    assert "non-blocking" in doc
++    assert "Live mode is replay that has caught up" in doc
++
++
++def test_cell_snapshot_journal_reader_manifest_has_no_renderer_or_network() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PART8_5_CELL_SNAPSHOT_JOURNAL_REPLAY_TAIL_READER.md")
++    assert "src/context/cell_snapshot_journal_reader.py" in manifest
++    assert "VisPy" not in manifest
++    assert "SSE" not in manifest
++    assert "requirements" not in manifest
++    assert ".dot" not in manifest
++    assert ".svg" not in manifest
+diff --git a/doc/contracts/CELL_SNAPSHOT_JOURNAL_READER_CONTRACT_V1.md b/doc/contracts/CELL_SNAPSHOT_JOURNAL_READER_CONTRACT_V1.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/contracts/CELL_SNAPSHOT_JOURNAL_READER_CONTRACT_V1.md
+@@ -0,0 +1,52 @@
++# Cell Snapshot Journal Reader Contract v1
++
++```text
++schema: missipy.cell_snapshot_journal_reader.v1
++line schema: missipy.cell.v1
++```
++
++The cell snapshot journal reader is the replay/tail read boundary for the
++cell-population visualization track.
++
++It is observation-only.
++
++## Purpose
++
++```text
++JSONL cell snapshot journal
++→ replay reader
++→ tail reader
++→ VisPy, future mobile view, analysis scripts
++```
++
++The reader does not schedule, cancel, mutate, or decide work.
++
++## Replay
++
++Replay reads the journal from the beginning and returns ordered
++`missipy.cell.v1` snapshots.
++
++Best-effort mode skips invalid lines and reports errors. Strict mode raises on
++the first invalid line.
++
++## Tail
++
++Tail reads new complete lines from a byte offset and returns the next offset.
++
++Tail is non-blocking. It never waits for future data.
++
++Live mode is replay that has caught up to the end of the journal and then calls
++tail repeatedly.
++
++## Bounded work
++
++Tail supports a maximum line count so that visualization work can be bounded.
++
++Replay supports a limit for startup or diagnostic uses.
++
++## Boundary rule
++
++The reader must not import VisPy, server code, Scheduler code, EventBus code, or
++network clients.
++
++It reads files only. It does not emit commands.
+diff --git a/doc/releases/README_PART8_5_CELL_SNAPSHOT_JOURNAL_REPLAY_TAIL_READER.md b/doc/releases/README_PART8_5_CELL_SNAPSHOT_JOURNAL_REPLAY_TAIL_READER.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PART8_5_CELL_SNAPSHOT_JOURNAL_REPLAY_TAIL_READER.md
+@@ -0,0 +1,21 @@
++# Part 8.5 — Cell Snapshot Journal Replay/Tail Reader
++
++Part 8.5 adds replay and non-blocking tail readers for the cell snapshot JSONL
++journal.
++
++## Added
++
++- `src/context/cell_snapshot_journal_reader.py`
++- Replay reader.
++- Non-blocking tail reader.
++- Best-effort and strict modes.
++- Bounded replay/tail support.
++- Tests and contract documentation.
++
++## Not added
++
++- No EventBus consumer.
++- No recorder stream integration.
++- No VisPy.
++- No mobile SSE.
++- No optimization loop.
+diff --git a/doc/changelogs/CHANGELOG_PART8_5_CELL_SNAPSHOT_JOURNAL_REPLAY_TAIL_READER.md b/doc/changelogs/CHANGELOG_PART8_5_CELL_SNAPSHOT_JOURNAL_REPLAY_TAIL_READER.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PART8_5_CELL_SNAPSHOT_JOURNAL_REPLAY_TAIL_READER.md
+@@ -0,0 +1,24 @@
++# Changelog — Part 8.5 Cell Snapshot Journal Replay/Tail Reader
++
++## Added
++
++- `CELL_SNAPSHOT_JOURNAL_READER_SCHEMA`
++- `CellSnapshotJournalReadResult`
++- `CellSnapshotJournalTailResult`
++- `iter_cell_snapshot_jsonl`
++- `read_cell_snapshot_jsonl`
++- `tail_cell_snapshot_jsonl`
++
++## Behavior
++
++Replay reads historical JSONL snapshots.
++
++Tail reads new complete lines from a byte offset without blocking.
++
++## Not changed
++
++- No Scheduler path.
++- No EventBus subscription.
++- No recorder core modification.
++- No renderer dependency.
++- No network dependency.
+diff --git a/doc/code-rules/PART8_5_CELL_SNAPSHOT_JOURNAL_READER_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PART8_5_CELL_SNAPSHOT_JOURNAL_READER_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PART8_5_CELL_SNAPSHOT_JOURNAL_READER_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,21 @@
++# Part 8.5 Cell Snapshot Journal Reader Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: The patch adds a bounded, observation-only replay/tail reader for the cell snapshot JSONL journal. It does not add rendering, network, EventBus, Scheduler, recorder core, or command paths.
++
++live_path_status: observation read boundary only
++live_path_uses_real_backend: local file reader
++external_dependencies_added: false
++scheduler_modified: false
++eventbus_modified: false
++recorder_core_modified: false
++network_added: false
++github_api_added: false
++vispy_added: false
++llm_or_openvino_added: false
++```
++
++Live visualization remains replay/tail over a journal, not a direct command or
++bus path.
+diff --git a/doc/reports/phase8/PART8_5_CELL_SNAPSHOT_JOURNAL_REPLAY_TAIL_READER_TEST_REPORT.md b/doc/reports/phase8/PART8_5_CELL_SNAPSHOT_JOURNAL_REPLAY_TAIL_READER_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase8/PART8_5_CELL_SNAPSHOT_JOURNAL_REPLAY_TAIL_READER_TEST_REPORT.md
+@@ -0,0 +1,19 @@
++# Part 8.5 Cell Snapshot Journal Replay/Tail Reader Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/context/test_cell_snapshot_journal_reader.py
++PYTHONPATH=src:. pytest -q tests/rules/test_cell_snapshot_journal_reader_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Expected
++
++```text
++journal reader tests: pass
++rules: pass
++full suite: pass
++```
+diff --git a/doc/manifests/MANIFEST_PART8_5_CELL_SNAPSHOT_JOURNAL_REPLAY_TAIL_READER.md b/doc/manifests/MANIFEST_PART8_5_CELL_SNAPSHOT_JOURNAL_REPLAY_TAIL_READER.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PART8_5_CELL_SNAPSHOT_JOURNAL_REPLAY_TAIL_READER.md
+@@ -0,0 +1,21 @@
++# Manifest — Part 8.5 Cell Snapshot Journal Replay/Tail Reader
++
++## Added
++
++- `src/context/cell_snapshot_journal_reader.py`
++- `tests/context/test_cell_snapshot_journal_reader.py`
++- `tests/rules/test_cell_snapshot_journal_reader_rule.py`
++- `doc/contracts/CELL_SNAPSHOT_JOURNAL_READER_CONTRACT_V1.md`
++- `doc/releases/README_PART8_5_CELL_SNAPSHOT_JOURNAL_REPLAY_TAIL_READER.md`
++- `doc/changelogs/CHANGELOG_PART8_5_CELL_SNAPSHOT_JOURNAL_REPLAY_TAIL_READER.md`
++- `doc/code-rules/PART8_5_CELL_SNAPSHOT_JOURNAL_READER_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase8/PART8_5_CELL_SNAPSHOT_JOURNAL_REPLAY_TAIL_READER_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PART8_5_CELL_SNAPSHOT_JOURNAL_REPLAY_TAIL_READER.md`
++
++## Modified
++
++- None.
++
++## Runtime dependencies
++
++- None added.
