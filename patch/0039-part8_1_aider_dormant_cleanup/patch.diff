@@ -1,0 +1,438 @@
+diff --git a/tools/local_ai_dormant_cleanup.py b/tools/local_ai_dormant_cleanup.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tools/local_ai_dormant_cleanup.py
+@@ -0,0 +1,123 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++from dataclasses import dataclass
++from pathlib import Path
++
++
++GENERATED_ARTIFACTS = (
++    Path("doc/maintenance/roadmap_b_aider_prompt.md"),
++    Path("doc/maintenance/roadmap_b_aider_orchestrator_run_report.json"),
++)
++
++LOCAL_ONLY_PATHS = (
++    Path(".var"),
++    Path(".env.aider312"),
++)
++
++PATCH_PREFIXES = (
++    "0039-part8_roadmap_b_part8_1_local_data_contract",
++)
++
++GITIGNORE_BLOCK = """\
++# Local AI / Aider generated operator artifacts
++doc/maintenance/roadmap_b_aider_prompt.md
++doc/maintenance/roadmap_b_aider_orchestrator_run_report.json
++.var/
++.env.aider312
++.aider*
++"""
++
++
++@dataclass(frozen=True)
++class CleanupPlan:
++    files_to_remove: tuple[Path, ...]
++    directories_to_remove: tuple[Path, ...]
++    gitignore_needs_update: bool
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": "missipy.local_ai_dormant_cleanup.v1",
++            "files_to_remove": [str(path) for path in self.files_to_remove],
++            "directories_to_remove": [str(path) for path in self.directories_to_remove],
++            "gitignore_needs_update": self.gitignore_needs_update,
++        }
++
++
++def build_cleanup_plan(root: Path, *, update_gitignore: bool = False) -> CleanupPlan:
++    files = tuple(path for path in GENERATED_ARTIFACTS if (root / path).is_file())
++
++    dirs: list[Path] = []
++    for local_path in LOCAL_ONLY_PATHS:
++        candidate = root / local_path
++        if candidate.is_dir():
++            dirs.append(local_path)
++
++    patch_root = root / "patch"
++    if patch_root.is_dir():
++        for child in sorted(patch_root.iterdir()):
++            if child.is_dir() and any(child.name.startswith(prefix) for prefix in PATCH_PREFIXES):
++                dirs.append(Path("patch") / child.name)
++
++    gitignore_needs_update = False
++    if update_gitignore:
++        gitignore = root / ".gitignore"
++        current = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
++        gitignore_needs_update = "roadmap_b_aider_prompt.md" not in current
++
++    return CleanupPlan(
++        files_to_remove=files,
++        directories_to_remove=tuple(dirs),
++        gitignore_needs_update=gitignore_needs_update,
++    )
++
++
++def apply_cleanup_plan(root: Path, plan: CleanupPlan, *, update_gitignore: bool = False) -> None:
++    for relative_path in plan.files_to_remove:
++        target = root / relative_path
++        if target.exists():
++            target.unlink()
++
++    for relative_path in plan.directories_to_remove:
++        target = root / relative_path
++        if target.is_dir():
++            for child in sorted(target.rglob("*"), reverse=True):
++                if child.is_file() or child.is_symlink():
++                    child.unlink()
++                elif child.is_dir():
++                    child.rmdir()
++            target.rmdir()
++        elif target.exists():
++            target.unlink()
++
++    if update_gitignore and plan.gitignore_needs_update:
++        gitignore = root / ".gitignore"
++        current = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""
++        separator = "\n" if current and not current.endswith("\n") else ""
++        gitignore.write_text(current + separator + "\n" + GITIGNORE_BLOCK, encoding="utf-8")
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description="Clean local AI/Aider generated artifacts and put Aider in dormant mode.")
++    parser.add_argument("--root", default=".")
++    parser.add_argument("--apply", action="store_true")
++    parser.add_argument("--update-gitignore", action="store_true")
++    args = parser.parse_args()
++
++    root = Path(args.root).resolve()
++    plan = build_cleanup_plan(root, update_gitignore=args.update_gitignore)
++
++    print(plan.to_json_dict())
++
++    if args.apply:
++        apply_cleanup_plan(root, plan, update_gitignore=args.update_gitignore)
++        print("cleanup_applied: true")
++    else:
++        print("cleanup_applied: false")
++
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_local_ai_dormant_cleanup.py b/tests/tools/test_local_ai_dormant_cleanup.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/tools/test_local_ai_dormant_cleanup.py
+@@ -0,0 +1,66 @@
++from __future__ import annotations
++
++from pathlib import Path
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOLS = ROOT / "tools"
++if str(TOOLS) not in sys.path:
++    sys.path.insert(0, str(TOOLS))
++
++from local_ai_dormant_cleanup import (  # noqa: E402
++    GITIGNORE_BLOCK,
++    apply_cleanup_plan,
++    build_cleanup_plan,
++)
++
++
++def test_cleanup_plan_detects_aider_generated_files(tmp_path: Path) -> None:
++    artifact = tmp_path / "doc" / "maintenance" / "roadmap_b_aider_prompt.md"
++    artifact.parent.mkdir(parents=True)
++    artifact.write_text("generated", encoding="utf-8")
++
++    plan = build_cleanup_plan(tmp_path)
++
++    assert Path("doc/maintenance/roadmap_b_aider_prompt.md") in plan.files_to_remove
++
++
++def test_cleanup_plan_detects_failed_aider_patch_dir(tmp_path: Path) -> None:
++    patch_dir = tmp_path / "patch" / "0039-part8_roadmap_b_part8_1_local_data_contract"
++    patch_dir.mkdir(parents=True)
++
++    plan = build_cleanup_plan(tmp_path)
++
++    assert Path("patch/0039-part8_roadmap_b_part8_1_local_data_contract") in plan.directories_to_remove
++
++
++def test_cleanup_apply_removes_files_and_directories(tmp_path: Path) -> None:
++    artifact = tmp_path / "doc" / "maintenance" / "roadmap_b_aider_orchestrator_run_report.json"
++    artifact.parent.mkdir(parents=True)
++    artifact.write_text("{}", encoding="utf-8")
++    patch_dir = tmp_path / "patch" / "0039-part8_roadmap_b_part8_1_local_data_contract"
++    patch_dir.mkdir(parents=True)
++    (patch_dir / "patch.diff").write_text("", encoding="utf-8")
++
++    plan = build_cleanup_plan(tmp_path)
++    apply_cleanup_plan(tmp_path, plan)
++
++    assert not artifact.exists()
++    assert not patch_dir.exists()
++
++
++def test_cleanup_updates_gitignore_idempotently(tmp_path: Path) -> None:
++    gitignore = tmp_path / ".gitignore"
++    gitignore.write_text("*.pyc\n", encoding="utf-8")
++
++    plan = build_cleanup_plan(tmp_path, update_gitignore=True)
++    apply_cleanup_plan(tmp_path, plan, update_gitignore=True)
++    first = gitignore.read_text(encoding="utf-8")
++
++    plan = build_cleanup_plan(tmp_path, update_gitignore=True)
++    apply_cleanup_plan(tmp_path, plan, update_gitignore=True)
++    second = gitignore.read_text(encoding="utf-8")
++
++    assert GITIGNORE_BLOCK in first
++    assert first == second
+diff --git a/tests/rules/test_local_ai_dormant_cleanup_rule.py b/tests/rules/test_local_ai_dormant_cleanup_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_local_ai_dormant_cleanup_rule.py
+@@ -0,0 +1,39 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_aider_is_documented_as_dormant_not_removed() -> None:
++    doc = _read("doc/maintenance/LOCAL_AI_AIDER_DORMANT.md")
++    assert "Aider is dormant" in doc
++    assert "not deleted" in doc
++    assert "not part of the active development path" in doc
++
++
++def test_cleanup_tool_targets_generated_aider_artifacts_only() -> None:
++    source = _read("tools/local_ai_dormant_cleanup.py")
++    assert "roadmap_b_aider_prompt.md" in source
++    assert "roadmap_b_aider_orchestrator_run_report.json" in source
++    assert "0039-part8_roadmap_b_part8_1_local_data_contract" in source
++    assert "src/kernel/scheduler.py" not in source
++
++
++def test_cleanup_patch_does_not_add_external_api_path() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PART8_1_AIDER_DORMANT_CLEANUP.md")
++    assert "OPENAI_API_KEY" not in manifest
++    assert "remote mutation" not in manifest.lower()
++    assert ".dot" not in manifest
++    assert ".svg" not in manifest
++
++
++def test_cleanup_keeps_patch_queue_as_active_development_path() -> None:
++    doc = _read("doc/maintenance/LOCAL_AI_AIDER_DORMANT.md")
++    assert "apply_patch_queue.py" in doc
++    assert "ChatGPT Plus 5.5 Advanced" in doc
+diff --git a/doc/maintenance/LOCAL_AI_AIDER_DORMANT.md b/doc/maintenance/LOCAL_AI_AIDER_DORMANT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/maintenance/LOCAL_AI_AIDER_DORMANT.md
+@@ -0,0 +1,50 @@
++# Local AI / Aider Dormant Mode
++
++Aider is dormant.
++
++It is not deleted because the experiment is useful context, but it is not part
++of the active development path.
++
++## Active development path
++
++```text
++ChatGPT Plus 5.5 Advanced
++→ patch bundle
++→ apply_patch_queue.py
++→ tests
++→ commit/push
++```
++
++## Dormant path
++
++```text
++Aider/API
++→ paused
++```
++
++Aider can be revisited later only after:
++
++```text
++- context capsules are much smaller
++- generated files are outside versioned documentation paths
++- interactive mode is explicit
++- model/API cost and rate limits are understood
++```
++
++## Cleanup artifacts
++
++The failed Aider experiment generated local/operator files:
++
++```text
++doc/maintenance/roadmap_b_aider_prompt.md
++doc/maintenance/roadmap_b_aider_orchestrator_run_report.json
++patch/0039-part8_roadmap_b_part8_1_local_data_contract/
++```
++
++These files are not source-of-truth design documents. They are generated
++operator artifacts and can be removed.
++
++## Rule
++
++A local model, Aider, or any other coding helper must not become the authority.
++The repository, contracts, tests, rules, and patch queue remain the authority.
+diff --git a/doc/releases/README_PART8_1_AIDER_DORMANT_CLEANUP.md b/doc/releases/README_PART8_1_AIDER_DORMANT_CLEANUP.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PART8_1_AIDER_DORMANT_CLEANUP.md
+@@ -0,0 +1,20 @@
++# Part 8.1 — Aider Dormant Cleanup
++
++This patch adds a cleanup tool and documentation for putting Aider in dormant
++mode.
++
++## Scope
++
++- Keep Roadmap B active.
++- Keep patch queue workflow active.
++- Clean generated Aider artifacts.
++- Document that Aider/API is paused.
++
++## Out of scope
++
++- No autonomous agent.
++- No API integration.
++- No GitHub mutation.
++- No Scheduler change.
++- No DOT.
++- No SVG.
+diff --git a/doc/changelogs/CHANGELOG_PART8_1_AIDER_DORMANT_CLEANUP.md b/doc/changelogs/CHANGELOG_PART8_1_AIDER_DORMANT_CLEANUP.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PART8_1_AIDER_DORMANT_CLEANUP.md
+@@ -0,0 +1,22 @@
++# Changelog — Part 8.1 Aider Dormant Cleanup
++
++## Added
++
++- `tools/local_ai_dormant_cleanup.py`
++- Tests for cleanup planning and application.
++- Dormant-mode documentation.
++- Code-rule alignment note.
++- Manifest and test report.
++
++## Behavior
++
++The cleanup tool removes generated Aider prompt/report artifacts and the failed
++Aider-created patch directory. It can also append ignore rules for these local
++artifacts.
++
++## Not changed
++
++- No Scheduler path.
++- No EventBus path.
++- No external API path.
++- No remote mutation path.
+diff --git a/doc/code-rules/PART8_1_AIDER_DORMANT_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PART8_1_AIDER_DORMANT_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PART8_1_AIDER_DORMANT_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,18 @@
++# Part 8.1 Aider Dormant Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: The patch confines Aider cleanup to an operator tool. It does not add a living path, does not touch the Scheduler, does not add a command path, and does not add external API integration. Generated artifacts are treated as local/operator artifacts, not source-of-truth contracts.
++
++live_path_status: operator cleanup only
++live_path_uses_real_backend: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++```
++
++Aider remains dormant. The active development path remains patch queue based.
+diff --git a/doc/reports/phase8/PART8_1_AIDER_DORMANT_TEST_REPORT.md b/doc/reports/phase8/PART8_1_AIDER_DORMANT_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase8/PART8_1_AIDER_DORMANT_TEST_REPORT.md
+@@ -0,0 +1,19 @@
++# Part 8.1 Aider Dormant Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/tools/test_local_ai_dormant_cleanup.py
++PYTHONPATH=src:. pytest -q tests/rules/test_local_ai_dormant_cleanup_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Expected
++
++```text
++cleanup tests: pass
++rules: pass
++full suite: pass
++```
+diff --git a/doc/manifests/MANIFEST_PART8_1_AIDER_DORMANT_CLEANUP.md b/doc/manifests/MANIFEST_PART8_1_AIDER_DORMANT_CLEANUP.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PART8_1_AIDER_DORMANT_CLEANUP.md
+@@ -0,0 +1,27 @@
++# Manifest — Part 8.1 Aider Dormant Cleanup
++
++## Added
++
++- `tools/local_ai_dormant_cleanup.py`
++- `tests/tools/test_local_ai_dormant_cleanup.py`
++- `tests/rules/test_local_ai_dormant_cleanup_rule.py`
++- `doc/maintenance/LOCAL_AI_AIDER_DORMANT.md`
++- `doc/releases/README_PART8_1_AIDER_DORMANT_CLEANUP.md`
++- `doc/changelogs/CHANGELOG_PART8_1_AIDER_DORMANT_CLEANUP.md`
++- `doc/code-rules/PART8_1_AIDER_DORMANT_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase8/PART8_1_AIDER_DORMANT_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PART8_1_AIDER_DORMANT_CLEANUP.md`
++
++## Cleanup targets
++
++The cleanup tool can remove:
++
++- `doc/maintenance/roadmap_b_aider_prompt.md`
++- `doc/maintenance/roadmap_b_aider_orchestrator_run_report.json`
++- `patch/0039-part8_roadmap_b_part8_1_local_data_contract/`
++
++## Modified
++
++- None by the patch itself.
++
++The generated artifacts are removed by running the cleanup tool.
