@@ -25,7 +25,7 @@ def test_github_projection_payload_has_no_network_or_process_calls() -> None:
 
 
 def test_github_projection_payload_does_not_modify_scheduler() -> None:
-    manifest = _read("MANIFEST_PHASE7_2_CHANGED_FILES.md")
+    manifest = _read("doc/manifests/MANIFEST_PHASE7_2_CHANGED_FILES.md")
     assert "src/kernel/scheduler.py" not in manifest
     assert "src/context/source_candidate_github_projection_payload.py" in manifest
 

@@ -18,7 +18,7 @@ def test_phase6_closure_audit_is_local_only() -> None:
 
 
 def test_phase6_closure_audit_does_not_modify_scheduler() -> None:
-    manifest = _read("MANIFEST_PHASE6_18_CHANGED_FILES.md")
+    manifest = _read("doc/manifests/MANIFEST_PHASE6_18_CHANGED_FILES.md")
     assert "src/kernel/scheduler.py" not in manifest
     assert "src/context/source_candidate_phase6_closure_audit.py" in manifest
 

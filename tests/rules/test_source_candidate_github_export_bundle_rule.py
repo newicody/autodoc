@@ -24,7 +24,7 @@ def test_github_export_bundle_uses_fake_adapter_and_gate() -> None:
 
 
 def test_github_export_bundle_does_not_modify_scheduler() -> None:
-    manifest = _read("MANIFEST_PHASE7_5_CHANGED_FILES.md")
+    manifest = _read("doc/manifests/MANIFEST_PHASE7_5_CHANGED_FILES.md")
     assert "src/kernel/scheduler.py" not in manifest
     assert "src/context/source_candidate_github_export_bundle.py" in manifest
 

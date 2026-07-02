@@ -18,7 +18,7 @@ def test_handoff_dry_run_is_local_only() -> None:
 
 
 def test_handoff_dry_run_does_not_modify_scheduler() -> None:
-    manifest = _read("MANIFEST_PHASE6_17_CHANGED_FILES.md")
+    manifest = _read("doc/manifests/MANIFEST_PHASE6_17_CHANGED_FILES.md")
     assert "src/kernel/scheduler.py" not in manifest
     assert "src/context/source_candidate_projection_handoff_dry_run.py" in manifest
 

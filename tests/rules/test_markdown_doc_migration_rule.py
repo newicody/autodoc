@@ -31,6 +31,6 @@ def test_tools_package_or_sys_path_bootstrap_exists_for_imports() -> None:
 
 
 def test_markdown_doc_migration_does_not_modify_scheduler() -> None:
-    manifest = _read("MANIFEST_PHASE7_7_CHANGED_FILES.md")
+    manifest = _read("doc/manifests/MANIFEST_PHASE7_7_CHANGED_FILES.md")
     assert "src/kernel/scheduler.py" not in manifest
     assert "tools/markdown_doc_migrate_repo.py" in manifest

@@ -28,6 +28,6 @@ def test_markdown_doc_layout_has_maintenance_doc() -> None:
 
 
 def test_markdown_doc_layout_does_not_modify_scheduler() -> None:
-    manifest = _read("MANIFEST_PHASE7_6_CHANGED_FILES.md")
+    manifest = _read("doc/manifests/MANIFEST_PHASE7_6_CHANGED_FILES.md")
     assert "src/kernel/scheduler.py" not in manifest
     assert "tools/markdown_doc_layout.py" in manifest

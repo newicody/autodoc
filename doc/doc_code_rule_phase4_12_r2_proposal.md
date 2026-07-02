@@ -328,7 +328,7 @@ Le réalignement attendu est :
 -> même règle de rapport, sans duplication
 ```
 
-### 8. Revue obligatoire de `code_rule.md` à chaque phase
+### 8. Revue obligatoire de `code-rules/code_rule.md` à chaque phase
 
 Chaque phase doit indiquer explicitement si elle modifie ou non les règles de programmation du projet.
 
@@ -340,14 +340,14 @@ code_rule_update_required: true|false
 code_rule_reason: ...
 ```
 
-Si une phase introduit une nouvelle technique de programmation, une nouvelle frontière d'IO, une nouvelle politique, un nouveau backend, une nouvelle forme d'adaptateur ou une nouvelle exception apparente, elle doit proposer un ajout minimal à `doc/code_rule.md`.
+Si une phase introduit une nouvelle technique de programmation, une nouvelle frontière d'IO, une nouvelle politique, un nouveau backend, une nouvelle forme d'adaptateur ou une nouvelle exception apparente, elle doit proposer un ajout minimal à `code-rules/code_rule.md`.
 
 La règle est :
 
 ```text
-on n'adapte pas code_rule.md pour justifier une dérive ;
-on adapte le code pour respecter code_rule.md ;
-on ne complète code_rule.md que lorsqu'une nouvelle technique mérite d'être explicitée.
+on n'adapte pas code-rules/code_rule.md pour justifier une dérive ;
+on adapte le code pour respecter code-rules/code_rule.md ;
+on ne complète code-rules/code_rule.md que lorsqu'une nouvelle technique mérite d'être explicitée.
 ```
 
 ### 9. Tests de règles

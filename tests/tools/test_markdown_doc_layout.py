@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
+
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -50,8 +51,14 @@ def test_layout_plan_skips_patch_readme_and_moves_root_reports(tmp_path: Path) -
     plan = build_markdown_layout_plan(tmp_path)
 
     moves = {(move.source.name, move.target.as_posix()) for move in plan.moves}
-    assert ("PHASE1_3_TEST_REPORT.md", (tmp_path / "doc/reports/phase1/PHASE1_3_TEST_REPORT.md").as_posix()) in moves
-    assert ("MANIFEST_CHANGED_FILES.md", (tmp_path / "doc/manifests/MANIFEST_CHANGED_FILES.md").as_posix()) in moves
+    assert (
+        "PHASE1_3_TEST_REPORT.md",
+        (tmp_path / "doc/reports/phase1/PHASE1_3_TEST_REPORT.md").as_posix(),
+    ) in moves
+    assert (
+        "MANIFEST_CHANGED_FILES.md",
+        (tmp_path / "doc/manifests/MANIFEST_CHANGED_FILES.md").as_posix(),
+    ) in moves
     assert any(path.name == "README.md" for path in plan.kept)
     assert any("patch/0001/README.md" in path.as_posix() for path in plan.skipped)
 

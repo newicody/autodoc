@@ -11,7 +11,7 @@ def _read(relative: str) -> str:
 
 
 def test_code_rule_preserves_kernel_identity_and_adds_only_e5_addendum() -> None:
-    text = _read("doc/code_rule.md")
+    text = _read("doc/code-rules/code_rule.md")
 
     assert "# Header de recherche / Philosophie du projet" in text
     assert "## Micro-Kernel Coopératif IA" in text

@@ -24,7 +24,7 @@ def test_external_projection_contract_is_target_neutral() -> None:
 
 
 def test_external_projection_contract_does_not_modify_scheduler() -> None:
-    manifest = _read("MANIFEST_PHASE7_1_CHANGED_FILES.md")
+    manifest = _read("doc/manifests/MANIFEST_PHASE7_1_CHANGED_FILES.md")
     assert "src/kernel/scheduler.py" not in manifest
     assert "src/context/source_candidate_external_projection_contract.py" in manifest
 

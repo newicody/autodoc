@@ -31,7 +31,7 @@ def test_github_adapter_requires_remote_mutation_gate() -> None:
 
 
 def test_github_adapter_does_not_modify_scheduler() -> None:
-    manifest = _read("MANIFEST_PHASE7_4_CHANGED_FILES.md")
+    manifest = _read("doc/manifests/MANIFEST_PHASE7_4_CHANGED_FILES.md")
     assert "src/kernel/scheduler.py" not in manifest
     assert "src/context/source_candidate_github_adapter.py" in manifest
 

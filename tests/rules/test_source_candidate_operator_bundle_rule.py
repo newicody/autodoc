@@ -34,6 +34,6 @@ def test_source_candidate_operator_bundle_adds_no_external_backend_tokens() -> N
 
 
 def test_phase6_10_documents_operator_bundle() -> None:
-    assert (ROOT / "PHASE6_10_TEST_REPORT.md").exists()
-    assert (ROOT / "doc/CHANGELOG_PHASE6_10_SOURCE_CANDIDATE_OPERATOR_BUNDLE.md").exists()
+    assert (ROOT / "doc/reports/phase6/PHASE6_10_TEST_REPORT.md").exists()
+    assert (ROOT / "doc/changelogs/CHANGELOG_PHASE6_10_SOURCE_CANDIDATE_OPERATOR_BUNDLE.md").exists()
     assert (ROOT / "doc/docs/architecture/context/51_source_candidate_operator_bundle.dot").exists()

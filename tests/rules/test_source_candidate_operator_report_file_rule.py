@@ -33,6 +33,6 @@ def test_source_candidate_operator_report_file_adds_no_external_backend_tokens()
 
 
 def test_phase6_9_documents_operator_report_file_artifact() -> None:
-    assert (ROOT / "PHASE6_9_TEST_REPORT.md").exists()
-    assert (ROOT / "doc/CHANGELOG_PHASE6_9_SOURCE_CANDIDATE_OPERATOR_REPORT_FILE.md").exists()
+    assert (ROOT / "doc/reports/phase6/PHASE6_9_TEST_REPORT.md").exists()
+    assert (ROOT / "doc/changelogs/CHANGELOG_PHASE6_9_SOURCE_CANDIDATE_OPERATOR_REPORT_FILE.md").exists()
     assert (ROOT / "doc/docs/architecture/context/50_source_candidate_operator_report_file.dot").exists()

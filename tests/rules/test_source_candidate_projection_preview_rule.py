@@ -18,7 +18,7 @@ def test_projection_preview_is_local_and_additive() -> None:
 
 
 def test_projection_preview_does_not_modify_scheduler() -> None:
-    manifest = _read("MANIFEST_PHASE6_13_CHANGED_FILES.md")
+    manifest = _read("doc/manifests/MANIFEST_PHASE6_13_CHANGED_FILES.md")
     assert "src/kernel/scheduler.py" not in manifest
     assert "src/context/source_candidate_projection_preview.py" in manifest
 

@@ -22,6 +22,6 @@ def test_source_candidate_review_audit_cli_reuses_review_scheduler_path() -> Non
 
 
 def test_phase6_7_documents_review_audit_summary() -> None:
-    assert (ROOT / "PHASE6_7_TEST_REPORT.md").exists()
-    assert (ROOT / "doc/CHANGELOG_PHASE6_7_SOURCE_CANDIDATE_REVIEW_AUDIT.md").exists()
+    assert (ROOT / "doc/reports/phase6/PHASE6_7_TEST_REPORT.md").exists()
+    assert (ROOT / "doc/changelogs/CHANGELOG_PHASE6_7_SOURCE_CANDIDATE_REVIEW_AUDIT.md").exists()
     assert (ROOT / "doc/docs/architecture/context/48_source_candidate_review_audit_summary.dot").exists()
