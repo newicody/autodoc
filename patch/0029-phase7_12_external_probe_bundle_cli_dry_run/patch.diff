@@ -1,0 +1,513 @@
+diff --git a/tools/source_candidate_external_probe_bundle_cli.py b/tools/source_candidate_external_probe_bundle_cli.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tools/source_candidate_external_probe_bundle_cli.py
+@@ -0,0 +1,120 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++import json
++from dataclasses import dataclass
++from pathlib import Path
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[1]
++SRC = ROOT / "src"
++if str(SRC) not in sys.path:
++    sys.path.insert(0, str(SRC))
++
++from context.source_candidate_external_probe_bundle import (  # noqa: E402
++    build_source_candidate_external_probe_bundle,
++    render_source_candidate_external_probe_bundle,
++)
++
++
++_PLAN_SCHEMA = "missipy.source_candidate.external_probe_bundle_cli_plan.v1"
++
++
++@dataclass(frozen=True)
++class SourceCandidateExternalProbeBundleCliPlan:
++    output_dir: Path
++    operator_review_report_path: Path
++    probe_request_path: Path
++    probe_result_path: Path
++    apply: bool
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": _PLAN_SCHEMA,
++            "output_dir": str(self.output_dir),
++            "operator_review_report_path": str(self.operator_review_report_path),
++            "probe_request_path": str(self.probe_request_path),
++            "probe_result_path": str(self.probe_result_path),
++            "apply": self.apply,
++            "writes_bundle": self.apply,
++        }
++
++
++def build_source_candidate_external_probe_bundle_cli_plan(
++    *,
++    output_dir: Path,
++    operator_review_report_path: Path,
++    probe_request_path: Path,
++    probe_result_path: Path,
++    apply: bool = False,
++) -> SourceCandidateExternalProbeBundleCliPlan:
++    return SourceCandidateExternalProbeBundleCliPlan(
++        output_dir=output_dir,
++        operator_review_report_path=operator_review_report_path,
++        probe_request_path=probe_request_path,
++        probe_result_path=probe_result_path,
++        apply=apply,
++    )
++
++
++def render_source_candidate_external_probe_bundle_cli_plan(
++    plan: SourceCandidateExternalProbeBundleCliPlan,
++) -> str:
++    mode = "apply" if plan.apply else "dry-run"
++    return "\n".join(
++        [
++            f"external probe bundle cli: {mode}",
++            f"output_dir: {plan.output_dir}",
++            f"operator_review_report_path: {plan.operator_review_report_path}",
++            f"probe_request_path: {plan.probe_request_path}",
++            f"probe_result_path: {plan.probe_result_path}",
++            f"writes_bundle: {plan.apply}",
++        ]
++    )
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(
++        description="Plan or create a local SourceCandidate external probe bundle."
++    )
++    parser.add_argument("--output-dir", type=Path, required=True)
++    parser.add_argument("--operator-review-report", type=Path, required=True)
++    parser.add_argument("--probe-request", type=Path, required=True)
++    parser.add_argument("--probe-result", type=Path, required=True)
++    parser.add_argument("--apply", action="store_true", help="write the local bundle")
++    parser.add_argument("--json", action="store_true", help="print JSON output")
++    args = parser.parse_args(argv)
++
++    plan = build_source_candidate_external_probe_bundle_cli_plan(
++        output_dir=args.output_dir,
++        operator_review_report_path=args.operator_review_report,
++        probe_request_path=args.probe_request,
++        probe_result_path=args.probe_result,
++        apply=args.apply,
++    )
++
++    if not plan.apply:
++        if args.json:
++            print(json.dumps(plan.to_json_dict(), ensure_ascii=False, indent=2, sort_keys=True))
++        else:
++            print(render_source_candidate_external_probe_bundle_cli_plan(plan))
++        return 0
++
++    bundle = build_source_candidate_external_probe_bundle(
++        output_dir=plan.output_dir,
++        operator_review_report_path=plan.operator_review_report_path,
++        probe_request_path=plan.probe_request_path,
++        probe_result_path=plan.probe_result_path,
++    )
++
++    if args.json:
++        print(json.dumps(bundle.to_json_dict(), ensure_ascii=False, indent=2, sort_keys=True))
++    else:
++        print(render_source_candidate_external_probe_bundle(bundle))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_source_candidate_external_probe_bundle_cli.py b/tests/tools/test_source_candidate_external_probe_bundle_cli.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/tools/test_source_candidate_external_probe_bundle_cli.py
+@@ -0,0 +1,176 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOLS = ROOT / "tools"
++if str(TOOLS) not in sys.path:
++    sys.path.insert(0, str(TOOLS))
++
++from source_candidate_external_probe_bundle_cli import (  # noqa: E402
++    build_source_candidate_external_probe_bundle_cli_plan,
++    main,
++    render_source_candidate_external_probe_bundle_cli_plan,
++)
++
++
++def _write_probe_inputs(path: Path) -> tuple[Path, Path, Path]:
++    path.mkdir(parents=True)
++
++    operator_review = path / "operator_external_review_report.json"
++    request = path / "read_only_external_probe_request.json"
++    result = path / "read_only_external_probe_result.json"
++
++    operator_review.write_text(
++        json.dumps(
++            {
++                "schema": "missipy.source_candidate.operator_external_review_report.v1",
++                "bundle_path": "/tmp/github_export_bundle",
++                "repository": "newicody/autodoc",
++                "dry_run": True,
++                "mutation_allowed": True,
++                "operation_count": 1,
++                "artifact_count": 5,
++                "finding_count": 0,
++                "recommended_action": "operator_review",
++                "findings": [],
++            }
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++    request.write_text(
++        json.dumps(
++            {
++                "schema": "missipy.source_candidate.read_only_external_probe_request.v1",
++                "target_kind": "github_project_surface",
++                "repository": "newicody/autodoc",
++                "dry_run": True,
++                "requested_checks": ["repository_visible"],
++            }
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++    result.write_text(
++        json.dumps(
++            {
++                "schema": "missipy.source_candidate.read_only_external_probe_result.v1",
++                "target_kind": "github_project_surface",
++                "repository": "newicody/autodoc",
++                "read_only": True,
++                "external_call_performed": False,
++                "probe_allowed": True,
++                "check_count": 1,
++                "finding_count": 0,
++                "findings": [],
++            }
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++    return operator_review, request, result
++
++
++def test_external_probe_bundle_cli_plan_is_dry_run_by_default(tmp_path: Path) -> None:
++    plan = build_source_candidate_external_probe_bundle_cli_plan(
++        output_dir=tmp_path / "bundle",
++        operator_review_report_path=tmp_path / "operator.json",
++        probe_request_path=tmp_path / "request.json",
++        probe_result_path=tmp_path / "result.json",
++    )
++
++    assert plan.apply is False
++    assert plan.to_json_dict()["writes_bundle"] is False
++
++
++def test_external_probe_bundle_cli_plan_render_is_stable(tmp_path: Path) -> None:
++    plan = build_source_candidate_external_probe_bundle_cli_plan(
++        output_dir=tmp_path / "bundle",
++        operator_review_report_path=tmp_path / "operator.json",
++        probe_request_path=tmp_path / "request.json",
++        probe_result_path=tmp_path / "result.json",
++    )
++
++    text = render_source_candidate_external_probe_bundle_cli_plan(plan)
++
++    assert "external probe bundle cli: dry-run" in text
++    assert "writes_bundle: False" in text
++
++
++def test_external_probe_bundle_cli_dry_run_does_not_write_bundle(tmp_path: Path, capsys) -> None:
++    inputs = tmp_path / "inputs"
++    output = tmp_path / "bundle"
++    operator_review, request, result = _write_probe_inputs(inputs)
++
++    exit_code = main(
++        [
++            "--output-dir",
++            str(output),
++            "--operator-review-report",
++            str(operator_review),
++            "--probe-request",
++            str(request),
++            "--probe-result",
++            str(result),
++        ]
++    )
++
++    captured = capsys.readouterr()
++    assert exit_code == 0
++    assert "external probe bundle cli: dry-run" in captured.out
++    assert not output.exists()
++
++
++def test_external_probe_bundle_cli_apply_writes_bundle(tmp_path: Path, capsys) -> None:
++    inputs = tmp_path / "inputs"
++    output = tmp_path / "bundle"
++    operator_review, request, result = _write_probe_inputs(inputs)
++
++    exit_code = main(
++        [
++            "--output-dir",
++            str(output),
++            "--operator-review-report",
++            str(operator_review),
++            "--probe-request",
++            str(request),
++            "--probe-result",
++            str(result),
++            "--apply",
++        ]
++    )
++
++    captured = capsys.readouterr()
++    assert exit_code == 0
++    assert "external probe bundle: PASS" in captured.out
++    assert (output / "manifest.json").exists()
++    assert (output / "read_only_external_probe_result.json").exists()
++
++
++def test_external_probe_bundle_cli_json_dry_run(tmp_path: Path, capsys) -> None:
++    inputs = tmp_path / "inputs"
++    output = tmp_path / "bundle"
++    operator_review, request, result = _write_probe_inputs(inputs)
++
++    exit_code = main(
++        [
++            "--output-dir",
++            str(output),
++            "--operator-review-report",
++            str(operator_review),
++            "--probe-request",
++            str(request),
++            "--probe-result",
++            str(result),
++            "--json",
++        ]
++    )
++
++    payload = json.loads(capsys.readouterr().out)
++    assert exit_code == 0
++    assert payload["schema"] == "missipy.source_candidate.external_probe_bundle_cli_plan.v1"
++    assert payload["writes_bundle"] is False
+diff --git a/tests/rules/test_source_candidate_external_probe_bundle_cli_rule.py b/tests/rules/test_source_candidate_external_probe_bundle_cli_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_source_candidate_external_probe_bundle_cli_rule.py
+@@ -0,0 +1,35 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_external_probe_bundle_cli_is_local_only() -> None:
++    source = _read("tools/source_candidate_external_probe_bundle_cli.py").lower()
++    forbidden = ("requests", "urllib", "httpx", "subprocess", "authorization")
++    for forbidden_text in forbidden:
++        assert forbidden_text not in source
++
++
++def test_external_probe_bundle_cli_is_dry_run_by_default() -> None:
++    source = _read("tools/source_candidate_external_probe_bundle_cli.py")
++    assert "apply: bool = False" in source
++    assert "writes_bundle" in source
++
++
++def test_external_probe_bundle_cli_uses_existing_bundle_module() -> None:
++    source = _read("tools/source_candidate_external_probe_bundle_cli.py")
++    assert "build_source_candidate_external_probe_bundle" in source
++    assert "render_source_candidate_external_probe_bundle" in source
++
++
++def test_external_probe_bundle_cli_manifest_uses_post_migration_path() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PHASE7_12_CHANGED_FILES.md")
++    assert "src/kernel/scheduler.py" not in manifest
++    assert "tools/source_candidate_external_probe_bundle_cli.py" in manifest
+diff --git a/doc/maintenance/EXTERNAL_PROBE_BUNDLE_CLI.md b/doc/maintenance/EXTERNAL_PROBE_BUNDLE_CLI.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/maintenance/EXTERNAL_PROBE_BUNDLE_CLI.md
+@@ -0,0 +1,28 @@
++# External probe bundle CLI
++
++Phase 7.12 adds a CLI surface for the local external probe bundle.
++
++The default mode is dry-run: it prints the bundle plan and writes nothing.
++
++## Dry-run
++
++```bash
++python tools/source_candidate_external_probe_bundle_cli.py \
++  --output-dir /tmp/source_candidate_external_probe_bundle \
++  --operator-review-report /path/to/operator_external_review_report.json \
++  --probe-request /path/to/read_only_external_probe_request.json \
++  --probe-result /path/to/read_only_external_probe_result.json
++```
++
++## Apply
++
++```bash
++python tools/source_candidate_external_probe_bundle_cli.py \
++  --output-dir /tmp/source_candidate_external_probe_bundle \
++  --operator-review-report /path/to/operator_external_review_report.json \
++  --probe-request /path/to/read_only_external_probe_request.json \
++  --probe-result /path/to/read_only_external_probe_result.json \
++  --apply
++```
++
++The CLI remains local-only.
+diff --git a/doc/releases/README_PHASE7_12_EXTERNAL_PROBE_BUNDLE_CLI_DRY_RUN.md b/doc/releases/README_PHASE7_12_EXTERNAL_PROBE_BUNDLE_CLI_DRY_RUN.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PHASE7_12_EXTERNAL_PROBE_BUNDLE_CLI_DRY_RUN.md
+@@ -0,0 +1,6 @@
++# Phase 7.12 — External Probe Bundle CLI Dry-Run
++
++Phase 7.12 adds a command-line entrypoint for the local external probe bundle.
++
++The CLI is dry-run by default and writes the bundle only when `--apply` is
++provided.
+diff --git a/doc/changelogs/CHANGELOG_PHASE7_12_EXTERNAL_PROBE_BUNDLE_CLI_DRY_RUN.md b/doc/changelogs/CHANGELOG_PHASE7_12_EXTERNAL_PROBE_BUNDLE_CLI_DRY_RUN.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PHASE7_12_EXTERNAL_PROBE_BUNDLE_CLI_DRY_RUN.md
+@@ -0,0 +1,25 @@
++# Changelog — Phase 7.12 External Probe Bundle CLI Dry-Run
++
++## Added
++
++- `tools/source_candidate_external_probe_bundle_cli.py`
++  - Plans external probe bundle creation.
++  - Writes nothing by default.
++  - Creates the local bundle only with `--apply`.
++  - Supports text and JSON output.
++
++- `tests/tools/test_source_candidate_external_probe_bundle_cli.py`
++  - Covers dry-run planning, apply mode and JSON output.
++
++- `tests/rules/test_source_candidate_external_probe_bundle_cli_rule.py`
++  - Ensures the CLI remains local-only and dry-run by default.
++
++- `doc/maintenance/EXTERNAL_PROBE_BUNDLE_CLI.md`
++  - Documents dry-run and apply usage.
++
++## Not added
++
++- No external service call.
++- No network access.
++- No remote mutation.
++- No Scheduler change.
+diff --git a/doc/code-rules/PHASE7_12_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PHASE7_12_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PHASE7_12_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,20 @@
++# Phase 7.12 Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Phase 7.12 adds a local CLI for external probe bundle planning. The CLI is dry-run by default and only writes local files with --apply. It does not add network access, remote mutation, scheduler execution or an external backend.
++
++live_path_status: n/a
++live_path_uses_real_backend: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++This phase gives the operator a command surface for local bundle generation
++without changing runtime paths.
+diff --git a/doc/reports/phase7/PHASE7_12_TEST_REPORT.md b/doc/reports/phase7/PHASE7_12_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase7/PHASE7_12_TEST_REPORT.md
+@@ -0,0 +1,28 @@
++# Phase 7.12 Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/tools/test_source_candidate_external_probe_bundle_cli.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Expected
++
++```text
++external probe bundle CLI tests: pass
++rules: pass
++full suite: pass
++```
++
++## Scope
++
++```text
++local CLI only
++dry-run by default
++no network
++no remote mutation
++no Scheduler change
++```
+diff --git a/doc/manifests/MANIFEST_PHASE7_12_CHANGED_FILES.md b/doc/manifests/MANIFEST_PHASE7_12_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PHASE7_12_CHANGED_FILES.md
+@@ -0,0 +1,21 @@
++# Manifest — Phase 7.12 External Probe Bundle CLI Dry-Run
++
++## Added
++
++- `tools/source_candidate_external_probe_bundle_cli.py`
++- `tests/tools/test_source_candidate_external_probe_bundle_cli.py`
++- `tests/rules/test_source_candidate_external_probe_bundle_cli_rule.py`
++- `doc/maintenance/EXTERNAL_PROBE_BUNDLE_CLI.md`
++- `doc/releases/README_PHASE7_12_EXTERNAL_PROBE_BUNDLE_CLI_DRY_RUN.md`
++- `doc/changelogs/CHANGELOG_PHASE7_12_EXTERNAL_PROBE_BUNDLE_CLI_DRY_RUN.md`
++- `doc/code-rules/PHASE7_12_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase7/PHASE7_12_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PHASE7_12_CHANGED_FILES.md`
++
++## Modified
++
++- None.
++
++## Generated artifacts
++
++- None.

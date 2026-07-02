@@ -1,0 +1,605 @@
+diff --git a/src/context/source_candidate_external_probe_bundle.py b/src/context/source_candidate_external_probe_bundle.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/source_candidate_external_probe_bundle.py
+@@ -0,0 +1,213 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any, Mapping
++import json
++import os
++import tempfile
++
++
++_BUNDLE_SCHEMA = "missipy.source_candidate.external_probe_bundle.v1"
++_OPERATOR_REVIEW_SCHEMA = "missipy.source_candidate.operator_external_review_report.v1"
++_PROBE_REQUEST_SCHEMA = "missipy.source_candidate.read_only_external_probe_request.v1"
++_PROBE_RESULT_SCHEMA = "missipy.source_candidate.read_only_external_probe_result.v1"
++
++
++@dataclass(frozen=True)
++class SourceCandidateExternalProbeBundleArtifact:
++    role: str
++    path: Path
++    schema: str
++    byte_count: int
++
++    def to_json_dict(self, bundle_root: Path) -> dict[str, object]:
++        return {
++            "role": self.role,
++            "path": self.path.resolve().relative_to(bundle_root.resolve()).as_posix(),
++            "schema": self.schema,
++            "byte_count": self.byte_count,
++        }
++
++
++@dataclass(frozen=True)
++class SourceCandidateExternalProbeBundle:
++    path: Path
++    manifest_path: Path
++    repository: str
++    read_only: bool
++    external_call_performed: bool
++    probe_allowed: bool
++    artifact_count: int
++    byte_count: int
++    artifacts: tuple[SourceCandidateExternalProbeBundleArtifact, ...]
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": _BUNDLE_SCHEMA,
++            "path": str(self.path),
++            "manifest_path": str(self.manifest_path),
++            "repository": self.repository,
++            "read_only": self.read_only,
++            "external_call_performed": self.external_call_performed,
++            "probe_allowed": self.probe_allowed,
++            "artifact_count": self.artifact_count,
++            "byte_count": self.byte_count,
++            "artifacts": [artifact.to_json_dict(self.path) for artifact in self.artifacts],
++        }
++
++
++def build_source_candidate_external_probe_bundle(
++    *,
++    output_dir: Path,
++    operator_review_report_path: Path,
++    probe_request_path: Path,
++    probe_result_path: Path,
++) -> SourceCandidateExternalProbeBundle:
++    """Create a local bundle for operator review of read-only external probing.
++
++    The bundle copies existing local JSON artifacts into one deterministic
++    directory and writes a manifest. It does not create, contact or mutate any
++    external resource.
++    """
++
++    output_dir.mkdir(parents=True, exist_ok=True)
++
++    operator_review_report = _read_json_object(operator_review_report_path)
++    probe_request = _read_json_object(probe_request_path)
++    probe_result = _read_json_object(probe_result_path)
++
++    _expect_schema(operator_review_report, _OPERATOR_REVIEW_SCHEMA, operator_review_report_path)
++    _expect_schema(probe_request, _PROBE_REQUEST_SCHEMA, probe_request_path)
++    _expect_schema(probe_result, _PROBE_RESULT_SCHEMA, probe_result_path)
++
++    repository = _same_repository(
++        operator_review_report.get("repository"),
++        probe_request.get("repository"),
++        probe_result.get("repository"),
++    )
++
++    read_only = bool(probe_result.get("read_only"))
++    external_call_performed = bool(probe_result.get("external_call_performed"))
++    probe_allowed = bool(probe_result.get("probe_allowed"))
++
++    artifacts = (
++        _copy_json_artifact(
++            source=operator_review_report_path,
++            target=output_dir / "operator_external_review_report.json",
++            role="operator_external_review_report",
++            schema=_OPERATOR_REVIEW_SCHEMA,
++            bundle_root=output_dir,
++        ),
++        _copy_json_artifact(
++            source=probe_request_path,
++            target=output_dir / "read_only_external_probe_request.json",
++            role="read_only_external_probe_request",
++            schema=_PROBE_REQUEST_SCHEMA,
++            bundle_root=output_dir,
++        ),
++        _copy_json_artifact(
++            source=probe_result_path,
++            target=output_dir / "read_only_external_probe_result.json",
++            role="read_only_external_probe_result",
++            schema=_PROBE_RESULT_SCHEMA,
++            bundle_root=output_dir,
++        ),
++    )
++
++    manifest_path = output_dir / "manifest.json"
++    bundle = SourceCandidateExternalProbeBundle(
++        path=output_dir,
++        manifest_path=manifest_path,
++        repository=repository,
++        read_only=read_only,
++        external_call_performed=external_call_performed,
++        probe_allowed=probe_allowed,
++        artifact_count=len(artifacts),
++        byte_count=sum(artifact.byte_count for artifact in artifacts),
++        artifacts=artifacts,
++    )
++    _atomic_write_json(manifest_path, bundle.to_json_dict())
++    return bundle
++
++
++def read_source_candidate_external_probe_bundle_manifest(path: Path) -> dict[str, Any]:
++    payload = _read_json_object(path)
++    _expect_schema(payload, _BUNDLE_SCHEMA, path)
++    return dict(payload)
++
++
++def render_source_candidate_external_probe_bundle(bundle: SourceCandidateExternalProbeBundle) -> str:
++    status = "PASS" if bundle.probe_allowed and bundle.read_only and not bundle.external_call_performed else "CHECK"
++    lines = [
++        f"external probe bundle: {status}",
++        f"repository: {bundle.repository}",
++        f"path: {bundle.path}",
++        f"read_only: {bundle.read_only}",
++        f"external_call_performed: {bundle.external_call_performed}",
++        f"probe_allowed: {bundle.probe_allowed}",
++        f"artifacts: {bundle.artifact_count}",
++        f"bytes: {bundle.byte_count}",
++    ]
++    for artifact in bundle.artifacts:
++        lines.append(f"- {artifact.role}: {artifact.path.name} ({artifact.byte_count} bytes)")
++    return "\n".join(lines)
++
++
++def _copy_json_artifact(
++    *,
++    source: Path,
++    target: Path,
++    role: str,
++    schema: str,
++    bundle_root: Path,
++) -> SourceCandidateExternalProbeBundleArtifact:
++    payload = _read_json_object(source)
++    _expect_schema(payload, schema, source)
++    _atomic_write_json(target, dict(payload))
++    return SourceCandidateExternalProbeBundleArtifact(
++        role=role,
++        path=target,
++        schema=schema,
++        byte_count=target.stat().st_size,
++    )
++
++
++def _same_repository(*values: object) -> str:
++    repositories = []
++    for value in values:
++        if isinstance(value, str) and value.strip():
++            repositories.append(value)
++    if not repositories:
++        raise ValueError("missing repository")
++    if len(set(repositories)) != 1:
++        raise ValueError("repository mismatch across external probe bundle artifacts")
++    return repositories[0]
++
++
++def _expect_schema(payload: Mapping[str, Any], schema: str, path: Path) -> None:
++    if payload.get("schema") != schema:
++        raise ValueError(f"schema mismatch for {path}: expected {schema}")
++
++
++def _read_json_object(path: Path) -> Mapping[str, Any]:
++    payload = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(payload, Mapping):
++        raise ValueError(f"JSON payload must be an object: {path}")
++    return payload
++
++
++def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
++    with tempfile.NamedTemporaryFile(
++        "w",
++        encoding="utf-8",
++        dir=str(path.parent),
++        prefix=f".{path.name}.",
++        suffix=".tmp",
++        delete=False,
++    ) as handle:
++        tmp_name = handle.name
++        handle.write(text)
++    os.replace(tmp_name, path)
+diff --git a/tests/context/test_source_candidate_external_probe_bundle.py b/tests/context/test_source_candidate_external_probe_bundle.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_source_candidate_external_probe_bundle.py
+@@ -0,0 +1,174 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++import pytest
++
++from context.source_candidate_external_probe_bundle import (
++    build_source_candidate_external_probe_bundle,
++    read_source_candidate_external_probe_bundle_manifest,
++    render_source_candidate_external_probe_bundle,
++)
++
++
++def _write_probe_inputs(path: Path, *, repository: str = "newicody/autodoc") -> tuple[Path, Path, Path]:
++    path.mkdir(parents=True)
++
++    operator_review = path / "operator_external_review_report.json"
++    request = path / "read_only_external_probe_request.json"
++    result = path / "read_only_external_probe_result.json"
++
++    operator_review.write_text(
++        json.dumps(
++            {
++                "schema": "missipy.source_candidate.operator_external_review_report.v1",
++                "bundle_path": "/tmp/github_export_bundle",
++                "repository": repository,
++                "dry_run": True,
++                "mutation_allowed": True,
++                "operation_count": 1,
++                "artifact_count": 5,
++                "finding_count": 0,
++                "recommended_action": "operator_review",
++                "findings": [],
++            }
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++    request.write_text(
++        json.dumps(
++            {
++                "schema": "missipy.source_candidate.read_only_external_probe_request.v1",
++                "target_kind": "github_project_surface",
++                "repository": repository,
++                "dry_run": True,
++                "requested_checks": [
++                    "repository_visible",
++                    "project_surface_visible",
++                    "write_access_not_required",
++                ],
++            }
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++    result.write_text(
++        json.dumps(
++            {
++                "schema": "missipy.source_candidate.read_only_external_probe_result.v1",
++                "target_kind": "github_project_surface",
++                "repository": repository,
++                "read_only": True,
++                "external_call_performed": False,
++                "probe_allowed": True,
++                "check_count": 3,
++                "finding_count": 0,
++                "findings": [],
++            }
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++    return operator_review, request, result
++
++
++def test_external_probe_bundle_copies_probe_artifacts_and_manifest(tmp_path: Path) -> None:
++    inputs = tmp_path / "inputs"
++    output = tmp_path / "bundle"
++    operator_review, request, result = _write_probe_inputs(inputs)
++
++    bundle = build_source_candidate_external_probe_bundle(
++        output_dir=output,
++        operator_review_report_path=operator_review,
++        probe_request_path=request,
++        probe_result_path=result,
++    )
++
++    assert bundle.repository == "newicody/autodoc"
++    assert bundle.read_only is True
++    assert bundle.external_call_performed is False
++    assert bundle.probe_allowed is True
++    assert bundle.artifact_count == 3
++    assert (output / "manifest.json").exists()
++    assert (output / "operator_external_review_report.json").exists()
++    assert (output / "read_only_external_probe_request.json").exists()
++    assert (output / "read_only_external_probe_result.json").exists()
++
++
++def test_external_probe_bundle_manifest_uses_relative_artifact_paths(tmp_path: Path) -> None:
++    inputs = tmp_path / "inputs"
++    output = tmp_path / "bundle"
++    operator_review, request, result = _write_probe_inputs(inputs)
++
++    bundle = build_source_candidate_external_probe_bundle(
++        output_dir=output,
++        operator_review_report_path=operator_review,
++        probe_request_path=request,
++        probe_result_path=result,
++    )
++    payload = read_source_candidate_external_probe_bundle_manifest(bundle.manifest_path)
++
++    assert payload["schema"] == "missipy.source_candidate.external_probe_bundle.v1"
++    assert payload["artifact_count"] == 3
++    assert payload["external_call_performed"] is False
++    assert {artifact["path"] for artifact in payload["artifacts"]} == {
++        "operator_external_review_report.json",
++        "read_only_external_probe_request.json",
++        "read_only_external_probe_result.json",
++    }
++
++
++def test_external_probe_bundle_rejects_repository_mismatch(tmp_path: Path) -> None:
++    inputs = tmp_path / "inputs"
++    output = tmp_path / "bundle"
++    operator_review, request, result = _write_probe_inputs(inputs)
++
++    payload = json.loads(result.read_text(encoding="utf-8"))
++    payload["repository"] = "other/repo"
++    result.write_text(json.dumps(payload) + "\n", encoding="utf-8")
++
++    with pytest.raises(ValueError, match="repository mismatch"):
++        build_source_candidate_external_probe_bundle(
++            output_dir=output,
++            operator_review_report_path=operator_review,
++            probe_request_path=request,
++            probe_result_path=result,
++        )
++
++
++def test_external_probe_bundle_rejects_schema_mismatch(tmp_path: Path) -> None:
++    inputs = tmp_path / "inputs"
++    output = tmp_path / "bundle"
++    operator_review, request, result = _write_probe_inputs(inputs)
++
++    payload = json.loads(request.read_text(encoding="utf-8"))
++    payload["schema"] = "wrong.schema"
++    request.write_text(json.dumps(payload) + "\n", encoding="utf-8")
++
++    with pytest.raises(ValueError, match="schema mismatch"):
++        build_source_candidate_external_probe_bundle(
++            output_dir=output,
++            operator_review_report_path=operator_review,
++            probe_request_path=request,
++            probe_result_path=result,
++        )
++
++
++def test_external_probe_bundle_render_is_stable(tmp_path: Path) -> None:
++    inputs = tmp_path / "inputs"
++    output = tmp_path / "bundle"
++    operator_review, request, result = _write_probe_inputs(inputs)
++
++    bundle = build_source_candidate_external_probe_bundle(
++        output_dir=output,
++        operator_review_report_path=operator_review,
++        probe_request_path=request,
++        probe_result_path=result,
++    )
++    text = render_source_candidate_external_probe_bundle(bundle)
++
++    assert "external probe bundle: PASS" in text
++    assert "repository: newicody/autodoc" in text
++    assert "external_call_performed: False" in text
+diff --git a/tests/rules/test_source_candidate_external_probe_bundle_rule.py b/tests/rules/test_source_candidate_external_probe_bundle_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_source_candidate_external_probe_bundle_rule.py
+@@ -0,0 +1,37 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_external_probe_bundle_is_local_only() -> None:
++    source = _read("src/context/source_candidate_external_probe_bundle.py").lower()
++    forbidden = ("requests", "urllib", "httpx", "subprocess", "token", "authorization")
++    for forbidden_text in forbidden:
++        assert forbidden_text not in source
++
++
++def test_external_probe_bundle_preserves_read_only_result() -> None:
++    source = _read("src/context/source_candidate_external_probe_bundle.py")
++    assert "external_call_performed" in source
++    assert "read_only" in source
++    assert "probe_allowed" in source
++
++
++def test_external_probe_bundle_uses_post_migration_manifest_path() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PHASE7_11_CHANGED_FILES.md")
++    assert "src/kernel/scheduler.py" not in manifest
++    assert "src/context/source_candidate_external_probe_bundle.py" in manifest
++
++
++def test_external_probe_bundle_has_architecture_source_only() -> None:
++    dot = ROOT / "doc/docs/architecture/context/66_source_candidate_external_probe_bundle.dot"
++    svg = ROOT / "doc/docs/architecture/context/66_source_candidate_external_probe_bundle.svg"
++    assert dot.exists()
++    assert not svg.exists()
+diff --git a/doc/docs/architecture/context/66_source_candidate_external_probe_bundle.dot b/doc/docs/architecture/context/66_source_candidate_external_probe_bundle.dot
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/docs/architecture/context/66_source_candidate_external_probe_bundle.dot
+@@ -0,0 +1,19 @@
++digraph source_candidate_external_probe_bundle {
++  graph [rankdir=LR, label="Phase 7.11 SourceCandidate external probe bundle", labelloc=t];
++  node [shape=box];
++
++  review [label="operator external review report"];
++  request [label="read-only probe request"];
++  result [label="read-only probe result"];
++  bundle [label="external probe bundle"];
++  manifest [label="manifest.json"];
++  operator [label="operator review"];
++  api [label="external API not contacted", style=dashed];
++
++  review -> bundle;
++  request -> bundle;
++  result -> bundle;
++  bundle -> manifest;
++  manifest -> operator;
++  bundle -> api [label="no call", style=dashed];
++}
+diff --git a/doc/releases/README_PHASE7_11_EXTERNAL_PROBE_BUNDLE.md b/doc/releases/README_PHASE7_11_EXTERNAL_PROBE_BUNDLE.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PHASE7_11_EXTERNAL_PROBE_BUNDLE.md
+@@ -0,0 +1,15 @@
++# Phase 7.11 — External Probe Bundle
++
++Phase 7.11 adds a local external probe bundle.
++
++The bundle groups the local read-only probe artifacts into a deterministic
++directory:
++
++```text
++manifest.json
++operator_external_review_report.json
++read_only_external_probe_request.json
++read_only_external_probe_result.json
++```
++
++The phase remains local-only. It does not contact external services.
+diff --git a/doc/changelogs/CHANGELOG_PHASE7_11_EXTERNAL_PROBE_BUNDLE.md b/doc/changelogs/CHANGELOG_PHASE7_11_EXTERNAL_PROBE_BUNDLE.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PHASE7_11_EXTERNAL_PROBE_BUNDLE.md
+@@ -0,0 +1,25 @@
++# Changelog — Phase 7.11 External Probe Bundle
++
++## Added
++
++- `src/context/source_candidate_external_probe_bundle.py`
++  - Copies operator review and read-only probe artifacts into one local bundle.
++  - Writes a deterministic manifest.
++  - Preserves `read_only`, `external_call_performed` and `probe_allowed` flags.
++
++- `tests/context/test_source_candidate_external_probe_bundle.py`
++  - Covers bundle creation, manifest paths, repository mismatch, schema mismatch and rendering.
++
++- `tests/rules/test_source_candidate_external_probe_bundle_rule.py`
++  - Ensures the bundle remains local-only and source-only for architecture docs.
++
++- `doc/docs/architecture/context/66_source_candidate_external_probe_bundle.dot`
++  - Documents the local bundle boundary.
++
++## Not added
++
++- No real external adapter.
++- No external API call.
++- No network.
++- No remote mutation.
++- No Scheduler change.
+diff --git a/doc/code-rules/PHASE7_11_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PHASE7_11_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PHASE7_11_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,20 @@
++# Phase 7.11 Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Phase 7.11 adds a local bundle for read-only external probe artifacts. It copies local JSON files and writes a manifest. It does not introduce network access, credential handling, real remote mutation, a scheduler path or an external backend.
++
++live_path_status: n/a
++live_path_uses_real_backend: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++The phase packages the read-only external probe artifacts for operator review
++before any real external adapter is introduced.
+diff --git a/doc/reports/phase7/PHASE7_11_TEST_REPORT.md b/doc/reports/phase7/PHASE7_11_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase7/PHASE7_11_TEST_REPORT.md
+@@ -0,0 +1,27 @@
++# Phase 7.11 Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/context/test_source_candidate_external_probe_bundle.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Expected
++
++```text
++external probe bundle tests: pass
++rules: pass
++full suite: pass
++```
++
++## Scope
++
++```text
++local bundle only
++no network
++no remote mutation
++no Scheduler change
++```
+diff --git a/doc/manifests/MANIFEST_PHASE7_11_CHANGED_FILES.md b/doc/manifests/MANIFEST_PHASE7_11_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PHASE7_11_CHANGED_FILES.md
+@@ -0,0 +1,21 @@
++# Manifest — Phase 7.11 External Probe Bundle
++
++## Added
++
++- `src/context/source_candidate_external_probe_bundle.py`
++- `tests/context/test_source_candidate_external_probe_bundle.py`
++- `tests/rules/test_source_candidate_external_probe_bundle_rule.py`
++- `doc/docs/architecture/context/66_source_candidate_external_probe_bundle.dot`
++- `doc/releases/README_PHASE7_11_EXTERNAL_PROBE_BUNDLE.md`
++- `doc/changelogs/CHANGELOG_PHASE7_11_EXTERNAL_PROBE_BUNDLE.md`
++- `doc/code-rules/PHASE7_11_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase7/PHASE7_11_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PHASE7_11_CHANGED_FILES.md`
++
++## Modified
++
++- None.
++
++## Generated artifacts
++
++- No SVG is versioned.
