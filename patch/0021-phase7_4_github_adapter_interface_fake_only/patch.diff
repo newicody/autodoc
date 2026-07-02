@@ -1,0 +1,532 @@
+diff --git a/src/context/source_candidate_github_adapter.py b/src/context/source_candidate_github_adapter.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/source_candidate_github_adapter.py
+@@ -0,0 +1,206 @@
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++from typing import Any, Mapping, Protocol, Sequence
++
++from .source_candidate_remote_mutation_gate import (
++    SourceCandidateRemoteMutationGatePolicy,
++    SourceCandidateRemoteMutationGateResult,
++    run_source_candidate_remote_mutation_gate,
++)
++
++
++_ADAPTER_PLAN_SCHEMA = "missipy.source_candidate.github_adapter_plan.v1"
++_ADAPTER_DRY_RUN_SCHEMA = "missipy.source_candidate.github_adapter_dry_run.v1"
++_ADAPTER_APPLY_SCHEMA = "missipy.source_candidate.github_adapter_apply.v1"
++
++
++@dataclass(frozen=True)
++class SourceCandidateGithubAdapterOperationPlan:
++    action: str
++    candidate_id: str
++    title: str
++    labels: tuple[str, ...]
++    safety_flags: tuple[str, ...]
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "action": self.action,
++            "candidate_id": self.candidate_id,
++            "title": self.title,
++            "labels": list(self.labels),
++            "safety_flags": list(self.safety_flags),
++        }
++
++
++@dataclass(frozen=True)
++class SourceCandidateGithubAdapterPlan:
++    repository: str
++    project_key: str | None
++    dry_run: bool
++    remote_mutation: bool
++    operation_count: int
++    operations: tuple[SourceCandidateGithubAdapterOperationPlan, ...]
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": _ADAPTER_PLAN_SCHEMA,
++            "repository": self.repository,
++            "project_key": self.project_key,
++            "dry_run": self.dry_run,
++            "remote_mutation": self.remote_mutation,
++            "operation_count": self.operation_count,
++            "operations": [operation.to_json_dict() for operation in self.operations],
++        }
++
++
++@dataclass(frozen=True)
++class SourceCandidateGithubAdapterDryRun:
++    plan: SourceCandidateGithubAdapterPlan
++    gate: SourceCandidateRemoteMutationGateResult
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": _ADAPTER_DRY_RUN_SCHEMA,
++            "plan": self.plan.to_json_dict(),
++            "gate": self.gate.to_json_dict(),
++        }
++
++
++@dataclass(frozen=True)
++class SourceCandidateGithubAdapterApplyResult:
++    applied: bool
++    fake_only: bool
++    operation_count: int
++    blocked_reasons: tuple[str, ...]
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": _ADAPTER_APPLY_SCHEMA,
++            "applied": self.applied,
++            "fake_only": self.fake_only,
++            "operation_count": self.operation_count,
++            "blocked_reasons": list(self.blocked_reasons),
++        }
++
++
++class SourceCandidateGithubProjectionAdapter(Protocol):
++    """Interface for a future GitHub projection adapter.
++
++    Implementations must keep planning, validation, dry-run and apply separated.
++    The Phase 7.4 implementation is fake-only.
++    """
++
++    def plan(self, payload: Mapping[str, Any]) -> SourceCandidateGithubAdapterPlan:
++        ...
++
++    def dry_run(
++        self,
++        payload: Mapping[str, Any],
++        policy: SourceCandidateRemoteMutationGatePolicy,
++    ) -> SourceCandidateGithubAdapterDryRun:
++        ...
++
++    def apply(
++        self,
++        payload: Mapping[str, Any],
++        policy: SourceCandidateRemoteMutationGatePolicy,
++    ) -> SourceCandidateGithubAdapterApplyResult:
++        ...
++
++
++@dataclass
++class FakeSourceCandidateGithubProjectionAdapter:
++    """Fake GitHub adapter used for local tests and operator review.
++
++    The fake adapter records local apply simulations only when the remote
++    mutation gate passes. It never contacts GitHub.
++    """
++
++    applied_payloads: list[dict[str, object]] = field(default_factory=list)
++
++    def plan(self, payload: Mapping[str, Any]) -> SourceCandidateGithubAdapterPlan:
++        operations = tuple(_operation_plan(operation) for operation in _operations(payload))
++        return SourceCandidateGithubAdapterPlan(
++            repository=_string(payload.get("repository")),
++            project_key=_optional_string(payload.get("project_key")),
++            dry_run=bool(payload.get("dry_run")),
++            remote_mutation=bool(payload.get("remote_mutation")),
++            operation_count=len(operations),
++            operations=operations,
++        )
++
++    def dry_run(
++        self,
++        payload: Mapping[str, Any],
++        policy: SourceCandidateRemoteMutationGatePolicy,
++    ) -> SourceCandidateGithubAdapterDryRun:
++        return SourceCandidateGithubAdapterDryRun(
++            plan=self.plan(payload),
++            gate=run_source_candidate_remote_mutation_gate(payload, policy),
++        )
++
++    def apply(
++        self,
++        payload: Mapping[str, Any],
++        policy: SourceCandidateRemoteMutationGatePolicy,
++    ) -> SourceCandidateGithubAdapterApplyResult:
++        dry_run = self.dry_run(payload, policy)
++        if not dry_run.gate.mutation_allowed:
++            return SourceCandidateGithubAdapterApplyResult(
++                applied=False,
++                fake_only=True,
++                operation_count=0,
++                blocked_reasons=tuple(issue.code for issue in dry_run.gate.issues),
++            )
++
++        plan_payload = dry_run.plan.to_json_dict()
++        self.applied_payloads.append(plan_payload)
++        return SourceCandidateGithubAdapterApplyResult(
++            applied=True,
++            fake_only=True,
++            operation_count=dry_run.plan.operation_count,
++            blocked_reasons=(),
++        )
++
++
++def _operation_plan(raw: Mapping[str, Any]) -> SourceCandidateGithubAdapterOperationPlan:
++    return SourceCandidateGithubAdapterOperationPlan(
++        action=_string(raw.get("action")),
++        candidate_id=_string(raw.get("candidate_id")),
++        title=_string(raw.get("title")),
++        labels=tuple(_string(item) for item in _sequence(raw.get("labels"))),
++        safety_flags=tuple(_string(item) for item in _sequence(raw.get("safety_flags"))),
++    )
++
++
++def _operations(payload: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
++    raw = payload.get("operations")
++    if not isinstance(raw, Sequence) or isinstance(raw, (str, bytes, bytearray)):
++        raise ValueError("payload operations must be a list")
++    operations: list[Mapping[str, Any]] = []
++    for operation in raw:
++        if not isinstance(operation, Mapping):
++            raise ValueError("payload operation must be an object")
++        operations.append(operation)
++    return tuple(operations)
++
++
++def _sequence(raw: object) -> tuple[object, ...]:
++    if raw is None:
++        return ()
++    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
++        return tuple(raw)
++    raise ValueError("expected list")
++
++
++def _string(raw: object) -> str:
++    if isinstance(raw, str) and raw.strip():
++        return raw
++    raise ValueError("expected non-empty string")
++
++
++def _optional_string(raw: object) -> str | None:
++    if isinstance(raw, str) and raw.strip():
++        return raw
++    return None
+diff --git a/tests/context/test_source_candidate_github_adapter.py b/tests/context/test_source_candidate_github_adapter.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_source_candidate_github_adapter.py
+@@ -0,0 +1,92 @@
++from __future__ import annotations
++
++from context.source_candidate_github_adapter import (
++    FakeSourceCandidateGithubProjectionAdapter,
++    SourceCandidateGithubProjectionAdapter,
++)
++from context.source_candidate_remote_mutation_gate import SourceCandidateRemoteMutationGatePolicy
++
++
++def _payload() -> dict[str, object]:
++    return {
++        "schema": "missipy.source_candidate.github_projection_payload.v1",
++        "repository": "newicody/autodoc",
++        "project_key": None,
++        "dry_run": True,
++        "remote_mutation": False,
++        "projection_allowed": True,
++        "blocked_reasons": [],
++        "operation_count": 1,
++        "operations": [
++            {
++                "action": "create_issue",
++                "candidate_id": "candidate-a",
++                "title": "SourceCandidate: Ready",
++                "body": "dry-run body",
++                "labels": ["autodoc", "source-candidate", "dry-run"],
++                "safety_flags": [],
++            }
++        ],
++    }
++
++
++def _open_policy() -> SourceCandidateRemoteMutationGatePolicy:
++    return SourceCandidateRemoteMutationGatePolicy(
++        remote_mutation_enabled=True,
++        operator_confirmed=True,
++        allowed_repositories=("newicody/autodoc",),
++    )
++
++
++def test_fake_github_adapter_satisfies_protocol_shape() -> None:
++    adapter: SourceCandidateGithubProjectionAdapter = FakeSourceCandidateGithubProjectionAdapter()
++
++    plan = adapter.plan(_payload())
++
++    assert plan.repository == "newicody/autodoc"
++    assert plan.operation_count == 1
++    assert plan.operations[0].action == "create_issue"
++
++
++def test_fake_github_adapter_dry_run_includes_remote_gate() -> None:
++    adapter = FakeSourceCandidateGithubProjectionAdapter()
++
++    dry_run = adapter.dry_run(_payload(), SourceCandidateRemoteMutationGatePolicy())
++
++    assert dry_run.plan.operation_count == 1
++    assert dry_run.gate.mutation_allowed is False
++    assert any(issue.code == "remote_mutation_disabled" for issue in dry_run.gate.issues)
++
++
++def test_fake_github_adapter_apply_is_blocked_when_gate_fails() -> None:
++    adapter = FakeSourceCandidateGithubProjectionAdapter()
++
++    result = adapter.apply(_payload(), SourceCandidateRemoteMutationGatePolicy())
++
++    assert result.applied is False
++    assert result.fake_only is True
++    assert "remote_mutation_disabled" in result.blocked_reasons
++    assert adapter.applied_payloads == []
++
++
++def test_fake_github_adapter_apply_records_local_simulation_when_gate_passes() -> None:
++    adapter = FakeSourceCandidateGithubProjectionAdapter()
++
++    result = adapter.apply(_payload(), _open_policy())
++
++    assert result.applied is True
++    assert result.fake_only is True
++    assert result.operation_count == 1
++    assert len(adapter.applied_payloads) == 1
++    assert adapter.applied_payloads[0]["schema"] == "missipy.source_candidate.github_adapter_plan.v1"
++
++
++def test_fake_github_adapter_serialization_is_stable() -> None:
++    adapter = FakeSourceCandidateGithubProjectionAdapter()
++    dry_run = adapter.dry_run(_payload(), _open_policy())
++
++    payload = dry_run.to_json_dict()
++
++    assert payload["schema"] == "missipy.source_candidate.github_adapter_dry_run.v1"
++    assert payload["plan"]["remote_mutation"] is False
++    assert payload["gate"]["mutation_allowed"] is True
+diff --git a/tests/rules/test_source_candidate_github_adapter_rule.py b/tests/rules/test_source_candidate_github_adapter_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_source_candidate_github_adapter_rule.py
+@@ -0,0 +1,43 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_github_adapter_is_fake_only_in_phase7_4() -> None:
++    source = _read("src/context/source_candidate_github_adapter.py")
++    assert "FakeSourceCandidateGithubProjectionAdapter" in source
++    assert "fake_only=True" in source
++    assert "never contacts GitHub" in source
++
++
++def test_github_adapter_has_no_network_process_or_token_handling() -> None:
++    source = _read("src/context/source_candidate_github_adapter.py").lower()
++    forbidden = ("requests", "urllib", "httpx", "subprocess", "token", "authorization")
++    for token in forbidden:
++        assert token not in source
++
++
++def test_github_adapter_requires_remote_mutation_gate() -> None:
++    source = _read("src/context/source_candidate_github_adapter.py")
++    assert "run_source_candidate_remote_mutation_gate" in source
++    assert "SourceCandidateRemoteMutationGatePolicy" in source
++
++
++def test_github_adapter_does_not_modify_scheduler() -> None:
++    manifest = _read("MANIFEST_PHASE7_4_CHANGED_FILES.md")
++    assert "src/kernel/scheduler.py" not in manifest
++    assert "src/context/source_candidate_github_adapter.py" in manifest
++
++
++def test_github_adapter_has_architecture_source_only() -> None:
++    dot = ROOT / "doc/docs/architecture/context/62_source_candidate_github_adapter_interface.dot"
++    svg = ROOT / "doc/docs/architecture/context/62_source_candidate_github_adapter_interface.svg"
++    assert dot.exists()
++    assert not svg.exists()
+diff --git a/doc/docs/architecture/context/62_source_candidate_github_adapter_interface.dot b/doc/docs/architecture/context/62_source_candidate_github_adapter_interface.dot
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/docs/architecture/context/62_source_candidate_github_adapter_interface.dot
+@@ -0,0 +1,17 @@
++digraph source_candidate_github_adapter_interface {
++  graph [rankdir=LR, label="Phase 7.4 SourceCandidate GitHub adapter interface fake-only", labelloc=t];
++  node [shape=box];
++
++  payload [label="github_projection_payload.json"];
++  adapter [label="GitHub adapter interface\nplan / dry_run / apply"];
++  fake [label="Fake adapter\nlocal simulation only"];
++  gate [label="remote mutation gate"];
++  result [label="adapter dry-run/apply result\nfake_only=true"];
++  api [label="GitHub API\nnot contacted", style=dashed];
++
++  payload -> adapter;
++  adapter -> fake;
++  fake -> gate;
++  gate -> result;
++  fake -> api [label="no call", style=dashed];
++}
+diff --git a/doc/releases/README_PHASE7_4_GITHUB_ADAPTER_INTERFACE_FAKE_ONLY.md b/doc/releases/README_PHASE7_4_GITHUB_ADAPTER_INTERFACE_FAKE_ONLY.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PHASE7_4_GITHUB_ADAPTER_INTERFACE_FAKE_ONLY.md
+@@ -0,0 +1,17 @@
++# Phase 7.4 — GitHub Adapter Interface Fake-Only
++
++Phase 7.4 introduces the GitHub projection adapter interface and a fake local
++implementation.
++
++The adapter surface is separated into:
++
++```text
++plan
++dry_run
++apply
++```
++
++The only implementation in this phase is fake-only. It records local apply
++simulations only when the remote mutation gate passes.
++
++No GitHub API is contacted.
+diff --git a/doc/CHANGELOG_PHASE7_4_GITHUB_ADAPTER_INTERFACE_FAKE_ONLY.md b/doc/CHANGELOG_PHASE7_4_GITHUB_ADAPTER_INTERFACE_FAKE_ONLY.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/CHANGELOG_PHASE7_4_GITHUB_ADAPTER_INTERFACE_FAKE_ONLY.md
+@@ -0,0 +1,27 @@
++# Changelog — Phase 7.4 GitHub Adapter Interface Fake-Only
++
++## Added
++
++- `src/context/source_candidate_github_adapter.py`
++  - Defines a GitHub projection adapter protocol.
++  - Adds a fake local adapter.
++  - Routes dry-run/apply through the remote mutation gate.
++  - Records local fake apply simulations only when the gate passes.
++
++- `tests/context/test_source_candidate_github_adapter.py`
++  - Covers protocol shape, dry-run gate integration, blocked apply, passing fake apply and serialization.
++
++- `tests/rules/test_source_candidate_github_adapter_rule.py`
++  - Ensures the adapter remains fake-only, network-free and Scheduler-free.
++
++- `doc/docs/architecture/context/62_source_candidate_github_adapter_interface.dot`
++  - Documents the fake-only adapter boundary.
++
++## Not added
++
++- No real GitHub adapter.
++- No GitHub API calls.
++- No network.
++- No token handling.
++- No remote mutation.
++- No Scheduler change.
+diff --git a/doc/PHASE7_4_CODE_RULE_ALIGNMENT.md b/doc/PHASE7_4_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/PHASE7_4_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,19 @@
++# Phase 7.4 Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Phase 7.4 adds a GitHub adapter interface and fake-only implementation. It does not introduce network access, token handling, real remote mutation, a scheduler path or an external backend.
++
++live_path_status: n/a
++live_path_uses_real_backend: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++The phase prepares the adapter seam while keeping execution local and fake-only.
+diff --git a/PHASE7_4_TEST_REPORT.md b/PHASE7_4_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/PHASE7_4_TEST_REPORT.md
+@@ -0,0 +1,36 @@
++# Phase 7.4 Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src python -m compileall -q src tests
++PYTHONPATH=src pytest -q tests/context/test_source_candidate_github_adapter.py
++PYTHONPATH=src pytest -q tests/rules
++PYTHONPATH=src pytest -q
++```
++
++## Expected
++
++```text
++GitHub adapter fake-only tests: pass
++rules: pass
++full suite: pass
++```
++
++## Code rule block
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: GitHub adapter interface plus fake-only implementation; no network, no token handling, no real remote mutation.
++
++live_path_status: n/a
++live_path_uses_real_backend: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
+diff --git a/MANIFEST_PHASE7_4_CHANGED_FILES.md b/MANIFEST_PHASE7_4_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/MANIFEST_PHASE7_4_CHANGED_FILES.md
+@@ -0,0 +1,21 @@
++# Manifest — Phase 7.4 GitHub Adapter Interface Fake-Only
++
++## Added
++
++- `src/context/source_candidate_github_adapter.py`
++- `tests/context/test_source_candidate_github_adapter.py`
++- `tests/rules/test_source_candidate_github_adapter_rule.py`
++- `doc/docs/architecture/context/62_source_candidate_github_adapter_interface.dot`
++- `doc/releases/README_PHASE7_4_GITHUB_ADAPTER_INTERFACE_FAKE_ONLY.md`
++- `doc/CHANGELOG_PHASE7_4_GITHUB_ADAPTER_INTERFACE_FAKE_ONLY.md`
++- `doc/PHASE7_4_CODE_RULE_ALIGNMENT.md`
++- `PHASE7_4_TEST_REPORT.md`
++- `MANIFEST_PHASE7_4_CHANGED_FILES.md`
++
++## Modified
++
++- None.
++
++## Generated artifacts
++
++- No SVG is versioned.

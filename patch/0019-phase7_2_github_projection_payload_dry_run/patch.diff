@@ -1,0 +1,592 @@
+diff --git a/src/context/source_candidate_github_projection_payload.py b/src/context/source_candidate_github_projection_payload.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/source_candidate_github_projection_payload.py
+@@ -0,0 +1,249 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any, Mapping, Sequence
++import json
++import os
++import tempfile
++
++
++_CONTRACT_SCHEMA = "missipy.source_candidate.external_projection_contract.v1"
++_PAYLOAD_SCHEMA = "missipy.source_candidate.github_projection_payload.v1"
++
++
++@dataclass(frozen=True)
++class SourceCandidateGithubProjectionPayloadPolicy:
++    """Policy for building a local GitHub projection payload.
++
++    This module only creates a dry-run payload. It does not contact GitHub and
++    it does not mutate any remote state.
++    """
++
++    repository: str
++    project_key: str | None = None
++    max_operations: int = 50
++
++
++@dataclass(frozen=True)
++class SourceCandidateGithubProjectionOperation:
++    action: str
++    candidate_id: str
++    title: str
++    body: str
++    labels: tuple[str, ...]
++    safety_flags: tuple[str, ...]
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "action": self.action,
++            "candidate_id": self.candidate_id,
++            "title": self.title,
++            "body": self.body,
++            "labels": list(self.labels),
++            "safety_flags": list(self.safety_flags),
++        }
++
++
++@dataclass(frozen=True)
++class SourceCandidateGithubProjectionPayload:
++    repository: str
++    project_key: str | None
++    dry_run: bool
++    remote_mutation: bool
++    projection_allowed: bool
++    blocked_reasons: tuple[str, ...]
++    operation_count: int
++    operations: tuple[SourceCandidateGithubProjectionOperation, ...]
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": _PAYLOAD_SCHEMA,
++            "repository": self.repository,
++            "project_key": self.project_key,
++            "dry_run": self.dry_run,
++            "remote_mutation": self.remote_mutation,
++            "projection_allowed": self.projection_allowed,
++            "blocked_reasons": list(self.blocked_reasons),
++            "operation_count": self.operation_count,
++            "operations": [operation.to_json_dict() for operation in self.operations],
++        }
++
++
++def build_source_candidate_github_projection_payload(
++    contract_payload: Mapping[str, Any],
++    policy: SourceCandidateGithubProjectionPayloadPolicy,
++) -> SourceCandidateGithubProjectionPayload:
++    """Build a local GitHub dry-run payload from an external projection contract."""
++
++    _validate_policy(policy)
++    if contract_payload.get("schema") != _CONTRACT_SCHEMA:
++        raise ValueError("external projection contract schema mismatch")
++
++    projection_allowed = bool(contract_payload.get("projection_allowed"))
++    blocked_reasons = tuple(_string(item) for item in _sequence(contract_payload.get("blocked_reasons")))
++
++    operations: list[SourceCandidateGithubProjectionOperation] = []
++    if projection_allowed:
++        for item in _contract_items(contract_payload):
++            operation = _operation_from_item(item)
++            if operation.action != "no_op":
++                operations.append(operation)
++            if len(operations) >= policy.max_operations:
++                break
++
++    return SourceCandidateGithubProjectionPayload(
++        repository=policy.repository,
++        project_key=policy.project_key,
++        dry_run=True,
++        remote_mutation=False,
++        projection_allowed=projection_allowed,
++        blocked_reasons=blocked_reasons,
++        operation_count=len(operations),
++        operations=tuple(operations),
++    )
++
++
++def build_source_candidate_github_projection_payload_from_file(
++    contract_path: Path,
++    policy: SourceCandidateGithubProjectionPayloadPolicy,
++) -> SourceCandidateGithubProjectionPayload:
++    return build_source_candidate_github_projection_payload(
++        _read_json_object(contract_path),
++        policy,
++    )
++
++
++def write_source_candidate_github_projection_payload(
++    path: Path,
++    payload: SourceCandidateGithubProjectionPayload,
++) -> Path:
++    _atomic_write_json(path, payload.to_json_dict())
++    return path
++
++
++def read_source_candidate_github_projection_payload(path: Path) -> dict[str, Any]:
++    payload = _read_json_object(path)
++    if payload.get("schema") != _PAYLOAD_SCHEMA:
++        raise ValueError("GitHub projection payload schema mismatch")
++    return dict(payload)
++
++
++def _operation_from_item(item: Mapping[str, Any]) -> SourceCandidateGithubProjectionOperation:
++    candidate_id = _string(item.get("candidate_id"))
++    title = _string(item.get("title"), default=candidate_id)
++    recommended_action = _string(item.get("recommended_action"), default="review")
++    safety_flags = tuple(_string(flag) for flag in _sequence(item.get("safety_flags")))
++    labels = _github_labels(item)
++
++    action = _github_action(recommended_action, safety_flags)
++    return SourceCandidateGithubProjectionOperation(
++        action=action,
++        candidate_id=candidate_id,
++        title=f"SourceCandidate: {title}",
++        body=_operation_body(item),
++        labels=labels,
++        safety_flags=safety_flags,
++    )
++
++
++def _github_action(recommended_action: str, safety_flags: tuple[str, ...]) -> str:
++    if "terminal" in safety_flags:
++        return "no_op"
++    if recommended_action in {"inspect", "review", "write-audit", "relaunch"}:
++        return "create_issue"
++    return "create_issue"
++
++
++def _operation_body(item: Mapping[str, Any]) -> str:
++    lines = [
++        "SourceCandidate projection dry-run.",
++        "",
++        f"- candidate_id: {_string(item.get('candidate_id'))}",
++        f"- status: {_string(item.get('status'), default='unknown')}",
++        f"- recommended_action: {_string(item.get('recommended_action'), default='review')}",
++        f"- audit_present: {bool(item.get('audit_present'))}",
++    ]
++    target_context_id = item.get("target_context_id")
++    if isinstance(target_context_id, str) and target_context_id.strip():
++        lines.append(f"- target_context_id: {target_context_id}")
++    safety_flags = _sequence(item.get("safety_flags"))
++    if safety_flags:
++        lines.append("- safety_flags: " + ", ".join(_string(flag) for flag in safety_flags))
++    lines.append("")
++    lines.append("This is a dry-run payload. No remote mutation has been performed.")
++    return "\n".join(lines)
++
++
++def _github_labels(item: Mapping[str, Any]) -> tuple[str, ...]:
++    labels = ["autodoc", "source-candidate", "dry-run"]
++    for raw in _sequence(item.get("labels")):
++        value = _string(raw)
++        if value.startswith("status:"):
++            labels.append(value.replace(":", "/"))
++        elif value.startswith("decision:"):
++            labels.append(value.replace(":", "/"))
++    for flag in _sequence(item.get("safety_flags")):
++        labels.append(f"safety/{_string(flag).replace('_', '-')}")
++    return tuple(dict.fromkeys(labels))
++
++
++def _validate_policy(policy: SourceCandidateGithubProjectionPayloadPolicy) -> None:
++    if policy.max_operations <= 0:
++        raise ValueError("max_operations must be greater than zero")
++    if "/" not in policy.repository or policy.repository.count("/") != 1:
++        raise ValueError("repository must use owner/name format")
++    owner, name = policy.repository.split("/", 1)
++    if not owner.strip() or not name.strip():
++        raise ValueError("repository must use owner/name format")
++
++
++def _contract_items(payload: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
++    raw_items = payload.get("items")
++    if not isinstance(raw_items, Sequence) or isinstance(raw_items, (str, bytes, bytearray)):
++        raise ValueError("external projection contract items must be a list")
++    items: list[Mapping[str, Any]] = []
++    for item in raw_items:
++        if not isinstance(item, Mapping):
++            raise ValueError("external projection contract item must be an object")
++        items.append(item)
++    return tuple(items)
++
++
++def _read_json_object(path: Path) -> Mapping[str, Any]:
++    payload = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(payload, Mapping):
++        raise ValueError(f"JSON payload must be an object: {path}")
++    return payload
++
++
++def _sequence(raw: object) -> tuple[object, ...]:
++    if raw is None:
++        return ()
++    if isinstance(raw, Sequence) and not isinstance(raw, (str, bytes, bytearray)):
++        return tuple(raw)
++    raise ValueError("expected list")
++
++
++def _string(raw: object, *, default: str | None = None) -> str:
++    if isinstance(raw, str) and raw.strip():
++        return raw
++    if default is not None:
++        return default
++    raise ValueError("expected non-empty string")
++
++
++def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
++    with tempfile.NamedTemporaryFile(
++        "w",
++        encoding="utf-8",
++        dir=str(path.parent),
++        prefix=f".{path.name}.",
++        suffix=".tmp",
++        delete=False,
++    ) as handle:
++        tmp_name = handle.name
++        handle.write(text)
++    os.replace(tmp_name, path)
+diff --git a/tests/context/test_source_candidate_github_projection_payload.py b/tests/context/test_source_candidate_github_projection_payload.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_source_candidate_github_projection_payload.py
+@@ -0,0 +1,120 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++import pytest
++
++from context.source_candidate_github_projection_payload import (
++    SourceCandidateGithubProjectionPayloadPolicy,
++    build_source_candidate_github_projection_payload,
++    build_source_candidate_github_projection_payload_from_file,
++    read_source_candidate_github_projection_payload,
++    write_source_candidate_github_projection_payload,
++)
++
++
++def _contract(*, allowed: bool = True, safety_flags: list[str] | None = None) -> dict[str, object]:
++    return {
++        "schema": "missipy.source_candidate.external_projection_contract.v1",
++        "target_kind": "github_project_surface",
++        "source_handoff_path": "/tmp/handoff",
++        "gate_passed": allowed,
++        "projection_allowed": allowed,
++        "blocked_reasons": [] if allowed else ["gate_not_passed"],
++        "item_count": 1,
++        "items": [
++            {
++                "candidate_id": "candidate-a",
++                "title": "Ready",
++                "status": "new",
++                "recommended_action": "inspect",
++                "audit_present": safety_flags is None,
++                "labels": ["status:new", "decision:inspect"],
++                "decision_action": "inspect",
++                "target_context_id": None,
++                "safety_flags": safety_flags or [],
++            }
++        ],
++    }
++
++
++def test_github_projection_payload_builds_dry_run_operations() -> None:
++    payload = build_source_candidate_github_projection_payload(
++        _contract(),
++        SourceCandidateGithubProjectionPayloadPolicy(repository="newicody/autodoc"),
++    )
++
++    assert payload.dry_run is True
++    assert payload.remote_mutation is False
++    assert payload.projection_allowed is True
++    assert payload.operation_count == 1
++    assert payload.operations[0].action == "create_issue"
++    assert "dry-run" in payload.operations[0].labels
++    assert "No remote mutation" in payload.operations[0].body
++
++
++def test_github_projection_payload_blocks_when_contract_is_blocked() -> None:
++    payload = build_source_candidate_github_projection_payload(
++        _contract(allowed=False),
++        SourceCandidateGithubProjectionPayloadPolicy(repository="newicody/autodoc"),
++    )
++
++    assert payload.projection_allowed is False
++    assert payload.blocked_reasons == ("gate_not_passed",)
++    assert payload.operation_count == 0
++
++
++def test_github_projection_payload_preserves_safety_flags_as_labels() -> None:
++    payload = build_source_candidate_github_projection_payload(
++        _contract(safety_flags=["audit_missing"]),
++        SourceCandidateGithubProjectionPayloadPolicy(repository="newicody/autodoc"),
++    )
++
++    assert payload.operation_count == 1
++    assert "safety/audit-missing" in payload.operations[0].labels
++
++
++def test_github_projection_payload_skips_terminal_items() -> None:
++    payload = build_source_candidate_github_projection_payload(
++        _contract(safety_flags=["terminal"]),
++        SourceCandidateGithubProjectionPayloadPolicy(repository="newicody/autodoc"),
++    )
++
++    assert payload.operation_count == 0
++
++
++def test_github_projection_payload_writes_and_reads_json(tmp_path: Path) -> None:
++    contract_path = tmp_path / "contract.json"
++    payload_path = tmp_path / "github_projection_payload.json"
++    contract_path.write_text(json.dumps(_contract()) + "\n", encoding="utf-8")
++
++    payload = build_source_candidate_github_projection_payload_from_file(
++        contract_path,
++        SourceCandidateGithubProjectionPayloadPolicy(repository="newicody/autodoc"),
++    )
++    returned = write_source_candidate_github_projection_payload(payload_path, payload)
++    reloaded = read_source_candidate_github_projection_payload(payload_path)
++
++    assert returned == payload_path
++    assert reloaded["schema"] == "missipy.source_candidate.github_projection_payload.v1"
++    assert reloaded["remote_mutation"] is False
++
++
++def test_github_projection_payload_rejects_invalid_repository() -> None:
++    with pytest.raises(ValueError, match="owner/name"):
++        build_source_candidate_github_projection_payload(
++            _contract(),
++            SourceCandidateGithubProjectionPayloadPolicy(repository="autodoc"),
++        )
++
++
++def test_github_projection_payload_rejects_invalid_contract_schema() -> None:
++    contract = _contract()
++    contract["schema"] = "wrong"
++
++    with pytest.raises(ValueError, match="schema"):
++        build_source_candidate_github_projection_payload(
++            contract,
++            SourceCandidateGithubProjectionPayloadPolicy(repository="newicody/autodoc"),
++        )
+diff --git a/tests/rules/test_source_candidate_github_projection_payload_rule.py b/tests/rules/test_source_candidate_github_projection_payload_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_source_candidate_github_projection_payload_rule.py
+@@ -0,0 +1,37 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_github_projection_payload_is_dry_run_only() -> None:
++    source = _read("src/context/source_candidate_github_projection_payload.py")
++    assert "dry_run=True" in source
++    assert "remote_mutation=False" in source
++    assert "No remote mutation has been performed." in source
++
++
++def test_github_projection_payload_has_no_network_or_process_calls() -> None:
++    source = _read("src/context/source_candidate_github_projection_payload.py").lower()
++    forbidden = ("requests", "urllib", "httpx", "subprocess", "gh ")
++    for token in forbidden:
++        assert token not in source
++
++
++def test_github_projection_payload_does_not_modify_scheduler() -> None:
++    manifest = _read("MANIFEST_PHASE7_2_CHANGED_FILES.md")
++    assert "src/kernel/scheduler.py" not in manifest
++    assert "src/context/source_candidate_github_projection_payload.py" in manifest
++
++
++def test_github_projection_payload_has_architecture_source_only() -> None:
++    dot = ROOT / "doc/docs/architecture/context/60_source_candidate_github_projection_payload.dot"
++    svg = ROOT / "doc/docs/architecture/context/60_source_candidate_github_projection_payload.svg"
++    assert dot.exists()
++    assert not svg.exists()
+diff --git a/doc/docs/architecture/context/60_source_candidate_github_projection_payload.dot b/doc/docs/architecture/context/60_source_candidate_github_projection_payload.dot
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/docs/architecture/context/60_source_candidate_github_projection_payload.dot
+@@ -0,0 +1,15 @@
++digraph source_candidate_github_projection_payload {
++  graph [rankdir=LR, label="Phase 7.2 SourceCandidate GitHub projection payload dry-run", labelloc=t];
++  node [shape=box];
++
++  contract [label="external_projection_contract.json"];
++  builder [label="GitHub projection payload builder\nlocal dry-run only"];
++  payload [label="github_projection_payload.json\ndry_run=true\nremote_mutation=false"];
++  gate [label="future remote mutation gate\nnot here", style=dashed];
++  api [label="GitHub API\nnot contacted", style=dashed];
++
++  contract -> builder;
++  builder -> payload;
++  payload -> gate [style=dashed];
++  payload -> api [label="no call", style=dashed];
++}
+diff --git a/doc/releases/README_PHASE7_2_GITHUB_PROJECTION_PAYLOAD_DRY_RUN.md b/doc/releases/README_PHASE7_2_GITHUB_PROJECTION_PAYLOAD_DRY_RUN.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PHASE7_2_GITHUB_PROJECTION_PAYLOAD_DRY_RUN.md
+@@ -0,0 +1,14 @@
++# Phase 7.2 — GitHub Projection Payload Dry-Run
++
++Phase 7.2 adapts the target-neutral external projection contract into a
++GitHub-shaped dry-run payload.
++
++The payload is local only:
++
++```text
++dry_run: true
++remote_mutation: false
++```
++
++This phase does not contact GitHub. It only serializes the operations that a
++future adapter may later validate and gate.
+diff --git a/doc/CHANGELOG_PHASE7_2_GITHUB_PROJECTION_PAYLOAD_DRY_RUN.md b/doc/CHANGELOG_PHASE7_2_GITHUB_PROJECTION_PAYLOAD_DRY_RUN.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/CHANGELOG_PHASE7_2_GITHUB_PROJECTION_PAYLOAD_DRY_RUN.md
+@@ -0,0 +1,27 @@
++# Changelog — Phase 7.2 GitHub Projection Payload Dry-Run
++
++## Added
++
++- `src/context/source_candidate_github_projection_payload.py`
++  - Builds a local GitHub-shaped projection payload from the generic external projection contract.
++  - Preserves dry-run and no-remote-mutation semantics.
++  - Converts SourceCandidate items to issue creation intents.
++  - Preserves safety flags as labels.
++
++- `tests/context/test_source_candidate_github_projection_payload.py`
++  - Covers allowed payloads, blocked contracts, safety labels, terminal items, JSON IO and invalid policy.
++
++- `tests/rules/test_source_candidate_github_projection_payload_rule.py`
++  - Ensures the payload builder stays dry-run only and has no network/process calls.
++
++- `doc/docs/architecture/context/60_source_candidate_github_projection_payload.dot`
++  - Documents the GitHub-shaped dry-run boundary.
++
++## Not added
++
++- No GitHub API calls.
++- No network.
++- No remote mutation.
++- No token handling.
++- No adapter apply.
++- No Scheduler change.
+diff --git a/doc/PHASE7_2_CODE_RULE_ALIGNMENT.md b/doc/PHASE7_2_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/PHASE7_2_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,19 @@
++# Phase 7.2 Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Phase 7.2 adds a local GitHub-shaped dry-run payload from the external projection contract. It does not introduce network access, remote mutation, token handling, a scheduler path or an external backend.
++
++live_path_status: n/a
++live_path_uses_real_backend: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++The phase remains a local serialization step.
+diff --git a/PHASE7_2_TEST_REPORT.md b/PHASE7_2_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/PHASE7_2_TEST_REPORT.md
+@@ -0,0 +1,36 @@
++# Phase 7.2 Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src python -m compileall -q src tests
++PYTHONPATH=src pytest -q tests/context/test_source_candidate_github_projection_payload.py
++PYTHONPATH=src pytest -q tests/rules
++PYTHONPATH=src pytest -q
++```
++
++## Expected
++
++```text
++GitHub projection payload dry-run tests: pass
++rules: pass
++full suite: pass
++```
++
++## Code rule block
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: GitHub-shaped dry-run payload only; no network, no token handling, no remote mutation.
++
++live_path_status: n/a
++live_path_uses_real_backend: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
+diff --git a/MANIFEST_PHASE7_2_CHANGED_FILES.md b/MANIFEST_PHASE7_2_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/MANIFEST_PHASE7_2_CHANGED_FILES.md
+@@ -0,0 +1,21 @@
++# Manifest — Phase 7.2 GitHub Projection Payload Dry-Run
++
++## Added
++
++- `src/context/source_candidate_github_projection_payload.py`
++- `tests/context/test_source_candidate_github_projection_payload.py`
++- `tests/rules/test_source_candidate_github_projection_payload_rule.py`
++- `doc/docs/architecture/context/60_source_candidate_github_projection_payload.dot`
++- `doc/releases/README_PHASE7_2_GITHUB_PROJECTION_PAYLOAD_DRY_RUN.md`
++- `doc/CHANGELOG_PHASE7_2_GITHUB_PROJECTION_PAYLOAD_DRY_RUN.md`
++- `doc/PHASE7_2_CODE_RULE_ALIGNMENT.md`
++- `PHASE7_2_TEST_REPORT.md`
++- `MANIFEST_PHASE7_2_CHANGED_FILES.md`
++
++## Modified
++
++- None.
++
++## Generated artifacts
++
++- No SVG is versioned.

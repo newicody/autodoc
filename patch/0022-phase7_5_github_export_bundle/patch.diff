@@ -1,0 +1,603 @@
+diff --git a/src/context/source_candidate_github_export_bundle.py b/src/context/source_candidate_github_export_bundle.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/source_candidate_github_export_bundle.py
+@@ -0,0 +1,215 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any, Mapping
++import json
++import os
++import tempfile
++
++from .source_candidate_github_adapter import FakeSourceCandidateGithubProjectionAdapter
++from .source_candidate_remote_mutation_gate import (
++    SourceCandidateRemoteMutationGatePolicy,
++    run_source_candidate_remote_mutation_gate,
++)
++
++
++_BUNDLE_SCHEMA = "missipy.source_candidate.github_export_bundle.v1"
++
++
++@dataclass(frozen=True)
++class SourceCandidateGithubExportBundlePolicy:
++    """Local GitHub export bundle policy.
++
++    The bundle is a local inspection artifact. It does not contact GitHub and it
++    does not perform remote mutation.
++    """
++
++    path: Path
++    contract_name: str = "external_projection_contract.json"
++    payload_name: str = "github_projection_payload.json"
++    gate_name: str = "remote_mutation_gate.json"
++    adapter_dry_run_name: str = "github_adapter_dry_run.json"
++    manifest_name: str = "manifest.json"
++    gate_policy: SourceCandidateRemoteMutationGatePolicy = SourceCandidateRemoteMutationGatePolicy()
++
++
++@dataclass(frozen=True)
++class SourceCandidateGithubExportBundleArtifact:
++    role: str
++    path: Path
++    byte_count: int
++    schema: str | None
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "role": self.role,
++            "path": str(self.path),
++            "byte_count": self.byte_count,
++            "schema": self.schema,
++        }
++
++
++@dataclass(frozen=True)
++class SourceCandidateGithubExportBundle:
++    path: Path
++    manifest_path: Path
++    repository: str | None
++    mutation_allowed: bool
++    dry_run: bool
++    operation_count: int
++    artifact_count: int
++    byte_count: int
++    artifacts: tuple[SourceCandidateGithubExportBundleArtifact, ...]
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": _BUNDLE_SCHEMA,
++            "path": str(self.path),
++            "manifest_path": str(self.manifest_path),
++            "repository": self.repository,
++            "mutation_allowed": self.mutation_allowed,
++            "dry_run": self.dry_run,
++            "operation_count": self.operation_count,
++            "artifact_count": self.artifact_count,
++            "byte_count": self.byte_count,
++            "artifacts": [artifact.to_json_dict() for artifact in self.artifacts],
++        }
++
++
++def build_source_candidate_github_export_bundle(
++    *,
++    contract_path: Path,
++    github_payload_path: Path,
++    policy: SourceCandidateGithubExportBundlePolicy,
++) -> SourceCandidateGithubExportBundle:
++    """Build a local GitHub export bundle for operator inspection."""
++
++    _validate_policy(policy)
++    policy.path.mkdir(parents=True, exist_ok=True)
++
++    contract_target = policy.path / policy.contract_name
++    payload_target = policy.path / policy.payload_name
++    gate_target = policy.path / policy.gate_name
++    adapter_dry_run_target = policy.path / policy.adapter_dry_run_name
++    manifest_path = policy.path / policy.manifest_name
++
++    _copy_text(contract_path, contract_target)
++    _copy_text(github_payload_path, payload_target)
++
++    payload = _read_json_object(payload_target)
++    gate = run_source_candidate_remote_mutation_gate(payload, policy.gate_policy)
++    _atomic_write_json(gate_target, gate.to_json_dict())
++
++    adapter = FakeSourceCandidateGithubProjectionAdapter()
++    adapter_dry_run = adapter.dry_run(payload, policy.gate_policy)
++    _atomic_write_json(adapter_dry_run_target, adapter_dry_run.to_json_dict())
++
++    artifacts = (
++        _artifact("external_projection_contract", contract_target),
++        _artifact("github_projection_payload", payload_target),
++        _artifact("remote_mutation_gate", gate_target),
++        _artifact("github_adapter_dry_run", adapter_dry_run_target),
++    )
++
++    manifest_payload = {
++        "schema": _BUNDLE_SCHEMA,
++        "path": str(policy.path),
++        "manifest_path": str(manifest_path),
++        "repository": _optional_string(payload.get("repository")),
++        "mutation_allowed": gate.mutation_allowed,
++        "dry_run": bool(payload.get("dry_run")),
++        "operation_count": gate.operation_count,
++        "artifact_count": len(artifacts),
++        "byte_count": sum(artifact.byte_count for artifact in artifacts),
++        "artifacts": [artifact.to_json_dict() for artifact in artifacts],
++    }
++    _atomic_write_json(manifest_path, manifest_payload)
++
++    all_artifacts = (_artifact("manifest", manifest_path), *artifacts)
++    return SourceCandidateGithubExportBundle(
++        path=policy.path,
++        manifest_path=manifest_path,
++        repository=_optional_string(payload.get("repository")),
++        mutation_allowed=gate.mutation_allowed,
++        dry_run=bool(payload.get("dry_run")),
++        operation_count=gate.operation_count,
++        artifact_count=len(all_artifacts),
++        byte_count=sum(artifact.byte_count for artifact in all_artifacts),
++        artifacts=all_artifacts,
++    )
++
++
++def read_source_candidate_github_export_bundle_manifest(path: Path) -> dict[str, Any]:
++    payload = _read_json_object(path)
++    if payload.get("schema") != _BUNDLE_SCHEMA:
++        raise ValueError("GitHub export bundle manifest schema mismatch")
++    return dict(payload)
++
++
++def _validate_policy(policy: SourceCandidateGithubExportBundlePolicy) -> None:
++    names = (
++        policy.contract_name,
++        policy.payload_name,
++        policy.gate_name,
++        policy.adapter_dry_run_name,
++        policy.manifest_name,
++    )
++    if any(not name.strip() for name in names):
++        raise ValueError("bundle artifact names must not be empty")
++    if len(set(names)) != len(names):
++        raise ValueError("bundle artifact names must be distinct")
++
++
++def _copy_text(source: Path, target: Path) -> None:
++    _atomic_write_text(target, source.read_text(encoding="utf-8"))
++
++
++def _artifact(role: str, path: Path) -> SourceCandidateGithubExportBundleArtifact:
++    schema: str | None = None
++    if path.suffix == ".json":
++        try:
++            payload = json.loads(path.read_text(encoding="utf-8"))
++        except json.JSONDecodeError:
++            payload = None
++        if isinstance(payload, Mapping) and isinstance(payload.get("schema"), str):
++            schema = payload["schema"]
++    return SourceCandidateGithubExportBundleArtifact(
++        role=role,
++        path=path,
++        byte_count=path.stat().st_size,
++        schema=schema,
++    )
++
++
++def _read_json_object(path: Path) -> Mapping[str, Any]:
++    payload = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(payload, Mapping):
++        raise ValueError(f"JSON payload must be an object: {path}")
++    return payload
++
++
++def _optional_string(raw: object) -> str | None:
++    if isinstance(raw, str) and raw.strip():
++        return raw
++    return None
++
++
++def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
++    text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
++    _atomic_write_text(path, text)
++
++
++def _atomic_write_text(path: Path, text: str) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with tempfile.NamedTemporaryFile(
++        "w",
++        encoding="utf-8",
++        dir=str(path.parent),
++        prefix=f".{path.name}.",
++        suffix=".tmp",
++        delete=False,
++    ) as handle:
++        tmp_name = handle.name
++        handle.write(text)
++    os.replace(tmp_name, path)
+diff --git a/tests/context/test_source_candidate_github_export_bundle.py b/tests/context/test_source_candidate_github_export_bundle.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_source_candidate_github_export_bundle.py
+@@ -0,0 +1,158 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++import pytest
++
++from context.source_candidate_github_export_bundle import (
++    SourceCandidateGithubExportBundlePolicy,
++    build_source_candidate_github_export_bundle,
++    read_source_candidate_github_export_bundle_manifest,
++)
++from context.source_candidate_remote_mutation_gate import SourceCandidateRemoteMutationGatePolicy
++
++
++def _write_contract(path: Path) -> None:
++    path.write_text(
++        json.dumps(
++            {
++                "schema": "missipy.source_candidate.external_projection_contract.v1",
++                "target_kind": "github_project_surface",
++                "source_handoff_path": "/tmp/handoff",
++                "gate_passed": True,
++                "projection_allowed": True,
++                "blocked_reasons": [],
++                "item_count": 1,
++                "items": [],
++            },
++            ensure_ascii=False,
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++
++
++def _write_payload(path: Path) -> None:
++    path.write_text(
++        json.dumps(
++            {
++                "schema": "missipy.source_candidate.github_projection_payload.v1",
++                "repository": "newicody/autodoc",
++                "project_key": None,
++                "dry_run": True,
++                "remote_mutation": False,
++                "projection_allowed": True,
++                "blocked_reasons": [],
++                "operation_count": 1,
++                "operations": [
++                    {
++                        "action": "create_issue",
++                        "candidate_id": "candidate-a",
++                        "title": "SourceCandidate: Ready",
++                        "body": "dry-run body",
++                        "labels": ["autodoc", "source-candidate", "dry-run"],
++                        "safety_flags": [],
++                    }
++                ],
++            },
++            ensure_ascii=False,
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++
++
++def _open_gate_policy() -> SourceCandidateRemoteMutationGatePolicy:
++    return SourceCandidateRemoteMutationGatePolicy(
++        remote_mutation_enabled=True,
++        operator_confirmed=True,
++        allowed_repositories=("newicody/autodoc",),
++    )
++
++
++def test_github_export_bundle_writes_local_artifacts(tmp_path: Path) -> None:
++    contract = tmp_path / "external_projection_contract.json"
++    payload = tmp_path / "github_projection_payload.json"
++    bundle_dir = tmp_path / "github_export_bundle"
++    _write_contract(contract)
++    _write_payload(payload)
++
++    bundle = build_source_candidate_github_export_bundle(
++        contract_path=contract,
++        github_payload_path=payload,
++        policy=SourceCandidateGithubExportBundlePolicy(path=bundle_dir),
++    )
++
++    assert bundle.path == bundle_dir
++    assert bundle.repository == "newicody/autodoc"
++    assert bundle.dry_run is True
++    assert bundle.mutation_allowed is False
++    assert bundle.operation_count == 1
++    assert bundle.artifact_count == 5
++    assert (bundle_dir / "manifest.json").exists()
++    assert (bundle_dir / "external_projection_contract.json").exists()
++    assert (bundle_dir / "github_projection_payload.json").exists()
++    assert (bundle_dir / "remote_mutation_gate.json").exists()
++    assert (bundle_dir / "github_adapter_dry_run.json").exists()
++
++
++def test_github_export_bundle_can_record_open_gate_result(tmp_path: Path) -> None:
++    contract = tmp_path / "external_projection_contract.json"
++    payload = tmp_path / "github_projection_payload.json"
++    bundle_dir = tmp_path / "github_export_bundle"
++    _write_contract(contract)
++    _write_payload(payload)
++
++    bundle = build_source_candidate_github_export_bundle(
++        contract_path=contract,
++        github_payload_path=payload,
++        policy=SourceCandidateGithubExportBundlePolicy(
++            path=bundle_dir,
++            gate_policy=_open_gate_policy(),
++        ),
++    )
++
++    assert bundle.mutation_allowed is True
++    gate = json.loads((bundle_dir / "remote_mutation_gate.json").read_text(encoding="utf-8"))
++    adapter = json.loads((bundle_dir / "github_adapter_dry_run.json").read_text(encoding="utf-8"))
++    assert gate["mutation_allowed"] is True
++    assert adapter["gate"]["mutation_allowed"] is True
++
++
++def test_github_export_bundle_manifest_can_be_read(tmp_path: Path) -> None:
++    contract = tmp_path / "external_projection_contract.json"
++    payload = tmp_path / "github_projection_payload.json"
++    bundle_dir = tmp_path / "github_export_bundle"
++    _write_contract(contract)
++    _write_payload(payload)
++
++    bundle = build_source_candidate_github_export_bundle(
++        contract_path=contract,
++        github_payload_path=payload,
++        policy=SourceCandidateGithubExportBundlePolicy(path=bundle_dir),
++    )
++
++    manifest = read_source_candidate_github_export_bundle_manifest(bundle.manifest_path)
++
++    assert manifest["schema"] == "missipy.source_candidate.github_export_bundle.v1"
++    assert manifest["repository"] == "newicody/autodoc"
++    assert manifest["artifact_count"] == 4
++
++
++def test_github_export_bundle_rejects_conflicting_names(tmp_path: Path) -> None:
++    contract = tmp_path / "external_projection_contract.json"
++    payload = tmp_path / "github_projection_payload.json"
++    _write_contract(contract)
++    _write_payload(payload)
++
++    with pytest.raises(ValueError, match="distinct"):
++        build_source_candidate_github_export_bundle(
++            contract_path=contract,
++            github_payload_path=payload,
++            policy=SourceCandidateGithubExportBundlePolicy(
++                path=tmp_path / "bundle",
++                contract_name="same.json",
++                payload_name="same.json",
++            ),
++        )
+diff --git a/tests/rules/test_source_candidate_github_export_bundle_rule.py b/tests/rules/test_source_candidate_github_export_bundle_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_source_candidate_github_export_bundle_rule.py
+@@ -0,0 +1,36 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_github_export_bundle_is_local_only() -> None:
++    source = _read("src/context/source_candidate_github_export_bundle.py").lower()
++    forbidden = ("requests", "urllib", "httpx", "subprocess", "token", "authorization")
++    for token in forbidden:
++        assert token not in source
++
++
++def test_github_export_bundle_uses_fake_adapter_and_gate() -> None:
++    source = _read("src/context/source_candidate_github_export_bundle.py")
++    assert "FakeSourceCandidateGithubProjectionAdapter" in source
++    assert "run_source_candidate_remote_mutation_gate" in source
++
++
++def test_github_export_bundle_does_not_modify_scheduler() -> None:
++    manifest = _read("MANIFEST_PHASE7_5_CHANGED_FILES.md")
++    assert "src/kernel/scheduler.py" not in manifest
++    assert "src/context/source_candidate_github_export_bundle.py" in manifest
++
++
++def test_github_export_bundle_has_architecture_source_only() -> None:
++    dot = ROOT / "doc/docs/architecture/context/63_source_candidate_github_export_bundle.dot"
++    svg = ROOT / "doc/docs/architecture/context/63_source_candidate_github_export_bundle.svg"
++    assert dot.exists()
++    assert not svg.exists()
+diff --git a/doc/docs/architecture/context/63_source_candidate_github_export_bundle.dot b/doc/docs/architecture/context/63_source_candidate_github_export_bundle.dot
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/docs/architecture/context/63_source_candidate_github_export_bundle.dot
+@@ -0,0 +1,20 @@
++digraph source_candidate_github_export_bundle {
++  graph [rankdir=LR, label="Phase 7.5 SourceCandidate GitHub export bundle", labelloc=t];
++  node [shape=box];
++
++  contract [label="external_projection_contract.json"];
++  payload [label="github_projection_payload.json"];
++  gate [label="remote_mutation_gate.json"];
++  adapter [label="github_adapter_dry_run.json\nfake-only"];
++  manifest [label="manifest.json"];
++  bundle [label="github_export_bundle\nlocal inspection artifact"];
++  api [label="GitHub API\nnot contacted", style=dashed];
++
++  contract -> bundle;
++  payload -> gate;
++  payload -> adapter;
++  gate -> bundle;
++  adapter -> bundle;
++  bundle -> manifest;
++  bundle -> api [label="no call", style=dashed];
++}
+diff --git a/doc/releases/README_PHASE7_5_GITHUB_EXPORT_BUNDLE.md b/doc/releases/README_PHASE7_5_GITHUB_EXPORT_BUNDLE.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PHASE7_5_GITHUB_EXPORT_BUNDLE.md
+@@ -0,0 +1,16 @@
++# Phase 7.5 — GitHub Export Bundle
++
++Phase 7.5 creates a local GitHub export bundle for operator inspection.
++
++The bundle contains:
++
++```text
++manifest.json
++external_projection_contract.json
++github_projection_payload.json
++remote_mutation_gate.json
++github_adapter_dry_run.json
++```
++
++The bundle is local-only. It does not contact GitHub and it does not perform
++remote mutation.
+diff --git a/doc/CHANGELOG_PHASE7_5_GITHUB_EXPORT_BUNDLE.md b/doc/CHANGELOG_PHASE7_5_GITHUB_EXPORT_BUNDLE.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/CHANGELOG_PHASE7_5_GITHUB_EXPORT_BUNDLE.md
+@@ -0,0 +1,27 @@
++# Changelog — Phase 7.5 GitHub Export Bundle
++
++## Added
++
++- `src/context/source_candidate_github_export_bundle.py`
++  - Builds a local inspection bundle from an external projection contract and GitHub projection payload.
++  - Writes a remote mutation gate result.
++  - Writes a fake adapter dry-run report.
++  - Writes a bundle manifest.
++
++- `tests/context/test_source_candidate_github_export_bundle.py`
++  - Covers local bundle writing, open gate recording, manifest reading and invalid policy.
++
++- `tests/rules/test_source_candidate_github_export_bundle_rule.py`
++  - Ensures the bundle remains local-only and uses the fake adapter plus gate.
++
++- `doc/docs/architecture/context/63_source_candidate_github_export_bundle.dot`
++  - Documents the local GitHub export bundle boundary.
++
++## Not added
++
++- No real GitHub adapter.
++- No GitHub API calls.
++- No network.
++- No token handling.
++- No remote mutation.
++- No Scheduler change.
+diff --git a/doc/PHASE7_5_CODE_RULE_ALIGNMENT.md b/doc/PHASE7_5_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/PHASE7_5_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,20 @@
++# Phase 7.5 Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Phase 7.5 adds a local GitHub export bundle built from local projection artifacts, remote mutation gate output and fake adapter dry-run output. It does not introduce network access, token handling, real remote mutation, a scheduler path or an external backend.
++
++live_path_status: n/a
++live_path_uses_real_backend: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++The phase creates an inspectable bundle before any read-only probe or real
++external adapter.
+diff --git a/PHASE7_5_TEST_REPORT.md b/PHASE7_5_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/PHASE7_5_TEST_REPORT.md
+@@ -0,0 +1,36 @@
++# Phase 7.5 Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src python -m compileall -q src tests
++PYTHONPATH=src pytest -q tests/context/test_source_candidate_github_export_bundle.py
++PYTHONPATH=src pytest -q tests/rules
++PYTHONPATH=src pytest -q
++```
++
++## Expected
++
++```text
++GitHub export bundle tests: pass
++rules: pass
++full suite: pass
++```
++
++## Code rule block
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Local GitHub export bundle only; no network, no token handling, no real remote mutation.
++
++live_path_status: n/a
++live_path_uses_real_backend: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
+diff --git a/MANIFEST_PHASE7_5_CHANGED_FILES.md b/MANIFEST_PHASE7_5_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/MANIFEST_PHASE7_5_CHANGED_FILES.md
+@@ -0,0 +1,21 @@
++# Manifest — Phase 7.5 GitHub Export Bundle
++
++## Added
++
++- `src/context/source_candidate_github_export_bundle.py`
++- `tests/context/test_source_candidate_github_export_bundle.py`
++- `tests/rules/test_source_candidate_github_export_bundle_rule.py`
++- `doc/docs/architecture/context/63_source_candidate_github_export_bundle.dot`
++- `doc/releases/README_PHASE7_5_GITHUB_EXPORT_BUNDLE.md`
++- `doc/CHANGELOG_PHASE7_5_GITHUB_EXPORT_BUNDLE.md`
++- `doc/PHASE7_5_CODE_RULE_ALIGNMENT.md`
++- `PHASE7_5_TEST_REPORT.md`
++- `MANIFEST_PHASE7_5_CHANGED_FILES.md`
++
++## Modified
++
++- None.
++
++## Generated artifacts
++
++- No SVG is versioned.

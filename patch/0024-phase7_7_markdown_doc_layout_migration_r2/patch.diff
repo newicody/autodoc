@@ -1,0 +1,451 @@
+diff --git a/tools/markdown_doc_migrate_repo.py b/tools/markdown_doc_migrate_repo.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tools/markdown_doc_migrate_repo.py
+@@ -0,0 +1,194 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++import json
++import re
++import sys
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Mapping
++
++
++_REPO_ROOT = Path(__file__).resolve().parents[1]
++if str(_REPO_ROOT) not in sys.path:
++    sys.path.insert(0, str(_REPO_ROOT))
++
++from tools.markdown_doc_layout import (  # noqa: E402
++    MarkdownLayoutPlan,
++    apply_markdown_layout_plan,
++    build_markdown_layout_plan,
++)
++
++
++_REPORT_SCHEMA = "missipy.markdown_doc_layout_migration.v1"
++
++
++@dataclass(frozen=True)
++class MarkdownDocMigrationResult:
++    root: Path
++    move_count: int
++    test_file_update_count: int
++    report_path: Path | None
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "schema": _REPORT_SCHEMA,
++            "root": str(self.root),
++            "move_count": self.move_count,
++            "test_file_update_count": self.test_file_update_count,
++            "report_path": str(self.report_path) if self.report_path is not None else None,
++        }
++
++
++def apply_markdown_doc_layout_migration(
++    root: Path,
++    *,
++    report_path: Path | None = None,
++    apply: bool = False,
++) -> MarkdownDocMigrationResult:
++    """Plan/apply the Markdown doc layout migration and update tests."""
++
++    root = root.resolve()
++    plan = build_markdown_layout_plan(root)
++    replacement_map = _replacement_map(plan)
++
++    test_updates = 0
++    if apply:
++        apply_markdown_layout_plan(plan)
++        test_updates = rewrite_python_doc_references(root, replacement_map)
++
++    if report_path is not None:
++        _write_report(report_path, plan, replacement_map, test_updates)
++
++    return MarkdownDocMigrationResult(
++        root=root,
++        move_count=len(plan.moves),
++        test_file_update_count=test_updates,
++        report_path=report_path,
++    )
++
++
++def rewrite_python_doc_references(root: Path, replacements: Mapping[str, str]) -> int:
++    """Rewrite Python test references to moved Markdown files."""
++
++    tests_dir = root / "tests"
++    if not tests_dir.exists():
++        return 0
++
++    updated_count = 0
++    for path in sorted(tests_dir.rglob("*.py")):
++        text = path.read_text(encoding="utf-8")
++        updated = rewrite_python_doc_reference_text(text, replacements)
++        if updated != text:
++            path.write_text(updated, encoding="utf-8")
++            updated_count += 1
++    return updated_count
++
++
++def rewrite_python_doc_reference_text(text: str, replacements: Mapping[str, str]) -> str:
++    updated = text
++
++    for old, new in sorted(replacements.items(), key=lambda item: len(item[0]), reverse=True):
++        updated = updated.replace(f'"{old}"', f'"{new}"')
++        updated = updated.replace(f"'{old}'", f"'{new}'")
++
++    updated = _rewrite_phase_report_literals(updated)
++    updated = _rewrite_manifest_literals(updated)
++    updated = _rewrite_changelog_literals(updated)
++    updated = updated.replace('"doc/code_rule.md"', '"doc/code-rules/code_rule.md"')
++    updated = updated.replace("'doc/code_rule.md'", "'doc/code-rules/code_rule.md'")
++
++    return updated
++
++
++def _replacement_map(plan: MarkdownLayoutPlan) -> dict[str, str]:
++    return {
++        move.source.relative_to(plan.root).as_posix(): move.target.relative_to(plan.root).as_posix()
++        for move in plan.moves
++    }
++
++
++def _rewrite_phase_report_literals(text: str) -> str:
++    def repl(match: re.Match[str]) -> str:
++        quote = match.group("quote")
++        name = match.group("name")
++        phase = match.group("phase")
++        return f"{quote}doc/reports/phase{phase}/{name}{quote}"
++
++    return re.sub(
++        r'(?P<quote>["\'])(?P<name>PHASE(?P<phase>\d+)[^"\']*(?:TEST_REPORT|AUDIT_REPORT|CODE_STYLE_AUDIT|REBUILD_REPORT|REPORT)[^"\']*\.md)(?P=quote)',
++        repl,
++        text,
++    )
++
++
++def _rewrite_manifest_literals(text: str) -> str:
++    def repl(match: re.Match[str]) -> str:
++        quote = match.group("quote")
++        name = match.group("name")
++        return f"{quote}doc/manifests/{name}{quote}"
++
++    return re.sub(
++        r'(?P<quote>["\'])(?P<name>MANIFEST[^"\']*\.md)(?P=quote)',
++        repl,
++        text,
++    )
++
++
++def _rewrite_changelog_literals(text: str) -> str:
++    def repl(match: re.Match[str]) -> str:
++        quote = match.group("quote")
++        name = match.group("name")
++        return f"{quote}doc/changelogs/{name}{quote}"
++
++    return re.sub(
++        r'(?P<quote>["\'])(?P<name>CHANGELOG[^"\']*\.md)(?P=quote)',
++        repl,
++        text,
++    )
++
++
++def _write_report(
++    report_path: Path,
++    plan: MarkdownLayoutPlan,
++    replacements: Mapping[str, str],
++    test_updates: int,
++) -> None:
++    report_path.parent.mkdir(parents=True, exist_ok=True)
++    report = {
++        "schema": _REPORT_SCHEMA,
++        "root": str(plan.root),
++        "move_count": len(plan.moves),
++        "test_file_update_count": test_updates,
++        "moves": plan.to_json_dict()["moves"],
++        "python_reference_replacements": dict(sorted(replacements.items())),
++    }
++    report_path.write_text(
++        json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
++        encoding="utf-8",
++    )
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description="Apply Markdown doc layout migration and update tests.")
++    parser.add_argument("--root", type=Path, default=Path("."), help="repository root")
++    parser.add_argument("--apply", action="store_true", help="move files and rewrite tests")
++    parser.add_argument(
++        "--report-file",
++        type=Path,
++        default=Path("doc/maintenance/markdown_doc_migration_report.json"),
++    )
++    args = parser.parse_args()
++
++    result = apply_markdown_doc_layout_migration(
++        args.root,
++        report_path=args.report_file,
++        apply=args.apply,
++    )
++    print(json.dumps(result.to_json_dict(), ensure_ascii=False, indent=2, sort_keys=True))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_markdown_doc_migrate_repo.py b/tests/tools/test_markdown_doc_migrate_repo.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/tools/test_markdown_doc_migrate_repo.py
+@@ -0,0 +1,18 @@
++from __future__ import annotations
++
++from pathlib import Path
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++if str(ROOT) not in sys.path:
++    sys.path.insert(0, str(ROOT))
++
++from tools.markdown_doc_migrate_repo import (  # noqa: E402
++    apply_markdown_doc_layout_migration,
++    rewrite_python_doc_reference_text,
++)
++
++
++def test_rewrite_python_doc_reference_text_updates_known_markdown_paths() -> None:
++    text = 
+diff --git a/tests/rules/test_markdown_doc_migration_rule.py b/tests/rules/test_markdown_doc_migration_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_markdown_doc_migration_rule.py
+@@ -0,0 +1,36 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_markdown_doc_migration_tool_is_stdlib_local_only() -> None:
++    source = _read("tools/markdown_doc_migrate_repo.py").lower()
++    forbidden = ("requests", "urllib", "httpx", "subprocess", "github")
++    for token in forbidden:
++        assert token not in source
++
++
++def test_markdown_doc_migration_updates_python_test_references() -> None:
++    source = _read("tools/markdown_doc_migrate_repo.py")
++    assert "rewrite_python_doc_references" in source
++    assert "doc/reports/phase" in source
++    assert "doc/manifests" in source
++    assert "doc/code-rules/code_rule.md" in source
++
++
++def test_tools_package_or_sys_path_bootstrap_exists_for_imports() -> None:
++    source = _read("tools/markdown_doc_migrate_repo.py")
++    assert "sys.path.insert" in source
++
++
++def test_markdown_doc_migration_does_not_modify_scheduler() -> None:
++    manifest = _read("MANIFEST_PHASE7_7_CHANGED_FILES.md")
++    assert "src/kernel/scheduler.py" not in manifest
++    assert "tools/markdown_doc_migrate_repo.py" in manifest
+diff --git a/doc/maintenance/MARKDOWN_DOC_MIGRATION.md b/doc/maintenance/MARKDOWN_DOC_MIGRATION.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/maintenance/MARKDOWN_DOC_MIGRATION.md
+@@ -0,0 +1,43 @@
++# Markdown doc migration
++
++Phase 7.7 applies the Markdown documentation layout and updates Python tests
++that reference moved Markdown files.
++
++The migration keeps:
++
++```text
++README.md
++patch/**/README.md
++```
++
++and moves reports/manifests/changelogs/code-rule docs under `doc/`.
++
++## Dry-run
++
++```bash
++python tools/markdown_doc_migrate_repo.py \
++  --root . \
++  --report-file doc/maintenance/markdown_doc_migration_report.json
++```
++
++## Apply
++
++```bash
++python tools/markdown_doc_migrate_repo.py \
++  --root . \
++  --apply \
++  --report-file doc/maintenance/markdown_doc_migration_report.json
++```
++
++## Validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/tools/test_markdown_doc_layout.py
++PYTHONPATH=src:. pytest -q tests/tools/test_markdown_doc_migrate_repo.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++The migration must be committed with `git add -A` so moved Markdown files and
++rewritten tests are recorded together.
+diff --git a/doc/releases/README_PHASE7_7_MARKDOWN_DOC_LAYOUT_MIGRATION.md b/doc/releases/README_PHASE7_7_MARKDOWN_DOC_LAYOUT_MIGRATION.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PHASE7_7_MARKDOWN_DOC_LAYOUT_MIGRATION.md
+@@ -0,0 +1,13 @@
++# Phase 7.7 — Markdown Doc Layout Migration
++
++Phase 7.7 adds the controlled migration step for Markdown documentation.
++
++It complements Phase 7.6 tooling by adding a migration command that:
++
++```text
++moves Markdown files according to the documented layout
++rewrites Python tests that reference moved Markdown paths
++writes a migration report
++```
++
++The migration is local-only and keeps referenced documentation exploitable.
+diff --git a/doc/CHANGELOG_PHASE7_7_MARKDOWN_DOC_LAYOUT_MIGRATION.md b/doc/CHANGELOG_PHASE7_7_MARKDOWN_DOC_LAYOUT_MIGRATION.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/CHANGELOG_PHASE7_7_MARKDOWN_DOC_LAYOUT_MIGRATION.md
+@@ -0,0 +1,24 @@
++# Changelog — Phase 7.7 Markdown Doc Layout Migration
++
++## Added
++
++- `tools/markdown_doc_migrate_repo.py`
++  - Applies the Markdown layout plan.
++  - Rewrites Python test references to moved Markdown files.
++  - Writes a JSON migration report.
++
++- `tests/tools/test_markdown_doc_migrate_repo.py`
++  - Covers Python reference rewriting and an end-to-end local migration fixture.
++
++- `tests/rules/test_markdown_doc_migration_rule.py`
++  - Ensures the migration remains local-only and imports are stable.
++
++- `doc/maintenance/MARKDOWN_DOC_MIGRATION.md`
++  - Documents dry-run, apply and validation commands.
++
++## Not added
++
++- No network.
++- No GitHub API.
++- No deletion of referenced documentation.
++- No Scheduler change.
+diff --git a/doc/PHASE7_7_CODE_RULE_ALIGNMENT.md b/doc/PHASE7_7_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/PHASE7_7_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,20 @@
++# Phase 7.7 Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: Phase 7.7 adds local Markdown migration tooling and test-reference rewriting. It does not introduce runtime scheduling, network access or an external backend.
++
++live_path_status: n/a
++live_path_uses_real_backend: n/a
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++The migration keeps documentation exploitable after moving Markdown files under
++`doc/`.
+diff --git a/PHASE7_7_TEST_REPORT.md b/PHASE7_7_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/PHASE7_7_TEST_REPORT.md
+@@ -0,0 +1,27 @@
++# Phase 7.7 Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/tools/test_markdown_doc_migrate_repo.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Optional migration command
++
++```bash
++python tools/markdown_doc_migrate_repo.py \
++  --root . \
++  --apply \
++  --report-file doc/maintenance/markdown_doc_migration_report.json
++```
++
++## Expected
++
++```text
++markdown migration tests: pass
++rules: pass after migration
++full suite: pass after migration
++```
+diff --git a/MANIFEST_PHASE7_7_CHANGED_FILES.md b/MANIFEST_PHASE7_7_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/MANIFEST_PHASE7_7_CHANGED_FILES.md
+@@ -0,0 +1,22 @@
++# Manifest — Phase 7.7 Markdown Doc Layout Migration
++
++## Added
++
++- `tools/markdown_doc_migrate_repo.py`
++- `tests/tools/test_markdown_doc_migrate_repo.py`
++- `tests/rules/test_markdown_doc_migration_rule.py`
++- `doc/maintenance/MARKDOWN_DOC_MIGRATION.md`
++- `doc/releases/README_PHASE7_7_MARKDOWN_DOC_LAYOUT_MIGRATION.md`
++- `doc/CHANGELOG_PHASE7_7_MARKDOWN_DOC_LAYOUT_MIGRATION.md`
++- `doc/PHASE7_7_CODE_RULE_ALIGNMENT.md`
++- `PHASE7_7_TEST_REPORT.md`
++- `MANIFEST_PHASE7_7_CHANGED_FILES.md`
++
++## Modified by migration command
++
++- Markdown files moved under `doc/`.
++- Python tests referencing moved Markdown files.
++
++## Generated artifacts
++
++- `doc/maintenance/markdown_doc_migration_report.json` is generated by the migration command and may be committed as migration evidence.
