@@ -1,0 +1,497 @@
+diff --git a/tools/cell_snapshot_sse_server.py b/tools/cell_snapshot_sse_server.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tools/cell_snapshot_sse_server.py
+@@ -0,0 +1,153 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++from http import HTTPStatus
++from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
++from pathlib import Path
++import time
++from typing import Callable
++
++from context.cell_snapshot_journal_reader import tail_cell_snapshot_jsonl
++from context.cell_snapshot_sse import cell_journal_to_sse_text, snapshots_to_sse_text
++
++
++DEFAULT_BIND_HOST = "127.0.0.1"
++DEFAULT_PORT = 8765
++CELL_STREAM_PATH = "/cells.sse"
++HEALTH_PATH = "/health"
++
++
++def build_replay_sse_text(journal: Path, *, limit: int | None = None, start_sequence: int = 0) -> str:
++    return cell_journal_to_sse_text(journal, limit=limit, start_sequence=start_sequence)
++
++
++def make_cell_sse_handler(
++    *,
++    journal: Path,
++    tail: bool = False,
++    replay_limit: int | None = None,
++    poll_seconds: float = 0.50,
++    max_tail_lines: int = 512,
++) -> type[BaseHTTPRequestHandler]:
++    if poll_seconds <= 0:
++        raise ValueError("poll_seconds must be > 0")
++    if max_tail_lines <= 0:
++        raise ValueError("max_tail_lines must be > 0")
++
++    class CellSseHandler(BaseHTTPRequestHandler):
++        server_version = "MissiPyCellSse/0.1"
++
++        def do_GET(self) -> None:  # noqa: N802
++            if self.path == HEALTH_PATH:
++                self._send_text(HTTPStatus.OK, "ok\n")
++                return
++            if self.path != CELL_STREAM_PATH:
++                self._send_text(HTTPStatus.NOT_FOUND, "not found\n")
++                return
++
++            self.send_response(HTTPStatus.OK)
++            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
++            self.send_header("Cache-Control", "no-cache")
++            self.send_header("Connection", "keep-alive")
++            self.end_headers()
++
++            sequence = 0
++            replay_text = build_replay_sse_text(journal, limit=replay_limit, start_sequence=sequence)
++            if replay_text:
++                self.wfile.write(replay_text.encode("utf-8"))
++                self.wfile.flush()
++                sequence += replay_text.count("\nevent: cell_snapshot\n")
++
++            offset = journal.stat().st_size if journal.exists() else 0
++            if not tail:
++                return
++
++            while True:
++                result = tail_cell_snapshot_jsonl(journal, offset=offset, max_lines=max_tail_lines)
++                offset = result.next_offset
++                if result.snapshots:
++                    text = snapshots_to_sse_text(result.snapshots, start_sequence=sequence)
++                    self.wfile.write(text.encode("utf-8"))
++                    self.wfile.flush()
++                    sequence += len(result.snapshots)
++                time.sleep(poll_seconds)
++
++        def do_POST(self) -> None:  # noqa: N802
++            self._send_text(HTTPStatus.METHOD_NOT_ALLOWED, "read only\n")
++
++        def do_PUT(self) -> None:  # noqa: N802
++            self._send_text(HTTPStatus.METHOD_NOT_ALLOWED, "read only\n")
++
++        def do_DELETE(self) -> None:  # noqa: N802
++            self._send_text(HTTPStatus.METHOD_NOT_ALLOWED, "read only\n")
++
++        def log_message(self, format: str, *args: object) -> None:
++            return
++
++        def _send_text(self, status: HTTPStatus, body: str) -> None:
++            payload = body.encode("utf-8")
++            self.send_response(status)
++            self.send_header("Content-Type", "text/plain; charset=utf-8")
++            self.send_header("Content-Length", str(len(payload)))
++            self.end_headers()
++            self.wfile.write(payload)
++
++    return CellSseHandler
++
++
++def serve_cell_sse(
++    *,
++    journal: Path,
++    host: str = DEFAULT_BIND_HOST,
++    port: int = DEFAULT_PORT,
++    tail: bool = False,
++    replay_limit: int | None = None,
++    poll_seconds: float = 0.50,
++    max_tail_lines: int = 512,
++    server_factory: Callable[..., ThreadingHTTPServer] = ThreadingHTTPServer,
++) -> None:
++    if host != DEFAULT_BIND_HOST:
++        raise ValueError("cell SSE endpoint is local-only; host must be 127.0.0.1")
++    if port <= 0:
++        raise ValueError("port must be > 0")
++
++    handler = make_cell_sse_handler(
++        journal=journal,
++        tail=tail,
++        replay_limit=replay_limit,
++        poll_seconds=poll_seconds,
++        max_tail_lines=max_tail_lines,
++    )
++    server = server_factory((host, port), handler)
++    try:
++        server.serve_forever()
++    finally:
++        server.server_close()
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description="Serve a read-only local SSE stream from a missipy.cell.v1 journal.")
++    parser.add_argument("--journal", required=True)
++    parser.add_argument("--host", default=DEFAULT_BIND_HOST)
++    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
++    parser.add_argument("--tail", action="store_true")
++    parser.add_argument("--replay-limit", type=int, default=None)
++    parser.add_argument("--poll-seconds", type=float, default=0.50)
++    parser.add_argument("--max-tail-lines", type=int, default=512)
++    args = parser.parse_args()
++
++    serve_cell_sse(
++        journal=Path(args.journal),
++        host=args.host,
++        port=args.port,
++        tail=args.tail,
++        replay_limit=args.replay_limit,
++        poll_seconds=args.poll_seconds,
++        max_tail_lines=args.max_tail_lines,
++    )
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_cell_snapshot_sse_server.py b/tests/tools/test_cell_snapshot_sse_server.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/tools/test_cell_snapshot_sse_server.py
+@@ -0,0 +1,88 @@
++from __future__ import annotations
++
++from pathlib import Path
++import sys
++
++import pytest
++
++from context.cell_snapshot import CellSnapshot
++from context.cell_snapshot_journal import CellSnapshotJournalWriter
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOLS = ROOT / "tools"
++if str(TOOLS) not in sys.path:
++    sys.path.insert(0, str(TOOLS))
++
++from cell_snapshot_sse_server import (  # noqa: E402
++    CELL_STREAM_PATH,
++    DEFAULT_BIND_HOST,
++    HEALTH_PATH,
++    build_replay_sse_text,
++    make_cell_sse_handler,
++    serve_cell_sse,
++)
++
++
++class FakeServer:
++    created_with: tuple[object, object] | None = None
++    served = False
++    closed = False
++
++    def __init__(self, address: object, handler: object) -> None:
++        self.__class__.created_with = (address, handler)
++
++    def serve_forever(self) -> None:
++        self.__class__.served = True
++
++    def server_close(self) -> None:
++        self.__class__.closed = True
++
++
++def _snapshot(index: int) -> CellSnapshot:
++    return CellSnapshot(
++        cell_id=f"cell-{index}",
++        source_class="scheduler.short_task",
++        score=1.0,
++        age=float(index),
++        cost=0.5,
++        lifecycle_state="completed",
++        observed_at=f"2026-07-03T10:00:0{index}Z",
++    )
++
++
++def test_build_replay_sse_text_uses_existing_journal(tmp_path: Path) -> None:
++    journal = tmp_path / "cells.jsonl"
++    CellSnapshotJournalWriter(journal).append_many([_snapshot(1), _snapshot(2)])
++
++    text = build_replay_sse_text(journal, limit=1)
++
++    assert text.startswith("id: 0\nevent: cell_snapshot\ndata: ")
++    assert "cell-1" in text
++    assert "cell-2" not in text
++
++
++def test_make_cell_sse_handler_exposes_expected_paths(tmp_path: Path) -> None:
++    handler = make_cell_sse_handler(journal=tmp_path / "cells.jsonl")
++
++    assert handler.server_version == "MissiPyCellSse/0.1"
++    assert CELL_STREAM_PATH == "/cells.sse"
++    assert HEALTH_PATH == "/health"
++
++
++def test_serve_cell_sse_is_local_only(tmp_path: Path) -> None:
++    with pytest.raises(ValueError, match="local-only"):
++        serve_cell_sse(journal=tmp_path / "cells.jsonl", host="0.0.0.0", server_factory=FakeServer)
++
++
++def test_serve_cell_sse_uses_local_default_host(tmp_path: Path) -> None:
++    FakeServer.created_with = None
++    FakeServer.served = False
++    FakeServer.closed = False
++
++    serve_cell_sse(journal=tmp_path / "cells.jsonl", server_factory=FakeServer)
++
++    assert FakeServer.created_with is not None
++    assert FakeServer.created_with[0] == (DEFAULT_BIND_HOST, 8765)
++    assert FakeServer.served is True
++    assert FakeServer.closed is True
+diff --git a/tests/rules/test_cell_snapshot_sse_server_rule.py b/tests/rules/test_cell_snapshot_sse_server_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_cell_snapshot_sse_server_rule.py
+@@ -0,0 +1,45 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_cell_snapshot_sse_server_is_tool_boundary_only() -> None:
++    source = _read("tools/cell_snapshot_sse_server.py")
++    assert 'DEFAULT_BIND_HOST = "127.0.0.1"' in source
++    assert 'CELL_STREAM_PATH = "/cells.sse"' in source
++    assert "ThreadingHTTPServer" in source
++    assert "METHOD_NOT_ALLOWED" in source
++
++
++def test_cell_snapshot_sse_server_has_no_command_or_external_api_path() -> None:
++    source = _read("tools/cell_snapshot_sse_server.py")
++    forbidden = ["vispy", "Scheduler", "EventBus", "requests", "urllib", "httpx", "OPENAI_API_KEY", "github"]
++    for token in forbidden:
++        assert token not in source
++
++
++def test_cell_snapshot_sse_server_docs_keep_read_only_local_boundary() -> None:
++    doc = _read("doc/server/CELL_SNAPSHOT_SSE_LOCAL_ENDPOINT.md")
++    assert "read-only" in doc
++    assert "127.0.0.1" in doc
++    assert "/cells.sse" in doc
++    assert "same missipy.cell.v1 journal" in doc
++    assert "No POST" in doc
++    assert "No command channel" in doc
++
++
++def test_cell_snapshot_sse_server_manifest_declares_endpoint_but_no_mobile_source_of_truth() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PART10_2_LOCAL_READ_ONLY_SSE_ENDPOINT.md")
++    assert "tools/cell_snapshot_sse_server.py" in manifest
++    assert "local read-only endpoint" in manifest
++    assert "mobile source of truth" not in manifest
++    assert "requirements" not in manifest
++    assert ".dot" not in manifest
++    assert ".svg" not in manifest
+diff --git a/doc/server/CELL_SNAPSHOT_SSE_LOCAL_ENDPOINT.md b/doc/server/CELL_SNAPSHOT_SSE_LOCAL_ENDPOINT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/server/CELL_SNAPSHOT_SSE_LOCAL_ENDPOINT.md
+@@ -0,0 +1,66 @@
++# Cell Snapshot SSE Local Endpoint
++
++This endpoint serves the same missipy.cell.v1 journal as read-only SSE.
++
++It is local-only.
++
++```text
++host: 127.0.0.1
++path: /cells.sse
++health: /health
++```
++
++## Purpose
++
++```text
++same missipy.cell.v1 journal
++→ replay/tail reader
++→ SSE contract
++→ local read-only endpoint
++→ browser window
++```
++
++The endpoint is a window into the journal. It is not a source of truth.
++
++## Read-only rule
++
++No POST.
++No PUT.
++No DELETE.
++No command channel.
++
++The endpoint returns `405 Method Not Allowed` for write-like HTTP methods.
++
++## Local-only rule
++
++The default host is `127.0.0.1`.
++
++The tool rejects any other host for this phase.
++
++## Usage
++
++```bash
++PYTHONPATH=src:. python tools/cell_snapshot_sse_server.py \
++  --journal /tmp/missipy_cells.jsonl \
++  --port 8765
++```
++
++Follow a growing journal:
++
++```bash
++PYTHONPATH=src:. python tools/cell_snapshot_sse_server.py \
++  --journal /tmp/missipy_cells.jsonl \
++  --port 8765 \
++  --tail
++```
++
++Then open:
++
++```text
++http://127.0.0.1:8765/cells.sse
++```
++
++## Boundary
++
++The server tool must not import visualization code, command code, model code, or
++external API clients.
+diff --git a/doc/releases/README_PART10_2_LOCAL_READ_ONLY_SSE_ENDPOINT.md b/doc/releases/README_PART10_2_LOCAL_READ_ONLY_SSE_ENDPOINT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PART10_2_LOCAL_READ_ONLY_SSE_ENDPOINT.md
+@@ -0,0 +1,19 @@
++# Part 10.2 — Local Read-Only SSE Endpoint
++
++Part 10.2 adds a local-only, read-only SSE endpoint tool for the cell snapshot
++journal.
++
++## Added
++
++- `tools/cell_snapshot_sse_server.py`
++- Read-only `/cells.sse`
++- Local health path `/health`
++- Local-only host guard
++- Tests and docs
++
++## Not added
++
++- No browser UI
++- No command channel
++- No remote exposure
++- No optimization loop
+diff --git a/doc/changelogs/CHANGELOG_PART10_2_LOCAL_READ_ONLY_SSE_ENDPOINT.md b/doc/changelogs/CHANGELOG_PART10_2_LOCAL_READ_ONLY_SSE_ENDPOINT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PART10_2_LOCAL_READ_ONLY_SSE_ENDPOINT.md
+@@ -0,0 +1,15 @@
++# Changelog — Part 10.2 Local Read-Only SSE Endpoint
++
++## Added
++
++- Local-only SSE endpoint tool.
++- Replay response from existing journal.
++- Optional non-blocking tail polling loop.
++- Write-like methods rejected with method-not-allowed responses.
++
++## Not changed
++
++- No Scheduler path.
++- No live bus subscription.
++- No recorder core mutation.
++- No renderer dependency.
+diff --git a/doc/code-rules/PART10_2_LOCAL_SSE_ENDPOINT_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PART10_2_LOCAL_SSE_ENDPOINT_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PART10_2_LOCAL_SSE_ENDPOINT_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,21 @@
++# Part 10.2 Local SSE Endpoint Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: The patch adds a local-only read-only SSE endpoint tool for an existing journal. It does not add a command path, external API, remote exposure, live subscription, recorder core mutation, or browser state authority.
++
++live_path_status: local read-only endpoint tool
++live_path_uses_real_backend: local journal reader
++external_dependencies_added: false
++scheduler_modified: false
++eventbus_modified: false
++recorder_core_modified: false
++network_added: local_only
++server_endpoint_added: local_read_only
++github_api_added: false
++vispy_added: false
++llm_or_openvino_added: false
++```
++
++The endpoint remains a lens over the journal.
+diff --git a/doc/reports/phase10/PART10_2_LOCAL_READ_ONLY_SSE_ENDPOINT_TEST_REPORT.md b/doc/reports/phase10/PART10_2_LOCAL_READ_ONLY_SSE_ENDPOINT_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase10/PART10_2_LOCAL_READ_ONLY_SSE_ENDPOINT_TEST_REPORT.md
+@@ -0,0 +1,11 @@
++# Part 10.2 Local Read-Only SSE Endpoint Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/tools/test_cell_snapshot_sse_server.py
++PYTHONPATH=src:. pytest -q tests/rules/test_cell_snapshot_sse_server_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
+diff --git a/doc/manifests/MANIFEST_PART10_2_LOCAL_READ_ONLY_SSE_ENDPOINT.md b/doc/manifests/MANIFEST_PART10_2_LOCAL_READ_ONLY_SSE_ENDPOINT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PART10_2_LOCAL_READ_ONLY_SSE_ENDPOINT.md
+@@ -0,0 +1,25 @@
++# Manifest — Part 10.2 Local Read-Only SSE Endpoint
++
++## Added
++
++- `tools/cell_snapshot_sse_server.py`
++- `tests/tools/test_cell_snapshot_sse_server.py`
++- `tests/rules/test_cell_snapshot_sse_server_rule.py`
++- `doc/server/CELL_SNAPSHOT_SSE_LOCAL_ENDPOINT.md`
++- `doc/releases/README_PART10_2_LOCAL_READ_ONLY_SSE_ENDPOINT.md`
++- `doc/changelogs/CHANGELOG_PART10_2_LOCAL_READ_ONLY_SSE_ENDPOINT.md`
++- `doc/code-rules/PART10_2_LOCAL_SSE_ENDPOINT_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase10/PART10_2_LOCAL_READ_ONLY_SSE_ENDPOINT_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PART10_2_LOCAL_READ_ONLY_SSE_ENDPOINT.md`
++
++## Modified
++
++- None.
++
++## Runtime changes
++
++- Adds a local read-only endpoint tool.
++
++## Runtime dependencies
++
++- None added.
