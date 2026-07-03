@@ -1,0 +1,682 @@
+diff --git a/src/context/baby_fork_smoke_project.py b/src/context/baby_fork_smoke_project.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/baby_fork_smoke_project.py
+@@ -0,0 +1,302 @@
++from __future__ import annotations
++
++from dataclasses import dataclass, replace
++import json
++from pathlib import Path
++from typing import Iterable
++
++from context.cell_snapshot import CellSnapshot
++from context.cell_snapshot_journal import write_cell_snapshots_jsonl
++
++
++BABY_FORK_SMOKE_PROJECT_SCHEMA = "missipy.baby_fork_smoke_project.v1"
++
++
++@dataclass(frozen=True, slots=True)
++class BabyForkDocument:
++    document_id: str
++    title: str
++    domain: str
++    food_contact: bool
++    age_target: str
++    material: str
++    text: str
++    hazard_class: str = "low"
++
++
++@dataclass(frozen=True, slots=True)
++class BabyForkTaskContext:
++    context_id: str
++    task_id: str
++    version: int
++    domain: str
++    objective: str
++    constraints: tuple[str, ...]
++    evidence_ids: tuple[str, ...] = ()
++    variants: tuple[str, ...] = ()
++    selected_variant: str = ""
++    schema: str = BABY_FORK_SMOKE_PROJECT_SCHEMA
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "constraints": list(self.constraints),
++            "context_id": self.context_id,
++            "domain": self.domain,
++            "evidence_ids": list(self.evidence_ids),
++            "objective": self.objective,
++            "schema": self.schema,
++            "selected_variant": self.selected_variant,
++            "task_id": self.task_id,
++            "variants": list(self.variants),
++            "version": self.version,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class BabyForkRetrievalResult:
++    worker_id: str
++    query: str
++    retrieved: tuple[BabyForkDocument, ...]
++    rejected_ids: tuple[str, ...]
++    schema: str = BABY_FORK_SMOKE_PROJECT_SCHEMA
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "query": self.query,
++            "rejected_ids": list(self.rejected_ids),
++            "retrieved_ids": [doc.document_id for doc in self.retrieved],
++            "schema": self.schema,
++            "worker_id": self.worker_id,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class BabyForkVariant:
++    variant_id: str
++    label: str
++    material: str
++    shape: str
++    reason: str
++    score: float
++
++
++@dataclass(frozen=True, slots=True)
++class BabyForkContextPatchProposal:
++    proposal_id: str
++    base_version: int
++    evidence_ids: tuple[str, ...]
++    variants: tuple[BabyForkVariant, ...]
++    selected_variant: str
++    reason: str
++    schema: str = BABY_FORK_SMOKE_PROJECT_SCHEMA
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "base_version": self.base_version,
++            "evidence_ids": list(self.evidence_ids),
++            "proposal_id": self.proposal_id,
++            "reason": self.reason,
++            "schema": self.schema,
++            "selected_variant": self.selected_variant,
++            "variants": [
++                {
++                    "label": variant.label,
++                    "material": variant.material,
++                    "reason": variant.reason,
++                    "score": variant.score,
++                    "shape": variant.shape,
++                    "variant_id": variant.variant_id,
++                }
++                for variant in self.variants
++            ],
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class BabyForkSmokeProjectResult:
++    initial_context: BabyForkTaskContext
++    retrieval: BabyForkRetrievalResult
++    patch: BabyForkContextPatchProposal
++    final_context: BabyForkTaskContext
++    journal_path: str
++    report_path: str
++    snapshot_count: int
++    schema: str = BABY_FORK_SMOKE_PROJECT_SCHEMA
++
++    @property
++    def ok(self) -> bool:
++        return (
++            self.initial_context.domain == "baby_utensil"
++            and self.final_context.domain == "baby_utensil"
++            and len(self.retrieval.retrieved) >= 1
++            and len(self.patch.variants) == 2
++            and "nasa-antenna" in self.retrieval.rejected_ids
++            and bool(self.final_context.selected_variant)
++        )
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "final_context": self.final_context.to_json_dict(),
++            "initial_context": self.initial_context.to_json_dict(),
++            "journal_path": self.journal_path,
++            "ok": self.ok,
++            "patch": self.patch.to_json_dict(),
++            "report_path": self.report_path,
++            "retrieval": self.retrieval.to_json_dict(),
++            "schema": self.schema,
++            "snapshot_count": self.snapshot_count,
++        }
++
++
++def baby_fork_seed_documents() -> tuple[BabyForkDocument, ...]:
++    return (
++        BabyForkDocument(
++            document_id="baby-silicone-fork",
++            title="Soft food-grade silicone baby fork",
++            domain="baby_utensil",
++            food_contact=True,
++            age_target="baby",
++            material="food-grade silicone",
++            text="Soft rounded fork for babies with short tines and a wide grip.",
++        ),
++        BabyForkDocument(
++            document_id="rounded-stainless-soft-handle",
++            title="Rounded stainless fork with soft baby handle",
++            domain="baby_utensil",
++            food_contact=True,
++            age_target="baby",
++            material="rounded stainless steel with silicone handle",
++            text="Durable rounded stainless tip with soft wide handle and safe geometry.",
++        ),
++        BabyForkDocument(
++            document_id="nasa-antenna",
++            title="High gain aerospace antenna feed",
++            domain="aerospace",
++            food_contact=False,
++            age_target="adult",
++            material="aluminium",
++            text="Antenna feed geometry for radio transmission and aerospace structures.",
++            hazard_class="irrelevant",
++        ),
++    )
++
++
++def retrieve_baby_fork_documents(context: BabyForkTaskContext, documents: Iterable[BabyForkDocument], *, limit: int = 2) -> BabyForkRetrievalResult:
++    query_terms = set((context.objective + " " + " ".join(context.constraints)).lower().split())
++    matches: list[tuple[int, BabyForkDocument]] = []
++    rejected: list[str] = []
++    for doc in documents:
++        if doc.domain != "baby_utensil" or not doc.food_contact or doc.age_target != "baby":
++            rejected.append(doc.document_id)
++            continue
++        text_terms = set((doc.title + " " + doc.text + " " + doc.material).lower().split())
++        matches.append((len(query_terms & text_terms), doc))
++    matches.sort(key=lambda item: (-item[0], item[1].document_id))
++    return BabyForkRetrievalResult(
++        worker_id="retrieval.baby_fork.stdlib",
++        query=context.objective,
++        retrieved=tuple(doc for _, doc in matches[:limit]),
++        rejected_ids=tuple(rejected),
++    )
++
++
++def mvtc_make_two_baby_fork_variants(context: BabyForkTaskContext, retrieval: BabyForkRetrievalResult) -> BabyForkContextPatchProposal:
++    variants: list[BabyForkVariant] = []
++    for index, doc in enumerate(retrieval.retrieved[:2], start=1):
++        if "silicone" in doc.material:
++            variants.append(BabyForkVariant(
++                variant_id=f"variant-{index}",
++                label="soft silicone baby fork",
++                material=doc.material,
++                shape="short rounded tines with wide grip",
++                reason="soft contact, simple cleaning, low sharp-edge risk",
++                score=0.86,
++            ))
++        else:
++            variants.append(BabyForkVariant(
++                variant_id=f"variant-{index}",
++                label="rounded stainless with soft handle",
++                material=doc.material,
++                shape="rounded metal tip with oversized soft handle",
++                reason="durable option if all edges are rounded and handle remains soft",
++                score=0.74,
++            ))
++    return BabyForkContextPatchProposal(
++        proposal_id="patch-baby-fork-001",
++        base_version=context.version,
++        evidence_ids=tuple(doc.document_id for doc in retrieval.retrieved),
++        variants=tuple(variants),
++        selected_variant=variants[0].variant_id if variants else "",
++        reason="MVTC kept two baby-utensil variants and rejected the off-domain antenna document.",
++    )
++
++
++def apply_baby_fork_context_patch(context: BabyForkTaskContext, patch: BabyForkContextPatchProposal) -> BabyForkTaskContext:
++    if context.domain != "baby_utensil":
++        raise ValueError("context domain must remain baby_utensil")
++    if patch.base_version != context.version:
++        raise ValueError("context patch base_version mismatch")
++    if len(patch.variants) != 2:
++        raise ValueError("baby fork smoke project expects exactly two variants")
++    return replace(
++        context,
++        version=context.version + 1,
++        evidence_ids=patch.evidence_ids,
++        variants=tuple(variant.variant_id for variant in patch.variants),
++        selected_variant=patch.selected_variant,
++    )
++
++
++def _snapshot(cell_id: str, source_class: str, state: str, score: float, age: float, cost: float) -> CellSnapshot:
++    return CellSnapshot(
++        cell_id=cell_id,
++        source_class=source_class,
++        lifecycle_state=state,
++        observed_at="2026-07-03T12:00:00Z",
++        score=score,
++        age=age,
++        cost=cost,
++        source_task_id="baby-fork-project",
++        source_component_id=cell_id,
++    )
++
++
++def baby_fork_smoke_snapshots() -> tuple[CellSnapshot, ...]:
++    return (
++        _snapshot("project:baby-fork", "project.context", "created", 1.0, 0.0, 1.0),
++        _snapshot("scheduler:baby-fork", "scheduler.project", "running", 1.0, 1.0, 2.0),
++        _snapshot("worker:retrieval-baby-fork", "worker.retrieval", "completed", 1.0, 2.0, 3.0),
++        _snapshot("mvtc:baby-fork", "mvtc.context_variation", "completed", 0.9, 3.0, 2.0),
++        _snapshot("context-gate:baby-fork", "context.gate", "completed", 1.0, 4.0, 1.0),
++        _snapshot("project:baby-fork-result", "project.result", "completed", 1.0, 5.0, 1.0),
++    )
++
++
++def run_baby_fork_smoke_project(output_dir: Path) -> BabyForkSmokeProjectResult:
++    output_dir.mkdir(parents=True, exist_ok=True)
++    journal_path = output_dir / "baby_fork_cells.jsonl"
++    report_path = output_dir / "baby_fork_report.json"
++    initial_context = BabyForkTaskContext(
++        context_id="ctx-baby-fork-001",
++        task_id="baby-fork-project",
++        version=1,
++        domain="baby_utensil",
++        objective="design a baby fork adapted to babies",
++        constraints=("food contact", "non toxic", "rounded geometry", "anti choking dimensions", "easy cleaning", "baby grip"),
++    )
++    retrieval = retrieve_baby_fork_documents(initial_context, baby_fork_seed_documents())
++    patch = mvtc_make_two_baby_fork_variants(initial_context, retrieval)
++    final_context = apply_baby_fork_context_patch(initial_context, patch)
++    snapshots = baby_fork_smoke_snapshots()
++    write_cell_snapshots_jsonl(journal_path, snapshots, strict=True)
++    result = BabyForkSmokeProjectResult(
++        initial_context=initial_context,
++        retrieval=retrieval,
++        patch=patch,
++        final_context=final_context,
++        journal_path=str(journal_path),
++        report_path=str(report_path),
++        snapshot_count=len(snapshots),
++    )
++    report_path.write_text(json.dumps(result.to_json_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    return result
+diff --git a/tools/run_baby_fork_smoke_project.py b/tools/run_baby_fork_smoke_project.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tools/run_baby_fork_smoke_project.py
+@@ -0,0 +1,21 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++
++from context.baby_fork_smoke_project import run_baby_fork_smoke_project
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description="Run the real minimal baby-fork context smoke project.")
++    parser.add_argument("--output-dir", default=".var/baby_fork_smoke")
++    args = parser.parse_args()
++    result = run_baby_fork_smoke_project(Path(args.output_dir))
++    print(json.dumps(result.to_json_dict(), ensure_ascii=False, sort_keys=True))
++    return 0 if result.ok else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/context/test_baby_fork_smoke_project.py b/tests/context/test_baby_fork_smoke_project.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_baby_fork_smoke_project.py
+@@ -0,0 +1,60 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++from context.baby_fork_smoke_project import (
++    BabyForkTaskContext,
++    apply_baby_fork_context_patch,
++    baby_fork_seed_documents,
++    mvtc_make_two_baby_fork_variants,
++    retrieve_baby_fork_documents,
++    run_baby_fork_smoke_project,
++)
++from context.cell_snapshot_journal_reader import read_cell_snapshot_jsonl
++
++
++def _context() -> BabyForkTaskContext:
++    return BabyForkTaskContext(
++        context_id="ctx",
++        task_id="task",
++        version=1,
++        domain="baby_utensil",
++        objective="design a baby fork",
++        constraints=("food contact", "rounded geometry", "baby grip"),
++    )
++
++
++def test_retrieval_worker_filters_to_baby_utensil_domain() -> None:
++    result = retrieve_baby_fork_documents(_context(), baby_fork_seed_documents())
++    assert [doc.document_id for doc in result.retrieved] == ["baby-silicone-fork", "rounded-stainless-soft-handle"]
++    assert "nasa-antenna" in result.rejected_ids
++
++
++def test_mvtc_produces_exactly_two_context_variants() -> None:
++    context = _context()
++    retrieval = retrieve_baby_fork_documents(context, baby_fork_seed_documents())
++    patch = mvtc_make_two_baby_fork_variants(context, retrieval)
++    assert len(patch.variants) == 2
++    assert patch.selected_variant == "variant-1"
++    assert "baby" in patch.reason
++
++
++def test_context_gate_versions_context_after_patch() -> None:
++    context = _context()
++    retrieval = retrieve_baby_fork_documents(context, baby_fork_seed_documents())
++    patch = mvtc_make_two_baby_fork_variants(context, retrieval)
++    final_context = apply_baby_fork_context_patch(context, patch)
++    assert final_context.version == 2
++    assert final_context.evidence_ids == ("baby-silicone-fork", "rounded-stainless-soft-handle")
++    assert final_context.selected_variant == "variant-1"
++
++
++def test_baby_fork_smoke_project_feeds_cell_lens_from_real_flow(tmp_path: Path) -> None:
++    result = run_baby_fork_smoke_project(tmp_path)
++    replay = read_cell_snapshot_jsonl(Path(result.journal_path))
++    assert result.ok is True
++    assert result.snapshot_count == 6
++    assert len(replay.snapshots) == 6
++    assert [snapshot.source_class for snapshot in replay.snapshots] == [
++        "project.context", "scheduler.project", "worker.retrieval", "mvtc.context_variation", "context.gate", "project.result"
++    ]
+diff --git a/tests/tools/test_run_baby_fork_smoke_project.py b/tests/tools/test_run_baby_fork_smoke_project.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/tools/test_run_baby_fork_smoke_project.py
+@@ -0,0 +1,27 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++import subprocess
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "run_baby_fork_smoke_project.py"
++
++
++def test_run_baby_fork_smoke_project_cli_outputs_report(tmp_path: Path) -> None:
++    completed = subprocess.run(
++        [sys.executable, str(TOOL), "--output-dir", str(tmp_path)],
++        cwd=ROOT,
++        env={"PYTHONPATH": "src:."},
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++    payload = json.loads(completed.stdout)
++    assert payload["schema"] == "missipy.baby_fork_smoke_project.v1"
++    assert payload["ok"] is True
++    assert payload["retrieval"]["retrieved_ids"] == ["baby-silicone-fork", "rounded-stainless-soft-handle"]
++    assert payload["patch"]["selected_variant"] == "variant-1"
++    assert Path(payload["journal_path"]).exists()
+diff --git a/tests/rules/test_baby_fork_smoke_project_rule.py b/tests/rules/test_baby_fork_smoke_project_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_baby_fork_smoke_project_rule.py
+@@ -0,0 +1,34 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_baby_fork_smoke_project_declares_real_minimal_flow() -> None:
++    source = _read("src/context/baby_fork_smoke_project.py")
++    assert 'BABY_FORK_SMOKE_PROJECT_SCHEMA = "missipy.baby_fork_smoke_project.v1"' in source
++    assert "retrieve_baby_fork_documents" in source
++    assert "mvtc_make_two_baby_fork_variants" in source
++    assert "apply_baby_fork_context_patch" in source
++    assert "run_baby_fork_smoke_project" in source
++
++
++def test_baby_fork_smoke_project_retrieval_replaces_calculation_for_single_domain() -> None:
++    doc = _read("doc/smoke/BABY_FORK_CONTEXT_SMOKE_PROJECT.md")
++    assert "retrieval replaces calculation for this single domain first" in doc
++    assert "one RetrievalWorker" in doc
++    assert "two MVTC variants" in doc
++    assert "ContextGate" in doc
++    assert "cell-lens is fed by this real flow, not the synthetic generator" in doc
++
++
++def test_baby_fork_smoke_project_has_no_qdrant_dependency_yet() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PART12_1_BABY_FORK_SMOKE_PROJECT_CONTEXT_FLOW.md")
++    assert "stand-in stdlib retrieval" in manifest
++    assert "qdrant dependency" not in manifest
++    assert ".svg" not in manifest
+diff --git a/doc/smoke/BABY_FORK_CONTEXT_SMOKE_PROJECT.md b/doc/smoke/BABY_FORK_CONTEXT_SMOKE_PROJECT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/smoke/BABY_FORK_CONTEXT_SMOKE_PROJECT.md
+@@ -0,0 +1,83 @@
++# Baby Fork Context Smoke Project
++
++```text
++schema: missipy.baby_fork_smoke_project.v1
++```
++
++This smoke project moves ahead of the generalized seven-vector-space plan.
++
++Goal:
++
++```text
++prove retrieval replaces calculation for this single domain first
++```
++
++## Flow
++
++```text
++TaskContext
++→ one RetrievalWorker
++→ two MVTC variants
++→ ContextGate
++→ missipy.cell.v1 journal
++→ cell-lens
++```
++
++The cell-lens is fed by this real flow, not the synthetic generator.
++
++## Domain
++
++```text
++project: baby fork
++domain: baby_utensil
++food_contact: true
++age_target: baby
++```
++
++The retrieval worker must reject off-domain documents such as an aerospace antenna.
++
++## Retrieval
++
++The first implementation uses stand-in stdlib retrieval.
++
++It exists to prove the architecture before adding qdrant_core.
++
++The future replacement is:
++
++```text
++stand-in stdlib retrieval
++→ qdrant_core retrieval
++```
++
++Only after this smoke stays useful should the project generalize toward multiple vector spaces.
++
++## MVTC
++
++MVTC produces exactly two context variants:
++
++```text
++soft silicone baby fork
++rounded stainless fork with soft baby handle
++```
++
++MVTC does not command the Scheduler.
++
++It proposes a context patch.
++
++## ContextGate
++
++The ContextGate accepts the patch only if the baby-utensil domain remains stable.
++
++## Manual run
++
++```bash
++PYTHONPATH=src:. python tools/run_baby_fork_smoke_project.py \
++  --output-dir .var/baby_fork_smoke
++```
++
++Then view:
++
++```bash
++VISPY_APP=pyqt6 QT_QPA_PLATFORM=wayland PYTHONPATH=src:. python tools/visualize_cell_population_vispy.py \
++  --journal .var/baby_fork_smoke/baby_fork_cells.jsonl
++```
+diff --git a/doc/releases/README_PART12_1_BABY_FORK_SMOKE_PROJECT_CONTEXT_FLOW.md b/doc/releases/README_PART12_1_BABY_FORK_SMOKE_PROJECT_CONTEXT_FLOW.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PART12_1_BABY_FORK_SMOKE_PROJECT_CONTEXT_FLOW.md
+@@ -0,0 +1,20 @@
++# Part 12.1 — Baby Fork Smoke Project Context Flow
++
++Part 12.1 moves a real minimal context smoke project ahead of generalized Qdrant vector-space work.
++
++## Added
++
++- TaskContext for the baby-fork domain.
++- One stdlib RetrievalWorker stand-in.
++- MVTC producing two variants.
++- ContextGate applying one context patch.
++- Cell Lens journal fed by this real flow.
++- Tests and docs.
++
++## Not added
++
++- No Qdrant dependency.
++- No seven-vector-space implementation.
++- No model dependency.
++- No live system adapter.
++- No command gateway implementation.
+diff --git a/doc/changelogs/CHANGELOG_PART12_1_BABY_FORK_SMOKE_PROJECT_CONTEXT_FLOW.md b/doc/changelogs/CHANGELOG_PART12_1_BABY_FORK_SMOKE_PROJECT_CONTEXT_FLOW.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PART12_1_BABY_FORK_SMOKE_PROJECT_CONTEXT_FLOW.md
+@@ -0,0 +1,13 @@
++# Changelog — Part 12.1 Baby Fork Smoke Project Context Flow
++
++## Added
++
++- `src/context/baby_fork_smoke_project.py`
++- `tools/run_baby_fork_smoke_project.py`
++- Minimal retrieval before generalized vector spaces.
++- MVTC two-variant context smoke.
++- Cell Lens journal from the real context flow.
++
++## Clarified
++
++The retrieval worker must prove value on the baby-fork domain before generalizing the Qdrant architecture.
+diff --git a/doc/code-rules/PART12_1_BABY_FORK_SMOKE_PROJECT_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PART12_1_BABY_FORK_SMOKE_PROJECT_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PART12_1_BABY_FORK_SMOKE_PROJECT_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,20 @@
++# Part 12.1 Baby Fork Smoke Project Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: The patch adds a local smoke project flow using stdlib retrieval, context patching, and the existing cell journal. It adds no Qdrant dependency, no model dependency, no network behavior, and no command gateway implementation.
++
++live_path_status: real local smoke flow
++live_path_uses_real_backend: local files
++external_dependencies_added: false
++scheduler_modified: false
++eventbus_modified: false
++recorder_core_modified: false
++network_added: false
++server_endpoint_added: false
++github_api_added: false
++vispy_added: false
++llm_or_openvino_added: false
++qdrant_added: false
++```
+diff --git a/doc/reports/phase12/PART12_1_BABY_FORK_SMOKE_PROJECT_TEST_REPORT.md b/doc/reports/phase12/PART12_1_BABY_FORK_SMOKE_PROJECT_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase12/PART12_1_BABY_FORK_SMOKE_PROJECT_TEST_REPORT.md
+@@ -0,0 +1,12 @@
++# Part 12.1 Baby Fork Smoke Project Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/context/test_baby_fork_smoke_project.py
++PYTHONPATH=src:. pytest -q tests/tools/test_run_baby_fork_smoke_project.py
++PYTHONPATH=src:. pytest -q tests/rules/test_baby_fork_smoke_project_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
+diff --git a/doc/manifests/MANIFEST_PART12_1_BABY_FORK_SMOKE_PROJECT_CONTEXT_FLOW.md b/doc/manifests/MANIFEST_PART12_1_BABY_FORK_SMOKE_PROJECT_CONTEXT_FLOW.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PART12_1_BABY_FORK_SMOKE_PROJECT_CONTEXT_FLOW.md
+@@ -0,0 +1,24 @@
++# Manifest — Part 12.1 Baby Fork Smoke Project Context Flow
++
++## Added
++
++- `src/context/baby_fork_smoke_project.py`
++- `tools/run_baby_fork_smoke_project.py`
++- `tests/context/test_baby_fork_smoke_project.py`
++- `tests/tools/test_run_baby_fork_smoke_project.py`
++- `tests/rules/test_baby_fork_smoke_project_rule.py`
++- `doc/smoke/BABY_FORK_CONTEXT_SMOKE_PROJECT.md`
++- `doc/releases/README_PART12_1_BABY_FORK_SMOKE_PROJECT_CONTEXT_FLOW.md`
++- `doc/changelogs/CHANGELOG_PART12_1_BABY_FORK_SMOKE_PROJECT_CONTEXT_FLOW.md`
++- `doc/code-rules/PART12_1_BABY_FORK_SMOKE_PROJECT_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase12/PART12_1_BABY_FORK_SMOKE_PROJECT_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PART12_1_BABY_FORK_SMOKE_PROJECT_CONTEXT_FLOW.md`
++
++## Runtime changes
++
++- Adds stand-in stdlib retrieval for the baby-fork context smoke project.
++- Adds a local tool that writes a cell-lens journal from this real flow.
++
++## Runtime dependencies
++
++- None added.
