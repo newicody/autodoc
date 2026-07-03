@@ -1,0 +1,686 @@
+diff --git a/src/context/cell_recorded_observation_ingest.py b/src/context/cell_recorded_observation_ingest.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/cell_recorded_observation_ingest.py
+@@ -0,0 +1,251 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++import json
++from pathlib import Path
++from typing import Any
++
++from context.cell_observation_event import CellObservationEvent
++from context.cell_snapshot import CellSnapshot
++from context.cell_snapshot_journal import write_cell_snapshots_jsonl
++
++
++CELL_RECORDED_OBSERVATION_INGEST_SCHEMA = "missipy.cell_recorded_observation_ingest.v1"
++CELL_RECORDED_OBSERVATION_STATE_SCHEMA = "missipy.cell_recorded_observation_ingest_state.v1"
++
++
++@dataclass(frozen=True, slots=True)
++class CellRecordedObservationIngestState:
++    source_path: str
++    next_offset: int
++    schema: str = CELL_RECORDED_OBSERVATION_STATE_SCHEMA
++
++    def __post_init__(self) -> None:
++        if self.schema != CELL_RECORDED_OBSERVATION_STATE_SCHEMA:
++            raise ValueError(f"unsupported recorded observation ingest state schema: {self.schema!r}")
++        if self.next_offset < 0:
++            raise ValueError("next_offset must be >= 0")
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "next_offset": self.next_offset,
++            "schema": self.schema,
++            "source_path": self.source_path,
++        }
++
++    @classmethod
++    def from_mapping(cls, mapping: dict[str, Any]) -> "CellRecordedObservationIngestState":
++        schema = str(mapping.get("schema", ""))
++        if schema != CELL_RECORDED_OBSERVATION_STATE_SCHEMA:
++            raise ValueError(f"unsupported recorded observation ingest state schema: {schema!r}")
++        return cls(
++            source_path=str(mapping["source_path"]),
++            next_offset=int(mapping["next_offset"]),
++            schema=schema,
++        )
++
++
++@dataclass(frozen=True, slots=True)
++class CellRecordedObservationReadResult:
++    source_path: str
++    start_offset: int
++    next_offset: int
++    attempted_lines: int
++    events: tuple[CellObservationEvent, ...]
++    dropped_count: int
++    errors: tuple[str, ...] = ()
++    schema: str = CELL_RECORDED_OBSERVATION_INGEST_SCHEMA
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "attempted_lines": self.attempted_lines,
++            "dropped_count": self.dropped_count,
++            "errors": list(self.errors),
++            "event_count": len(self.events),
++            "next_offset": self.next_offset,
++            "schema": self.schema,
++            "source_path": self.source_path,
++            "start_offset": self.start_offset,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class CellRecordedObservationIngestResult:
++    source_path: str
++    journal_path: str
++    state_path: str
++    start_offset: int
++    next_offset: int
++    attempted_lines: int
++    event_count: int
++    snapshot_count: int
++    written_count: int
++    dropped_count: int
++    errors: tuple[str, ...] = ()
++    schema: str = CELL_RECORDED_OBSERVATION_INGEST_SCHEMA
++
++    @property
++    def ok(self) -> bool:
++        return not self.errors and self.event_count == self.snapshot_count == self.written_count
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "attempted_lines": self.attempted_lines,
++            "dropped_count": self.dropped_count,
++            "errors": list(self.errors),
++            "event_count": self.event_count,
++            "journal_path": self.journal_path,
++            "next_offset": self.next_offset,
++            "ok": self.ok,
++            "schema": self.schema,
++            "snapshot_count": self.snapshot_count,
++            "source_path": self.source_path,
++            "start_offset": self.start_offset,
++            "state_path": self.state_path,
++            "written_count": self.written_count,
++        }
++
++
++def load_recorded_observation_ingest_state(
++    state_path: Path,
++    *,
++    source_path: Path,
++) -> CellRecordedObservationIngestState:
++    if not state_path.exists():
++        return CellRecordedObservationIngestState(source_path=str(source_path), next_offset=0)
++
++    payload = json.loads(state_path.read_text(encoding="utf-8"))
++    if not isinstance(payload, dict):
++        raise ValueError("recorded observation ingest state must be a JSON object")
++
++    state = CellRecordedObservationIngestState.from_mapping(payload)
++    if state.source_path != str(source_path):
++        return CellRecordedObservationIngestState(source_path=str(source_path), next_offset=0)
++    return state
++
++
++def save_recorded_observation_ingest_state(
++    state_path: Path,
++    state: CellRecordedObservationIngestState,
++) -> None:
++    state_path.parent.mkdir(parents=True, exist_ok=True)
++    state_path.write_text(
++        json.dumps(state.to_json_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
++        encoding="utf-8",
++    )
++
++
++def read_recorded_observation_events_from_offset(
++    source_path: Path,
++    *,
++    offset: int = 0,
++    max_lines: int | None = None,
++    strict: bool = False,
++) -> CellRecordedObservationReadResult:
++    if offset < 0:
++        raise ValueError("offset must be >= 0")
++    if max_lines is not None and max_lines <= 0:
++        raise ValueError("max_lines must be > 0")
++
++    events: list[CellObservationEvent] = []
++    errors: list[str] = []
++    dropped_count = 0
++    attempted_lines = 0
++    next_offset = offset
++
++    if not source_path.exists():
++        message = f"source does not exist: {source_path}"
++        if strict:
++            raise FileNotFoundError(message)
++        return CellRecordedObservationReadResult(
++            source_path=str(source_path),
++            start_offset=offset,
++            next_offset=offset,
++            attempted_lines=0,
++            events=(),
++            dropped_count=0,
++            errors=(message,),
++        )
++
++    with source_path.open("r", encoding="utf-8") as handle:
++        handle.seek(offset)
++        while True:
++            if max_lines is not None and attempted_lines >= max_lines:
++                break
++
++            line = handle.readline()
++            if not line:
++                break
++
++            next_offset = handle.tell()
++            stripped = line.strip()
++            if not stripped:
++                continue
++
++            attempted_lines += 1
++            try:
++                events.append(CellObservationEvent.from_json_line(stripped))
++            except Exception as exc:
++                message = f"line {attempted_lines}: {type(exc).__name__}: {exc}"
++                if strict:
++                    raise ValueError(message) from exc
++                dropped_count += 1
++                errors.append(message)
++
++    return CellRecordedObservationReadResult(
++        source_path=str(source_path),
++        start_offset=offset,
++        next_offset=next_offset,
++        attempted_lines=attempted_lines,
++        events=tuple(events),
++        dropped_count=dropped_count,
++        errors=tuple(errors),
++    )
++
++
++def derive_snapshots_from_recorded_events(
++    events: tuple[CellObservationEvent, ...],
++) -> tuple[CellSnapshot, ...]:
++    return tuple(event.to_cell_snapshot() for event in events)
++
++
++def ingest_recorded_observation_events_to_cell_journal(
++    source_path: Path,
++    journal_path: Path,
++    state_path: Path,
++    *,
++    max_lines: int | None = None,
++    strict: bool = False,
++) -> CellRecordedObservationIngestResult:
++    state = load_recorded_observation_ingest_state(state_path, source_path=source_path)
++    read_result = read_recorded_observation_events_from_offset(
++        source_path,
++        offset=state.next_offset,
++        max_lines=max_lines,
++        strict=strict,
++    )
++    snapshots = derive_snapshots_from_recorded_events(read_result.events)
++    write_result = write_cell_snapshots_jsonl(journal_path, snapshots, strict=strict)
++
++    errors = list(read_result.errors)
++    errors.extend(write_result.errors)
++
++    next_state = CellRecordedObservationIngestState(
++        source_path=str(source_path),
++        next_offset=read_result.next_offset,
++    )
++    save_recorded_observation_ingest_state(state_path, next_state)
++
++    return CellRecordedObservationIngestResult(
++        source_path=str(source_path),
++        journal_path=str(journal_path),
++        state_path=str(state_path),
++        start_offset=read_result.start_offset,
++        next_offset=read_result.next_offset,
++        attempted_lines=read_result.attempted_lines,
++        event_count=len(read_result.events),
++        snapshot_count=len(snapshots),
++        written_count=write_result.written_count,
++        dropped_count=read_result.dropped_count + write_result.dropped_count,
++        errors=tuple(errors),
++    )
+diff --git a/tools/ingest_recorded_observations_to_cell_journal.py b/tools/ingest_recorded_observations_to_cell_journal.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tools/ingest_recorded_observations_to_cell_journal.py
+@@ -0,0 +1,32 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++
++from context.cell_recorded_observation_ingest import ingest_recorded_observation_events_to_cell_journal
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description="Ingest recorded cell observation events into a missipy.cell.v1 journal.")
++    parser.add_argument("--source", required=True, help="Input missipy.cell_observation_event.v1 JSONL path.")
++    parser.add_argument("--journal", required=True, help="Output missipy.cell.v1 JSONL journal path.")
++    parser.add_argument("--state", required=True, help="Offset state file path.")
++    parser.add_argument("--max-lines", type=int, default=None)
++    parser.add_argument("--strict", action="store_true")
++    args = parser.parse_args()
++
++    result = ingest_recorded_observation_events_to_cell_journal(
++        Path(args.source),
++        Path(args.journal),
++        Path(args.state),
++        max_lines=args.max_lines,
++        strict=args.strict,
++    )
++    print(json.dumps(result.to_json_dict(), ensure_ascii=False, sort_keys=True))
++    return 0 if result.ok else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/context/test_cell_recorded_observation_ingest.py b/tests/context/test_cell_recorded_observation_ingest.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_cell_recorded_observation_ingest.py
+@@ -0,0 +1,104 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++from context.cell_observation_event import CellObservationEvent
++from context.cell_recorded_observation_ingest import (
++    CELL_RECORDED_OBSERVATION_INGEST_SCHEMA,
++    CELL_RECORDED_OBSERVATION_STATE_SCHEMA,
++    ingest_recorded_observation_events_to_cell_journal,
++    load_recorded_observation_ingest_state,
++    read_recorded_observation_events_from_offset,
++)
++from context.cell_snapshot_journal_reader import read_cell_snapshot_jsonl
++
++
++def _event(index: int, event_type: str = "task.running") -> CellObservationEvent:
++    return CellObservationEvent(
++        event_id=f"event-{index}",
++        event_type=event_type,
++        source_task_id=f"task-{index}",
++        source_class="scheduler.short_task",
++        score=1.0,
++        age=float(index),
++        cost=0.5,
++        observed_at=f"2026-07-03T10:00:0{index}Z",
++    )
++
++
++def test_recorded_observation_ingest_writes_journal_and_state(tmp_path: Path) -> None:
++    source = tmp_path / "observations.jsonl"
++    journal = tmp_path / "cells.jsonl"
++    state = tmp_path / "state.json"
++    source.write_text(_event(1).to_json_line() + _event(2, "task.completed").to_json_line(), encoding="utf-8")
++
++    result = ingest_recorded_observation_events_to_cell_journal(source, journal, state)
++
++    replay = read_cell_snapshot_jsonl(journal)
++    saved_state = json.loads(state.read_text(encoding="utf-8"))
++
++    assert result.schema == CELL_RECORDED_OBSERVATION_INGEST_SCHEMA
++    assert result.ok is True
++    assert result.event_count == 2
++    assert result.written_count == 2
++    assert len(replay.snapshots) == 2
++    assert saved_state["schema"] == CELL_RECORDED_OBSERVATION_STATE_SCHEMA
++    assert saved_state["next_offset"] == source.stat().st_size
++
++
++def test_recorded_observation_ingest_is_incremental(tmp_path: Path) -> None:
++    source = tmp_path / "observations.jsonl"
++    journal = tmp_path / "cells.jsonl"
++    state = tmp_path / "state.json"
++    source.write_text(_event(1).to_json_line(), encoding="utf-8")
++
++    first = ingest_recorded_observation_events_to_cell_journal(source, journal, state)
++    second = ingest_recorded_observation_events_to_cell_journal(source, journal, state)
++
++    assert first.written_count == 1
++    assert second.written_count == 0
++    assert read_cell_snapshot_jsonl(journal).snapshots[0].cell_id == "task:task-1"
++
++
++def test_recorded_observation_ingest_reads_only_new_appended_lines(tmp_path: Path) -> None:
++    source = tmp_path / "observations.jsonl"
++    journal = tmp_path / "cells.jsonl"
++    state = tmp_path / "state.json"
++    source.write_text(_event(1).to_json_line(), encoding="utf-8")
++    ingest_recorded_observation_events_to_cell_journal(source, journal, state)
++
++    with source.open("a", encoding="utf-8") as handle:
++        handle.write(_event(2, "task.completed").to_json_line())
++
++    result = ingest_recorded_observation_events_to_cell_journal(source, journal, state)
++    replay = read_cell_snapshot_jsonl(journal)
++
++    assert result.written_count == 1
++    assert [snapshot.cell_id for snapshot in replay.snapshots] == ["task:task-1", "task:task-2"]
++
++
++def test_recorded_observation_read_best_effort_drops_bad_lines(tmp_path: Path) -> None:
++    source = tmp_path / "observations.jsonl"
++    source.write_text(_event(1).to_json_line() + "not-json\n", encoding="utf-8")
++
++    result = read_recorded_observation_events_from_offset(source)
++
++    assert result.attempted_lines == 2
++    assert len(result.events) == 1
++    assert result.dropped_count == 1
++    assert result.errors
++
++
++def test_recorded_observation_state_resets_when_source_changes(tmp_path: Path) -> None:
++    source_a = tmp_path / "a.jsonl"
++    source_b = tmp_path / "b.jsonl"
++    state = tmp_path / "state.json"
++    source_a.write_text(_event(1).to_json_line(), encoding="utf-8")
++    source_b.write_text(_event(2).to_json_line(), encoding="utf-8")
++
++    ingest_recorded_observation_events_to_cell_journal(source_a, tmp_path / "cells.jsonl", state)
++    loaded = load_recorded_observation_ingest_state(state, source_path=source_b)
++
++    assert loaded.source_path == str(source_b)
++    assert loaded.next_offset == 0
+diff --git a/tests/tools/test_ingest_recorded_observations_to_cell_journal.py b/tests/tools/test_ingest_recorded_observations_to_cell_journal.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/tools/test_ingest_recorded_observations_to_cell_journal.py
+@@ -0,0 +1,54 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++import subprocess
++import sys
++
++from context.cell_observation_event import CellObservationEvent
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "ingest_recorded_observations_to_cell_journal.py"
++
++
++def test_ingest_recorded_observations_cli_outputs_json_result(tmp_path: Path) -> None:
++    source = tmp_path / "observations.jsonl"
++    journal = tmp_path / "cells.jsonl"
++    state = tmp_path / "state.json"
++    event = CellObservationEvent(
++        event_id="event-1",
++        event_type="task.completed",
++        source_task_id="task-1",
++        source_class="scheduler.short_task",
++        score=1.0,
++        age=1.0,
++        cost=0.5,
++        observed_at="2026-07-03T10:00:00Z",
++    )
++    source.write_text(event.to_json_line(), encoding="utf-8")
++
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--source",
++            str(source),
++            "--journal",
++            str(journal),
++            "--state",
++            str(state),
++        ],
++        cwd=ROOT,
++        env={"PYTHONPATH": "src:."},
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    result = json.loads(completed.stdout)
++    assert result["schema"] == "missipy.cell_recorded_observation_ingest.v1"
++    assert result["ok"] is True
++    assert result["written_count"] == 1
++    assert journal.exists()
++    assert state.exists()
+diff --git a/tests/rules/test_cell_recorded_observation_ingest_rule.py b/tests/rules/test_cell_recorded_observation_ingest_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_cell_recorded_observation_ingest_rule.py
+@@ -0,0 +1,43 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_recorded_observation_ingest_declares_versioned_schema() -> None:
++    source = _read("src/context/cell_recorded_observation_ingest.py")
++    assert 'CELL_RECORDED_OBSERVATION_INGEST_SCHEMA = "missipy.cell_recorded_observation_ingest.v1"' in source
++    assert 'CELL_RECORDED_OBSERVATION_STATE_SCHEMA = "missipy.cell_recorded_observation_ingest_state.v1"' in source
++    assert "ingest_recorded_observation_events_to_cell_journal" in source
++
++
++def test_recorded_observation_ingest_has_no_command_or_network_path() -> None:
++    source = _read("src/context/cell_recorded_observation_ingest.py")
++    forbidden = ["vispy", "Scheduler", "EventBus", "requests", "urllib", "httpx", "OPENAI_API_KEY", "github"]
++    for token in forbidden:
++        assert token not in source
++
++
++def test_recorded_observation_ingest_docs_keep_observation_boundary() -> None:
++    doc = _read("doc/contracts/CELL_RECORDED_OBSERVATION_INGEST_V1.md")
++    assert "missipy.cell_recorded_observation_ingest.v1" in doc
++    assert "missipy.cell_observation_event.v1" in doc
++    assert "missipy.cell.v1 journal" in doc
++    assert "offset state" in doc
++    assert "observation-only" in doc
++    assert "not a command path" in doc
++
++
++def test_recorded_observation_ingest_manifest_has_no_ui_or_network_dependency() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PART11_1_RECORDED_OBSERVATION_INGEST_TO_CELL_JOURNAL.md")
++    assert "src/context/cell_recorded_observation_ingest.py" in manifest
++    assert "tools/ingest_recorded_observations_to_cell_journal.py" in manifest
++    assert "requirements" not in manifest
++    assert ".dot" not in manifest
++    assert ".svg" not in manifest
+diff --git a/doc/contracts/CELL_RECORDED_OBSERVATION_INGEST_V1.md b/doc/contracts/CELL_RECORDED_OBSERVATION_INGEST_V1.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/contracts/CELL_RECORDED_OBSERVATION_INGEST_V1.md
+@@ -0,0 +1,44 @@
++# Cell Recorded Observation Ingest v1
++
++```text
++schema: missipy.cell_recorded_observation_ingest.v1
++state schema: missipy.cell_recorded_observation_ingest_state.v1
++input schema: missipy.cell_observation_event.v1
++output schema: missipy.cell.v1
++```
++
++This contract ingests recorded observation events into the stable cell snapshot
++journal.
++
++It is observation-only.
++
++It is not a command path.
++
++## Purpose
++
++```text
++recorded observation JSONL
++→ missipy.cell_observation_event.v1
++→ missipy.cell.v1 journal
++→ replay/tail
++→ views
++```
++
++## Incremental state
++
++The ingest keeps an offset state file.
++
++```text
++source_path
++next_offset
++```
++
++A repeated run reads only lines appended after the previous offset.
++
++## Boundary
++
++The ingest reads local recorded observations, appends snapshots, and writes
++offset state.
++
++It does not render, stream, subscribe to a live source, call a remote API, or
++dispatch actions.
+diff --git a/doc/releases/README_PART11_1_RECORDED_OBSERVATION_INGEST_TO_CELL_JOURNAL.md b/doc/releases/README_PART11_1_RECORDED_OBSERVATION_INGEST_TO_CELL_JOURNAL.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PART11_1_RECORDED_OBSERVATION_INGEST_TO_CELL_JOURNAL.md
+@@ -0,0 +1,18 @@
++# Part 11.1 — Recorded Observation Ingest to Cell Journal
++
++Part 11.1 starts the post-UI handoff back to recorded observation production.
++
++## Added
++
++- Incremental recorded observation ingest module.
++- Offset state file contract.
++- CLI ingest tool.
++- Tests and docs.
++
++## Not added
++
++- No live subscription.
++- No renderer.
++- No server.
++- No command channel.
++- No optimization loop.
+diff --git a/doc/changelogs/CHANGELOG_PART11_1_RECORDED_OBSERVATION_INGEST_TO_CELL_JOURNAL.md b/doc/changelogs/CHANGELOG_PART11_1_RECORDED_OBSERVATION_INGEST_TO_CELL_JOURNAL.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PART11_1_RECORDED_OBSERVATION_INGEST_TO_CELL_JOURNAL.md
+@@ -0,0 +1,16 @@
++# Changelog — Part 11.1 Recorded Observation Ingest to Cell Journal
++
++## Added
++
++- `CELL_RECORDED_OBSERVATION_INGEST_SCHEMA`
++- `CELL_RECORDED_OBSERVATION_STATE_SCHEMA`
++- `CellRecordedObservationIngestState`
++- `CellRecordedObservationReadResult`
++- `CellRecordedObservationIngestResult`
++- `ingest_recorded_observation_events_to_cell_journal`
++- `tools/ingest_recorded_observations_to_cell_journal.py`
++
++## Behavior
++
++A recorded observation JSONL file can now be incrementally ingested into a
++`missipy.cell.v1` journal using an offset state file.
+diff --git a/doc/code-rules/PART11_1_RECORDED_OBSERVATION_INGEST_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PART11_1_RECORDED_OBSERVATION_INGEST_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PART11_1_RECORDED_OBSERVATION_INGEST_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,19 @@
++# Part 11.1 Recorded Observation Ingest Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: The patch adds an incremental local observation ingest path from recorded observation events to the cell journal. It does not add rendering, networking, live subscription, external APIs, command paths, or dependencies.
++
++live_path_status: local recorded observation ingest
++live_path_uses_real_backend: local files
++external_dependencies_added: false
++scheduler_modified: false
++eventbus_modified: false
++recorder_core_modified: false
++network_added: false
++server_endpoint_added: false
++github_api_added: false
++vispy_added: false
++llm_or_openvino_added: false
++```
+diff --git a/doc/reports/phase11/PART11_1_RECORDED_OBSERVATION_INGEST_TEST_REPORT.md b/doc/reports/phase11/PART11_1_RECORDED_OBSERVATION_INGEST_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase11/PART11_1_RECORDED_OBSERVATION_INGEST_TEST_REPORT.md
+@@ -0,0 +1,12 @@
++# Part 11.1 Recorded Observation Ingest Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/context/test_cell_recorded_observation_ingest.py
++PYTHONPATH=src:. pytest -q tests/tools/test_ingest_recorded_observations_to_cell_journal.py
++PYTHONPATH=src:. pytest -q tests/rules/test_cell_recorded_observation_ingest_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
+diff --git a/doc/manifests/MANIFEST_PART11_1_RECORDED_OBSERVATION_INGEST_TO_CELL_JOURNAL.md b/doc/manifests/MANIFEST_PART11_1_RECORDED_OBSERVATION_INGEST_TO_CELL_JOURNAL.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PART11_1_RECORDED_OBSERVATION_INGEST_TO_CELL_JOURNAL.md
+@@ -0,0 +1,27 @@
++# Manifest — Part 11.1 Recorded Observation Ingest to Cell Journal
++
++## Added
++
++- `src/context/cell_recorded_observation_ingest.py`
++- `tools/ingest_recorded_observations_to_cell_journal.py`
++- `tests/context/test_cell_recorded_observation_ingest.py`
++- `tests/tools/test_ingest_recorded_observations_to_cell_journal.py`
++- `tests/rules/test_cell_recorded_observation_ingest_rule.py`
++- `doc/contracts/CELL_RECORDED_OBSERVATION_INGEST_V1.md`
++- `doc/releases/README_PART11_1_RECORDED_OBSERVATION_INGEST_TO_CELL_JOURNAL.md`
++- `doc/changelogs/CHANGELOG_PART11_1_RECORDED_OBSERVATION_INGEST_TO_CELL_JOURNAL.md`
++- `doc/code-rules/PART11_1_RECORDED_OBSERVATION_INGEST_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase11/PART11_1_RECORDED_OBSERVATION_INGEST_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PART11_1_RECORDED_OBSERVATION_INGEST_TO_CELL_JOURNAL.md`
++
++## Modified
++
++- None.
++
++## Runtime changes
++
++- Adds incremental local recorded observation ingest.
++
++## Runtime dependencies
++
++- None added.
