@@ -17,7 +17,7 @@ prove retrieval replaces calculation for this single domain first
 ```text
 TaskContext
 → one RetrievalWorker
-→ two MVTC variants
+→ two VariantGeneratorStub variants
 → ContextGate
 → missipy.cell.v1 journal
 → cell-lens
@@ -51,18 +51,22 @@ stand-in stdlib retrieval
 
 Only after this smoke stays useful should the project generalize toward multiple vector spaces.
 
-## MVTC
+## VariantGeneratorStub
 
-MVTC produces exactly two context variants:
+This is not the real MVTC.
+
+The VariantGeneratorStub produces exactly two context variants:
 
 ```text
 soft silicone baby fork
 rounded stainless fork with soft baby handle
 ```
 
-MVTC does not command the Scheduler.
+The stub does not command the Scheduler.
 
 It proposes a context patch.
+
+The future MVTC will replace this stub with real context variation, scoring, comparison, and reduction.
 
 ## ContextGate
 

@@ -200,10 +200,10 @@ def retrieve_baby_fork_documents(context: BabyForkTaskContext, documents: Iterab
     )
 
 
-def mvtc_make_two_baby_fork_variants(context: BabyForkTaskContext, retrieval: BabyForkRetrievalResult) -> BabyForkContextPatchProposal:
+def make_two_baby_fork_variants_stub(context: BabyForkTaskContext, retrieval: BabyForkRetrievalResult) -> BabyForkContextPatchProposal:
     variants: list[BabyForkVariant] = []
     for index, doc in enumerate(retrieval.retrieved[:2], start=1):
-        if "silicone" in doc.material:
+        if doc.document_id == "baby-silicone-fork":
             variants.append(BabyForkVariant(
                 variant_id=f"variant-{index}",
                 label="soft silicone baby fork",
@@ -227,7 +227,7 @@ def mvtc_make_two_baby_fork_variants(context: BabyForkTaskContext, retrieval: Ba
         evidence_ids=tuple(doc.document_id for doc in retrieval.retrieved),
         variants=tuple(variants),
         selected_variant=variants[0].variant_id if variants else "",
-        reason="MVTC kept two baby-utensil variants and rejected the off-domain antenna document.",
+        reason="VariantGeneratorStub kept two baby-utensil variants and rejected the off-domain antenna document.",
     )
 
 
@@ -266,7 +266,7 @@ def baby_fork_smoke_snapshots() -> tuple[CellSnapshot, ...]:
         _snapshot("project:baby-fork", "project.context", "created", 1.0, 0.0, 1.0),
         _snapshot("scheduler:baby-fork", "scheduler.project", "running", 1.0, 1.0, 2.0),
         _snapshot("worker:retrieval-baby-fork", "worker.retrieval", "completed", 1.0, 2.0, 3.0),
-        _snapshot("mvtc:baby-fork", "mvtc.context_variation", "completed", 0.9, 3.0, 2.0),
+        _snapshot("variant-generator:baby-fork", "variant_generator.stub", "completed", 0.9, 3.0, 2.0),
         _snapshot("context-gate:baby-fork", "context.gate", "completed", 1.0, 4.0, 1.0),
         _snapshot("project:baby-fork-result", "project.result", "completed", 1.0, 5.0, 1.0),
     )
@@ -285,7 +285,7 @@ def run_baby_fork_smoke_project(output_dir: Path) -> BabyForkSmokeProjectResult:
         constraints=("food contact", "non toxic", "rounded geometry", "anti choking dimensions", "easy cleaning", "baby grip"),
     )
     retrieval = retrieve_baby_fork_documents(initial_context, baby_fork_seed_documents())
-    patch = mvtc_make_two_baby_fork_variants(initial_context, retrieval)
+    patch = make_two_baby_fork_variants_stub(initial_context, retrieval)
     final_context = apply_baby_fork_context_patch(initial_context, patch)
     snapshots = baby_fork_smoke_snapshots()
     write_cell_snapshots_jsonl(journal_path, snapshots, strict=True)

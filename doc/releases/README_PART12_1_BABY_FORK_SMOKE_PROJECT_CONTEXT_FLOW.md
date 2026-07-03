@@ -6,7 +6,7 @@ Part 12.1 moves a real minimal context smoke project ahead of generalized Qdrant
 
 - TaskContext for the baby-fork domain.
 - One stdlib RetrievalWorker stand-in.
-- MVTC producing two variants.
+- VariantGeneratorStub producing two variants.
 - ContextGate applying one context patch.
 - Cell Lens journal fed by this real flow.
 - Tests and docs.
@@ -18,3 +18,4 @@ Part 12.1 moves a real minimal context smoke project ahead of generalized Qdrant
 - No model dependency.
 - No live system adapter.
 - No command gateway implementation.
+- No real MVTC implementation.

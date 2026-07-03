@@ -6,7 +6,7 @@ from context.baby_fork_smoke_project import (
     BabyForkTaskContext,
     apply_baby_fork_context_patch,
     baby_fork_seed_documents,
-    mvtc_make_two_baby_fork_variants,
+    make_two_baby_fork_variants_stub,
     retrieve_baby_fork_documents,
     run_baby_fork_smoke_project,
 )
@@ -30,19 +30,22 @@ def test_retrieval_worker_filters_to_baby_utensil_domain() -> None:
     assert "nasa-antenna" in result.rejected_ids
 
 
-def test_mvtc_produces_exactly_two_context_variants() -> None:
+def test_variant_generator_stub_produces_exactly_two_context_variants() -> None:
     context = _context()
     retrieval = retrieve_baby_fork_documents(context, baby_fork_seed_documents())
-    patch = mvtc_make_two_baby_fork_variants(context, retrieval)
+    patch = make_two_baby_fork_variants_stub(context, retrieval)
     assert len(patch.variants) == 2
     assert patch.selected_variant == "variant-1"
+    assert patch.variants[0].label == "soft silicone baby fork"
+    assert patch.variants[1].label == "rounded stainless with soft handle"
+    assert patch.variants[0].score > patch.variants[1].score
     assert "baby" in patch.reason
 
 
 def test_context_gate_versions_context_after_patch() -> None:
     context = _context()
     retrieval = retrieve_baby_fork_documents(context, baby_fork_seed_documents())
-    patch = mvtc_make_two_baby_fork_variants(context, retrieval)
+    patch = make_two_baby_fork_variants_stub(context, retrieval)
     final_context = apply_baby_fork_context_patch(context, patch)
     assert final_context.version == 2
     assert final_context.evidence_ids == ("baby-silicone-fork", "rounded-stainless-soft-handle")
@@ -56,5 +59,5 @@ def test_baby_fork_smoke_project_feeds_cell_lens_from_real_flow(tmp_path: Path) 
     assert result.snapshot_count == 6
     assert len(replay.snapshots) == 6
     assert [snapshot.source_class for snapshot in replay.snapshots] == [
-        "project.context", "scheduler.project", "worker.retrieval", "mvtc.context_variation", "context.gate", "project.result"
+        "project.context", "scheduler.project", "worker.retrieval", "variant_generator.stub", "context.gate", "project.result"
     ]

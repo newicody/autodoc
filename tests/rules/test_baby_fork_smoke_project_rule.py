@@ -13,7 +13,7 @@ def test_baby_fork_smoke_project_declares_real_minimal_flow() -> None:
     source = _read("src/context/baby_fork_smoke_project.py")
     assert 'BABY_FORK_SMOKE_PROJECT_SCHEMA = "missipy.baby_fork_smoke_project.v1"' in source
     assert "retrieve_baby_fork_documents" in source
-    assert "mvtc_make_two_baby_fork_variants" in source
+    assert "make_two_baby_fork_variants_stub" in source
     assert "apply_baby_fork_context_patch" in source
     assert "run_baby_fork_smoke_project" in source
 
@@ -22,7 +22,7 @@ def test_baby_fork_smoke_project_retrieval_replaces_calculation_for_single_domai
     doc = _read("doc/smoke/BABY_FORK_CONTEXT_SMOKE_PROJECT.md")
     assert "retrieval replaces calculation for this single domain first" in doc
     assert "one RetrievalWorker" in doc
-    assert "two MVTC variants" in doc
+    assert "two VariantGeneratorStub variants" in doc
     assert "ContextGate" in doc
     assert "cell-lens is fed by this real flow, not the synthetic generator" in doc
 

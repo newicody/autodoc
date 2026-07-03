@@ -17,6 +17,7 @@
 ## Runtime changes
 
 - Adds stand-in stdlib retrieval for the baby-fork context smoke project.
+- Adds a VariantGeneratorStub, not the real MVTC.
 - Adds a local tool that writes a cell-lens journal from this real flow.
 
 ## Runtime dependencies
