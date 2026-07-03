@@ -1,0 +1,504 @@
+diff --git a/tools/cell_lens_local_launch_profiles.py b/tools/cell_lens_local_launch_profiles.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tools/cell_lens_local_launch_profiles.py
+@@ -0,0 +1,165 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++from dataclasses import dataclass
++import json
++import os
++from pathlib import Path
++
++
++CELL_LENS_LAUNCH_PROFILES_SCHEMA = "missipy.cell_lens_local_launch_profiles.v1"
++
++
++@dataclass(frozen=True, slots=True)
++class CellLensLaunchProfile:
++    name: str
++    purpose: str
++    command: tuple[str, ...]
++    environment: tuple[tuple[str, str], ...] = ()
++    url: str = ""
++    notes: tuple[str, ...] = ()
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "command": list(self.command),
++            "environment": {key: value for key, value in self.environment},
++            "name": self.name,
++            "notes": list(self.notes),
++            "purpose": self.purpose,
++            "url": self.url,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class CellLensLaunchProfileBundle:
++    journal_path: str
++    profiles: tuple[CellLensLaunchProfile, ...]
++    schema: str = CELL_LENS_LAUNCH_PROFILES_SCHEMA
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "journal_path": self.journal_path,
++            "profiles": [profile.to_json_dict() for profile in self.profiles],
++            "schema": self.schema,
++        }
++
++
++def detect_qt_platform(env: dict[str, str] | None = None) -> str:
++    values = env if env is not None else os.environ
++    if values.get("QT_QPA_PLATFORM"):
++        return values["QT_QPA_PLATFORM"]
++    if values.get("WAYLAND_DISPLAY"):
++        return "wayland"
++    if values.get("DISPLAY"):
++        return "xcb"
++    return "offscreen"
++
++
++def build_cell_lens_launch_profiles(
++    journal: Path,
++    *,
++    browser_port: int = 8766,
++    sse_port: int = 8765,
++    qt_platform: str | None = None,
++) -> CellLensLaunchProfileBundle:
++    if browser_port <= 0:
++        raise ValueError("browser_port must be > 0")
++    if sse_port <= 0:
++        raise ValueError("sse_port must be > 0")
++
++    platform = qt_platform or detect_qt_platform()
++    journal_text = str(journal)
++
++    profiles = (
++        CellLensLaunchProfile(
++            name="vispy-desktop",
++            purpose="Open the desktop Cell Lens viewer from the cell journal.",
++            command=(
++                "python",
++                "tools/visualize_cell_population_vispy.py",
++                "--journal",
++                journal_text,
++            ),
++            environment=(
++                ("PYTHONPATH", "src:."),
++                ("VISPY_APP", "pyqt6"),
++                ("QT_QPA_PLATFORM", platform),
++            ),
++            notes=(
++                "Use wayland on a native Wayland session.",
++                "Use xcb only when the XCB Qt platform plugin dependencies are present.",
++            ),
++        ),
++        CellLensLaunchProfile(
++            name="browser-canvas",
++            purpose="Serve the local read-only browser Canvas view.",
++            command=(
++                "python",
++                "tools/cell_snapshot_browser_view_server.py",
++                "--journal",
++                journal_text,
++                "--port",
++                str(browser_port),
++            ),
++            environment=(("PYTHONPATH", "src:."),),
++            url=f"http://127.0.0.1:{browser_port}/view.html",
++            notes=("The server stays running until interrupted.",),
++        ),
++        CellLensLaunchProfile(
++            name="sse-stream",
++            purpose="Serve the local read-only SSE stream.",
++            command=(
++                "python",
++                "tools/cell_snapshot_sse_server.py",
++                "--journal",
++                journal_text,
++                "--port",
++                str(sse_port),
++            ),
++            environment=(("PYTHONPATH", "src:."),),
++            url=f"http://127.0.0.1:{sse_port}/cells.sse",
++            notes=("Useful for curl and EventSource checks.",),
++        ),
++    )
++
++    return CellLensLaunchProfileBundle(journal_path=journal_text, profiles=profiles)
++
++
++def shell_command(profile: CellLensLaunchProfile) -> str:
++    env_prefix = " ".join(f"{key}={value}" for key, value in profile.environment)
++    command = " ".join(profile.command)
++    return f"{env_prefix} {command}".strip()
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description="Print local read-only Cell Lens launch profiles.")
++    parser.add_argument("--journal", default=".var/cell_lens_demo/cells.jsonl")
++    parser.add_argument("--browser-port", type=int, default=8766)
++    parser.add_argument("--sse-port", type=int, default=8765)
++    parser.add_argument("--qt-platform", default="")
++    parser.add_argument("--shell", action="store_true", help="Print shell commands instead of JSON.")
++    args = parser.parse_args()
++
++    bundle = build_cell_lens_launch_profiles(
++        Path(args.journal),
++        browser_port=args.browser_port,
++        sse_port=args.sse_port,
++        qt_platform=args.qt_platform or None,
++    )
++
++    if args.shell:
++        for profile in bundle.profiles:
++            print(f"# {profile.name}: {profile.purpose}")
++            print(shell_command(profile))
++            if profile.url:
++                print(f"# url: {profile.url}")
++            print()
++        return 0
++
++    print(json.dumps(bundle.to_json_dict(), ensure_ascii=False, sort_keys=True))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_cell_lens_local_launch_profiles.py b/tests/tools/test_cell_lens_local_launch_profiles.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/tools/test_cell_lens_local_launch_profiles.py
+@@ -0,0 +1,97 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++import subprocess
++import sys
++
++from cell_lens_local_launch_profiles import (
++    CELL_LENS_LAUNCH_PROFILES_SCHEMA,
++    build_cell_lens_launch_profiles,
++    detect_qt_platform,
++    shell_command,
++)
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "cell_lens_local_launch_profiles.py"
++
++
++def test_detect_qt_platform_prefers_explicit_value() -> None:
++    assert detect_qt_platform({"QT_QPA_PLATFORM": "minimal", "WAYLAND_DISPLAY": "wayland-1"}) == "minimal"
++
++
++def test_detect_qt_platform_prefers_wayland_before_xcb() -> None:
++    assert detect_qt_platform({"WAYLAND_DISPLAY": "wayland-1", "DISPLAY": ":0"}) == "wayland"
++
++
++def test_detect_qt_platform_uses_xcb_when_only_display_exists() -> None:
++    assert detect_qt_platform({"DISPLAY": ":0"}) == "xcb"
++
++
++def test_build_cell_lens_launch_profiles_returns_three_profiles() -> None:
++    bundle = build_cell_lens_launch_profiles(Path(".var/cell_lens_demo/cells.jsonl"), qt_platform="wayland")
++
++    assert bundle.schema == CELL_LENS_LAUNCH_PROFILES_SCHEMA
++    assert [profile.name for profile in bundle.profiles] == ["vispy-desktop", "browser-canvas", "sse-stream"]
++    assert bundle.profiles[0].environment == (
++        ("PYTHONPATH", "src:."),
++        ("VISPY_APP", "pyqt6"),
++        ("QT_QPA_PLATFORM", "wayland"),
++    )
++    assert bundle.profiles[1].url == "http://127.0.0.1:8766/view.html"
++    assert bundle.profiles[2].url == "http://127.0.0.1:8765/cells.sse"
++
++
++def test_shell_command_formats_environment_prefix() -> None:
++    profile = build_cell_lens_launch_profiles(Path("cells.jsonl"), qt_platform="wayland").profiles[0]
++
++    command = shell_command(profile)
++
++    assert command.startswith("PYTHONPATH=src:. VISPY_APP=pyqt6 QT_QPA_PLATFORM=wayland ")
++    assert "tools/visualize_cell_population_vispy.py" in command
++
++
++def test_cell_lens_local_launch_profiles_cli_outputs_json(tmp_path: Path) -> None:
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--journal",
++            str(tmp_path / "cells.jsonl"),
++            "--qt-platform",
++            "wayland",
++        ],
++        cwd=ROOT,
++        env={"PYTHONPATH": "src:.:tools"},
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    payload = json.loads(completed.stdout)
++    assert payload["schema"] == "missipy.cell_lens_local_launch_profiles.v1"
++    assert len(payload["profiles"]) == 3
++    assert payload["profiles"][0]["environment"]["QT_QPA_PLATFORM"] == "wayland"
++
++
++def test_cell_lens_local_launch_profiles_cli_outputs_shell_commands(tmp_path: Path) -> None:
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--journal",
++            str(tmp_path / "cells.jsonl"),
++            "--qt-platform",
++            "wayland",
++            "--shell",
++        ],
++        cwd=ROOT,
++        env={"PYTHONPATH": "src:.:tools"},
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    assert "QT_QPA_PLATFORM=wayland" in completed.stdout
++    assert "http://127.0.0.1:8766/view.html" in completed.stdout
+diff --git a/tests/rules/test_cell_lens_local_launch_profiles_rule.py b/tests/rules/test_cell_lens_local_launch_profiles_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_cell_lens_local_launch_profiles_rule.py
+@@ -0,0 +1,43 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_cell_lens_launch_profiles_declares_versioned_schema() -> None:
++    source = _read("tools/cell_lens_local_launch_profiles.py")
++    assert 'CELL_LENS_LAUNCH_PROFILES_SCHEMA = "missipy.cell_lens_local_launch_profiles.v1"' in source
++    assert "build_cell_lens_launch_profiles" in source
++    assert "detect_qt_platform" in source
++
++
++def test_cell_lens_launch_profiles_has_no_live_or_mutation_path() -> None:
++    source = _read("tools/cell_lens_local_launch_profiles.py")
++    forbidden = ["requests", "urllib", "httpx", "OPENAI_API_KEY", "github", "ThreadingHTTPServer"]
++    for token in forbidden:
++        assert token not in source
++
++
++def test_cell_lens_launch_profiles_docs_include_wayland_and_browser_modes() -> None:
++    doc = _read("doc/demo/CELL_LENS_LOCAL_LAUNCH_PROFILES.md")
++    assert "missipy.cell_lens_local_launch_profiles.v1" in doc
++    assert "VISPY_APP=pyqt6" in doc
++    assert "QT_QPA_PLATFORM=wayland" in doc
++    assert "browser Canvas" in doc
++    assert "read-only" in doc
++    assert "127.0.0.1" in doc
++
++
++def test_cell_lens_launch_profiles_manifest_has_no_runtime_dependency() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES.md")
++    assert "tools/cell_lens_local_launch_profiles.py" in manifest
++    assert "launch profiles" in manifest
++    assert "requirements" not in manifest
++    assert ".dot" not in manifest
++    assert ".svg" not in manifest
+diff --git a/doc/demo/CELL_LENS_LOCAL_LAUNCH_PROFILES.md b/doc/demo/CELL_LENS_LOCAL_LAUNCH_PROFILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/demo/CELL_LENS_LOCAL_LAUNCH_PROFILES.md
+@@ -0,0 +1,58 @@
++# Cell Lens Local Launch Profiles
++
++```text
++schema: missipy.cell_lens_local_launch_profiles.v1
++```
++
++This tool prints local read-only launch profiles for the Cell Lens demo outputs.
++
++It does not start anything by itself.
++
++## Modes
++
++### VisPy desktop
++
++```bash
++PYTHONPATH=src:. VISPY_APP=pyqt6 QT_QPA_PLATFORM=wayland python tools/visualize_cell_population_vispy.py \
++  --journal .var/cell_lens_demo/cells.jsonl
++```
++
++Use `QT_QPA_PLATFORM=wayland` on a native Wayland session.
++
++Use `QT_QPA_PLATFORM=xcb` only when the Qt XCB platform dependencies are
++installed.
++
++### Browser Canvas
++
++```bash
++PYTHONPATH=src:. python tools/cell_snapshot_browser_view_server.py \
++  --journal .var/cell_lens_demo/cells.jsonl \
++  --port 8766
++```
++
++Then open:
++
++```text
++http://127.0.0.1:8766/view.html
++```
++
++### SSE stream
++
++```bash
++PYTHONPATH=src:. python tools/cell_snapshot_sse_server.py \
++  --journal .var/cell_lens_demo/cells.jsonl \
++  --port 8765
++```
++
++Then inspect:
++
++```text
++http://127.0.0.1:8765/cells.sse
++```
++
++## Rule
++
++All launch profiles are read-only viewing profiles.
++
++They consume the same `missipy.cell.v1` journal and do not introduce an action
++surface.
+diff --git a/doc/releases/README_PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES.md b/doc/releases/README_PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES.md
+@@ -0,0 +1,19 @@
++# Part 10.5 — Cell Lens Local Launch Profiles
++
++Part 10.5 adds a small helper that prints the local launch profiles for the
++Cell Lens demo.
++
++## Added
++
++- VisPy desktop launch profile.
++- Browser Canvas launch profile.
++- SSE stream launch profile.
++- Wayland/XCB Qt platform detection helper.
++- Tests and docs.
++
++## Not added
++
++- No server implementation.
++- No renderer implementation.
++- No command channel.
++- No dependency.
+diff --git a/doc/changelogs/CHANGELOG_PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES.md b/doc/changelogs/CHANGELOG_PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES.md
+@@ -0,0 +1,13 @@
++# Changelog — Part 10.5 Cell Lens Local Launch Profiles
++
++## Added
++
++- `tools/cell_lens_local_launch_profiles.py`
++- JSON and shell command output.
++- Local launch profile documentation.
++- Tests and rules.
++
++## Behavior
++
++The tool prints repeatable local launch commands for VisPy, browser Canvas, and
++SSE stream modes.
+diff --git a/doc/code-rules/PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,19 @@
++# Part 10.5 Cell Lens Local Launch Profiles Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: The patch adds a helper that prints local read-only launch profiles. It does not start servers, render windows, mutate state, add network behavior, add dependencies, or add a command channel.
++
++live_path_status: launch profile helper only
++live_path_uses_real_backend: false
++external_dependencies_added: false
++scheduler_modified: false
++eventbus_modified: false
++recorder_core_modified: false
++network_added: false
++server_endpoint_added: false
++github_api_added: false
++vispy_added: false
++llm_or_openvino_added: false
++```
+diff --git a/doc/reports/phase10/PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES_TEST_REPORT.md b/doc/reports/phase10/PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase10/PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES_TEST_REPORT.md
+@@ -0,0 +1,11 @@
++# Part 10.5 Cell Lens Local Launch Profiles Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:.:tools pytest -q tests/tools/test_cell_lens_local_launch_profiles.py
++PYTHONPATH=src:. pytest -q tests/rules/test_cell_lens_local_launch_profiles_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
+diff --git a/doc/manifests/MANIFEST_PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES.md b/doc/manifests/MANIFEST_PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES.md
+@@ -0,0 +1,25 @@
++# Manifest — Part 10.5 Cell Lens Local Launch Profiles
++
++## Added
++
++- `tools/cell_lens_local_launch_profiles.py`
++- `tests/tools/test_cell_lens_local_launch_profiles.py`
++- `tests/rules/test_cell_lens_local_launch_profiles_rule.py`
++- `doc/demo/CELL_LENS_LOCAL_LAUNCH_PROFILES.md`
++- `doc/releases/README_PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES.md`
++- `doc/changelogs/CHANGELOG_PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES.md`
++- `doc/code-rules/PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase10/PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PART10_5_CELL_LENS_LOCAL_LAUNCH_PROFILES.md`
++
++## Modified
++
++- None.
++
++## Runtime changes
++
++- Adds launch profiles helper.
++
++## Runtime dependencies
++
++- None added.
