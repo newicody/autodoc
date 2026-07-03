@@ -1,0 +1,493 @@
+diff --git a/src/context/cell_recorder_handoff.py b/src/context/cell_recorder_handoff.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/cell_recorder_handoff.py
+@@ -0,0 +1,123 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++import json
++from pathlib import Path
++
++from context.cell_observation_event import CellObservationEvent
++from context.cell_snapshot import CellSnapshot
++from context.cell_snapshot_journal import write_cell_snapshots_jsonl
++from context.cell_snapshot_journal_reader import read_cell_snapshot_jsonl
++
++
++CELL_RECORDER_HANDOFF_SCHEMA = "missipy.cell_recorder_handoff_dry_run.v1"
++
++
++@dataclass(frozen=True, slots=True)
++class CellRecorderHandoffDryRunResult:
++    """Compatibility result for recorded observation input to cell journal output."""
++
++    input_path: str
++    output_path: str
++    event_count: int
++    snapshot_count: int
++    replay_count: int
++    errors: tuple[str, ...] = ()
++    schema: str = CELL_RECORDER_HANDOFF_SCHEMA
++
++    @property
++    def ok(self) -> bool:
++        return not self.errors and self.event_count == self.snapshot_count == self.replay_count
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "errors": list(self.errors),
++            "event_count": self.event_count,
++            "input_path": self.input_path,
++            "ok": self.ok,
++            "output_path": self.output_path,
++            "replay_count": self.replay_count,
++            "schema": self.schema,
++            "snapshot_count": self.snapshot_count,
++        }
++
++
++def read_recorded_cell_observation_events(
++    path: Path,
++    *,
++    strict: bool = False,
++) -> tuple[CellObservationEvent, ...]:
++    events: list[CellObservationEvent] = []
++    errors: list[str] = []
++
++    try:
++        with path.open("r", encoding="utf-8") as handle:
++            for line_number, line in enumerate(handle, start=1):
++                stripped = line.strip()
++                if not stripped:
++                    continue
++                try:
++                    events.append(CellObservationEvent.from_json_line(stripped))
++                except Exception as exc:
++                    message = f"line {line_number}: {type(exc).__name__}: {exc}"
++                    if strict:
++                        raise ValueError(message) from exc
++                    errors.append(message)
++    except Exception:
++        if strict:
++            raise
++
++    if errors and strict:
++        raise ValueError("; ".join(errors))
++
++    return tuple(events)
++
++
++def derive_snapshots_for_handoff(events: tuple[CellObservationEvent, ...]) -> tuple[CellSnapshot, ...]:
++    return tuple(event.to_cell_snapshot() for event in events)
++
++
++def run_cell_recorder_handoff_dry_run(
++    input_path: Path,
++    output_path: Path,
++    *,
++    strict: bool = False,
++) -> CellRecorderHandoffDryRunResult:
++    errors: list[str] = []
++
++    try:
++        events = read_recorded_cell_observation_events(input_path, strict=strict)
++    except Exception as exc:
++        if strict:
++            raise
++        events = ()
++        errors.append(f"read: {type(exc).__name__}: {exc}")
++
++    snapshots = derive_snapshots_for_handoff(events)
++
++    write_result = write_cell_snapshots_jsonl(output_path, snapshots, strict=strict)
++    errors.extend(write_result.errors)
++
++    replay_result = read_cell_snapshot_jsonl(output_path, strict=strict)
++    errors.extend(replay_result.errors)
++
++    if len(snapshots) != len(replay_result.snapshots):
++        errors.append(
++            f"snapshot/replay count mismatch: {len(snapshots)} != {len(replay_result.snapshots)}"
++        )
++
++    if [snapshot.cell_id for snapshot in snapshots] != [snapshot.cell_id for snapshot in replay_result.snapshots]:
++        errors.append("snapshot/replay cell order mismatch")
++
++    return CellRecorderHandoffDryRunResult(
++        input_path=str(input_path),
++        output_path=str(output_path),
++        event_count=len(events),
++        snapshot_count=len(snapshots),
++        replay_count=len(replay_result.snapshots),
++        errors=tuple(errors),
++    )
++
++
++def result_to_json(result: CellRecorderHandoffDryRunResult) -> str:
++    return json.dumps(result.to_json_dict(), ensure_ascii=False, sort_keys=True)
+diff --git a/tools/cell_recorder_handoff_dry_run.py b/tools/cell_recorder_handoff_dry_run.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tools/cell_recorder_handoff_dry_run.py
+@@ -0,0 +1,27 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++from pathlib import Path
++
++from context.cell_recorder_handoff import result_to_json, run_cell_recorder_handoff_dry_run
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description="Dry-run recorded observation events to a missipy.cell.v1 journal.")
++    parser.add_argument("--input", required=True, help="Input missipy.cell_observation_event.v1 JSONL path.")
++    parser.add_argument("--output", required=True, help="Output missipy.cell.v1 JSONL path.")
++    parser.add_argument("--strict", action="store_true")
++    args = parser.parse_args()
++
++    result = run_cell_recorder_handoff_dry_run(
++        Path(args.input),
++        Path(args.output),
++        strict=args.strict,
++    )
++    print(result_to_json(result))
++    return 0 if result.ok else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/context/test_cell_recorder_handoff.py b/tests/context/test_cell_recorder_handoff.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_cell_recorder_handoff.py
+@@ -0,0 +1,64 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++from context.cell_observation_event import CellObservationEvent
++from context.cell_recorder_handoff import (
++    CELL_RECORDER_HANDOFF_SCHEMA,
++    read_recorded_cell_observation_events,
++    run_cell_recorder_handoff_dry_run,
++)
++
++
++def _event(index: int, event_type: str = "task.running") -> CellObservationEvent:
++    return CellObservationEvent(
++        event_id=f"event-{index}",
++        event_type=event_type,
++        source_task_id=f"task-{index}",
++        source_component_id="component-a",
++        source_class="scheduler.short_task",
++        score=1.0,
++        age=float(index),
++        cost=0.5,
++        observed_at=f"2026-07-03T10:00:0{index}Z",
++    )
++
++
++def test_handoff_reads_recorded_events(tmp_path: Path) -> None:
++    input_path = tmp_path / "events.jsonl"
++    input_path.write_text(_event(1).to_json_line() + _event(2).to_json_line(), encoding="utf-8")
++
++    events = read_recorded_cell_observation_events(input_path)
++
++    assert [event.event_id for event in events] == ["event-1", "event-2"]
++
++
++def test_handoff_dry_run_writes_and_replays_same_count(tmp_path: Path) -> None:
++    input_path = tmp_path / "events.jsonl"
++    output_path = tmp_path / "cells.jsonl"
++    input_path.write_text(
++        _event(1, "task.created").to_json_line()
++        + _event(2, "task.completed").to_json_line(),
++        encoding="utf-8",
++    )
++
++    result = run_cell_recorder_handoff_dry_run(input_path, output_path)
++
++    assert result.schema == CELL_RECORDER_HANDOFF_SCHEMA
++    assert result.ok is True
++    assert result.event_count == 2
++    assert result.snapshot_count == 2
++    assert result.replay_count == 2
++    assert output_path.exists()
++
++
++def test_handoff_dry_run_reports_invalid_input_best_effort(tmp_path: Path) -> None:
++    input_path = tmp_path / "events.jsonl"
++    output_path = tmp_path / "cells.jsonl"
++    input_path.write_text(_event(1).to_json_line() + "not-json\n", encoding="utf-8")
++
++    result = run_cell_recorder_handoff_dry_run(input_path, output_path)
++
++    assert result.event_count == 1
++    assert result.snapshot_count == 1
++    assert result.replay_count == 1
+diff --git a/tests/tools/test_cell_recorder_handoff_dry_run.py b/tests/tools/test_cell_recorder_handoff_dry_run.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/tools/test_cell_recorder_handoff_dry_run.py
+@@ -0,0 +1,43 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++import subprocess
++import sys
++
++from context.cell_observation_event import CellObservationEvent
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "cell_recorder_handoff_dry_run.py"
++
++
++def test_cell_recorder_handoff_dry_run_cli_outputs_json_result(tmp_path: Path) -> None:
++    input_path = tmp_path / "events.jsonl"
++    output_path = tmp_path / "cells.jsonl"
++    event = CellObservationEvent(
++        event_id="event-1",
++        event_type="task.completed",
++        source_task_id="task-1",
++        source_class="scheduler.short_task",
++        score=1.0,
++        age=1.0,
++        cost=0.5,
++        observed_at="2026-07-03T10:00:00Z",
++    )
++    input_path.write_text(event.to_json_line(), encoding="utf-8")
++
++    completed = subprocess.run(
++        [sys.executable, str(TOOL), "--input", str(input_path), "--output", str(output_path)],
++        cwd=ROOT,
++        env={"PYTHONPATH": "src:."},
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    result = json.loads(completed.stdout)
++    assert result["schema"] == "missipy.cell_recorder_handoff_dry_run.v1"
++    assert result["ok"] is True
++    assert result["event_count"] == 1
++    assert output_path.exists()
+diff --git a/tests/rules/test_cell_recorder_handoff_rule.py b/tests/rules/test_cell_recorder_handoff_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_cell_recorder_handoff_rule.py
+@@ -0,0 +1,43 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_cell_recorder_handoff_declares_versioned_schema() -> None:
++    source = _read("src/context/cell_recorder_handoff.py")
++    assert 'CELL_RECORDER_HANDOFF_SCHEMA = "missipy.cell_recorder_handoff_dry_run.v1"' in source
++    assert "run_cell_recorder_handoff_dry_run" in source
++
++
++def test_cell_recorder_handoff_is_file_dry_run_only() -> None:
++    source = _read("src/context/cell_recorder_handoff.py")
++    forbidden = ["vispy", "Scheduler", "EventBus", "requests", "urllib", "httpx", "OPENAI_API_KEY", "github"]
++    for token in forbidden:
++        assert token not in source
++
++
++def test_cell_recorder_handoff_docs_keep_no_live_subscription() -> None:
++    doc = _read("doc/contracts/CELL_RECORDER_HANDOFF_DRY_RUN_V1.md")
++    assert "missipy.cell_recorder_handoff_dry_run.v1" in doc
++    assert "dry-run" in doc
++    assert "no live subscription" in doc
++    assert "not a command path" in doc
++    assert "same missipy.cell.v1 journal" in doc
++
++
++def test_cell_recorder_handoff_manifest_has_no_renderer_or_network() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PART9_3_CELL_RECORDER_HANDOFF_DRY_RUN.md")
++    assert "src/context/cell_recorder_handoff.py" in manifest
++    assert "tools/cell_recorder_handoff_dry_run.py" in manifest
++    assert "VisPy" not in manifest
++    assert "SSE" not in manifest
++    assert "requirements" not in manifest
++    assert ".dot" not in manifest
++    assert ".svg" not in manifest
+diff --git a/doc/contracts/CELL_RECORDER_HANDOFF_DRY_RUN_V1.md b/doc/contracts/CELL_RECORDER_HANDOFF_DRY_RUN_V1.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/contracts/CELL_RECORDER_HANDOFF_DRY_RUN_V1.md
+@@ -0,0 +1,41 @@
++# Cell Recorder Handoff Dry-Run v1
++
++```text
++schema: missipy.cell_recorder_handoff_dry_run.v1
++input schema: missipy.cell_observation_event.v1
++output schema: missipy.cell.v1
++```
++
++This dry-run validates the future handoff from recorded observation data to the
++cell snapshot journal.
++
++It has no live subscription.
++
++It is not a command path.
++
++## Purpose
++
++```text
++recorded observation JSONL
++→ missipy.cell_observation_event.v1
++→ missipy.cell.v1
++→ JSONL journal
++→ replay reader
++```
++
++The dry-run succeeds only when the produced journal can be replayed as the same
++missipy.cell.v1 journal consumed by the visualizer.
++
++## Boundary
++
++The dry-run reads and writes local files only. It does not command, schedule,
++subscribe, render, stream, or mutate the running system.
++
++## Done criterion
++
++```text
++event_count == snapshot_count == replay_count
++cell order is preserved
++journal is replayable
++errors are reported
++```
+diff --git a/doc/releases/README_PART9_3_CELL_RECORDER_HANDOFF_DRY_RUN.md b/doc/releases/README_PART9_3_CELL_RECORDER_HANDOFF_DRY_RUN.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PART9_3_CELL_RECORDER_HANDOFF_DRY_RUN.md
+@@ -0,0 +1,18 @@
++# Part 9.3 — Cell Recorder Handoff Dry-Run
++
++Part 9.3 validates the future recorded-observation handoff without connecting to
++the live system.
++
++## Added
++
++- Dry-run module for recorded observation events.
++- CLI report tool.
++- Tests and docs.
++
++## Not added
++
++- No live subscription.
++- No recorder core mutation.
++- No Scheduler path.
++- No VisPy change.
++- No mobile SSE.
+diff --git a/doc/changelogs/CHANGELOG_PART9_3_CELL_RECORDER_HANDOFF_DRY_RUN.md b/doc/changelogs/CHANGELOG_PART9_3_CELL_RECORDER_HANDOFF_DRY_RUN.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PART9_3_CELL_RECORDER_HANDOFF_DRY_RUN.md
+@@ -0,0 +1,15 @@
++# Changelog — Part 9.3 Cell Recorder Handoff Dry-Run
++
++## Added
++
++- `CELL_RECORDER_HANDOFF_SCHEMA`
++- `CellRecorderHandoffDryRunResult`
++- `read_recorded_cell_observation_events`
++- `derive_snapshots_for_handoff`
++- `run_cell_recorder_handoff_dry_run`
++- `tools/cell_recorder_handoff_dry_run.py`
++
++## Behavior
++
++Recorded observation JSONL can now be converted to a cell snapshot journal and
++immediately replay-checked.
+diff --git a/doc/code-rules/PART9_3_CELL_RECORDER_HANDOFF_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PART9_3_CELL_RECORDER_HANDOFF_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PART9_3_CELL_RECORDER_HANDOFF_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,18 @@
++# Part 9.3 Cell Recorder Handoff Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: The patch adds a local dry-run that validates recorded observation input can produce a replayable cell snapshot journal. It does not add live subscription, command paths, rendering, network, or recorder core mutation.
++
++live_path_status: dry-run file compatibility only
++live_path_uses_real_backend: local files
++external_dependencies_added: false
++scheduler_modified: false
++eventbus_modified: false
++recorder_core_modified: false
++network_added: false
++github_api_added: false
++vispy_added: false
++llm_or_openvino_added: false
++```
+diff --git a/doc/reports/phase9/PART9_3_CELL_RECORDER_HANDOFF_DRY_RUN_TEST_REPORT.md b/doc/reports/phase9/PART9_3_CELL_RECORDER_HANDOFF_DRY_RUN_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase9/PART9_3_CELL_RECORDER_HANDOFF_DRY_RUN_TEST_REPORT.md
+@@ -0,0 +1,12 @@
++# Part 9.3 Cell Recorder Handoff Dry-Run Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/context/test_cell_recorder_handoff.py
++PYTHONPATH=src:. pytest -q tests/tools/test_cell_recorder_handoff_dry_run.py
++PYTHONPATH=src:. pytest -q tests/rules/test_cell_recorder_handoff_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
+diff --git a/doc/manifests/MANIFEST_PART9_3_CELL_RECORDER_HANDOFF_DRY_RUN.md b/doc/manifests/MANIFEST_PART9_3_CELL_RECORDER_HANDOFF_DRY_RUN.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PART9_3_CELL_RECORDER_HANDOFF_DRY_RUN.md
+@@ -0,0 +1,23 @@
++# Manifest — Part 9.3 Cell Recorder Handoff Dry-Run
++
++## Added
++
++- `src/context/cell_recorder_handoff.py`
++- `tools/cell_recorder_handoff_dry_run.py`
++- `tests/context/test_cell_recorder_handoff.py`
++- `tests/tools/test_cell_recorder_handoff_dry_run.py`
++- `tests/rules/test_cell_recorder_handoff_rule.py`
++- `doc/contracts/CELL_RECORDER_HANDOFF_DRY_RUN_V1.md`
++- `doc/releases/README_PART9_3_CELL_RECORDER_HANDOFF_DRY_RUN.md`
++- `doc/changelogs/CHANGELOG_PART9_3_CELL_RECORDER_HANDOFF_DRY_RUN.md`
++- `doc/code-rules/PART9_3_CELL_RECORDER_HANDOFF_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase9/PART9_3_CELL_RECORDER_HANDOFF_DRY_RUN_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PART9_3_CELL_RECORDER_HANDOFF_DRY_RUN.md`
++
++## Modified
++
++- None.
++
++## Runtime dependencies
++
++- None added.
