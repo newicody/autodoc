@@ -1,0 +1,569 @@
+diff --git a/src/context/cell_observation_event.py b/src/context/cell_observation_event.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/cell_observation_event.py
+@@ -0,0 +1,148 @@
++from __future__ import annotations
++
++import json
++from dataclasses import dataclass
++from typing import Any, Iterable, Mapping
++
++from context.cell_snapshot import CellSnapshot
++
++
++CELL_OBSERVATION_EVENT_SCHEMA = "missipy.cell_observation_event.v1"
++
++CELL_OBSERVATION_EVENT_TYPES = (
++    "task.created",
++    "task.queued",
++    "task.running",
++    "task.waiting",
++    "task.completed",
++    "task.failed",
++    "task.cancelled",
++    "task.dropped",
++    "component.observed",
++)
++
++_STATE_BY_EVENT_TYPE = {
++    "task.created": "created",
++    "task.queued": "queued",
++    "task.running": "running",
++    "task.waiting": "waiting",
++    "task.completed": "completed",
++    "task.failed": "failed",
++    "task.cancelled": "cancelled",
++    "task.dropped": "dropped",
++    "component.observed": "running",
++}
++
++
++@dataclass(frozen=True, slots=True)
++class CellObservationEvent:
++    """Immutable recorded observation input for deriving a cell snapshot."""
++
++    event_id: str
++    event_type: str
++    source_class: str
++    observed_at: str
++    score: float
++    age: float
++    cost: float
++    cell_id: str = ""
++    source_task_id: str = ""
++    source_component_id: str = ""
++    lifecycle_state: str = ""
++    schema: str = CELL_OBSERVATION_EVENT_SCHEMA
++
++    def __post_init__(self) -> None:
++        if self.schema != CELL_OBSERVATION_EVENT_SCHEMA:
++            raise ValueError(f"unsupported cell observation event schema: {self.schema!r}")
++        _require_non_empty("event_id", self.event_id)
++        _require_non_empty("event_type", self.event_type)
++        _require_non_empty("source_class", self.source_class)
++        _require_non_empty("observed_at", self.observed_at)
++        if self.event_type not in CELL_OBSERVATION_EVENT_TYPES:
++            raise ValueError(f"unsupported event_type: {self.event_type!r}")
++        if self.age < 0:
++            raise ValueError("age must be >= 0")
++        if self.cost < 0:
++            raise ValueError("cost must be >= 0")
++
++    def snapshot_cell_id(self) -> str:
++        if self.cell_id:
++            return self.cell_id
++        if self.source_task_id:
++            return f"task:{self.source_task_id}"
++        if self.source_component_id:
++            return f"component:{self.source_component_id}"
++        return f"event:{self.event_id}"
++
++    def snapshot_lifecycle_state(self) -> str:
++        return self.lifecycle_state or _STATE_BY_EVENT_TYPE[self.event_type]
++
++    def to_cell_snapshot(self) -> CellSnapshot:
++        return CellSnapshot(
++            cell_id=self.snapshot_cell_id(),
++            source_task_id=self.source_task_id,
++            source_component_id=self.source_component_id,
++            source_class=self.source_class,
++            score=float(self.score),
++            age=float(self.age),
++            cost=float(self.cost),
++            lifecycle_state=self.snapshot_lifecycle_state(),
++            observed_at=self.observed_at,
++        )
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "age": self.age,
++            "cell_id": self.cell_id,
++            "cost": self.cost,
++            "event_id": self.event_id,
++            "event_type": self.event_type,
++            "lifecycle_state": self.lifecycle_state,
++            "observed_at": self.observed_at,
++            "schema": self.schema,
++            "score": self.score,
++            "source_class": self.source_class,
++            "source_component_id": self.source_component_id,
++            "source_task_id": self.source_task_id,
++        }
++
++    def to_json_line(self) -> str:
++        return json.dumps(self.to_json_dict(), ensure_ascii=False, sort_keys=True) + "\n"
++
++    @classmethod
++    def from_mapping(cls, mapping: Mapping[str, Any]) -> "CellObservationEvent":
++        schema = str(mapping.get("schema", ""))
++        if schema != CELL_OBSERVATION_EVENT_SCHEMA:
++            raise ValueError(f"unsupported cell observation event schema: {schema!r}")
++        return cls(
++            event_id=str(mapping["event_id"]),
++            event_type=str(mapping["event_type"]),
++            source_class=str(mapping["source_class"]),
++            observed_at=str(mapping["observed_at"]),
++            score=float(mapping["score"]),
++            age=float(mapping["age"]),
++            cost=float(mapping["cost"]),
++            cell_id=str(mapping.get("cell_id", "")),
++            source_task_id=str(mapping.get("source_task_id", "")),
++            source_component_id=str(mapping.get("source_component_id", "")),
++            lifecycle_state=str(mapping.get("lifecycle_state", "")),
++            schema=schema,
++        )
++
++    @classmethod
++    def from_json_line(cls, line: str) -> "CellObservationEvent":
++        payload = json.loads(line)
++        if not isinstance(payload, dict):
++            raise ValueError("cell observation event JSON line must contain an object")
++        return cls.from_mapping(payload)
++
++
++def derive_cell_snapshots_from_observation_events(
++    events: Iterable[CellObservationEvent],
++) -> tuple[CellSnapshot, ...]:
++    return tuple(event.to_cell_snapshot() for event in events)
++
++
++def _require_non_empty(name: str, value: str) -> None:
++    if not isinstance(value, str) or not value:
++        raise ValueError(f"{name} must be a non-empty string")
+diff --git a/tools/convert_cell_observation_events.py b/tools/convert_cell_observation_events.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tools/convert_cell_observation_events.py
+@@ -0,0 +1,46 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++
++from context.cell_observation_event import CellObservationEvent
++from context.cell_snapshot_journal import write_cell_snapshots_jsonl
++
++
++def read_observation_events_jsonl(path: Path, *, strict: bool = False) -> tuple[CellObservationEvent, ...]:
++    events: list[CellObservationEvent] = []
++    with path.open("r", encoding="utf-8") as handle:
++        for line in handle:
++            stripped = line.strip()
++            if not stripped:
++                continue
++            try:
++                events.append(CellObservationEvent.from_json_line(stripped))
++            except Exception:
++                if strict:
++                    raise
++                continue
++    return tuple(events)
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description="Convert recorded cell observation events to a cell snapshot journal.")
++    parser.add_argument("--input", required=True)
++    parser.add_argument("--output", required=True)
++    parser.add_argument("--strict", action="store_true")
++    args = parser.parse_args()
++
++    events = read_observation_events_jsonl(Path(args.input), strict=args.strict)
++    result = write_cell_snapshots_jsonl(
++        Path(args.output),
++        (event.to_cell_snapshot() for event in events),
++        strict=args.strict,
++    )
++    print(json.dumps(result.to_json_dict(), ensure_ascii=False, sort_keys=True))
++    return 0 if not result.errors else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/context/test_cell_observation_event.py b/tests/context/test_cell_observation_event.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_cell_observation_event.py
+@@ -0,0 +1,96 @@
++from __future__ import annotations
++
++from dataclasses import FrozenInstanceError
++
++import pytest
++
++from context.cell_observation_event import (
++    CELL_OBSERVATION_EVENT_SCHEMA,
++    CellObservationEvent,
++    derive_cell_snapshots_from_observation_events,
++)
++
++
++def _event(event_type: str = "task.running") -> CellObservationEvent:
++    return CellObservationEvent(
++        event_id="event-1",
++        event_type=event_type,
++        source_task_id="task-1",
++        source_component_id="component-1",
++        source_class="llm.answer",
++        score=0.8,
++        age=4.0,
++        cost=2.0,
++        observed_at="2026-07-03T10:00:00Z",
++    )
++
++
++def test_cell_observation_event_uses_versioned_schema() -> None:
++    assert _event().schema == CELL_OBSERVATION_EVENT_SCHEMA
++    assert _event().schema == "missipy.cell_observation_event.v1"
++
++
++def test_cell_observation_event_is_immutable() -> None:
++    event = _event()
++    with pytest.raises(FrozenInstanceError):
++        event.score = 0.0  # type: ignore[misc]
++
++
++def test_cell_observation_event_derives_cell_snapshot() -> None:
++    snapshot = _event("task.completed").to_cell_snapshot()
++    assert snapshot.schema == "missipy.cell.v1"
++    assert snapshot.cell_id == "task:task-1"
++    assert snapshot.lifecycle_state == "completed"
++
++
++def test_cell_observation_event_explicit_cell_id_wins() -> None:
++    event = CellObservationEvent(
++        event_id="event-1",
++        event_type="component.observed",
++        cell_id="cell-explicit",
++        source_class="recorder.write",
++        score=1.0,
++        age=1.0,
++        cost=0.5,
++        observed_at="2026-07-03T10:00:00Z",
++    )
++    assert event.to_cell_snapshot().cell_id == "cell-explicit"
++
++
++def test_cell_observation_event_round_trips_json_line() -> None:
++    event = _event("task.waiting")
++    assert CellObservationEvent.from_json_line(event.to_json_line()) == event
++
++
++def test_cell_observation_event_rejects_unknown_schema() -> None:
++    with pytest.raises(ValueError, match="unsupported cell observation event schema"):
++        CellObservationEvent.from_mapping(
++            {
++                "schema": "missipy.cell_observation_event.v2",
++                "event_id": "event-1",
++                "event_type": "task.running",
++                "source_class": "llm.answer",
++                "score": 0.5,
++                "age": 0,
++                "cost": 0,
++                "observed_at": "2026-07-03T10:00:00Z",
++            }
++        )
++
++
++def test_cell_observation_event_rejects_unknown_event_type() -> None:
++    with pytest.raises(ValueError, match="unsupported event_type"):
++        CellObservationEvent(
++            event_id="event-1",
++            event_type="task.mutate",
++            source_class="llm.answer",
++            score=0.5,
++            age=0,
++            cost=0,
++            observed_at="2026-07-03T10:00:00Z",
++        )
++
++
++def test_cell_observation_event_batch_derivation() -> None:
++    snapshots = derive_cell_snapshots_from_observation_events([_event("task.running"), _event("task.completed")])
++    assert [snapshot.lifecycle_state for snapshot in snapshots] == ["running", "completed"]
+diff --git a/tests/tools/test_convert_cell_observation_events.py b/tests/tools/test_convert_cell_observation_events.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/tools/test_convert_cell_observation_events.py
+@@ -0,0 +1,43 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++import subprocess
++import sys
++
++from context.cell_observation_event import CellObservationEvent
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "convert_cell_observation_events.py"
++
++
++def test_convert_cell_observation_events_cli_writes_snapshot_journal(tmp_path: Path) -> None:
++    input_path = tmp_path / "events.jsonl"
++    output_path = tmp_path / "cells.jsonl"
++    event = CellObservationEvent(
++        event_id="event-1",
++        event_type="task.completed",
++        source_task_id="task-1",
++        source_class="scheduler.short_task",
++        score=1.0,
++        age=1.0,
++        cost=0.5,
++        observed_at="2026-07-03T10:00:00Z",
++    )
++    input_path.write_text(event.to_json_line(), encoding="utf-8")
++
++    completed = subprocess.run(
++        [sys.executable, str(TOOL), "--input", str(input_path), "--output", str(output_path)],
++        cwd=ROOT,
++        env={"PYTHONPATH": "src:."},
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    result = json.loads(completed.stdout)
++    rows = [json.loads(line) for line in output_path.read_text(encoding="utf-8").splitlines()]
++    assert result["written_count"] == 1
++    assert rows[0]["schema"] == "missipy.cell.v1"
++    assert rows[0]["lifecycle_state"] == "completed"
+diff --git a/tests/rules/test_cell_observation_event_adapter_rule.py b/tests/rules/test_cell_observation_event_adapter_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_cell_observation_event_adapter_rule.py
+@@ -0,0 +1,45 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_cell_observation_event_adapter_declares_versioned_schema() -> None:
++    source = _read("src/context/cell_observation_event.py")
++    assert 'CELL_OBSERVATION_EVENT_SCHEMA = "missipy.cell_observation_event.v1"' in source
++    assert "CellObservationEvent" in source
++    assert "to_cell_snapshot" in source
++
++
++def test_cell_observation_event_adapter_is_observation_only() -> None:
++    source = _read("src/context/cell_observation_event.py")
++    forbidden = ["vispy", "Scheduler", "EventBus", "requests", "urllib", "httpx", "OPENAI_API_KEY", "github"]
++    for token in forbidden:
++        assert token not in source
++
++
++def test_cell_observation_event_adapter_docs_keep_lens_and_lever_separate() -> None:
++    doc = _read("doc/contracts/CELL_OBSERVATION_EVENT_ADAPTER_V1.md")
++    assert "missipy.cell_observation_event.v1" in doc
++    assert "observation-only" in doc
++    assert "not a command" in doc
++    assert "EventBus / recorder" in doc
++    assert "typed command" in doc
++    assert "Scheduler" in doc
++
++
++def test_cell_observation_event_adapter_manifest_has_no_renderer_or_network() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PART9_2_CELL_OBSERVATION_EVENT_ADAPTER.md")
++    assert "src/context/cell_observation_event.py" in manifest
++    assert "tools/convert_cell_observation_events.py" in manifest
++    assert "VisPy" not in manifest
++    assert "SSE" not in manifest
++    assert "requirements" not in manifest
++    assert ".dot" not in manifest
++    assert ".svg" not in manifest
+diff --git a/doc/contracts/CELL_OBSERVATION_EVENT_ADAPTER_V1.md b/doc/contracts/CELL_OBSERVATION_EVENT_ADAPTER_V1.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/contracts/CELL_OBSERVATION_EVENT_ADAPTER_V1.md
+@@ -0,0 +1,40 @@
++# Cell Observation Event Adapter v1
++
++```text
++schema: missipy.cell_observation_event.v1
++output schema: missipy.cell.v1
++```
++
++This adapter converts recorded observation events into stable cell snapshots.
++
++It is observation-only. It is not a command, not an action request, and not a
++mutation surface.
++
++## Purpose
++
++```text
++EventBus / recorder observation event
++→ missipy.cell_observation_event.v1
++→ missipy.cell.v1 snapshot
++→ JSONL journal
++→ replay/tail reader
++→ VisPy or analysis
++```
++
++## Command boundary
++
++The adapter must not command the system.
++
++Any future operator action must use:
++
++```text
++typed command → Scheduler
++```
++
++It must not travel through the observation event adapter or the EventBus.
++
++## Replacement rule
++
++This is the handoff point for replacing synthetic journal production with real
++recorded observations. The visualizer continues to read the same
++`missipy.cell.v1` journal.
+diff --git a/doc/releases/README_PART9_2_CELL_OBSERVATION_EVENT_ADAPTER.md b/doc/releases/README_PART9_2_CELL_OBSERVATION_EVENT_ADAPTER.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PART9_2_CELL_OBSERVATION_EVENT_ADAPTER.md
+@@ -0,0 +1,19 @@
++# Part 9.2 — Cell Observation Event Adapter
++
++Part 9.2 prepares the handoff from synthetic data to real recorded observation
++data without connecting to the live bus yet.
++
++## Added
++
++- `missipy.cell_observation_event.v1`
++- Conversion to `missipy.cell.v1`
++- Local JSONL conversion tool
++- Tests and documentation
++
++## Not added
++
++- No live bus subscription
++- No recorder core mutation
++- No Scheduler path
++- No VisPy change
++- No mobile SSE
+diff --git a/doc/changelogs/CHANGELOG_PART9_2_CELL_OBSERVATION_EVENT_ADAPTER.md b/doc/changelogs/CHANGELOG_PART9_2_CELL_OBSERVATION_EVENT_ADAPTER.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PART9_2_CELL_OBSERVATION_EVENT_ADAPTER.md
+@@ -0,0 +1,13 @@
++# Changelog — Part 9.2 Cell Observation Event Adapter
++
++## Added
++
++- `CELL_OBSERVATION_EVENT_SCHEMA`
++- `CellObservationEvent`
++- `derive_cell_snapshots_from_observation_events`
++- `tools/convert_cell_observation_events.py`
++
++## Behavior
++
++Recorded observation events can now be converted into the same
++`missipy.cell.v1` JSONL journal consumed by replay/tail and visualization.
+diff --git a/doc/code-rules/PART9_2_CELL_OBSERVATION_EVENT_ADAPTER_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PART9_2_CELL_OBSERVATION_EVENT_ADAPTER_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PART9_2_CELL_OBSERVATION_EVENT_ADAPTER_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,18 @@
++# Part 9.2 Cell Observation Event Adapter Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: The patch adds an immutable observation adapter contract and a local conversion tool. It does not subscribe to the live bus, does not modify recorder core, does not add a command path, and does not add rendering or network dependencies.
++
++live_path_status: observation adapter only
++live_path_uses_real_backend: local JSONL conversion
++external_dependencies_added: false
++scheduler_modified: false
++eventbus_modified: false
++recorder_core_modified: false
++network_added: false
++github_api_added: false
++vispy_added: false
++llm_or_openvino_added: false
++```
+diff --git a/doc/reports/phase9/PART9_2_CELL_OBSERVATION_EVENT_ADAPTER_TEST_REPORT.md b/doc/reports/phase9/PART9_2_CELL_OBSERVATION_EVENT_ADAPTER_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase9/PART9_2_CELL_OBSERVATION_EVENT_ADAPTER_TEST_REPORT.md
+@@ -0,0 +1,12 @@
++# Part 9.2 Cell Observation Event Adapter Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/context/test_cell_observation_event.py
++PYTHONPATH=src:. pytest -q tests/tools/test_convert_cell_observation_events.py
++PYTHONPATH=src:. pytest -q tests/rules/test_cell_observation_event_adapter_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
+diff --git a/doc/manifests/MANIFEST_PART9_2_CELL_OBSERVATION_EVENT_ADAPTER.md b/doc/manifests/MANIFEST_PART9_2_CELL_OBSERVATION_EVENT_ADAPTER.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PART9_2_CELL_OBSERVATION_EVENT_ADAPTER.md
+@@ -0,0 +1,23 @@
++# Manifest — Part 9.2 Cell Observation Event Adapter
++
++## Added
++
++- `src/context/cell_observation_event.py`
++- `tools/convert_cell_observation_events.py`
++- `tests/context/test_cell_observation_event.py`
++- `tests/tools/test_convert_cell_observation_events.py`
++- `tests/rules/test_cell_observation_event_adapter_rule.py`
++- `doc/contracts/CELL_OBSERVATION_EVENT_ADAPTER_V1.md`
++- `doc/releases/README_PART9_2_CELL_OBSERVATION_EVENT_ADAPTER.md`
++- `doc/changelogs/CHANGELOG_PART9_2_CELL_OBSERVATION_EVENT_ADAPTER.md`
++- `doc/code-rules/PART9_2_CELL_OBSERVATION_EVENT_ADAPTER_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase9/PART9_2_CELL_OBSERVATION_EVENT_ADAPTER_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PART9_2_CELL_OBSERVATION_EVENT_ADAPTER.md`
++
++## Modified
++
++- None.
++
++## Runtime dependencies
++
++- None added.
