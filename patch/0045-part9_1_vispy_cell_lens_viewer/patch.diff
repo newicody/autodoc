@@ -1,0 +1,804 @@
+diff --git a/src/visualization/cell_lens_health.py b/src/visualization/cell_lens_health.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/visualization/cell_lens_health.py
+@@ -0,0 +1,102 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from typing import Mapping
++
++from context.cell_snapshot import CellSnapshot
++
++
++CELL_LENS_HEALTH_SCHEMA = "missipy.cell_lens_health.v1"
++
++
++DEFAULT_EXPECTED_LIFETIMES = {
++    "scheduler.short_task": 2.0,
++    "llm.answer": 45.0,
++    "ingest.batch": 120.0,
++    "recorder.write": 5.0,
++}
++
++
++@dataclass(frozen=True, slots=True)
++class CellHealth:
++    """Observation-only health estimate for a cell snapshot."""
++
++    cell_id: str
++    source_class: str
++    age: float
++    expected_lifetime: float
++    lifetime_ratio: float
++    health_score: float
++    status: str
++    lifecycle_state: str
++    schema: str = CELL_LENS_HEALTH_SCHEMA
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "age": self.age,
++            "cell_id": self.cell_id,
++            "expected_lifetime": self.expected_lifetime,
++            "health_score": self.health_score,
++            "lifecycle_state": self.lifecycle_state,
++            "lifetime_ratio": self.lifetime_ratio,
++            "schema": self.schema,
++            "source_class": self.source_class,
++            "status": self.status,
++        }
++
++
++def estimate_cell_health(
++    snapshot: CellSnapshot,
++    *,
++    expected_lifetimes: Mapping[str, float] | None = None,
++    default_expected_lifetime: float = 30.0,
++) -> CellHealth:
++    """Estimate health by deviation from expected lifetime.
++
++    This is deliberately not a fitness function and not a command decision. It
++    is a visualization/readout estimate.
++    """
++
++    lifetimes = expected_lifetimes or DEFAULT_EXPECTED_LIFETIMES
++    expected = float(lifetimes.get(snapshot.source_class, default_expected_lifetime))
++    if expected <= 0:
++        raise ValueError("expected lifetime must be > 0")
++
++    ratio = snapshot.age / expected
++    health_score = _health_score_from_ratio(ratio=ratio, lifecycle_state=snapshot.lifecycle_state)
++    status = _status_from_score(score=health_score, ratio=ratio, lifecycle_state=snapshot.lifecycle_state)
++
++    return CellHealth(
++        cell_id=snapshot.cell_id,
++        source_class=snapshot.source_class,
++        age=snapshot.age,
++        expected_lifetime=expected,
++        lifetime_ratio=round(ratio, 6),
++        health_score=round(health_score, 6),
++        status=status,
++        lifecycle_state=snapshot.lifecycle_state,
++    )
++
++
++def _health_score_from_ratio(*, ratio: float, lifecycle_state: str) -> float:
++    if lifecycle_state in {"failed", "cancelled", "dropped"}:
++        return 0.0
++    if ratio <= 1.0:
++        return 1.0
++    if ratio <= 1.5:
++        return max(0.55, 1.0 - ((ratio - 1.0) * 0.90))
++    if ratio <= 2.5:
++        return max(0.15, 0.55 - ((ratio - 1.5) * 0.40))
++    return 0.05
++
++
++def _status_from_score(*, score: float, ratio: float, lifecycle_state: str) -> str:
++    if lifecycle_state in {"failed", "cancelled", "dropped"}:
++        return "terminal"
++    if score >= 0.85:
++        return "healthy"
++    if score >= 0.55:
++        return "late"
++    if ratio >= 2.5:
++        return "stale"
++    return "degraded"
+diff --git a/src/visualization/cell_lens_projection.py b/src/visualization/cell_lens_projection.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/visualization/cell_lens_projection.py
+@@ -0,0 +1,126 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++import hashlib
++import math
++from typing import Iterable, Mapping
++
++from context.cell_snapshot import CellSnapshot
++from visualization.cell_lens_health import CellHealth, estimate_cell_health
++
++
++CELL_LENS_PROJECTION_SCHEMA = "missipy.cell_lens_projection.v1"
++
++
++@dataclass(frozen=True, slots=True)
++class CellRenderPoint:
++    """Renderer-neutral point derived from a cell snapshot."""
++
++    cell_id: str
++    source_class: str
++    lifecycle_state: str
++    x: float
++    y: float
++    z: float
++    size: float
++    health_score: float
++    status: str
++    age: float
++    cost: float
++    schema: str = CELL_LENS_PROJECTION_SCHEMA
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "age": self.age,
++            "cell_id": self.cell_id,
++            "cost": self.cost,
++            "health_score": self.health_score,
++            "lifecycle_state": self.lifecycle_state,
++            "schema": self.schema,
++            "size": self.size,
++            "source_class": self.source_class,
++            "status": self.status,
++            "x": self.x,
++            "y": self.y,
++            "z": self.z,
++        }
++
++
++def latest_snapshot_by_cell(snapshots: Iterable[CellSnapshot]) -> dict[str, CellSnapshot]:
++    latest: dict[str, CellSnapshot] = {}
++    for snapshot in snapshots:
++        latest[snapshot.cell_id] = snapshot
++    return latest
++
++
++def project_cell_snapshot(
++    snapshot: CellSnapshot,
++    *,
++    health: CellHealth | None = None,
++    expected_lifetimes: Mapping[str, float] | None = None,
++) -> CellRenderPoint:
++    current_health = health or estimate_cell_health(snapshot, expected_lifetimes=expected_lifetimes)
++    x, y = _stable_unit_position(snapshot.cell_id, snapshot.source_class)
++    z = _lifecycle_z(snapshot.lifecycle_state)
++    size = _size_from_cost(snapshot.cost)
++
++    return CellRenderPoint(
++        cell_id=snapshot.cell_id,
++        source_class=snapshot.source_class,
++        lifecycle_state=snapshot.lifecycle_state,
++        x=x,
++        y=y,
++        z=z,
++        size=size,
++        health_score=current_health.health_score,
++        status=current_health.status,
++        age=snapshot.age,
++        cost=snapshot.cost,
++    )
++
++
++def project_cell_snapshots(
++    snapshots: Iterable[CellSnapshot],
++    *,
++    expected_lifetimes: Mapping[str, float] | None = None,
++    latest_only: bool = True,
++) -> tuple[CellRenderPoint, ...]:
++    materialized: Iterable[CellSnapshot]
++    if latest_only:
++        materialized = latest_snapshot_by_cell(snapshots).values()
++    else:
++        materialized = snapshots
++
++    return tuple(
++        project_cell_snapshot(snapshot, expected_lifetimes=expected_lifetimes)
++        for snapshot in materialized
++    )
++
++
++def _stable_unit_position(cell_id: str, source_class: str) -> tuple[float, float]:
++    digest = hashlib.sha256(f"{source_class}:{cell_id}".encode("utf-8")).digest()
++    angle_raw = int.from_bytes(digest[0:8], "big") / float(2**64 - 1)
++    radius_raw = int.from_bytes(digest[8:16], "big") / float(2**64 - 1)
++
++    angle = angle_raw * math.tau
++    radius = math.sqrt(radius_raw)
++
++    return (round(math.cos(angle) * radius, 6), round(math.sin(angle) * radius, 6))
++
++
++def _lifecycle_z(lifecycle_state: str) -> float:
++    order = {
++        "created": 0.0,
++        "queued": 0.1,
++        "running": 0.2,
++        "waiting": 0.3,
++        "completed": 0.4,
++        "failed": 0.5,
++        "cancelled": 0.5,
++        "dropped": 0.5,
++    }
++    return order.get(lifecycle_state, 0.0)
++
++
++def _size_from_cost(cost: float) -> float:
++    return round(4.0 + min(16.0, math.sqrt(max(cost, 0.0)) * 1.6), 6)
+diff --git a/tools/visualize_cell_population_vispy.py b/tools/visualize_cell_population_vispy.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tools/visualize_cell_population_vispy.py
+@@ -0,0 +1,107 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++from pathlib import Path
++from typing import Any
++
++from context.cell_snapshot_journal_reader import (
++    read_cell_snapshot_jsonl,
++    tail_cell_snapshot_jsonl,
++)
++from visualization.cell_lens_projection import (
++    CellRenderPoint,
++    latest_snapshot_by_cell,
++    project_cell_snapshots,
++)
++
++
++STATUS_COLORS = {
++    "healthy": (0.20, 0.85, 0.35, 1.0),
++    "late": (0.95, 0.75, 0.20, 1.0),
++    "degraded": (0.95, 0.35, 0.20, 1.0),
++    "stale": (0.55, 0.20, 0.85, 1.0),
++    "terminal": (0.45, 0.45, 0.45, 1.0),
++}
++
++
++def render_points_to_arrays(points: tuple[CellRenderPoint, ...]) -> tuple[list[tuple[float, float]], list[float], list[tuple[float, float, float, float]]]:
++    positions = [(point.x, point.y) for point in points]
++    sizes = [point.size for point in points]
++    colors = [STATUS_COLORS.get(point.status, STATUS_COLORS["degraded"]) for point in points]
++    return positions, sizes, colors
++
++
++def load_initial_points(journal: Path, *, limit: int | None = None) -> tuple[dict[str, Any], int]:
++    result = read_cell_snapshot_jsonl(journal, limit=limit)
++    latest = latest_snapshot_by_cell(result.snapshots)
++    return latest, journal.stat().st_size if journal.exists() else 0
++
++
++def run_vispy_viewer(journal: Path, *, tail: bool, interval_seconds: float, limit: int | None) -> int:
++    try:
++        from vispy import app, scene
++    except ImportError as exc:
++        raise SystemExit(
++            "VisPy is required for the desktop viewer. Install it in the active environment before running this tool."
++        ) from exc
++
++    latest, offset = load_initial_points(journal, limit=limit)
++
++    canvas = scene.SceneCanvas(keys="interactive", title="MissiPy Cell Lens", size=(1000, 800), show=True)
++    view = canvas.central_widget.add_view()
++    view.camera = "panzoom"
++    markers = scene.visuals.Markers(parent=view.scene)
++
++    def redraw() -> None:
++        points = project_cell_snapshots(latest.values(), latest_only=False)
++        positions, sizes, colors = render_points_to_arrays(points)
++        markers.set_data(positions, face_color=colors, edge_color=None, size=sizes)
++        canvas.update()
++
++    def poll_tail(event: object | None = None) -> None:
++        nonlocal offset
++        if not tail:
++            return
++        result = tail_cell_snapshot_jsonl(journal, offset=offset, max_lines=2048)
++        offset = result.next_offset
++        for snapshot in result.snapshots:
++            latest[snapshot.cell_id] = snapshot
++        redraw()
++
++    redraw()
++
++    timer = None
++    if tail:
++        timer = app.Timer(interval=interval_seconds, connect=poll_tail, start=True)
++
++    try:
++        app.run()
++    finally:
++        if timer is not None:
++            timer.stop()
++
++    return 0
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description="Render a missipy.cell.v1 JSONL journal with VisPy.")
++    parser.add_argument("--journal", required=True, help="Input JSONL cell snapshot journal.")
++    parser.add_argument("--tail", action="store_true", help="Follow the journal with non-blocking tail reads.")
++    parser.add_argument("--interval-seconds", type=float, default=0.25)
++    parser.add_argument("--limit", type=int, default=None, help="Optional replay limit before tailing.")
++    args = parser.parse_args()
++
++    if args.interval_seconds <= 0:
++        raise SystemExit("--interval-seconds must be > 0")
++
++    return run_vispy_viewer(
++        Path(args.journal),
++        tail=args.tail,
++        interval_seconds=args.interval_seconds,
++        limit=args.limit,
++    )
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/visualization/test_cell_lens_health.py b/tests/visualization/test_cell_lens_health.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/visualization/test_cell_lens_health.py
+@@ -0,0 +1,45 @@
++from __future__ import annotations
++
++from context.cell_snapshot import CellSnapshot
++from visualization.cell_lens_health import (
++    CELL_LENS_HEALTH_SCHEMA,
++    estimate_cell_health,
++)
++
++
++def _snapshot(source_class: str, age: float, state: str = "running") -> CellSnapshot:
++    return CellSnapshot(
++        cell_id="cell-1",
++        source_class=source_class,
++        score=1.0,
++        age=age,
++        cost=1.0,
++        lifecycle_state=state,
++        observed_at="2026-07-03T10:00:00Z",
++    )
++
++
++def test_health_uses_expected_lifetime_not_raw_duration() -> None:
++    slow_llm = estimate_cell_health(_snapshot("llm.answer", age=20.0))
++    slow_short_task = estimate_cell_health(_snapshot("scheduler.short_task", age=20.0))
++
++    assert slow_llm.status == "healthy"
++    assert slow_short_task.status in {"stale", "degraded"}
++    assert slow_llm.health_score > slow_short_task.health_score
++
++
++def test_health_marks_terminal_states_as_terminal() -> None:
++    health = estimate_cell_health(_snapshot("llm.answer", age=1.0, state="failed"))
++
++    assert health.schema == CELL_LENS_HEALTH_SCHEMA
++    assert health.status == "terminal"
++    assert health.health_score == 0.0
++
++
++def test_health_accepts_custom_expected_lifetime() -> None:
++    snapshot = _snapshot("custom.long", age=40.0)
++
++    health = estimate_cell_health(snapshot, expected_lifetimes={"custom.long": 100.0})
++
++    assert health.status == "healthy"
++    assert health.expected_lifetime == 100.0
+diff --git a/tests/visualization/test_cell_lens_projection.py b/tests/visualization/test_cell_lens_projection.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/visualization/test_cell_lens_projection.py
+@@ -0,0 +1,62 @@
++from __future__ import annotations
++
++from context.cell_snapshot import CellSnapshot
++from visualization.cell_lens_projection import (
++    CELL_LENS_PROJECTION_SCHEMA,
++    latest_snapshot_by_cell,
++    project_cell_snapshot,
++    project_cell_snapshots,
++)
++
++
++def _snapshot(cell_id: str, age: float, state: str = "running") -> CellSnapshot:
++    return CellSnapshot(
++        cell_id=cell_id,
++        source_class="llm.answer",
++        score=1.0,
++        age=age,
++        cost=4.0,
++        lifecycle_state=state,
++        observed_at=f"2026-07-03T10:00:{int(age):02d}Z",
++    )
++
++
++def test_projection_is_stable_for_same_cell() -> None:
++    first = project_cell_snapshot(_snapshot("cell-1", 1.0))
++    second = project_cell_snapshot(_snapshot("cell-1", 10.0))
++
++    assert first.schema == CELL_LENS_PROJECTION_SCHEMA
++    assert (first.x, first.y) == (second.x, second.y)
++
++
++def test_projection_size_grows_with_cost() -> None:
++    low = CellSnapshot(
++        cell_id="cell-1",
++        source_class="llm.answer",
++        score=1.0,
++        age=1.0,
++        cost=1.0,
++        lifecycle_state="running",
++        observed_at="2026-07-03T10:00:00Z",
++    )
++    high = CellSnapshot(
++        cell_id="cell-2",
++        source_class="llm.answer",
++        score=1.0,
++        age=1.0,
++        cost=100.0,
++        lifecycle_state="running",
++        observed_at="2026-07-03T10:00:00Z",
++    )
++
++    assert project_cell_snapshot(high).size > project_cell_snapshot(low).size
++
++
++def test_projection_can_keep_latest_snapshot_per_cell() -> None:
++    snapshots = [_snapshot("cell-1", 1.0), _snapshot("cell-1", 2.0), _snapshot("cell-2", 1.0)]
++
++    latest = latest_snapshot_by_cell(snapshots)
++    points = project_cell_snapshots(snapshots)
++
++    assert latest["cell-1"].age == 2.0
++    assert len(points) == 2
+diff --git a/tests/tools/test_visualize_cell_population_vispy.py b/tests/tools/test_visualize_cell_population_vispy.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/tools/test_visualize_cell_population_vispy.py
+@@ -0,0 +1,37 @@
++from __future__ import annotations
++
++from pathlib import Path
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOLS = ROOT / "tools"
++if str(TOOLS) not in sys.path:
++    sys.path.insert(0, str(TOOLS))
++
++from visualize_cell_population_vispy import render_points_to_arrays  # noqa: E402
++from visualization.cell_lens_projection import CellRenderPoint  # noqa: E402
++
++
++def test_render_points_to_arrays_is_renderer_neutral_until_vispy_runtime() -> None:
++    points = (
++        CellRenderPoint(
++            cell_id="cell-1",
++            source_class="llm.answer",
++            lifecycle_state="running",
++            x=0.1,
++            y=0.2,
++            z=0.0,
++            size=8.0,
++            health_score=1.0,
++            status="healthy",
++            age=1.0,
++            cost=2.0,
++        ),
++    )
++
++    positions, sizes, colors = render_points_to_arrays(points)
++
++    assert positions == [(0.1, 0.2)]
++    assert sizes == [8.0]
++    assert colors[0][-1] == 1.0
+diff --git a/tests/rules/test_vispy_cell_lens_viewer_rule.py b/tests/rules/test_vispy_cell_lens_viewer_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_vispy_cell_lens_viewer_rule.py
+@@ -0,0 +1,57 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_vispy_viewer_is_confined_to_tool_boundary() -> None:
++    tool = _read("tools/visualize_cell_population_vispy.py")
++    assert "from vispy import app, scene" in tool
++
++    health = _read("src/visualization/cell_lens_health.py")
++    projection = _read("src/visualization/cell_lens_projection.py")
++    assert "vispy" not in health.lower()
++    assert "vispy" not in projection.lower()
++
++
++def test_vispy_viewer_does_not_use_command_or_bus_tokens() -> None:
++    combined = (
++        _read("tools/visualize_cell_population_vispy.py")
++        + _read("src/visualization/cell_lens_health.py")
++        + _read("src/visualization/cell_lens_projection.py")
++    )
++    forbidden = [
++        "Scheduler",
++        "EventBus",
++        "requests",
++        "urllib",
++        "httpx",
++        "OPENAI_API_KEY",
++        "github",
++    ]
++    for token in forbidden:
++        assert token not in combined
++
++
++def test_vispy_viewer_docs_keep_it_observation_only() -> None:
++    doc = _read("doc/visualization/VISPY_CELL_LENS_VIEWER.md")
++    assert "observation-only" in doc
++    assert "read-only" in doc
++    assert "tail" in doc
++    assert "replay" in doc
++    assert "must not command the system" in doc
++
++
++def test_vispy_viewer_manifest_declares_optional_dependency_only() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PART9_1_VISPY_CELL_LENS_VIEWER.md")
++    assert "tools/visualize_cell_population_vispy.py" in manifest
++    assert "optional" in manifest
++    assert "requirements" not in manifest
++    assert ".dot" not in manifest
++    assert ".svg" not in manifest
+diff --git a/doc/visualization/VISPY_CELL_LENS_VIEWER.md b/doc/visualization/VISPY_CELL_LENS_VIEWER.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/visualization/VISPY_CELL_LENS_VIEWER.md
+@@ -0,0 +1,82 @@
++# VisPy Cell Lens Viewer
++
++The VisPy cell lens viewer is a desktop, observation-only renderer for the
++`missipy.cell.v1` JSONL journal.
++
++It is read-only.
++
++It must not command the system.
++
++## Input
++
++```text
++missipy.cell.v1 JSONL journal
++```
++
++The journal may come from:
++
++```text
++synthetic generator now
++real observation recorder later
++```
++
++The viewer reads the same contract in both cases.
++
++## Replay and tail
++
++Replay mode reads existing journal lines.
++
++Tail mode repeatedly reads new complete lines from a byte offset.
++
++Live mode is replay that has caught up to the end of the journal and then keeps
++tailing.
++
++## Health
++
++Health is derived by comparing age to the expected lifetime for the source
++class.
++
++```text
++slow LLM answer within expected window: healthy
++short task far beyond expected window: degraded or stale
++```
++
++Health is not a fitness function.
++
++## Dependency boundary
++
++VisPy is imported only by:
++
++```text
++tools/visualize_cell_population_vispy.py
++```
++
++Core contracts, journal writer, journal reader, Scheduler, and recorder code
++must not import VisPy.
++
++## Usage
++
++Generate a synthetic journal:
++
++```bash
++PYTHONPATH=src:. python tools/generate_synthetic_cell_journal.py \
++  --output /tmp/missipy_cells.jsonl \
++  --population-size 64 \
++  --tick-count 200 \
++  --seed 42
++```
++
++Run the viewer after installing VisPy in the active environment:
++
++```bash
++PYTHONPATH=src:. python tools/visualize_cell_population_vispy.py \
++  --journal /tmp/missipy_cells.jsonl
++```
++
++Follow a growing journal:
++
++```bash
++PYTHONPATH=src:. python tools/visualize_cell_population_vispy.py \
++  --journal /tmp/missipy_cells.jsonl \
++  --tail
++```
+diff --git a/doc/releases/README_PART9_1_VISPY_CELL_LENS_VIEWER.md b/doc/releases/README_PART9_1_VISPY_CELL_LENS_VIEWER.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PART9_1_VISPY_CELL_LENS_VIEWER.md
+@@ -0,0 +1,18 @@
++# Part 9.1 — VisPy Cell Lens Viewer
++
++Part 9.1 adds the first desktop viewer boundary for the cell lens.
++
++## Added
++
++- Renderer-neutral health mapping.
++- Renderer-neutral projection points.
++- Optional VisPy desktop tool.
++- Tests for health/projection logic without requiring VisPy.
++- Rule tests ensuring VisPy is confined to the tool boundary.
++
++## Not added
++
++- No real observation recorder consumer.
++- No mobile SSE.
++- No command path.
++- No optimization loop.
+diff --git a/doc/changelogs/CHANGELOG_PART9_1_VISPY_CELL_LENS_VIEWER.md b/doc/changelogs/CHANGELOG_PART9_1_VISPY_CELL_LENS_VIEWER.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PART9_1_VISPY_CELL_LENS_VIEWER.md
+@@ -0,0 +1,22 @@
++# Changelog — Part 9.1 VisPy Cell Lens Viewer
++
++## Added
++
++- `src/visualization/cell_lens_health.py`
++- `src/visualization/cell_lens_projection.py`
++- `tools/visualize_cell_population_vispy.py`
++- Viewer documentation and tests.
++
++## Behavior
++
++The viewer reads the JSONL journal through replay/tail readers and projects the
++latest snapshot per cell into renderer-neutral points.
++
++VisPy is imported only when the tool runs.
++
++## Not changed
++
++- No Scheduler path.
++- No EventBus subscription.
++- No recorder core modification.
++- No server or mobile endpoint.
+diff --git a/doc/code-rules/PART9_1_VISPY_CELL_LENS_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PART9_1_VISPY_CELL_LENS_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PART9_1_VISPY_CELL_LENS_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,20 @@
++# Part 9.1 VisPy Cell Lens Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: The patch adds an optional desktop visualization boundary that consumes the existing journal. Core health/projection code is renderer-neutral. VisPy is confined to a tool. No command path, network path, Scheduler path, or recorder core mutation is added.
++
++live_path_status: optional observation tool
++live_path_uses_real_backend: local journal reader
++external_dependencies_added: false
++scheduler_modified: false
++eventbus_modified: false
++recorder_core_modified: false
++network_added: false
++github_api_added: false
++vispy_added_to_core: false
++llm_or_openvino_added: false
++```
++
++The viewer remains a lens. It is not a lever.
+diff --git a/doc/reports/phase9/PART9_1_VISPY_CELL_LENS_VIEWER_TEST_REPORT.md b/doc/reports/phase9/PART9_1_VISPY_CELL_LENS_VIEWER_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase9/PART9_1_VISPY_CELL_LENS_VIEWER_TEST_REPORT.md
+@@ -0,0 +1,23 @@
++# Part 9.1 VisPy Cell Lens Viewer Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/visualization/test_cell_lens_health.py
++PYTHONPATH=src:. pytest -q tests/visualization/test_cell_lens_projection.py
++PYTHONPATH=src:. pytest -q tests/tools/test_visualize_cell_population_vispy.py
++PYTHONPATH=src:. pytest -q tests/rules/test_vispy_cell_lens_viewer_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Expected
++
++```text
++health tests: pass
++projection tests: pass
++tool boundary tests: pass
++rules: pass
++full suite: pass
++```
+diff --git a/doc/manifests/MANIFEST_PART9_1_VISPY_CELL_LENS_VIEWER.md b/doc/manifests/MANIFEST_PART9_1_VISPY_CELL_LENS_VIEWER.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PART9_1_VISPY_CELL_LENS_VIEWER.md
+@@ -0,0 +1,25 @@
++# Manifest — Part 9.1 VisPy Cell Lens Viewer
++
++## Added
++
++- `src/visualization/cell_lens_health.py`
++- `src/visualization/cell_lens_projection.py`
++- `tools/visualize_cell_population_vispy.py`
++- `tests/visualization/test_cell_lens_health.py`
++- `tests/visualization/test_cell_lens_projection.py`
++- `tests/tools/test_visualize_cell_population_vispy.py`
++- `tests/rules/test_vispy_cell_lens_viewer_rule.py`
++- `doc/visualization/VISPY_CELL_LENS_VIEWER.md`
++- `doc/releases/README_PART9_1_VISPY_CELL_LENS_VIEWER.md`
++- `doc/changelogs/CHANGELOG_PART9_1_VISPY_CELL_LENS_VIEWER.md`
++- `doc/code-rules/PART9_1_VISPY_CELL_LENS_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase9/PART9_1_VISPY_CELL_LENS_VIEWER_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PART9_1_VISPY_CELL_LENS_VIEWER.md`
++
++## Modified
++
++- None.
++
++## Runtime dependencies
++
++- VisPy is optional and imported only by the desktop viewer tool at runtime.
