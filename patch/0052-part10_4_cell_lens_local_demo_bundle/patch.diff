@@ -1,0 +1,397 @@
+diff --git a/tools/cell_lens_local_demo_bundle.py b/tools/cell_lens_local_demo_bundle.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tools/cell_lens_local_demo_bundle.py
+@@ -0,0 +1,111 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++import json
++from dataclasses import dataclass
++from pathlib import Path
++
++from context.cell_snapshot_journal import write_cell_snapshots_jsonl
++from context.cell_snapshot_journal_reader import read_cell_snapshot_jsonl
++from context.cell_snapshot_sse import cell_journal_to_sse_text
++from context.cell_snapshot_synthetic import (
++    SyntheticCellPopulationConfig,
++    generate_synthetic_cell_snapshots,
++)
++
++
++CELL_LENS_DEMO_BUNDLE_SCHEMA = "missipy.cell_lens_local_demo_bundle.v1"
++
++
++@dataclass(frozen=True, slots=True)
++class CellLensLocalDemoBundleResult:
++    output_dir: str
++    journal_path: str
++    sse_preview_path: str
++    snapshot_count: int
++    replay_count: int
++    sse_event_count: int
++    errors: tuple[str, ...] = ()
++    schema: str = CELL_LENS_DEMO_BUNDLE_SCHEMA
++
++    @property
++    def ok(self) -> bool:
++        return not self.errors and self.snapshot_count == self.replay_count
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "errors": list(self.errors),
++            "journal_path": self.journal_path,
++            "ok": self.ok,
++            "output_dir": self.output_dir,
++            "replay_count": self.replay_count,
++            "schema": self.schema,
++            "snapshot_count": self.snapshot_count,
++            "sse_event_count": self.sse_event_count,
++            "sse_preview_path": self.sse_preview_path,
++        }
++
++
++def build_cell_lens_local_demo_bundle(
++    output_dir: Path,
++    *,
++    population_size: int = 32,
++    tick_count: int = 20,
++    seed: int = 42,
++    sse_limit: int = 20,
++) -> CellLensLocalDemoBundleResult:
++    output_dir.mkdir(parents=True, exist_ok=True)
++    journal_path = output_dir / "cells.jsonl"
++    sse_preview_path = output_dir / "cells.sse"
++    report_path = output_dir / "report.json"
++
++    config = SyntheticCellPopulationConfig(
++        population_size=population_size,
++        tick_count=tick_count,
++        seed=seed,
++    )
++    snapshots = tuple(generate_synthetic_cell_snapshots(config))
++    journal_result = write_cell_snapshots_jsonl(journal_path, snapshots)
++    replay_result = read_cell_snapshot_jsonl(journal_path)
++    sse_text = cell_journal_to_sse_text(journal_path, limit=sse_limit)
++    sse_preview_path.write_text(sse_text, encoding="utf-8")
++
++    errors = list(journal_result.errors)
++    errors.extend(replay_result.errors)
++
++    result = CellLensLocalDemoBundleResult(
++        output_dir=str(output_dir),
++        journal_path=str(journal_path),
++        sse_preview_path=str(sse_preview_path),
++        snapshot_count=len(snapshots),
++        replay_count=len(replay_result.snapshots),
++        sse_event_count=sse_text.count("\nevent: cell_snapshot\n"),
++        errors=tuple(errors),
++    )
++    report_path.write_text(json.dumps(result.to_json_dict(), ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    return result
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description="Build a local read-only Cell Lens demo bundle.")
++    parser.add_argument("--output-dir", default=".var/cell_lens_demo")
++    parser.add_argument("--population-size", type=int, default=32)
++    parser.add_argument("--tick-count", type=int, default=20)
++    parser.add_argument("--seed", type=int, default=42)
++    parser.add_argument("--sse-limit", type=int, default=20)
++    args = parser.parse_args()
++
++    result = build_cell_lens_local_demo_bundle(
++        Path(args.output_dir),
++        population_size=args.population_size,
++        tick_count=args.tick_count,
++        seed=args.seed,
++        sse_limit=args.sse_limit,
++    )
++    print(json.dumps(result.to_json_dict(), ensure_ascii=False, sort_keys=True))
++    return 0 if result.ok else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_cell_lens_local_demo_bundle.py b/tests/tools/test_cell_lens_local_demo_bundle.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/tools/test_cell_lens_local_demo_bundle.py
+@@ -0,0 +1,47 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++import subprocess
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "cell_lens_local_demo_bundle.py"
++
++
++def test_cell_lens_local_demo_bundle_cli_writes_demo_files(tmp_path: Path) -> None:
++    output_dir = tmp_path / "demo"
++
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--output-dir",
++            str(output_dir),
++            "--population-size",
++            "8",
++            "--tick-count",
++            "8",
++            "--seed",
++            "3",
++            "--sse-limit",
++            "5",
++        ],
++        cwd=ROOT,
++        env={"PYTHONPATH": "src:."},
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    result = json.loads(completed.stdout)
++    report = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
++
++    assert result["schema"] == "missipy.cell_lens_local_demo_bundle.v1"
++    assert result["ok"] is True
++    assert report["ok"] is True
++    assert (output_dir / "cells.jsonl").exists()
++    assert (output_dir / "cells.sse").exists()
++    assert "missipy.cell.v1" in (output_dir / "cells.jsonl").read_text(encoding="utf-8")
++    assert "missipy.cell_snapshot_sse.v1" in (output_dir / "cells.sse").read_text(encoding="utf-8")
+diff --git a/tests/rules/test_cell_lens_local_demo_bundle_rule.py b/tests/rules/test_cell_lens_local_demo_bundle_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_cell_lens_local_demo_bundle_rule.py
+@@ -0,0 +1,42 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_cell_lens_demo_bundle_declares_versioned_schema() -> None:
++    source = _read("tools/cell_lens_local_demo_bundle.py")
++    assert 'CELL_LENS_DEMO_BUNDLE_SCHEMA = "missipy.cell_lens_local_demo_bundle.v1"' in source
++    assert "build_cell_lens_local_demo_bundle" in source
++
++
++def test_cell_lens_demo_bundle_is_dry_run_file_only() -> None:
++    source = _read("tools/cell_lens_local_demo_bundle.py")
++    forbidden = ["vispy", "Scheduler", "EventBus", "requests", "urllib", "httpx", "OPENAI_API_KEY", "github", "ThreadingHTTPServer"]
++    for token in forbidden:
++        assert token not in source
++
++
++def test_cell_lens_demo_bundle_docs_show_full_local_chain() -> None:
++    doc = _read("doc/demo/CELL_LENS_LOCAL_DEMO_BUNDLE.md")
++    assert "missipy.cell_lens_local_demo_bundle.v1" in doc
++    assert "synthetic population" in doc
++    assert "missipy.cell.v1 journal" in doc
++    assert "SSE preview" in doc
++    assert "read-only" in doc
++    assert "does not start a server" in doc
++
++
++def test_cell_lens_demo_bundle_manifest_has_no_runtime_server_or_renderer() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE.md")
++    assert "tools/cell_lens_local_demo_bundle.py" in manifest
++    assert "local demo bundle" in manifest
++    assert "requirements" not in manifest
++    assert ".dot" not in manifest
++    assert ".svg" not in manifest
+diff --git a/doc/demo/CELL_LENS_LOCAL_DEMO_BUNDLE.md b/doc/demo/CELL_LENS_LOCAL_DEMO_BUNDLE.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/demo/CELL_LENS_LOCAL_DEMO_BUNDLE.md
+@@ -0,0 +1,56 @@
++# Cell Lens Local Demo Bundle
++
++```text
++schema: missipy.cell_lens_local_demo_bundle.v1
++```
++
++This tool builds a local read-only demo bundle for the Cell Lens chain.
++
++It does not start a server.
++
++## Chain
++
++```text
++synthetic population
++→ missipy.cell.v1 journal
++→ replay check
++→ SSE preview
++→ report.json
++```
++
++## Files
++
++```text
++cells.jsonl
++cells.sse
++report.json
++```
++
++`cells.jsonl` is the same journal consumed by VisPy, replay/tail, the local SSE
++endpoint, and the browser view.
++
++`cells.sse` is an SSE preview file, not a live socket stream.
++
++## Usage
++
++```bash
++PYTHONPATH=src:. python tools/cell_lens_local_demo_bundle.py \
++  --output-dir .var/cell_lens_demo \
++  --population-size 32 \
++  --tick-count 20 \
++  --seed 42 \
++  --sse-limit 20
++```
++
++Then inspect:
++
++```bash
++head .var/cell_lens_demo/cells.jsonl
++cat .var/cell_lens_demo/cells.sse
++cat .var/cell_lens_demo/report.json
++```
++
++## Boundary
++
++This is a demo artifact builder only. It does not command the system, does not
++start a server, does not subscribe to a live source, and does not render.
+diff --git a/doc/releases/README_PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE.md b/doc/releases/README_PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE.md
+@@ -0,0 +1,19 @@
++# Part 10.4 — Cell Lens Local Demo Bundle
++
++Part 10.4 adds a local demo bundle builder for the Cell Lens chain.
++
++## Added
++
++- Synthetic journal generation.
++- Replay verification.
++- SSE preview file.
++- JSON report.
++- Tests and docs.
++
++## Not added
++
++- No server.
++- No browser launch.
++- No renderer.
++- No command channel.
++- No optimization loop.
+diff --git a/doc/changelogs/CHANGELOG_PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE.md b/doc/changelogs/CHANGELOG_PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE.md
+@@ -0,0 +1,13 @@
++# Changelog — Part 10.4 Cell Lens Local Demo Bundle
++
++## Added
++
++- `tools/cell_lens_local_demo_bundle.py`
++- Local demo report schema.
++- Tool tests and rule tests.
++- Demo documentation.
++
++## Behavior
++
++The tool creates a local `cells.jsonl`, a `cells.sse` preview, and a
++`report.json` that confirms replay compatibility.
+diff --git a/doc/code-rules/PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,19 @@
++# Part 10.4 Cell Lens Local Demo Bundle Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: The patch adds a file-only local demo builder. It uses existing synthetic, journal, replay, and SSE contract code. It does not add a server, renderer, command path, remote exposure, or external dependency.
++
++live_path_status: local demo bundle only
++live_path_uses_real_backend: local files
++external_dependencies_added: false
++scheduler_modified: false
++eventbus_modified: false
++recorder_core_modified: false
++network_added: false
++server_endpoint_added: false
++github_api_added: false
++vispy_added: false
++llm_or_openvino_added: false
++```
+diff --git a/doc/reports/phase10/PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE_TEST_REPORT.md b/doc/reports/phase10/PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase10/PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE_TEST_REPORT.md
+@@ -0,0 +1,11 @@
++# Part 10.4 Cell Lens Local Demo Bundle Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/tools/test_cell_lens_local_demo_bundle.py
++PYTHONPATH=src:. pytest -q tests/rules/test_cell_lens_local_demo_bundle_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
+diff --git a/doc/manifests/MANIFEST_PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE.md b/doc/manifests/MANIFEST_PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE.md
+@@ -0,0 +1,25 @@
++# Manifest — Part 10.4 Cell Lens Local Demo Bundle
++
++## Added
++
++- `tools/cell_lens_local_demo_bundle.py`
++- `tests/tools/test_cell_lens_local_demo_bundle.py`
++- `tests/rules/test_cell_lens_local_demo_bundle_rule.py`
++- `doc/demo/CELL_LENS_LOCAL_DEMO_BUNDLE.md`
++- `doc/releases/README_PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE.md`
++- `doc/changelogs/CHANGELOG_PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE.md`
++- `doc/code-rules/PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase10/PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PART10_4_CELL_LENS_LOCAL_DEMO_BUNDLE.md`
++
++## Modified
++
++- None.
++
++## Runtime changes
++
++- Adds a local demo bundle tool.
++
++## Runtime dependencies
++
++- None added.
