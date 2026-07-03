@@ -41,6 +41,7 @@ def load_initial_points(journal: Path, *, limit: int | None = None) -> tuple[dic
 def run_vispy_viewer(journal: Path, *, tail: bool, interval_seconds: float, limit: int | None) -> int:
     try:
         from vispy import app, scene
+        import numpy as np
     except ImportError as exc:
         raise SystemExit(
             "VisPy is required for the desktop viewer. Install it in the active environment before running this tool."
@@ -56,7 +57,28 @@ def run_vispy_viewer(journal: Path, *, tail: bool, interval_seconds: float, limi
     def redraw() -> None:
         points = project_cell_snapshots(latest.values(), latest_only=False)
         positions, sizes, colors = render_points_to_arrays(points)
-        markers.set_data(positions, face_color=colors, edge_color=None, size=sizes)
+        positions_array = (
+            np.asarray(positions, dtype=np.float32)
+            if positions
+            else np.empty((0, 2), dtype=np.float32)
+        )
+        colors_array = (
+            np.asarray(colors, dtype=np.float32)
+            if colors
+            else np.empty((0, 4), dtype=np.float32)
+        )
+        sizes_array = (
+            np.asarray(sizes, dtype=np.float32)
+            if sizes
+            else np.empty((0,), dtype=np.float32)
+        )
+
+        markers.set_data(
+            positions_array,
+            face_color=colors_array,
+            edge_color=None,
+            size=sizes_array,
+        )
         canvas.update()
 
     def poll_tail(event: object | None = None) -> None:
@@ -68,6 +90,7 @@ def run_vispy_viewer(journal: Path, *, tail: bool, interval_seconds: float, limi
         for snapshot in result.snapshots:
             latest[snapshot.cell_id] = snapshot
         redraw()
+    canvas.show()
 
     redraw()
 
