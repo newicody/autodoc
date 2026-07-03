@@ -1,0 +1,505 @@
+diff --git a/src/context/cell_snapshot_sse.py b/src/context/cell_snapshot_sse.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/cell_snapshot_sse.py
+@@ -0,0 +1,83 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++import json
++from typing import Iterable
++
++from context.cell_snapshot import CellSnapshot
++from context.cell_snapshot_journal_reader import read_cell_snapshot_jsonl
++
++
++CELL_SNAPSHOT_SSE_SCHEMA = "missipy.cell_snapshot_sse.v1"
++CELL_SNAPSHOT_SSE_EVENT_NAME = "cell_snapshot"
++
++
++@dataclass(frozen=True, slots=True)
++class CellSnapshotSseEvent:
++    """Renderer-neutral SSE event for read-only cell snapshot streaming."""
++
++    event_id: str
++    data: CellSnapshot
++    event_name: str = CELL_SNAPSHOT_SSE_EVENT_NAME
++    schema: str = CELL_SNAPSHOT_SSE_SCHEMA
++
++    def __post_init__(self) -> None:
++        if self.schema != CELL_SNAPSHOT_SSE_SCHEMA:
++            raise ValueError(f"unsupported cell snapshot SSE schema: {self.schema!r}")
++        if not self.event_id:
++            raise ValueError("event_id must be non-empty")
++        if self.event_name != CELL_SNAPSHOT_SSE_EVENT_NAME:
++            raise ValueError(f"unsupported event_name: {self.event_name!r}")
++
++    def to_sse_text(self) -> str:
++        payload = {
++            "schema": self.schema,
++            "snapshot": self.data.to_json_dict(),
++        }
++        return format_sse_event(
++            event_name=self.event_name,
++            event_id=self.event_id,
++            data=json.dumps(payload, ensure_ascii=False, sort_keys=True),
++        )
++
++
++def format_sse_event(*, event_name: str, event_id: str, data: str) -> str:
++    if "\n" in event_name or "\n" in event_id:
++        raise ValueError("SSE event name and id must be single-line values")
++
++    lines = [
++        f"id: {event_id}",
++        f"event: {event_name}",
++    ]
++
++    for data_line in data.splitlines() or [""]:
++        lines.append(f"data: {data_line}")
++
++    return "\n".join(lines) + "\n\n"
++
++
++def snapshot_to_sse_event(snapshot: CellSnapshot, *, sequence: int) -> CellSnapshotSseEvent:
++    if sequence < 0:
++        raise ValueError("sequence must be >= 0")
++    return CellSnapshotSseEvent(event_id=str(sequence), data=snapshot)
++
++
++def snapshots_to_sse_text(snapshots: Iterable[CellSnapshot], *, start_sequence: int = 0) -> str:
++    if start_sequence < 0:
++        raise ValueError("start_sequence must be >= 0")
++
++    chunks: list[str] = []
++    for offset, snapshot in enumerate(snapshots):
++        chunks.append(snapshot_to_sse_event(snapshot, sequence=start_sequence + offset).to_sse_text())
++    return "".join(chunks)
++
++
++def cell_journal_to_sse_text(path: object, *, limit: int | None = None, start_sequence: int = 0) -> str:
++    """Convert a cell snapshot JSONL journal to read-only SSE text.
++
++    This helper does not open a socket. It exists so Phase 10 can validate the
++    stream contract before adding a local server endpoint.
++    """
++
++    result = read_cell_snapshot_jsonl(path, limit=limit)  # type: ignore[arg-type]
++    return snapshots_to_sse_text(result.snapshots, start_sequence=start_sequence)
+diff --git a/tools/cell_snapshot_sse_dry_run.py b/tools/cell_snapshot_sse_dry_run.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tools/cell_snapshot_sse_dry_run.py
+@@ -0,0 +1,33 @@
++#!/usr/bin/env python3
++from __future__ import annotations
++
++import argparse
++from pathlib import Path
++
++from context.cell_snapshot_sse import cell_journal_to_sse_text
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description="Convert a missipy.cell.v1 JSONL journal to read-only SSE text.")
++    parser.add_argument("--journal", required=True, help="Input missipy.cell.v1 JSONL journal.")
++    parser.add_argument("--output", default="", help="Optional output file. Defaults to stdout.")
++    parser.add_argument("--limit", type=int, default=None)
++    parser.add_argument("--start-sequence", type=int, default=0)
++    args = parser.parse_args()
++
++    text = cell_journal_to_sse_text(
++        Path(args.journal),
++        limit=args.limit,
++        start_sequence=args.start_sequence,
++    )
++
++    if args.output:
++        Path(args.output).write_text(text, encoding="utf-8")
++    else:
++        print(text, end="")
++
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/context/test_cell_snapshot_sse.py b/tests/context/test_cell_snapshot_sse.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/context/test_cell_snapshot_sse.py
+@@ -0,0 +1,81 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++import pytest
++
++from context.cell_snapshot import CellSnapshot
++from context.cell_snapshot_journal import CellSnapshotJournalWriter
++from context.cell_snapshot_sse import (
++    CELL_SNAPSHOT_SSE_EVENT_NAME,
++    CELL_SNAPSHOT_SSE_SCHEMA,
++    CellSnapshotSseEvent,
++    cell_journal_to_sse_text,
++    format_sse_event,
++    snapshot_to_sse_event,
++    snapshots_to_sse_text,
++)
++
++
++def _snapshot(index: int) -> CellSnapshot:
++    return CellSnapshot(
++        cell_id=f"cell-{index}",
++        source_task_id=f"task-{index}",
++        source_class="llm.answer",
++        score=0.8,
++        age=float(index),
++        cost=2.0,
++        lifecycle_state="running",
++        observed_at=f"2026-07-03T10:00:0{index}Z",
++    )
++
++
++def test_cell_snapshot_sse_event_declares_versioned_schema() -> None:
++    event = snapshot_to_sse_event(_snapshot(1), sequence=7)
++
++    assert event.schema == CELL_SNAPSHOT_SSE_SCHEMA
++    assert event.schema == "missipy.cell_snapshot_sse.v1"
++    assert event.event_name == CELL_SNAPSHOT_SSE_EVENT_NAME
++    assert event.event_id == "7"
++
++
++def test_cell_snapshot_sse_event_formats_sse_text() -> None:
++    text = snapshot_to_sse_event(_snapshot(1), sequence=0).to_sse_text()
++
++    assert text.startswith("id: 0\nevent: cell_snapshot\ndata: ")
++    assert text.endswith("\n\n")
++    payload = json.loads(text.split("data: ", 1)[1])
++    assert payload["schema"] == "missipy.cell_snapshot_sse.v1"
++    assert payload["snapshot"]["schema"] == "missipy.cell.v1"
++
++
++def test_format_sse_event_rejects_multiline_id_or_event_name() -> None:
++    with pytest.raises(ValueError):
++        format_sse_event(event_name="cell\nsnapshot", event_id="1", data="{}")
++    with pytest.raises(ValueError):
++        format_sse_event(event_name="cell_snapshot", event_id="1\n2", data="{}")
++
++
++def test_snapshots_to_sse_text_preserves_sequence_order() -> None:
++    text = snapshots_to_sse_text([_snapshot(1), _snapshot(2)], start_sequence=10)
++
++    assert "id: 10" in text
++    assert "id: 11" in text
++    assert text.index("id: 10") < text.index("id: 11")
++
++
++def test_cell_journal_to_sse_text_reads_existing_journal(tmp_path: Path) -> None:
++    path = tmp_path / "cells.jsonl"
++    CellSnapshotJournalWriter(path).append_many([_snapshot(1), _snapshot(2)])
++
++    text = cell_journal_to_sse_text(path, limit=1)
++
++    assert "id: 0" in text
++    assert "cell-1" in text
++    assert "cell-2" not in text
++
++
++def test_cell_snapshot_sse_event_rejects_wrong_schema() -> None:
++    with pytest.raises(ValueError, match="unsupported cell snapshot SSE schema"):
++        CellSnapshotSseEvent(event_id="1", data=_snapshot(1), schema="missipy.cell_snapshot_sse.v2")
+diff --git a/tests/tools/test_cell_snapshot_sse_dry_run.py b/tests/tools/test_cell_snapshot_sse_dry_run.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/tools/test_cell_snapshot_sse_dry_run.py
+@@ -0,0 +1,50 @@
++from __future__ import annotations
++
++from pathlib import Path
++import subprocess
++import sys
++
++from context.cell_snapshot import CellSnapshot
++from context.cell_snapshot_journal import CellSnapshotJournalWriter
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "cell_snapshot_sse_dry_run.py"
++
++
++def test_cell_snapshot_sse_dry_run_cli_writes_sse_file(tmp_path: Path) -> None:
++    journal = tmp_path / "cells.jsonl"
++    output = tmp_path / "cells.sse"
++    snapshot = CellSnapshot(
++        cell_id="cell-1",
++        source_class="scheduler.short_task",
++        score=1.0,
++        age=1.0,
++        cost=0.5,
++        lifecycle_state="completed",
++        observed_at="2026-07-03T10:00:00Z",
++    )
++    CellSnapshotJournalWriter(journal).append(snapshot)
++
++    subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--journal",
++            str(journal),
++            "--output",
++            str(output),
++            "--start-sequence",
++            "5",
++        ],
++        cwd=ROOT,
++        env={"PYTHONPATH": "src:."},
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    text = output.read_text(encoding="utf-8")
++    assert text.startswith("id: 5\nevent: cell_snapshot\ndata: ")
++    assert "missipy.cell_snapshot_sse.v1" in text
++    assert "missipy.cell.v1" in text
+diff --git a/tests/rules/test_cell_snapshot_sse_stream_contract_rule.py b/tests/rules/test_cell_snapshot_sse_stream_contract_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_cell_snapshot_sse_stream_contract_rule.py
+@@ -0,0 +1,44 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_cell_snapshot_sse_contract_declares_versioned_schema() -> None:
++    source = _read("src/context/cell_snapshot_sse.py")
++    assert 'CELL_SNAPSHOT_SSE_SCHEMA = "missipy.cell_snapshot_sse.v1"' in source
++    assert 'CELL_SNAPSHOT_SSE_EVENT_NAME = "cell_snapshot"' in source
++    assert "CellSnapshotSseEvent" in source
++
++
++def test_cell_snapshot_sse_contract_has_no_server_or_command_path() -> None:
++    source = _read("src/context/cell_snapshot_sse.py")
++    forbidden = ["vispy", "Scheduler", "EventBus", "requests", "urllib", "httpx", "OPENAI_API_KEY", "github", "socketserver"]
++    for token in forbidden:
++        assert token not in source
++
++
++def test_cell_snapshot_sse_contract_docs_keep_mobile_read_only() -> None:
++    doc = _read("doc/contracts/CELL_SNAPSHOT_SSE_STREAM_CONTRACT_V1.md")
++    assert "missipy.cell_snapshot_sse.v1" in doc
++    assert "read-only" in doc
++    assert "same missipy.cell.v1 journal" in doc
++    assert "no command channel" in doc
++    assert "local server" in doc
++    assert "Phase 10" in doc
++
++
++def test_cell_snapshot_sse_contract_manifest_has_no_runtime_server() -> None:
++    manifest = _read("doc/manifests/MANIFEST_PART10_1_CELL_SNAPSHOT_SSE_STREAM_CONTRACT.md")
++    assert "src/context/cell_snapshot_sse.py" in manifest
++    assert "tools/cell_snapshot_sse_dry_run.py" in manifest
++    assert "server endpoint" not in manifest
++    assert "requirements" not in manifest
++    assert ".dot" not in manifest
++    assert ".svg" not in manifest
+diff --git a/doc/contracts/CELL_SNAPSHOT_SSE_STREAM_CONTRACT_V1.md b/doc/contracts/CELL_SNAPSHOT_SSE_STREAM_CONTRACT_V1.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/contracts/CELL_SNAPSHOT_SSE_STREAM_CONTRACT_V1.md
+@@ -0,0 +1,56 @@
++# Cell Snapshot SSE Stream Contract v1
++
++```text
++schema: missipy.cell_snapshot_sse.v1
++event: cell_snapshot
++payload snapshot schema: missipy.cell.v1
++```
++
++This contract defines the read-only Server-Sent Events text format for the
++future Phase 10 local mobile/browser view.
++
++It is not a server yet.
++
++It is no command channel.
++
++## Purpose
++
++```text
++same missipy.cell.v1 journal
++→ replay/tail reader
++→ SSE text event
++→ local server later
++→ browser window later
++```
++
++The browser is a window. The local machine and the journal remain the source of
++truth.
++
++## Event shape
++
++```text
++id: <sequence>
++event: cell_snapshot
++data: {"schema":"missipy.cell_snapshot_sse.v1","snapshot":{...missipy.cell.v1...}}
++```
++
++Each SSE event carries one cell snapshot.
++
++## Boundary rule
++
++The contract may format text. It must not open sockets, expose a server
++endpoint, import a browser framework, import VisPy, or dispatch actions.
++
++Phase 10 may later add a local server that streams this exact contract.
++
++## Command rule
++
++The mobile/browser view is read-only.
++
++Any future action must use:
++
++```text
++typed command → Scheduler
++```
++
++It must not travel through SSE, the journal, replay state, or the browser view.
+diff --git a/doc/releases/README_PART10_1_CELL_SNAPSHOT_SSE_STREAM_CONTRACT.md b/doc/releases/README_PART10_1_CELL_SNAPSHOT_SSE_STREAM_CONTRACT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/releases/README_PART10_1_CELL_SNAPSHOT_SSE_STREAM_CONTRACT.md
+@@ -0,0 +1,19 @@
++# Part 10.1 — Cell Snapshot SSE Stream Contract
++
++Part 10.1 defines the read-only SSE text contract for streaming
++`missipy.cell.v1` snapshots to a future local browser view.
++
++## Added
++
++- SSE event contract.
++- Journal-to-SSE dry-run helper.
++- CLI for writing SSE text from a journal.
++- Tests and docs.
++
++## Not added
++
++- No local server.
++- No endpoint.
++- No browser UI.
++- No command channel.
++- No optimization loop.
+diff --git a/doc/changelogs/CHANGELOG_PART10_1_CELL_SNAPSHOT_SSE_STREAM_CONTRACT.md b/doc/changelogs/CHANGELOG_PART10_1_CELL_SNAPSHOT_SSE_STREAM_CONTRACT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelogs/CHANGELOG_PART10_1_CELL_SNAPSHOT_SSE_STREAM_CONTRACT.md
+@@ -0,0 +1,16 @@
++# Changelog — Part 10.1 Cell Snapshot SSE Stream Contract
++
++## Added
++
++- `CELL_SNAPSHOT_SSE_SCHEMA`
++- `CellSnapshotSseEvent`
++- `format_sse_event`
++- `snapshot_to_sse_event`
++- `snapshots_to_sse_text`
++- `cell_journal_to_sse_text`
++- `tools/cell_snapshot_sse_dry_run.py`
++
++## Behavior
++
++A `missipy.cell.v1` journal can now be converted into read-only SSE text without
++opening a server socket.
+diff --git a/doc/code-rules/PART10_1_CELL_SNAPSHOT_SSE_CODE_RULE_ALIGNMENT.md b/doc/code-rules/PART10_1_CELL_SNAPSHOT_SSE_CODE_RULE_ALIGNMENT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/PART10_1_CELL_SNAPSHOT_SSE_CODE_RULE_ALIGNMENT.md
+@@ -0,0 +1,22 @@
++# Part 10.1 Cell Snapshot SSE Code Rule Alignment
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: The patch adds a read-only SSE text contract and dry-run converter. It does not add a server endpoint, network listener, command path, live subscription, renderer, or external dependency.
++
++live_path_status: stream contract only
++live_path_uses_real_backend: local journal reader
++external_dependencies_added: false
++scheduler_modified: false
++eventbus_modified: false
++recorder_core_modified: false
++network_added: false
++server_endpoint_added: false
++github_api_added: false
++vispy_added: false
++llm_or_openvino_added: false
++```
++
++The next Phase 10 patch may add a local server endpoint that streams this exact
++contract. It must remain read-only.
+diff --git a/doc/reports/phase10/PART10_1_CELL_SNAPSHOT_SSE_STREAM_CONTRACT_TEST_REPORT.md b/doc/reports/phase10/PART10_1_CELL_SNAPSHOT_SSE_STREAM_CONTRACT_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/reports/phase10/PART10_1_CELL_SNAPSHOT_SSE_STREAM_CONTRACT_TEST_REPORT.md
+@@ -0,0 +1,12 @@
++# Part 10.1 Cell Snapshot SSE Stream Contract Test Report
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/context/test_cell_snapshot_sse.py
++PYTHONPATH=src:. pytest -q tests/tools/test_cell_snapshot_sse_dry_run.py
++PYTHONPATH=src:. pytest -q tests/rules/test_cell_snapshot_sse_stream_contract_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
+diff --git a/doc/manifests/MANIFEST_PART10_1_CELL_SNAPSHOT_SSE_STREAM_CONTRACT.md b/doc/manifests/MANIFEST_PART10_1_CELL_SNAPSHOT_SSE_STREAM_CONTRACT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_PART10_1_CELL_SNAPSHOT_SSE_STREAM_CONTRACT.md
+@@ -0,0 +1,23 @@
++# Manifest — Part 10.1 Cell Snapshot SSE Stream Contract
++
++## Added
++
++- `src/context/cell_snapshot_sse.py`
++- `tools/cell_snapshot_sse_dry_run.py`
++- `tests/context/test_cell_snapshot_sse.py`
++- `tests/tools/test_cell_snapshot_sse_dry_run.py`
++- `tests/rules/test_cell_snapshot_sse_stream_contract_rule.py`
++- `doc/contracts/CELL_SNAPSHOT_SSE_STREAM_CONTRACT_V1.md`
++- `doc/releases/README_PART10_1_CELL_SNAPSHOT_SSE_STREAM_CONTRACT.md`
++- `doc/changelogs/CHANGELOG_PART10_1_CELL_SNAPSHOT_SSE_STREAM_CONTRACT.md`
++- `doc/code-rules/PART10_1_CELL_SNAPSHOT_SSE_CODE_RULE_ALIGNMENT.md`
++- `doc/reports/phase10/PART10_1_CELL_SNAPSHOT_SSE_STREAM_CONTRACT_TEST_REPORT.md`
++- `doc/manifests/MANIFEST_PART10_1_CELL_SNAPSHOT_SSE_STREAM_CONTRACT.md`
++
++## Modified
++
++- None.
++
++## Runtime dependencies
++
++- None added.
