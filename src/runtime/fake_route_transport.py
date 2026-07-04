@@ -22,6 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import json
+import shutil
 from typing import Iterable, Mapping, Any
 
 from runtime.shm_runtime_schema import (
@@ -138,6 +139,7 @@ def write_projection_to_fake_runtime(
     events: Iterable[EventBusMessage],
     contexts: Iterable[ContextBusMessage],
     routes: Iterable[RouteMessage],
+    replace_routes: bool = True,
 ) -> FakeRuntimeSnapshot:
     """Write a runtime projection to a fake local runtime surface.
 
@@ -151,10 +153,18 @@ def write_projection_to_fake_runtime(
 
     This simulates the future local runtime vocabulary without implementing
     shared memory or semaphores.
+
+    By default route files are replaced, not appended, so repeated end-to-end
+    smoke runs remain deterministic. Use FakeLocalRouteTransport.send directly
+    when append semantics are wanted.
     """
 
     runtime_root = Path(root)
     runtime_root.mkdir(parents=True, exist_ok=True)
+
+    routes_root = runtime_root / "routes"
+    if replace_routes and routes_root.exists():
+        shutil.rmtree(routes_root)
 
     data_handle_items = tuple(data_handles)
     event_items = tuple(events)

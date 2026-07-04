@@ -24,6 +24,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("report", type=Path)
     parser.add_argument("runtime_root", type=Path)
     parser.add_argument("--occurred-at", default="2026-07-04T20:00:00Z")
+    parser.add_argument(
+        "--append-routes",
+        action="store_true",
+        help="Append route messages instead of replacing existing fake route files.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -50,6 +55,7 @@ def main(argv: list[str] | None = None) -> int:
         events=projection.events,
         contexts=projection.contexts,
         routes=projection.routes,
+        replace_routes=not args.append_routes,
     )
     print(json.dumps(snapshot.to_mapping(), indent=2, sort_keys=True))
     return 0
