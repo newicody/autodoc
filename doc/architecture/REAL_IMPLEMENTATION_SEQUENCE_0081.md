@@ -20,18 +20,19 @@ with a real ControlProxy implementation.
 
 ```text
 0082 notification primitive
-  eventfd or semaphore abstraction, still no daemon
+  eventfd abstraction with pipe fallback, no daemon and no CLI
 
 0083 route lease state
   not_leased -> leased -> active -> draining -> closed
 
-0084 ControlProxy OpenRC service skeleton
-  watches ControlFS desired/request state
+0084 ControlProxy pump/tick
+  importable function, no service, no OpenRC, no resident daemon
+  reads ControlFS desired/request state when explicitly called
   calls active route materializer
   publishes bus facts
 
 0085 Scheduler handshake
-  Scheduler waits for ready active route
+  Scheduler calls/waits on the ControlProxy pump/tick path
   returns route_handle/lease to producer
 
 0086 VisPy adapter

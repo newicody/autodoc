@@ -87,17 +87,19 @@ not_leased
 
 This is the seam for the real ControlProxy materializer.
 
-Later phases can replace the current direct function call with:
+Later phases should replace the current direct function call with an
+explicitly called pump/tick, not a service:
 
 ```text
-ControlProxy daemon / OpenRC service
--> watches ControlFS desired/request state
+ControlProxy pump/tick
+-> reads ControlFS desired/request state when called
 -> materializes runtime routes
 -> writes active state
 -> publishes bus facts
 ```
 
-The API and files should remain stable.
+The API and files should remain stable. No OpenRC service and no resident daemon
+are planned for this path.
 
 ## Non-goals
 
