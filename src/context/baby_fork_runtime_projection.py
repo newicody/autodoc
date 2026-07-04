@@ -18,8 +18,9 @@ DataHandle, EventBusMessage, ContextBusMessage and RouteMessage.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from runtime.shm_runtime_schema import (
     CONTEXT_BUS_MESSAGE_SCHEMA,
@@ -82,6 +83,8 @@ def build_baby_fork_runtime_projection(
     context_id = _context_id(report)
     context_version = _context_version(report)
     selected_variant_id = _selected_variant_id(report)
+    variants = _variants(report)
+    variant_ids = _variant_ids(variants, selected_variant_id)
 
     evidence_handle = DataHandle.from_mapping(
         {
@@ -91,7 +94,7 @@ def build_baby_fork_runtime_projection(
             "uri": report_uri,
             "content_schema": BABY_FORK_REPORT_SCHEMA,
             "size_bytes": _stable_size(report),
-            "hash": "sha256:projection",
+            "hash": _stable_sha256(report),
             "producer": "baby_fork_smoke_project",
             "zone": "workers",
             "created_at": occurred_at,
@@ -101,7 +104,6 @@ def build_baby_fork_runtime_projection(
 
     retrieved_ids = _retrieved_ids(report)
     rejected_ids = _rejected_ids(report)
-    variants = _variants(report)
 
     retrieval_event = EventBusMessage.from_mapping(
         {
@@ -136,7 +138,8 @@ def build_baby_fork_runtime_projection(
             "payload": {
                 "route_id": BABY_FORK_VARIANT_ROUTE,
                 "context_id": context_id,
-                "variant_count": len(variants),
+                "variant_count": len(variant_ids),
+                "variant_ids": variant_ids,
                 "selected_variant_id": selected_variant_id,
             },
         }
@@ -155,6 +158,7 @@ def build_baby_fork_runtime_projection(
             "payload": {
                 "selected_variant_id": selected_variant_id,
                 "route_id": BABY_FORK_CONTEXT_GATE_ROUTE,
+                "variant_ids": variant_ids,
             },
             "data_handles": [evidence_handle.to_mapping()],
         }
@@ -191,7 +195,8 @@ def build_baby_fork_runtime_projection(
             "payload_schema": BABY_FORK_VARIANTS_GENERATED_SCHEMA,
             "payload": {
                 "context_id": context_id,
-                "variant_count": len(variants),
+                "variant_count": len(variant_ids),
+                "variant_ids": variant_ids,
                 "selected_variant_id": selected_variant_id,
             },
         }
@@ -211,6 +216,7 @@ def build_baby_fork_runtime_projection(
                 "context_id": context_id,
                 "context_version": context_version,
                 "selected_variant_id": selected_variant_id,
+                "variant_ids": variant_ids,
             },
         }
     )
@@ -261,13 +267,18 @@ def _selected_variant_id(report: Mapping[str, Any]) -> str:
     value = final_context.get("selected_variant_id") or report.get("selected_variant_id")
     if value:
         return str(value)
+
+    selected_variant = _mapping(final_context.get("selected_variant") or report.get("selected_variant"))
+    if selected_variant:
+        value = _variant_id(selected_variant)
+        if value:
+            return value
+
     variants = _variants(report)
     if variants:
-        first = _mapping(variants[0])
-        if first.get("variant_id"):
-            return str(first["variant_id"])
-        if first.get("id"):
-            return str(first["id"])
+        value = _variant_id(_mapping(variants[0]))
+        if value:
+            return value
     return "variant-1"
 
 
@@ -283,13 +294,109 @@ def _rejected_ids(report: Mapping[str, Any]) -> list[str]:
     return [str(item) for item in value] if isinstance(value, list) else []
 
 
-def _variants(report: Mapping[str, Any]) -> list[Any]:
-    value = report.get("variants") or []
-    return list(value) if isinstance(value, list) else []
+def _variants(report: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """Return variants from known report locations or recursive fallback.
+
+    The smoke report has changed shape across architecture patches. This helper
+    accepts the direct form and common nested forms, then falls back to scanning
+    for a list of variant-like mappings.
+    """
+
+    candidates: list[Any] = [
+        report.get("variants"),
+        report.get("generated_variants"),
+        report.get("candidate_variants"),
+        _mapping(report.get("variant_generator")).get("variants"),
+        _mapping(report.get("variant_generator")).get("generated_variants"),
+        _mapping(report.get("variant_generator")).get("candidate_variants"),
+        _mapping(report.get("variant_generator_stub")).get("variants"),
+        _mapping(report.get("variant_generator_stub")).get("generated_variants"),
+        _mapping(report.get("result")).get("variants"),
+        _mapping(report.get("final_context")).get("variants"),
+        _mapping(report.get("final_context")).get("candidate_variants"),
+    ]
+
+    for candidate in candidates:
+        variants = _variant_list(candidate)
+        if variants:
+            return variants
+
+    return _find_first_variant_list(report)
+
+
+def _variant_list(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    variants = [_mapping(item) for item in value]
+    variants = [item for item in variants if _variant_id(item)]
+    return variants
+
+
+def _find_first_variant_list(value: Any) -> list[Mapping[str, Any]]:
+    if isinstance(value, list):
+        variants = _variant_list(value)
+        if len(variants) >= 1:
+            return variants
+        for item in value:
+            found = _find_first_variant_list(item)
+            if found:
+                return found
+        return []
+
+    if isinstance(value, Mapping):
+        for key in (
+            "variants",
+            "generated_variants",
+            "candidate_variants",
+            "variant_candidates",
+            "outputs",
+            "items",
+            "snapshots",
+        ):
+            found = _find_first_variant_list(value.get(key))
+            if found:
+                return found
+        for item in value.values():
+            found = _find_first_variant_list(item)
+            if found:
+                return found
+
+    return []
+
+
+def _variant_ids(variants: Sequence[Mapping[str, Any]], selected_variant_id: str) -> list[str]:
+    seen: set[str] = set()
+    ids: list[str] = []
+    for variant in variants:
+        variant_id = _variant_id(variant)
+        if variant_id and variant_id not in seen:
+            seen.add(variant_id)
+            ids.append(variant_id)
+
+    if not ids and selected_variant_id:
+        ids.append(selected_variant_id)
+
+    return ids
+
+
+def _variant_id(variant: Mapping[str, Any]) -> str | None:
+    for key in ("variant_id", "id", "name"):
+        value = variant.get(key)
+        if value:
+            return str(value)
+    return None
 
 
 def _stable_size(report: Mapping[str, Any]) -> int:
-    return len(json.dumps(dict(report), sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    return len(_stable_report_bytes(report))
+
+
+def _stable_sha256(report: Mapping[str, Any]) -> str:
+    return "sha256:" + hashlib.sha256(_stable_report_bytes(report)).hexdigest()
+
+
+def _stable_report_bytes(report: Mapping[str, Any]) -> bytes:
+    return json.dumps(dict(report), sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
