@@ -39,7 +39,12 @@ with a real ControlProxy implementation.
   acquires and activates route lease
   returns route_handle/lease to producer
 
-0086 VisPy adapter
+0086 Scheduler route adapter
+  implemented as handle_scheduler_route_request()
+  wraps prepare_route_for_scheduler() behind an already-authorized request/reply boundary
+  no Scheduler loop change
+
+0087 VisPy adapter
   consumes context.bus/event.bus route state
 ```
 
