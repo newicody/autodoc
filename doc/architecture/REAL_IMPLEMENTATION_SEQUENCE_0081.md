@@ -27,6 +27,7 @@ with a real ControlProxy implementation.
   file-backed lease.json plus active status update
 
 0084 ControlProxy pump/tick
+  implemented as tick_controlproxy()
   importable function, no service, no OpenRC, no resident daemon
   reads ControlFS desired/request state when explicitly called
   calls active route materializer
