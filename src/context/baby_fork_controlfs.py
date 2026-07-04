@@ -6,11 +6,14 @@ Architecture vocabulary:
 
     ControlProxy = ControlFS declarative surface + RouteProxy materializer.
 
+It only writes desired route manifests and builds dry-run plans.
+
 It deliberately does not:
 - create shared memory
 - create semaphores
 - implement mmap
 - resize a live mmap ring
+- start RouteProxy
 - start Scheduler
 - decide security
 - write active/routes

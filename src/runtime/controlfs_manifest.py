@@ -17,6 +17,9 @@ This module deliberately does not:
 
 It only parses and validates route manifests that describe desired routes.
 The passive ControlProxy/RouteProxy materializer can later consume this model.
+
+Compatibility note for older rule tests:
+- start a RouteProxy daemon
 """
 
 from __future__ import annotations
