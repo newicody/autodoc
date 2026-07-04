@@ -1,0 +1,781 @@
+diff --git a/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md b/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
+index baa5647..55e0f31 100644
+--- a/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
++++ b/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
+@@ -34,7 +34,9 @@ with a real ControlProxy implementation.
+   publishes bus facts
+ 
+ 0085 Scheduler handshake
+-  Scheduler calls/waits on the ControlProxy pump/tick path
++  implemented as prepare_route_for_scheduler()
++  calls ControlProxy pump/tick path
++  acquires and activates route lease
+   returns route_handle/lease to producer
+ 
+ 0086 VisPy adapter
+diff --git a/doc/architecture/SCHEDULER_ROUTE_HANDSHAKE.md b/doc/architecture/SCHEDULER_ROUTE_HANDSHAKE.md
+new file mode 100644
+index 0000000..f855b1c
+--- /dev/null
++++ b/doc/architecture/SCHEDULER_ROUTE_HANDSHAKE.md
+@@ -0,0 +1,112 @@
++# Scheduler route handshake
++
++Status: 0085 implementation.
++
++This phase adds Scheduler-facing route handshake functions.
++
++## Purpose
++
++After `0084`, ControlProxy can materialize active routes with an explicit pump.
++After `0083`, active routes can be leased.
++
++`0085` connects those two steps for the Scheduler path:
++
++```text
++prepare_route_for_scheduler(...)
++  -> tick_controlproxy(...)
++  -> verify active route exists
++  -> acquire route lease
++  -> activate route lease
++  -> publish handshake facts
++  -> return route_handle + lease_id
++```
++
++## No service
++
++This phase is not:
++
++```text
++daemon
++service
++OpenRC
++resident process
++watcher
++poll loop
++CLI
++```
++
++It is:
++
++```text
++prepare_route_for_scheduler(controlfs_root, runtime_root, route_id)
++```
++
++## Idempotency
++
++The handshake is idempotent for the same holder/scope:
++
++```text
++same holder + same scope + active lease -> return existing lease
++```
++
++It rejects conflicting ownership:
++
++```text
++different holder
++different scope
++closed lease
++```
++
++## Authority boundary
++
++This module is Scheduler-facing but not the Scheduler itself.
++
++It does not decide security policy. The caller must already be the authorized
++Scheduler path. Security remains with:
++
++```text
++Scheduler
++policy engine
++zone/scope rules
++```
++
++## Bus facts
++
++Event topic:
++
++```text
++scheduler.route.handshake.ready
++```
++
++Context topic:
++
++```text
++scheduler.route.lease.active
++```
++
++These are facts, not commands.
++
++## What it refuses
++
++```text
++daemon
++service
++OpenRC
++watcher
++poll loop
++Scheduler event loop implementation
++security policy decision
++zone/scope bypass
++RouteMessage frame write
++eventfd notification
++route drain
++live mmap resize
++inter-process locks
++VisPy renderer
++CLI
++```
++
++## Next
++
++`0086` can wire an actual existing Scheduler adapter/call boundary to this
++handshake function, still without service.
+diff --git a/doc/changelog/0085-scheduler-route-handshake.md b/doc/changelog/0085-scheduler-route-handshake.md
+new file mode 100644
+index 0000000..55d3c7e
+--- /dev/null
++++ b/doc/changelog/0085-scheduler-route-handshake.md
+@@ -0,0 +1,32 @@
++# 0085 - Scheduler route handshake
++
++## Added
++
++- `runtime.scheduler_route_handshake`
++- `prepare_route_for_scheduler()`
++- `publish_scheduler_handshake_to_bus()`
++- handshake schema:
++  - `missipy.scheduler.route_handshake.v1`
++- event topic:
++  - `scheduler.route.handshake.ready`
++- context topic:
++  - `scheduler.route.lease.active`
++- tests proving:
++  - pump + lease acquire + lease activate
++  - idempotent same holder/scope reuse
++  - conflict rejection
++  - no service/daemon/CLI
++  - bus facts are written
++
++## Not added
++
++- No daemon.
++- No service.
++- No OpenRC.
++- No watcher.
++- No Scheduler event loop implementation.
++- No security policy decision.
++- No frame write.
++- No notification.
++- No live resize.
++- No CLI.
+diff --git a/src/runtime/scheduler_route_handshake.py b/src/runtime/scheduler_route_handshake.py
+new file mode 100644
+index 0000000..06610a5
+--- /dev/null
++++ b/src/runtime/scheduler_route_handshake.py
+@@ -0,0 +1,323 @@
++"""Scheduler-facing route handshake.
++
++This module implements phase 0085.
++
++It provides importable functions that a Scheduler can call directly:
++
++    prepare_route_for_scheduler(...)
++
++Flow:
++
++    tick_controlproxy()
++    -> active route exists
++    -> acquire route lease
++    -> activate route lease
++    -> publish handshake facts to event.bus/context.bus
++    -> return route_handle + lease_id
++
++This is not the Scheduler implementation. It is a Scheduler-facing handshake
++primitive for the already-authorized caller.
++
++It deliberately does not:
++- create a daemon
++- start a service
++- use OpenRC
++- run forever
++- watch ControlFS
++- sleep or poll
++- implement the Scheduler event loop
++- decide security policy
++- bypass zone/scope policy
++- write RouteMessage frames
++- notify eventfd
++- drain routes
++- resize live mmap routes
++- implement inter-process locks
++- implement VisPy
++- add a CLI
++
++It is a synchronous function boundary, not a resident process.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++import json
++from pathlib import Path
++from typing import Any, Mapping
++
++from runtime.controlproxy_active_routes import active_status_path
++from runtime.controlproxy_pump import ControlProxyPumpResult, tick_controlproxy
++from runtime.controlproxy_route_lease import (
++    RouteLease,
++    RouteLeaseError,
++    RouteLeaseTransitionError,
++    acquire_route_lease,
++    activate_route_lease,
++    lease_path,
++    load_route_lease,
++)
++from runtime.controlfs_manifest import normalize_route_id
++from runtime.shm_runtime_schema import (
++    CONTEXT_BUS_MESSAGE_SCHEMA,
++    EVENT_BUS_MESSAGE_SCHEMA,
++    ContextBusMessage,
++    EventBusMessage,
++)
++
++
++SCHEDULER_ROUTE_HANDSHAKE_SCHEMA = "missipy.scheduler.route_handshake.v1"
++SCHEDULER_ROUTE_HANDSHAKE_EVENT_SCHEMA = "missipy.scheduler.route_handshake_event.v1"
++SCHEDULER_ROUTE_HANDSHAKE_CONTEXT_SCHEMA = "missipy.scheduler.route_handshake_context.v1"
++DEFAULT_HANDSHAKE_AT = "2026-07-04T20:00:00Z"
++
++
++class SchedulerRouteHandshakeError(RuntimeError):
++    """Raised when Scheduler-facing route handshake cannot complete."""
++
++
++@dataclass(frozen=True)
++class SchedulerRouteHandshakeResult:
++    """Return object for prepare_route_for_scheduler."""
++
++    schema: str
++    route_id: str
++    route_handle: str
++    task_id: str
++    holder: str
++    scope: str
++    lease_id: str
++    lease_state: str
++    active_status_path: str
++    lease_path: str
++    ring_path: str
++    mmap_status_path: str
++    reused_existing_lease: bool
++    pump_materialized_count: int
++    pump_skipped_count: int
++    pump_error_count: int
++    bus_event_count: int
++    bus_context_count: int
++    prepared_at: str
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "route_id": self.route_id,
++            "route_handle": self.route_handle,
++            "task_id": self.task_id,
++            "holder": self.holder,
++            "scope": self.scope,
++            "lease_id": self.lease_id,
++            "lease_state": self.lease_state,
++            "active_status_path": self.active_status_path,
++            "lease_path": self.lease_path,
++            "ring_path": self.ring_path,
++            "mmap_status_path": self.mmap_status_path,
++            "reused_existing_lease": self.reused_existing_lease,
++            "pump_materialized_count": self.pump_materialized_count,
++            "pump_skipped_count": self.pump_skipped_count,
++            "pump_error_count": self.pump_error_count,
++            "bus_event_count": self.bus_event_count,
++            "bus_context_count": self.bus_context_count,
++            "prepared_at": self.prepared_at,
++        }
++
++
++def prepare_route_for_scheduler(
++    *,
++    controlfs_root: Path | str,
++    runtime_root: Path | str,
++    route_id: str,
++    holder: str = "scheduler",
++    scope: str = "route.write",
++    lease_id: str | None = None,
++    ttl_seconds: int = 300,
++    prepared_at: str = DEFAULT_HANDSHAKE_AT,
++    activate: bool = True,
++    publish_bus: bool = True,
++) -> SchedulerRouteHandshakeResult:
++    """Prepare a route for Scheduler use.
++
++    This function is idempotent for the same holder/scope while the lease is
++    already leased or active. A different holder/scope is rejected.
++
++    Security policy is intentionally not decided here. The caller must already
++    be the authorized Scheduler path.
++    """
++
++    safe_route_id = normalize_route_id(route_id)
++    pump_result = tick_controlproxy(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        tick_id=f"tick:scheduler-handshake:{safe_route_id}",
++        ticked_at=prepared_at,
++        publish_bus=publish_bus,
++    )
++    if pump_result.error_count:
++        raise SchedulerRouteHandshakeError("ControlProxy pump reported errors")
++
++    status_path = active_status_path(controlfs_root, safe_route_id)
++    if not status_path.exists():
++        raise SchedulerRouteHandshakeError(f"route is not active after pump: {safe_route_id}")
++
++    status = _load_status(status_path)
++    existing = _load_existing_lease(controlfs_root, safe_route_id)
++    reused = False
++
++    if existing is None:
++        lease = acquire_route_lease(
++            controlfs_root=controlfs_root,
++            route_id=safe_route_id,
++            holder=holder,
++            scope=scope,
++            lease_id=lease_id,
++            ttl_seconds=ttl_seconds,
++            acquired_at=prepared_at,
++        )
++    else:
++        _ensure_same_holder_scope(existing, holder=holder, scope=scope)
++        if existing.state == "closed":
++            raise SchedulerRouteHandshakeError("cannot reuse a closed route lease")
++        lease = existing
++        reused = True
++
++    if activate:
++        if lease.state == "leased":
++            activate_route_lease(
++                controlfs_root=controlfs_root,
++                route_id=safe_route_id,
++                transitioned_at=prepared_at,
++            )
++            lease = load_route_lease(controlfs_root, safe_route_id)
++        elif lease.state == "active":
++            pass
++        else:
++            raise RouteLeaseTransitionError(f"cannot prepare route from lease state {lease.state}")
++
++    status = _load_status(status_path)
++    result = SchedulerRouteHandshakeResult(
++        schema=SCHEDULER_ROUTE_HANDSHAKE_SCHEMA,
++        route_id=safe_route_id,
++        route_handle=str(status["route_handle"]),
++        task_id=str(status["task_id"]),
++        holder=holder,
++        scope=scope,
++        lease_id=lease.lease_id,
++        lease_state=lease.state,
++        active_status_path=str(status_path),
++        lease_path=str(lease_path(controlfs_root, safe_route_id)),
++        ring_path=str(status["ring_path"]),
++        mmap_status_path=str(status["mmap_status_path"]),
++        reused_existing_lease=reused,
++        pump_materialized_count=pump_result.materialized_count,
++        pump_skipped_count=pump_result.skipped_count,
++        pump_error_count=pump_result.error_count,
++        bus_event_count=pump_result.bus_event_count,
++        bus_context_count=pump_result.bus_context_count,
++        prepared_at=prepared_at,
++    )
++
++    if publish_bus:
++        event_count, context_count = publish_scheduler_handshake_to_bus(
++            runtime_root=runtime_root,
++            result=result,
++            prepared_at=prepared_at,
++        )
++        result = SchedulerRouteHandshakeResult(
++            schema=result.schema,
++            route_id=result.route_id,
++            route_handle=result.route_handle,
++            task_id=result.task_id,
++            holder=result.holder,
++            scope=result.scope,
++            lease_id=result.lease_id,
++            lease_state=result.lease_state,
++            active_status_path=result.active_status_path,
++            lease_path=result.lease_path,
++            ring_path=result.ring_path,
++            mmap_status_path=result.mmap_status_path,
++            reused_existing_lease=result.reused_existing_lease,
++            pump_materialized_count=result.pump_materialized_count,
++            pump_skipped_count=result.pump_skipped_count,
++            pump_error_count=result.pump_error_count,
++            bus_event_count=result.bus_event_count + event_count,
++            bus_context_count=result.bus_context_count + context_count,
++            prepared_at=result.prepared_at,
++        )
++
++    return result
++
++
++def publish_scheduler_handshake_to_bus(
++    *,
++    runtime_root: Path | str,
++    result: SchedulerRouteHandshakeResult,
++    prepared_at: str = DEFAULT_HANDSHAKE_AT,
++) -> tuple[int, int]:
++    """Append Scheduler route handshake facts to event.bus/context.bus."""
++
++    root = Path(runtime_root)
++    root.mkdir(parents=True, exist_ok=True)
++    payload = result.to_mapping()
++
++    event = EventBusMessage.from_mapping(
++        {
++            "schema": EVENT_BUS_MESSAGE_SCHEMA,
++            "event_id": f"evt:scheduler-route-handshake:{result.route_id}",
++            "topic": "scheduler.route.handshake.ready",
++            "source": "scheduler_route_handshake",
++            "occurred_at": prepared_at,
++            "zone": "scheduler",
++            "payload_schema": SCHEDULER_ROUTE_HANDSHAKE_EVENT_SCHEMA,
++            "payload": payload,
++        }
++    )
++    context = ContextBusMessage.from_mapping(
++        {
++            "schema": CONTEXT_BUS_MESSAGE_SCHEMA,
++            "context_id": result.task_id,
++            "context_version": 1,
++            "topic": "scheduler.route.lease.active",
++            "source": "scheduler_route_handshake",
++            "occurred_at": prepared_at,
++            "zone": "scheduler",
++            "payload_schema": SCHEDULER_ROUTE_HANDSHAKE_CONTEXT_SCHEMA,
++            "payload": payload,
++        }
++    )
++
++    _append_jsonl(root / "event.bus.jsonl", event.to_mapping())
++    _append_jsonl(root / "context.bus.jsonl", context.to_mapping())
++    return 1, 1
++
++
++def _load_status(path: Path) -> dict[str, Any]:
++    raw = json.loads(path.read_text(encoding="utf-8"))
++    required = {"route_id", "route_handle", "task_id", "ring_path", "mmap_status_path"}
++    missing = sorted(required.difference(raw))
++    if missing:
++        raise SchedulerRouteHandshakeError("active status missing fields: " + ", ".join(missing))
++    return raw
++
++
++def _load_existing_lease(controlfs_root: Path | str, route_id: str) -> RouteLease | None:
++    path = lease_path(controlfs_root, route_id)
++    if not path.exists():
++        return None
++    return load_route_lease(controlfs_root, route_id)
++
++
++def _ensure_same_holder_scope(lease: RouteLease, *, holder: str, scope: str) -> None:
++    if lease.holder != holder or lease.scope != scope:
++        raise SchedulerRouteHandshakeError(
++            "route already leased by different holder/scope: "
++            f"{lease.holder}/{lease.scope}"
++        )
++
++
++def _append_jsonl(path: Path, row: Mapping[str, Any]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with path.open("a", encoding="utf-8") as handle:
++        handle.write(json.dumps(dict(row), sort_keys=True, separators=(",", ":")))
++        handle.write("\n")
+diff --git a/tests/rules/test_scheduler_route_handshake_rule.py b/tests/rules/test_scheduler_route_handshake_rule.py
+new file mode 100644
+index 0000000..939d73d
+--- /dev/null
++++ b/tests/rules/test_scheduler_route_handshake_rule.py
+@@ -0,0 +1,92 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "SCHEDULER_ROUTE_HANDSHAKE.md"
++MODULE = ROOT / "src" / "runtime" / "scheduler_route_handshake.py"
++SEQUENCE = ROOT / "doc" / "architecture" / "REAL_IMPLEMENTATION_SEQUENCE_0081.md"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing file: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_scheduler_route_handshake_doc_locks_scheduler_facing_no_service_scope() -> None:
++    text = _read(DOC)
++
++    required_phrases = [
++        "Status: 0085 implementation.",
++        "Scheduler-facing route handshake functions",
++        "prepare_route_for_scheduler(...)",
++        "tick_controlproxy(...)",
++        "verify active route exists",
++        "acquire route lease",
++        "activate route lease",
++        "return route_handle + lease_id",
++        "No service",
++        "daemon",
++        "service",
++        "OpenRC",
++        "resident process",
++        "watcher",
++        "poll loop",
++        "CLI",
++        "idempotent for the same holder/scope",
++        "different holder",
++        "different scope",
++        "closed lease",
++        "does not decide security policy",
++        "Scheduler",
++        "policy engine",
++        "zone/scope rules",
++        "These are facts, not commands.",
++        "live mmap resize",
++        "No CLI",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_scheduler_route_handshake_module_locks_non_goals() -> None:
++    text = _read(MODULE)
++
++    required_phrases = [
++        "Scheduler-facing route handshake",
++        "tick_controlproxy()",
++        "acquire route lease",
++        "activate route lease",
++        "not the Scheduler implementation",
++        "already-authorized caller",
++        "does not:",
++        "create a daemon",
++        "start a service",
++        "use OpenRC",
++        "run forever",
++        "watch ControlFS",
++        "sleep or poll",
++        "implement the Scheduler event loop",
++        "decide security policy",
++        "bypass zone/scope policy",
++        "write RouteMessage frames",
++        "notify eventfd",
++        "drain routes",
++        "resize live mmap routes",
++        "implement inter-process locks",
++        "implement VisPy",
++        "add a CLI",
++        "synchronous function boundary",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_real_sequence_mentions_0085_implemented_handshake() -> None:
++    text = _read(SEQUENCE)
++
++    assert "0085 Scheduler handshake" in text
++    assert "implemented as prepare_route_for_scheduler()" in text
++    assert "acquires and activates route lease" in text
++    assert "returns route_handle/lease to producer" in text
+diff --git a/tests/test_scheduler_route_handshake.py b/tests/test_scheduler_route_handshake.py
+new file mode 100644
+index 0000000..d05f04a
+--- /dev/null
++++ b/tests/test_scheduler_route_handshake.py
+@@ -0,0 +1,177 @@
++import json
++from pathlib import Path
++
++import pytest
++
++from context.baby_fork_controlfs import build_route_sizing_hints_from_messages, write_baby_fork_desired_manifests
++from context.baby_fork_runtime_projection import build_baby_fork_runtime_projection
++from runtime.controlproxy_route_lease import load_route_lease
++from runtime.fake_route_transport import load_fake_bus_messages
++from runtime.scheduler_route_handshake import SchedulerRouteHandshakeError, prepare_route_for_scheduler
++from runtime.shm_runtime_schema import ContextBusMessage, EventBusMessage
++
++
++def _report() -> dict:
++    return {
++        "retrieval": {
++            "retrieved_ids": ["baby-silicone-fork", "rounded-stainless-soft-handle"],
++            "rejected_ids": ["nasa-antenna"],
++        },
++        "variant_generator_stub": {
++            "generated_variants": [
++                {"variant_id": "variant-1"},
++                {"variant_id": "variant-2"},
++            ]
++        },
++        "final_context": {
++            "context_id": "ctx-baby-fork-001",
++            "context_version": 2,
++            "selected_variant_id": "variant-1",
++        },
++    }
++
++
++def _write_desired(controlfs_root: Path) -> None:
++    projection = build_baby_fork_runtime_projection(_report())
++    hints = build_route_sizing_hints_from_messages(projection.routes)
++    write_baby_fork_desired_manifests(
++        controlfs_root,
++        context_id="ctx-baby-fork-001",
++        sizing_hints=hints,
++    )
++
++
++def test_prepare_route_for_scheduler_pumps_acquires_and_activates_lease(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++    _write_desired(controlfs_root)
++
++    result = prepare_route_for_scheduler(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        route_id="baby_fork.retrieval",
++        holder="scheduler",
++        scope="route.write",
++    )
++
++    assert result.schema == "missipy.scheduler.route_handshake.v1"
++    assert result.route_id == "baby_fork.retrieval"
++    assert result.route_handle == "baby_fork.retrieval@g1"
++    assert result.lease_state == "active"
++    assert result.reused_existing_lease is False
++    assert result.pump_materialized_count == 3
++    assert Path(result.ring_path).exists()
++    assert Path(result.lease_path).exists()
++
++    lease = load_route_lease(controlfs_root, "baby_fork.retrieval")
++    assert lease.state == "active"
++    assert lease.holder == "scheduler"
++    assert lease.scope == "route.write"
++
++
++def test_prepare_route_for_scheduler_is_idempotent_for_same_holder_scope(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++    _write_desired(controlfs_root)
++
++    first = prepare_route_for_scheduler(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        route_id="baby_fork.retrieval",
++        holder="scheduler",
++        scope="route.write",
++    )
++    second = prepare_route_for_scheduler(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        route_id="baby_fork.retrieval",
++        holder="scheduler",
++        scope="route.write",
++    )
++
++    assert second.reused_existing_lease is True
++    assert second.lease_id == first.lease_id
++    assert second.lease_state == "active"
++    assert second.pump_materialized_count == 0
++    assert second.pump_skipped_count == 3
++
++
++def test_prepare_route_for_scheduler_rejects_different_holder(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++    _write_desired(controlfs_root)
++
++    prepare_route_for_scheduler(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        route_id="baby_fork.retrieval",
++        holder="scheduler",
++        scope="route.write",
++    )
++
++    with pytest.raises(SchedulerRouteHandshakeError, match="different holder/scope"):
++        prepare_route_for_scheduler(
++            controlfs_root=controlfs_root,
++            runtime_root=runtime_root,
++            route_id="baby_fork.retrieval",
++            holder="other_scheduler",
++            scope="route.write",
++        )
++
++
++def test_prepare_route_for_scheduler_rejects_different_scope(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++    _write_desired(controlfs_root)
++
++    prepare_route_for_scheduler(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        route_id="baby_fork.retrieval",
++        holder="scheduler",
++        scope="route.write",
++    )
++
++    with pytest.raises(SchedulerRouteHandshakeError, match="different holder/scope"):
++        prepare_route_for_scheduler(
++            controlfs_root=controlfs_root,
++            runtime_root=runtime_root,
++            route_id="baby_fork.retrieval",
++            holder="scheduler",
++            scope="route.read",
++        )
++
++
++def test_prepare_route_for_scheduler_writes_bus_facts(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++    _write_desired(controlfs_root)
++
++    result = prepare_route_for_scheduler(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        route_id="baby_fork.retrieval",
++        holder="scheduler",
++        scope="route.write",
++    )
++
++    events = load_fake_bus_messages(runtime_root / "event.bus.jsonl")
++    contexts = load_fake_bus_messages(runtime_root / "context.bus.jsonl")
++
++    assert result.bus_event_count == 4
++    assert result.bus_context_count == 4
++    assert all(isinstance(event, EventBusMessage) for event in events)
++    assert all(isinstance(context, ContextBusMessage) for context in contexts)
++    assert "scheduler.route.handshake.ready" in {event.topic for event in events}
++    assert "scheduler.route.lease.active" in {context.topic for context in contexts}
++
++
++def test_prepare_route_for_scheduler_errors_when_route_missing(tmp_path: Path) -> None:
++    with pytest.raises(SchedulerRouteHandshakeError, match="route is not active after pump"):
++        prepare_route_for_scheduler(
++            controlfs_root=tmp_path / "controlfs",
++            runtime_root=tmp_path / "runtime",
++            route_id="baby_fork.retrieval",
++            holder="scheduler",
++            scope="route.write",
++        )

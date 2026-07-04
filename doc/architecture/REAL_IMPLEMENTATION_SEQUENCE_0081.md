@@ -34,7 +34,9 @@ with a real ControlProxy implementation.
   publishes bus facts
 
 0085 Scheduler handshake
-  Scheduler calls/waits on the ControlProxy pump/tick path
+  implemented as prepare_route_for_scheduler()
+  calls ControlProxy pump/tick path
+  acquires and activates route lease
   returns route_handle/lease to producer
 
 0086 VisPy adapter
