@@ -24,6 +24,7 @@ with a real ControlProxy implementation.
 
 0083 route lease state
   not_leased -> leased -> active -> draining -> closed
+  file-backed lease.json plus active status update
 
 0084 ControlProxy pump/tick
   importable function, no service, no OpenRC, no resident daemon
