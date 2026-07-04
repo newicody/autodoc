@@ -28,6 +28,7 @@ from typing import Any, Mapping
 from context.baby_fork_controlfs import (
     baby_fork_controlfs_summary,
     build_baby_fork_routeproxy_plan,
+    build_route_sizing_hints_from_messages,
 )
 from context.baby_fork_runtime_projection import build_baby_fork_runtime_projection
 from runtime.fake_route_transport import write_projection_to_fake_runtime
@@ -109,9 +110,11 @@ def run_baby_fork_runtime_flow(
 
     controlfs_summary: dict[str, Any] | None = None
     if controlfs_root is not None:
+        sizing_hints = build_route_sizing_hints_from_messages(projection.routes)
         plan = build_baby_fork_routeproxy_plan(
             controlfs_root,
             context_id=effective_context_id,
+            sizing_hints=sizing_hints,
         )
         controlfs_summary = baby_fork_controlfs_summary(controlfs_root, plan)
 
