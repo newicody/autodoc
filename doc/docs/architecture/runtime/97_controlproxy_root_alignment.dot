@@ -1,0 +1,83 @@
+digraph ControlProxyRootAlignment0107 {
+  // ROADMAP_ID: controlproxy-root-alignment-0107
+  // ROOT_GRAPH: doc/docs/architecture/00_global.dot
+  // This is a root-attached runtime overlay, not an isolated graph.
+  // It clarifies how the ControlProxy runtime path attaches to the existing
+  // micro-kernel graph family without creating a second Scheduler or bus.
+
+  graph [
+    label="0107 ControlProxy root-attached runtime overlay",
+    labelloc=t,
+    fontname="Arial",
+    fontsize=12,
+    rankdir=LR,
+    compound=true,
+    splines=ortho
+  ];
+
+  node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10];
+  edge [fontname="Arial", fontsize=9, arrowsize=0.7];
+
+  subgraph cluster_root {
+    label="Root micro-kernel command path";
+    style="rounded";
+
+    scheduler_emit [label="Scheduler.emit()"];
+    policy_engine [label="PolicyEngine\nminimal admission before queue"];
+    priority_queue [label="PriorityQueue\ndeterministic execution order"];
+    scheduler_run [label="Scheduler.run()"];
+    dispatcher [label="Dispatcher\nEventType -> Handler only"];
+    handler [label="Handler\nthin adapter"];
+
+    scheduler_emit -> policy_engine -> priority_queue -> scheduler_run -> dispatcher -> handler;
+  }
+
+  subgraph cluster_specialist {
+    label="Specialist branch";
+    style="rounded,dashed";
+
+    specialist [label="Specialist\nbusiness logic / reasoning / transformation"];
+  }
+
+  subgraph cluster_controlproxy {
+    label="ControlProxy / RouteRuntimeManager runtime boundary";
+    style="rounded";
+
+    route_runtime_manager [label="RouteRuntimeManager\nruntime data-plane boundary"];
+    controlfs [label="ControlFS\nstate surface"];
+    generation_table [label="generation table\ng2/g3"];
+    lifecycle [label="lifecycle\ncandidate/active/draining/closed"];
+    placement [label="placement\nfile or /dev/shm"];
+    dataplane [label="mmap/eventfd\ndata plane, not EventBus"];
+    journal [label="RouteMessageJournal\ndrained messages"];
+
+    route_runtime_manager -> controlfs;
+    route_runtime_manager -> generation_table;
+    route_runtime_manager -> lifecycle;
+    route_runtime_manager -> placement;
+    route_runtime_manager -> dataplane;
+    dataplane -> journal [label="drained route messages"];
+  }
+
+  subgraph cluster_observation {
+    label="Observation and context";
+    style="rounded,dashed";
+
+    eventbus [label="EventBus\nobservation only"];
+    visualization [label="visualization adapter\nreads existing EventBus/context"];
+    context_gate [label="TaskContext / ContextGate\ncontext authority"];
+    qdrant [label="Qdrant\nprojection/search only"];
+
+    eventbus -> visualization [label="facts"];
+    context_gate -> visualization [label="snapshot"];
+    context_gate -> qdrant [label="projection"];
+  }
+
+  handler -> route_runtime_manager [label="ControlProxy route handler"];
+  handler -> specialist [label="specialist handlers"];
+  dispatcher -> eventbus [label="observable copy", style=dashed];
+  journal -> eventbus [label="optional facts only", style=dashed];
+
+  policy_note [shape=note, label="ControlProxy does not manage global priorities\nControlProxy does not decide policy/zone\nNo ControlProxyBus / RouteBus / VisualizationBus"];
+  route_runtime_manager -> policy_note [style=dotted, arrowhead=none];
+}
