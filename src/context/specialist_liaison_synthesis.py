@@ -1,0 +1,671 @@
+"""Specialist liaison synthesis boundary.
+
+0123-r2 replaces the rejected GitHub publication review path.  Specialist
+outputs are first linked, normalized, and synthesized locally.  Specialists can
+produce different output natures depending on submitted context and depth, can
+request context influence, and can leave path observations for the existing bus
+surface.  End users receive a unified synthesis that hides specialist
+provenance; GitHub or another workflow surface only receives something after the
+final liaison step and through a later adapter.
+
+SpecialistLiaisonSynthesis unifies specialist work before any final publication.
+Specialist path observations are bus-ready facts, not commands.
+VisPy can represent specialist paths from bus observations later.
+No GitHub/DOT publication review in 0123-r2.
+SQLContextStore is durable context authority.
+Qdrant is vector projection and retrieval, not context authority.
+OpenVINO produces embeddings behind adapter.
+LLM is specialist producer, not context authority.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+import hashlib
+import re
+
+from inference.llm_specialist_adapter import LLMSolutionCandidate, LLMSpecialistResult
+
+_PATH_STEP_SCHEMA = "missipy.specialist_liaison.path_step.v1"
+_PATH_TRACE_SCHEMA = "missipy.specialist_liaison.path_trace.v1"
+_FRAGMENT_SCHEMA = "missipy.specialist_liaison.fragment.v1"
+_SECTION_SCHEMA = "missipy.specialist_liaison.section.v1"
+_SYNTHESIS_SCHEMA = "missipy.specialist_liaison.synthesis.v1"
+_FINAL_PACKET_SCHEMA = "missipy.specialist_liaison.final_packet.v1"
+_TYPED_REF_RE = re.compile(r"^[a-z][a-z0-9-]*:[^\s].*$")
+_ALLOWED_EVIDENCE_PREFIXES = ("sql:", "qdrant:", "ctx:", "ctx-fragment:", "artifact:")
+_ALLOWED_CONTEXT_DELTA_PREFIXES = ("ctx-result:", "ctx:", "sql:")
+_ALLOWED_REVIEW_PREFIXES = ("specialist:", "ctx-review:", "artifact:")
+_ALLOWED_VALIDATION_PREFIXES = ("artifact:", "sql:", "ctx-result:", "specialist:")
+_ALLOWED_BUS_PREFIXES = ("bus:",)
+_OUTPUT_DEPTHS = ("shallow", "standard", "deep", "audit")
+_FINAL_TARGET_PREFIXES = ("github:", "artifact:", "local:", "publication:")
+
+
+@dataclass(frozen=True, slots=True)
+class SpecialistPathStep:
+    """One path step a specialist reports as an observation fact."""
+
+    step_ref: str
+    specialist_ref: str
+    label: str
+    input_refs: tuple[str, ...]
+    output_refs: tuple[str, ...]
+    depth: str = "standard"
+    context_delta_refs: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _require_typed_ref("step_ref", self.step_ref, required_prefixes=("specialist-path:",))
+        _require_typed_ref("specialist_ref", self.specialist_ref, required_prefixes=("specialist:", "llm:"))
+        _require_non_empty("label", self.label)
+        object.__setattr__(self, "input_refs", _normalize_refs("input_refs", self.input_refs))
+        object.__setattr__(self, "output_refs", _normalize_refs("output_refs", self.output_refs))
+        if self.depth not in _OUTPUT_DEPTHS:
+            raise ValueError("depth must be shallow, standard, deep, or audit")
+        object.__setattr__(
+            self,
+            "context_delta_refs",
+            _normalize_refs(
+                "context_delta_refs",
+                self.context_delta_refs,
+                allow_empty=True,
+                required_prefixes=_ALLOWED_CONTEXT_DELTA_PREFIXES,
+            ),
+        )
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "schema": _PATH_STEP_SCHEMA,
+            "step_ref": self.step_ref,
+            "specialist_ref": self.specialist_ref,
+            "label": self.label,
+            "input_refs": list(self.input_refs),
+            "output_refs": list(self.output_refs),
+            "depth": self.depth,
+            "context_delta_refs": list(self.context_delta_refs),
+            "observation_only": True,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SpecialistPathTrace:
+    """Bus-ready trace of paths taken by specialists."""
+
+    trace_ref: str
+    request_ref: str
+    bus_topic_ref: str
+    steps: tuple[SpecialistPathStep, ...]
+    note: str = "specialist path observation"
+
+    def __post_init__(self) -> None:
+        _require_typed_ref("trace_ref", self.trace_ref, required_prefixes=("specialist-path:",))
+        _require_typed_ref("request_ref", self.request_ref)
+        _require_typed_ref("bus_topic_ref", self.bus_topic_ref, required_prefixes=_ALLOWED_BUS_PREFIXES)
+        if not self.steps:
+            raise ValueError("steps must not be empty")
+        object.__setattr__(self, "steps", tuple(self.steps))
+        _require_non_empty("note", self.note)
+
+    @property
+    def step_refs(self) -> tuple[str, ...]:
+        return tuple(step.step_ref for step in self.steps)
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "schema": _PATH_TRACE_SCHEMA,
+            "trace_ref": self.trace_ref,
+            "request_ref": self.request_ref,
+            "bus_topic_ref": self.bus_topic_ref,
+            "step_refs": list(self.step_refs),
+            "note": self.note,
+            "observation_only": True,
+            "command": False,
+            "steps": [step.to_mapping() for step in self.steps],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SpecialistOutputFragment:
+    """Normalized output fragment independent from final user-facing provenance."""
+
+    fragment_ref: str
+    result_ref: str
+    output_kind: str
+    title: str
+    body: str
+    evidence_refs: tuple[str, ...]
+    context_delta_refs: tuple[str, ...] = ()
+    review_request_refs: tuple[str, ...] = ()
+    validation_refs: tuple[str, ...] = ()
+    payload_ref: str | None = None
+    depth: str = "standard"
+    metadata: tuple[tuple[str, str], ...] = field(default_factory=tuple)
+
+    def __post_init__(self) -> None:
+        _require_typed_ref("fragment_ref", self.fragment_ref, required_prefixes=("specialist-fragment:",))
+        _require_typed_ref("result_ref", self.result_ref, required_prefixes=("specialist:", "ctx-result:"))
+        _require_non_empty("output_kind", self.output_kind)
+        _require_non_empty("title", self.title)
+        _require_non_empty("body", self.body)
+        object.__setattr__(
+            self,
+            "evidence_refs",
+            _normalize_refs("evidence_refs", self.evidence_refs, required_prefixes=_ALLOWED_EVIDENCE_PREFIXES),
+        )
+        object.__setattr__(
+            self,
+            "context_delta_refs",
+            _normalize_refs(
+                "context_delta_refs",
+                self.context_delta_refs,
+                allow_empty=True,
+                required_prefixes=_ALLOWED_CONTEXT_DELTA_PREFIXES,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "review_request_refs",
+            _normalize_refs(
+                "review_request_refs",
+                self.review_request_refs,
+                allow_empty=True,
+                required_prefixes=_ALLOWED_REVIEW_PREFIXES,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "validation_refs",
+            _normalize_refs(
+                "validation_refs",
+                self.validation_refs,
+                allow_empty=True,
+                required_prefixes=_ALLOWED_VALIDATION_PREFIXES,
+            ),
+        )
+        if self.payload_ref is not None:
+            _require_typed_ref("payload_ref", self.payload_ref)
+        if self.depth not in _OUTPUT_DEPTHS:
+            raise ValueError("depth must be shallow, standard, deep, or audit")
+        object.__setattr__(self, "metadata", _normalize_metadata(self.metadata))
+
+    def to_mapping(self) -> dict[str, object | None]:
+        return {
+            "schema": _FRAGMENT_SCHEMA,
+            "fragment_ref": self.fragment_ref,
+            "result_ref": self.result_ref,
+            "output_kind": self.output_kind,
+            "title": self.title,
+            "body": self.body,
+            "evidence_refs": list(self.evidence_refs),
+            "context_delta_refs": list(self.context_delta_refs),
+            "review_request_refs": list(self.review_request_refs),
+            "validation_refs": list(self.validation_refs),
+            "payload_ref": self.payload_ref,
+            "depth": self.depth,
+            "metadata": dict(self.metadata),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SpecialistLiaisonPolicy:
+    """Bounds for local liaison synthesis before final workflow publication."""
+
+    max_fragments: int = 8
+    max_section_chars: int = 2_048
+    hide_specialist_provenance_from_user: bool = True
+    include_review_requests: bool = True
+    include_context_influence: bool = True
+
+    def __post_init__(self) -> None:
+        if self.max_fragments <= 0:
+            raise ValueError("max_fragments must be > 0")
+        if self.max_section_chars <= 0:
+            raise ValueError("max_section_chars must be > 0")
+
+
+@dataclass(frozen=True, slots=True)
+class EndUserSynthesisSection:
+    """One normalized synthesis section visible to the end user."""
+
+    section_ref: str
+    title: str
+    body: str
+    evidence_refs: tuple[str, ...]
+    context_delta_refs: tuple[str, ...] = ()
+    review_request_refs: tuple[str, ...] = ()
+    validation_refs: tuple[str, ...] = ()
+    source_fragment_refs: tuple[str, ...] = ()
+    truncated: bool = False
+
+    def __post_init__(self) -> None:
+        _require_typed_ref("section_ref", self.section_ref, required_prefixes=("synthesis-section:",))
+        _require_non_empty("title", self.title)
+        _require_non_empty("body", self.body)
+        object.__setattr__(
+            self,
+            "evidence_refs",
+            _normalize_refs("evidence_refs", self.evidence_refs, required_prefixes=_ALLOWED_EVIDENCE_PREFIXES),
+        )
+        object.__setattr__(
+            self,
+            "context_delta_refs",
+            _normalize_refs(
+                "context_delta_refs",
+                self.context_delta_refs,
+                allow_empty=True,
+                required_prefixes=_ALLOWED_CONTEXT_DELTA_PREFIXES,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "review_request_refs",
+            _normalize_refs(
+                "review_request_refs",
+                self.review_request_refs,
+                allow_empty=True,
+                required_prefixes=_ALLOWED_REVIEW_PREFIXES,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "validation_refs",
+            _normalize_refs(
+                "validation_refs",
+                self.validation_refs,
+                allow_empty=True,
+                required_prefixes=_ALLOWED_VALIDATION_PREFIXES,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "source_fragment_refs",
+            _normalize_refs("source_fragment_refs", self.source_fragment_refs, allow_empty=True),
+        )
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "schema": _SECTION_SCHEMA,
+            "section_ref": self.section_ref,
+            "title": self.title,
+            "body": self.body,
+            "evidence_refs": list(self.evidence_refs),
+            "context_delta_refs": list(self.context_delta_refs),
+            "review_request_refs": list(self.review_request_refs),
+            "validation_refs": list(self.validation_refs),
+            "source_fragment_refs": list(self.source_fragment_refs),
+            "truncated": self.truncated,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SpecialistLiaisonSynthesis:
+    """Unified local synthesis produced after specialist liaison."""
+
+    synthesis_ref: str
+    request_ref: str
+    title: str
+    sections: tuple[EndUserSynthesisSection, ...]
+    bus_trace_refs: tuple[str, ...] = ()
+    context_influence_refs: tuple[str, ...] = ()
+    review_request_refs: tuple[str, ...] = ()
+    validation_refs: tuple[str, ...] = ()
+    final_publication_ready: bool = False
+    provenance_hidden: bool = True
+
+    def __post_init__(self) -> None:
+        _require_typed_ref("synthesis_ref", self.synthesis_ref, required_prefixes=("synthesis:",))
+        _require_typed_ref("request_ref", self.request_ref)
+        _require_non_empty("title", self.title)
+        if not self.sections:
+            raise ValueError("sections must not be empty")
+        object.__setattr__(self, "sections", tuple(self.sections))
+        object.__setattr__(
+            self,
+            "bus_trace_refs",
+            _normalize_refs("bus_trace_refs", self.bus_trace_refs, allow_empty=True, required_prefixes=("specialist-path:",)),
+        )
+        object.__setattr__(
+            self,
+            "context_influence_refs",
+            _normalize_refs(
+                "context_influence_refs",
+                self.context_influence_refs,
+                allow_empty=True,
+                required_prefixes=_ALLOWED_CONTEXT_DELTA_PREFIXES,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "review_request_refs",
+            _normalize_refs(
+                "review_request_refs",
+                self.review_request_refs,
+                allow_empty=True,
+                required_prefixes=_ALLOWED_REVIEW_PREFIXES,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "validation_refs",
+            _normalize_refs(
+                "validation_refs",
+                self.validation_refs,
+                allow_empty=True,
+                required_prefixes=_ALLOWED_VALIDATION_PREFIXES,
+            ),
+        )
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "schema": _SYNTHESIS_SCHEMA,
+            "synthesis_ref": self.synthesis_ref,
+            "request_ref": self.request_ref,
+            "title": self.title,
+            "section_refs": [section.section_ref for section in self.sections],
+            "bus_trace_refs": list(self.bus_trace_refs),
+            "context_influence_refs": list(self.context_influence_refs),
+            "review_request_refs": list(self.review_request_refs),
+            "validation_refs": list(self.validation_refs),
+            "final_publication_ready": self.final_publication_ready,
+            "provenance_hidden": self.provenance_hidden,
+            "sections": [section.to_mapping() for section in self.sections],
+            "publication_surface": "none until final adapter",
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class FinalSynthesisPacket:
+    """Final packet that a later GitHub/local adapter may publish after validation."""
+
+    packet_ref: str
+    synthesis: SpecialistLiaisonSynthesis
+    target_ref: str
+    title: str
+    body: str
+    evidence_refs: tuple[str, ...]
+    context_influence_refs: tuple[str, ...] = ()
+    validation_refs: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _require_typed_ref("packet_ref", self.packet_ref, required_prefixes=("publication:",))
+        _require_typed_ref("target_ref", self.target_ref, required_prefixes=_FINAL_TARGET_PREFIXES)
+        _require_non_empty("title", self.title)
+        _require_non_empty("body", self.body)
+        object.__setattr__(
+            self,
+            "evidence_refs",
+            _normalize_refs("evidence_refs", self.evidence_refs, required_prefixes=_ALLOWED_EVIDENCE_PREFIXES),
+        )
+        object.__setattr__(
+            self,
+            "context_influence_refs",
+            _normalize_refs(
+                "context_influence_refs",
+                self.context_influence_refs,
+                allow_empty=True,
+                required_prefixes=_ALLOWED_CONTEXT_DELTA_PREFIXES,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "validation_refs",
+            _normalize_refs(
+                "validation_refs",
+                self.validation_refs,
+                allow_empty=True,
+                required_prefixes=_ALLOWED_VALIDATION_PREFIXES,
+            ),
+        )
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "schema": _FINAL_PACKET_SCHEMA,
+            "packet_ref": self.packet_ref,
+            "target_ref": self.target_ref,
+            "title": self.title,
+            "body": self.body,
+            "synthesis_ref": self.synthesis.synthesis_ref,
+            "evidence_refs": list(self.evidence_refs),
+            "context_influence_refs": list(self.context_influence_refs),
+            "validation_refs": list(self.validation_refs),
+            "runtime_import": "external final publication adapter only",
+        }
+
+
+def build_path_trace_from_specialist_result(
+    *,
+    request_ref: str,
+    result: LLMSpecialistResult,
+    input_refs: tuple[str, ...],
+    depth: str = "standard",
+    bus_topic_ref: str = "bus:specialist-path-observation",
+) -> SpecialistPathTrace:
+    """Build a bus-ready path trace from one specialist result."""
+
+    output_refs = tuple(candidate.candidate_ref for candidate in result.candidates)
+    context_delta_refs = _unique_refs(
+        ref for candidate in result.candidates for ref in candidate.action_refs if ref.startswith(_ALLOWED_CONTEXT_DELTA_PREFIXES)
+    )
+    identity = f"{request_ref}\0{result.result_ref}\0{'|'.join(output_refs)}"
+    step = SpecialistPathStep(
+        step_ref=f"specialist-path:step:{_digest(identity)}",
+        specialist_ref=result.target.target_ref,
+        label="specialist generated candidate outputs",
+        input_refs=input_refs,
+        output_refs=output_refs,
+        depth=depth,
+        context_delta_refs=context_delta_refs,
+    )
+    return SpecialistPathTrace(
+        trace_ref=f"specialist-path:trace:{_digest(identity)}",
+        request_ref=request_ref,
+        bus_topic_ref=bus_topic_ref,
+        steps=(step,),
+    )
+
+
+def build_output_fragments_from_specialist_result(
+    result: LLMSpecialistResult,
+    *,
+    default_output_kind: str = "analysis",
+    default_depth: str = "standard",
+) -> tuple[SpecialistOutputFragment, ...]:
+    """Normalize one specialist result into liaison fragments."""
+
+    fragments: list[SpecialistOutputFragment] = []
+    for candidate in result.candidates:
+        output_kind = _metadata_value(candidate, "output_kind") or default_output_kind
+        depth = _metadata_value(candidate, "depth") or default_depth
+        context_delta_refs = tuple(ref for ref in candidate.action_refs if ref.startswith(_ALLOWED_CONTEXT_DELTA_PREFIXES))
+        review_request_refs = tuple(ref for ref in candidate.action_refs if ref.startswith(("specialist:", "ctx-review:")))
+        validation_refs = tuple(ref for ref in candidate.action_refs if ref.startswith("artifact:"))
+        identity = f"{result.result_ref}\0{candidate.candidate_ref}\0{output_kind}"
+        fragments.append(
+            SpecialistOutputFragment(
+                fragment_ref=f"specialist-fragment:{_digest(identity)}",
+                result_ref=result.result_ref,
+                output_kind=output_kind,
+                title=candidate.title,
+                body=candidate.summary,
+                evidence_refs=candidate.evidence_refs,
+                context_delta_refs=context_delta_refs,
+                review_request_refs=review_request_refs,
+                validation_refs=validation_refs,
+                payload_ref=_metadata_value(candidate, "payload_ref"),
+                depth=depth,
+                metadata=candidate.metadata,
+            )
+        )
+    return tuple(fragments)
+
+
+def build_specialist_liaison_synthesis(
+    *,
+    request_ref: str,
+    title: str,
+    fragments: tuple[SpecialistOutputFragment, ...],
+    traces: tuple[SpecialistPathTrace, ...] = (),
+    policy: SpecialistLiaisonPolicy | None = None,
+) -> SpecialistLiaisonSynthesis:
+    """Build a unified local synthesis from normalized specialist fragments."""
+
+    effective = policy or SpecialistLiaisonPolicy()
+    selected = fragments[: effective.max_fragments]
+    if not selected:
+        raise ValueError("fragments must not be empty")
+    sections = tuple(_section_from_fragment(fragment, effective) for fragment in selected)
+    context_refs = _unique_refs(ref for section in sections for ref in section.context_delta_refs)
+    review_refs = _unique_refs(ref for section in sections for ref in section.review_request_refs)
+    validation_refs = _unique_refs(ref for section in sections for ref in section.validation_refs)
+    if not effective.include_context_influence:
+        context_refs = ()
+    if not effective.include_review_requests:
+        review_refs = ()
+    trace_refs = tuple(trace.trace_ref for trace in traces)
+    identity = f"{request_ref}\0{title}\0{'|'.join(section.section_ref for section in sections)}"
+    return SpecialistLiaisonSynthesis(
+        synthesis_ref=f"synthesis:specialist-liaison:{_digest(identity)}",
+        request_ref=request_ref,
+        title=title,
+        sections=sections,
+        bus_trace_refs=trace_refs,
+        context_influence_refs=context_refs,
+        review_request_refs=review_refs,
+        validation_refs=validation_refs,
+        final_publication_ready=False,
+        provenance_hidden=effective.hide_specialist_provenance_from_user,
+    )
+
+
+def build_final_synthesis_packet(
+    *,
+    synthesis: SpecialistLiaisonSynthesis,
+    target_ref: str,
+    mark_ready: bool = True,
+) -> FinalSynthesisPacket:
+    """Build the final packet only after liaison has unified the work."""
+
+    body = _final_body(synthesis)
+    evidence_refs = _unique_refs(ref for section in synthesis.sections for ref in section.evidence_refs)
+    identity = f"{synthesis.synthesis_ref}\0{target_ref}\0{body}"
+    ready_synthesis = synthesis
+    if mark_ready and not synthesis.final_publication_ready:
+        ready_synthesis = SpecialistLiaisonSynthesis(
+            synthesis_ref=synthesis.synthesis_ref,
+            request_ref=synthesis.request_ref,
+            title=synthesis.title,
+            sections=synthesis.sections,
+            bus_trace_refs=synthesis.bus_trace_refs,
+            context_influence_refs=synthesis.context_influence_refs,
+            review_request_refs=synthesis.review_request_refs,
+            validation_refs=synthesis.validation_refs,
+            final_publication_ready=True,
+            provenance_hidden=synthesis.provenance_hidden,
+        )
+    return FinalSynthesisPacket(
+        packet_ref=f"publication:final-synthesis:{_digest(identity)}",
+        synthesis=ready_synthesis,
+        target_ref=target_ref,
+        title=synthesis.title,
+        body=body,
+        evidence_refs=evidence_refs,
+        context_influence_refs=synthesis.context_influence_refs,
+        validation_refs=synthesis.validation_refs,
+    )
+
+
+def _section_from_fragment(
+    fragment: SpecialistOutputFragment,
+    policy: SpecialistLiaisonPolicy,
+) -> EndUserSynthesisSection:
+    body, truncated = _truncate(fragment.body, policy.max_section_chars)
+    title = fragment.title if policy.hide_specialist_provenance_from_user else f"{fragment.output_kind}: {fragment.title}"
+    identity = f"{fragment.fragment_ref}\0{title}\0{body}"
+    return EndUserSynthesisSection(
+        section_ref=f"synthesis-section:{_digest(identity)}",
+        title=title,
+        body=body,
+        evidence_refs=fragment.evidence_refs,
+        context_delta_refs=fragment.context_delta_refs,
+        review_request_refs=fragment.review_request_refs,
+        validation_refs=fragment.validation_refs,
+        source_fragment_refs=(fragment.fragment_ref,),
+        truncated=truncated,
+    )
+
+
+def _final_body(synthesis: SpecialistLiaisonSynthesis) -> str:
+    lines = [synthesis.title, ""]
+    for index, section in enumerate(synthesis.sections, start=1):
+        lines.extend((f"{index}. {section.title}", section.body, ""))
+    if synthesis.review_request_refs:
+        lines.append("Revues demandées: " + ", ".join(synthesis.review_request_refs))
+    if synthesis.context_influence_refs:
+        lines.append("Influences contexte: " + ", ".join(synthesis.context_influence_refs))
+    return "\n".join(lines).strip()
+
+
+def _metadata_value(candidate: LLMSolutionCandidate, key: str) -> str | None:
+    metadata = dict(candidate.metadata)
+    value = metadata.get(key)
+    if value is None or not value.strip():
+        return None
+    return value
+
+
+def _truncate(value: str, max_chars: int) -> tuple[str, bool]:
+    if len(value) <= max_chars:
+        return value, False
+    return value[:max_chars], True
+
+
+def _unique_refs(values) -> tuple[str, ...]:
+    seen: set[str] = set()
+    refs: list[str] = []
+    for value in values:
+        _require_typed_ref("ref", value)
+        if value not in seen:
+            seen.add(value)
+            refs.append(value)
+    return tuple(refs)
+
+
+def _normalize_metadata(values: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
+    normalized: dict[str, str] = {}
+    for key, value in values:
+        _require_non_empty("metadata key", key)
+        _require_non_empty("metadata value", value)
+        normalized[key] = value
+    return tuple(sorted(normalized.items()))
+
+
+def _normalize_refs(
+    name: str,
+    values: tuple[str, ...],
+    *,
+    allow_empty: bool = False,
+    required_prefixes: tuple[str, ...] | None = None,
+) -> tuple[str, ...]:
+    normalized = tuple(values)
+    if not normalized and not allow_empty:
+        raise ValueError(f"{name} must not be empty")
+    for value in normalized:
+        _require_typed_ref(name, value, required_prefixes=required_prefixes)
+    return normalized
+
+
+def _require_typed_ref(name: str, value: str, *, required_prefixes: tuple[str, ...] | None = None) -> None:
+    _require_non_empty(name, value)
+    if not _TYPED_REF_RE.match(value):
+        raise ValueError(f"{name} must be a typed reference")
+    if required_prefixes is not None and not value.startswith(required_prefixes):
+        raise ValueError(f"{name} must start with one of {', '.join(required_prefixes)}")
+
+
+def _require_non_empty(name: str, value: str) -> None:
+    if not value or not value.strip():
+        raise ValueError(f"{name} must not be empty")
+
+
+def _digest(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
