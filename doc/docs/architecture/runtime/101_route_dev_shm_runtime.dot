@@ -1,0 +1,38 @@
+digraph RouteDevShmRuntime0111 {
+  graph [label="0111 route /dev/shm runtime boundary — root-attached data plane", labelloc=top, fontsize=18];
+  rankdir=LR;
+
+  subgraph cluster_kernel {
+    label="Micro-kernel path unchanged";
+    SchedulerEmit [label="Scheduler.emit()"];
+    PolicyEngine [label="PolicyEngine\nminimal admission before queue"];
+    PriorityQueue [label="PriorityQueue\ndeterministic execution order"];
+    SchedulerRun [label="Scheduler.run()\nunchanged"];
+    Dispatcher [label="Dispatcher\nEventType -> Handler only"];
+    Handler [label="Thin Handler"];
+  }
+
+  subgraph cluster_runtime {
+    label="ControlProxy / RouteRuntimeManager runtime boundary";
+    RouteRuntimeManager [label="RouteRuntimeManager\nbuilds RouteRuntimeManager"];
+    DevShmPolicy [label="RouteDevShmRuntimePolicy\nexplicit /dev/shm runtime root"];
+    DevShmRoot [label="prepared /dev/shm namespace\nno implicit file fallback"];
+    DataPlane [label="mmap/eventfd route files\nreal inter-process data plane\nRoute mmap/eventfd is data plane, not EventBus"];
+  }
+
+  subgraph cluster_observation {
+    label="Observation, not command";
+    EventBus [label="EventBus remains observation only"];
+    NoControlProxyBus [label="No ControlProxyBus"];
+    NoRouteBus [label="No RouteBus"];
+    NoVisualizationBus [label="No VisualizationBus"];
+  }
+
+  SchedulerEmit -> PolicyEngine -> PriorityQueue -> SchedulerRun -> Dispatcher -> Handler -> RouteRuntimeManager;
+  RouteRuntimeManager -> DevShmPolicy -> DevShmRoot -> DataPlane;
+  Dispatcher -> EventBus [style=dashed, label="observable fact copy"];
+  DataPlane -> EventBus [style=dashed, label="facts may be published, never commands"];
+
+  PolicyEngine -> RouteRuntimeManager [style=dotted, label="PolicyEngine remains minimal admission before queue"];
+  PriorityQueue -> RouteRuntimeManager [style=dotted, label="PriorityQueue remains deterministic execution order"];
+}
