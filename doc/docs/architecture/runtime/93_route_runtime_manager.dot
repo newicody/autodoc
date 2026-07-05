@@ -1,0 +1,45 @@
+digraph RouteRuntimeManager0103 {
+  // ROOT_GRAPH: doc/docs/architecture/00_global.dot
+  rankdir=LR;
+  graph [label="0103 RouteRuntimeManager root-attached runtime overlay", labelloc=t];
+  node [shape=box];
+
+  Scheduler_emit [label="Scheduler.emit()"];
+  PolicyEngine [label="PolicyEngine\nminimal admission before queue"];
+  PriorityQueue [label="PriorityQueue\ndeterministic ordering"];
+  Scheduler_run [label="Scheduler.run()\nloop + time + queue + priority"];
+  Dispatcher [label="Dispatcher\nEventType -> Handler only"];
+  ControlProxyRouteHandler [label="ControlProxy route Handler\nthin adapter"];
+  RouteRuntimeManager [label="RouteRuntimeManager\nruntime facade, not scheduler-like coordinator"];
+
+  subgraph cluster_runtime {
+    label="ControlProxy / ControlFS runtime boundary";
+    ControlFS [label="ControlFS\ngeneration_state + status"];
+    GenerationTable [label="generation table\ng1/g2/g3"];
+    RouteLock [label="route generation lock"];
+    Lifecycle [label="candidate -> active -> draining -> closed"];
+    RouteDataPlane [label="mmap/eventfd data plane\nnot EventBus"];
+    Journal [label="RouteMessageJournal\nprojection/replay input"];
+  }
+
+  Specialist [label="Specialist branch\nbusiness logic / reasoning"];
+  EventBusObservation [label="existing EventBus\nobservation only"];
+
+  Scheduler_emit -> PolicyEngine;
+  PolicyEngine -> PriorityQueue;
+  PriorityQueue -> Scheduler_run;
+  Scheduler_run -> Dispatcher;
+  Dispatcher -> ControlProxyRouteHandler;
+  ControlProxyRouteHandler -> RouteRuntimeManager;
+
+  RouteRuntimeManager -> ControlFS;
+  RouteRuntimeManager -> GenerationTable;
+  RouteRuntimeManager -> RouteLock;
+  RouteRuntimeManager -> Lifecycle;
+  RouteRuntimeManager -> RouteDataPlane;
+  RouteDataPlane -> Journal [style=dashed, label="drained messages"];
+
+  Dispatcher -> Specialist [style=dashed, label="other handlers"];
+  Dispatcher -> EventBusObservation [style=dotted, label="observable copy"];
+  RouteRuntimeManager -> EventBusObservation [style=dotted, label="future facts only"];
+}
