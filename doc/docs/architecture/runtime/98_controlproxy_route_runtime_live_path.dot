@@ -1,0 +1,52 @@
+digraph controlproxy_route_runtime_live_path_0108 {
+  graph [
+    label="0108 ControlProxy route runtime live path — root-attached runtime overlay",
+    labelloc=t,
+    fontsize=18
+  ];
+  rankdir=LR;
+  node [shape=box, style="rounded"];
+
+  root [label="ROOT_GRAPH: doc/docs/architecture/00_global.dot"];
+
+  subgraph cluster_kernel_path {
+    label="Micro-kernel command path (unchanged)";
+    scheduler [label="Scheduler\nloop + time + queue + priority"];
+    policy [label="PolicyEngine\nminimal admission before queue"];
+    queue [label="PriorityQueue\ndeterministic execution order"];
+    run [label="Scheduler.run()\nunchanged"];
+    dispatcher [label="Dispatcher\nEventType -> Handler only"];
+    handler [label="ControlProxySchedulerRouteRequestHandler\nthin Handler"];
+  }
+
+  subgraph cluster_runtime_slice {
+    label="0108 live runtime slice";
+    adapter [label="controlproxy_route_runtime_handler\nHandler -> RouteRuntimeManager"];
+    manager [label="RouteRuntimeManager\nroute runtime only"];
+    controlfs [label="ControlFS\ngeneration table + lifecycle"];
+    dataplane [label="ControlFS + mmap/eventfd data plane\nRoute mmap/eventfd = data plane, not EventBus"];
+  }
+
+  subgraph cluster_observation {
+    label="Observation boundary";
+    eventbus [label="EventBus = observation only"];
+    journal [label="RouteMessageJournal\ndrained message journal, not EventBus"];
+  }
+
+  specialist [label="Specialist branch owns business logic"];
+
+  root -> scheduler;
+  scheduler -> policy -> queue -> run -> dispatcher -> handler -> adapter -> manager;
+  manager -> controlfs;
+  manager -> dataplane;
+  dataplane -> journal [style=dashed, label="drained facts"];
+  dispatcher -> eventbus [style=dashed, label="observable copy"];
+  specialist -> scheduler [style=dashed, label="typed command/event"];
+
+  no_proxy_bus [label="No ControlProxyBus", shape=note];
+  no_route_bus [label="No RouteBus", shape=note];
+  no_visualization_bus [label="No VisualizationBus", shape=note];
+  dataplane -> no_proxy_bus [style=dotted];
+  dataplane -> no_route_bus [style=dotted];
+  eventbus -> no_visualization_bus [style=dotted];
+}
