@@ -1,0 +1,68 @@
+digraph controlproxy_simplification_lock_0101 {
+  graph [
+    label="0101 ControlProxy simplification lock — root-attached runtime overlay",
+    labelloc="t",
+    fontsize=18
+  ];
+
+  rankdir=LR;
+  node [shape=box, style="rounded"];
+
+  subgraph cluster_microkernel {
+    label="Micro-kernel command path";
+    Component [label="Component / Specialist\nyields Event or Request"];
+    SchedulerEmit [label="Scheduler.emit()"];
+    PolicyEngine [label="PolicyEngine\nminimal admission gate"];
+    PriorityQueue [label="PriorityQueue\ndeterministic ordering"];
+    SchedulerRun [label="Scheduler.run()\nloop only"];
+    Dispatcher [label="Dispatcher\nEventType -> Handler only"];
+    Handler [label="Thin Handler\nadapter only"];
+  }
+
+  subgraph cluster_specialist {
+    label="Specialist branch";
+    Specialist [label="Specialist\nbusiness logic / reasoning / transformation"];
+  }
+
+  subgraph cluster_controlproxy_runtime {
+    label="ControlProxy / RouteRuntimeManager boundary";
+    RouteRuntimeManager [label="RouteRuntimeManager\nruntime transport only"];
+    ControlFS [label="ControlFS\nstate surface"];
+    GenerationTable [label="generation table\ng2/g3"];
+    Lifecycle [label="lifecycle\ncandidate/active/draining/closed"];
+    Lock [label="file lock\ninter-process primitive"];
+    Placement [label="placement\nfile or /dev/shm explicit"];
+    DataPlane [label="mmap/shm + eventfd\ndata plane, not EventBus"];
+    Journal [label="RouteMessageJournal\nreplay projection"];
+  }
+
+  subgraph cluster_context_observation {
+    label="Context and observation";
+    ContextGate [label="ContextEngine / ContextGate\ncontext authority"];
+    QdrantProjection [label="Qdrant\nprojection/search only"];
+    EventBus [label="EventBus\nobservation only"];
+    Visualization [label="Visualization adapter\nreads existing bus"];
+  }
+
+  Component -> SchedulerEmit -> PolicyEngine -> PriorityQueue -> SchedulerRun -> Dispatcher -> Handler;
+  Handler -> Specialist [label="business capability"];
+  Handler -> RouteRuntimeManager [label="route runtime capability"];
+
+  RouteRuntimeManager -> ControlFS;
+  RouteRuntimeManager -> GenerationTable;
+  RouteRuntimeManager -> Lifecycle;
+  RouteRuntimeManager -> Lock;
+  RouteRuntimeManager -> Placement;
+  RouteRuntimeManager -> DataPlane;
+  DataPlane -> Journal [label="drained messages"];
+
+  Dispatcher -> EventBus [style=dashed, label="observable facts"];
+  Journal -> EventBus [style=dashed, label="facts/replay"];
+  EventBus -> Visualization [style=dashed, label="read tap only"];
+
+  Specialist -> ContextGate [style=dashed, label="context request"];
+  ContextGate -> QdrantProjection [style=dashed, label="projection/search"];
+
+  PolicyEngine -> RouteRuntimeManager [style=dotted, label="does not choose runtime generation"];
+  Dispatcher -> RouteRuntimeManager [style=dotted, label="no direct runtime logic"];
+}
