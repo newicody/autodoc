@@ -1,0 +1,170 @@
+digraph ControlProxyRuntimeOverlay {
+  // ROADMAP_ID: runtime_controlproxy_overlay_0099
+  // ROOT_GRAPH: doc/docs/architecture/00_global.dot
+  // This graph is a root-attached runtime overlay, not an isolated island.
+  rankdir=LR;
+  compound=true;
+  splines=ortho;
+  graph [fontname="Arial", fontsize=11, label="Runtime overlay — ControlProxy / ControlFS / mmap route path (0099)", labelloc=t];
+  node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10];
+  edge [fontname="Arial", fontsize=9, arrowsize=0.7];
+
+  subgraph cluster_existing_root {
+    label="Existing root graph family";
+    color="#455a64";
+    bgcolor="#eceff1";
+    node [fillcolor="#eceff1", color="#455a64"];
+
+    RootGlobal [label="00_global.dot\nroot architecture", URL="../00_global.svg"];
+    SchedulerGraph [label="scheduler/10_scheduler.dot", URL="../scheduler/10_scheduler.svg"];
+    DispatcherGraph [label="scheduler dispatcher graphs", URL="../scheduler/dispatcher/11_dispatcher.svg"];
+    EventBusGraph [label="scheduler event_bus graphs", URL="../scheduler/event_bus/12_event_bus.svg"];
+    ContextGraph [label="context graphs\n20..41", URL="../context/20_context.svg"];
+    ObservabilityGraph [label="observability/70_observability.dot", URL="../observability/70_observability.svg"];
+  }
+
+  subgraph cluster_scheduler_authority {
+    label="Scheduler / policy / queue / dispatcher authority";
+    color="#512da8";
+    bgcolor="#ede7f6";
+    node [fillcolor="#ede7f6", color="#512da8"];
+
+    ComponentProxy [label="ComponentProxy"];
+    Scheduler [label="Scheduler.emit()"];
+    PolicyZone [label="PolicyEngine + zone\ndispatch authority"];
+    PriorityQueue [label="PriorityQueue"];
+    SchedulerRun [label="Scheduler.run()\nunchanged"];
+    Dispatcher [label="Dispatcher.dispatch()"];
+    RouteFilter [label="RouteDispatchFilterEnvelope\n0098\ndispatch filtering, not policy invention"];
+    RouteHandler [label="ControlProxySchedulerRouteRequestHandler\n0088"];
+  }
+
+  subgraph cluster_controlproxy_controlfs {
+    label="ControlProxy / ControlFS bounded subsystem";
+    color="#ef6c00";
+    bgcolor="#fff3e0";
+    node [fillcolor="#fff3e0", color="#ef6c00"];
+
+    ControlProxy [label="ControlProxy\nroute/control code"];
+    ControlFS [label="ControlFS\nUnix-state surface"];
+    SchedulerAdapter [label="handle_scheduler_route_request()\n0086 adapter"];
+    RouteHandshake [label="prepare_route_for_scheduler()\n0085"];
+    TickPump [label="tick_controlproxy()\n0084 importable pump"];
+    ActiveMaterializer [label="active route materializer\n0081"];
+    LeaseState [label="route lease state\nnot_leased -> leased -> active -> draining -> closed\n0083"];
+    GenerationTable [label="RouteGenerationTable\nroute_id -> current_generation\ng2/g3\n0091-r2"];
+    GenerationLock [label="RouteGenerationLock\nfcntl.flock\n0094"];
+    LockedMaterializer [label="locked materializer\nload -> verify -> materialize -> persist\n0095"];
+    Placement [label="RouteRuntimePlacementPolicy\nfile or /dev/shm explicit\n0096"];
+    GenerationLifecycle [label="RouteGenerationLifecycle\ncandidate -> active -> draining -> closed -> cleanup\n0092"];
+  }
+
+  subgraph cluster_mmap_runtime {
+    label="mmap / SHM route runtime";
+    color="#00695c";
+    bgcolor="#e0f2f1";
+    node [fillcolor="#e0f2f1", color="#00695c"];
+
+    RuntimeRoot [label="runtime_root\nfile or /dev/shm namespace"];
+    G1 [label="route@g1/ring.bin\nactive segment"];
+    G2 [label="route@g2/ring.bin\ncandidate generation"];
+    G3 [label="route@g3/ring.bin\nnext generation"];
+    MmapFixedSlotRoute [label="MmapFixedSlotRoute\n0080"];
+    RouteNotifier [label="RouteNotifier\neventfd/pipe\n0082"];
+    WriteNotifyDrain [label="RouteWriteNotifyDrain\nwrite -> notify -> selector -> drain\n0089"];
+  }
+
+  subgraph cluster_observation {
+    label="Observation and journal path";
+    color="#666666";
+    bgcolor="#f5f5f5";
+    node [fillcolor="#f5f5f5", color="#666666"];
+
+    ExistingEventBus [label="existing event.bus\nfacts only"];
+    ExistingContextBus [label="existing context.bus / snapshot\nread source"];
+    BusVizAdapter [label="existing-bus visualization adapter\nread tap only\n0093-r2"];
+    RouteMessageJournal [label="RouteMessageJournal\nJSONL deterministic\n0090"];
+    Recorder [label="Recorder / journal ingestion"];
+    ZFSArtifacts [label="ZFS artifacts\nlocal source of truth"];
+  }
+
+  subgraph cluster_context_authority {
+    label="Context authority and projection";
+    color="#0288d1";
+    bgcolor="#e1f5fe";
+    node [fillcolor="#e1f5fe", color="#0288d1"];
+
+    TaskContext [label="TaskContext\nauthority"];
+    ContextGate [label="ContextGate\nauthority"];
+    QdrantProjection [label="Qdrant\nprojection/search only"];
+  }
+
+  subgraph cluster_future_boundaries {
+    label="Future boundaries — not active in 0099";
+    color="#9e9e9e";
+    bgcolor="#fafafa";
+    node [fillcolor="#fafafa", color="#9e9e9e", style="rounded,filled,dashed"];
+
+    NetworkBridge [label="NetworkBridge\nfuture"];
+    HardwareBridge [label="HardwareBridge\nfuture"];
+    ClusterFabric [label="distributed cluster fabric\nfuture"];
+  }
+
+  RootGlobal -> SchedulerGraph [style=dotted, label="zoom"];
+  RootGlobal -> ContextGraph [style=dotted, label="zoom"];
+  RootGlobal -> ObservabilityGraph [style=dotted, label="zoom"];
+  RootGlobal -> ControlProxy [style=dashed, label="runtime overlay"];
+  SchedulerGraph -> ComponentProxy [style=dotted];
+  DispatcherGraph -> Dispatcher [style=dotted];
+  EventBusGraph -> ExistingEventBus [style=dotted];
+  ContextGraph -> TaskContext [style=dotted];
+  ObservabilityGraph -> Recorder [style=dotted];
+
+  ComponentProxy -> Scheduler [label="emit(Event / Request)"];
+  Scheduler -> PolicyZone [label="decide"];
+  PolicyZone -> PriorityQueue [label="allowed -> enqueue"];
+  PolicyZone -> ExistingEventBus [style=dashed, label="denied fact"];
+  PriorityQueue -> SchedulerRun [label="dequeue"];
+  SchedulerRun -> Dispatcher [label="dispatch loop unchanged"];
+  Dispatcher -> RouteFilter [label="handler input"];
+  RouteFilter -> RouteHandler [label="accepted envelope"];
+  RouteHandler -> ControlProxy [label="call bounded subsystem"];
+
+  ControlProxy -> SchedulerAdapter [label="Scheduler-facing adapter"];
+  SchedulerAdapter -> RouteHandshake [label="prepare"];
+  RouteHandshake -> TickPump [label="importable pump"];
+  TickPump -> ActiveMaterializer [label="materialize"];
+  ActiveMaterializer -> LeaseState [label="state"];
+  ActiveMaterializer -> GenerationTable [label="route generation"];
+  GenerationLock -> LockedMaterializer [label="protect critical section"];
+  GenerationTable -> LockedMaterializer [label="next_generation"];
+  Placement -> RuntimeRoot [label="resolve"];
+  LockedMaterializer -> RuntimeRoot [label="create candidate"];
+  LockedMaterializer -> GenerationLifecycle [label="persist state"];
+  ControlFS -> GenerationTable [label="generation_state.json"];
+  ControlFS -> LeaseState [label="status.json"];
+
+  RuntimeRoot -> G1;
+  RuntimeRoot -> G2;
+  RuntimeRoot -> G3;
+  G1 -> MmapFixedSlotRoute;
+  G2 -> MmapFixedSlotRoute;
+  G3 -> MmapFixedSlotRoute;
+  MmapFixedSlotRoute -> WriteNotifyDrain [label="write/drain"];
+  RouteNotifier -> WriteNotifyDrain [label="notify/drain fd"];
+  WriteNotifyDrain -> RouteMessageJournal [label="drained RouteMessage"];
+  RouteMessageJournal -> Recorder [label="ingest facts"];
+  Recorder -> ZFSArtifacts [label="persist"];
+  ExistingEventBus -> BusVizAdapter [style=dashed, label="read existing facts"];
+  ExistingContextBus -> BusVizAdapter [style=dashed, label="read existing snapshot"];
+
+  TaskContext -> ContextGate [label="gate"];
+  ContextGate -> ExistingContextBus [label="context facts"];
+  ContextGate -> QdrantProjection [style=dashed, label="projection/search only"];
+
+  ExistingEventBus -> Recorder [style=dashed, label="facts, not commands"];
+  ExistingEventBus -> ObservabilityGraph [style=dotted, label="observable"];
+  NetworkBridge -> ClusterFabric [style=dashed];
+  HardwareBridge -> ClusterFabric [style=dashed];
+  ClusterFabric -> RuntimeRoot [style=dashed, label="future only"];
+}
