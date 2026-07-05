@@ -1,0 +1,56 @@
+digraph eventbus_dataplane_boundary_0106 {
+  graph [rankdir=LR, label="0106 EventBus / data plane boundary", labelloc=t];
+  node [shape=box];
+
+  subgraph cluster_kernel_command_path {
+    label="kernel command path";
+    scheduler_emit [label="Scheduler.emit()"];
+    policy [label="PolicyEngine\nminimal admission"];
+    queue [label="PriorityQueue\ndeterministic order"];
+    scheduler_run [label="Scheduler.run()"];
+    dispatcher [label="Dispatcher\nEventType -> Handler only"];
+    handler [label="thin Handler"];
+  }
+
+  subgraph cluster_runtime_dataplane {
+    label="ControlProxy / RouteRuntimeManager data plane";
+    manager [label="RouteRuntimeManager\nruntime boundary"];
+    controlfs [label="ControlFS state"];
+    mmap [label="mmap fixed-slot route"];
+    eventfd [label="eventfd / pipe notifier"];
+    journal [label="RouteMessageJournal\ndrained messages"];
+  }
+
+  subgraph cluster_observation {
+    label="observation only";
+    eventbus [label="EventBus\nobservation only"];
+    visualization [label="visualization adapter\nreads existing bus/context"];
+    recorder [label="recorder / replay readers"];
+  }
+
+  subgraph cluster_context_projection {
+    label="context / projection";
+    contextgate [label="ContextGate / TaskContext\ncontext authority"];
+    snapshot [label="GlobalContextSnapshot"];
+    qdrant [label="Qdrant\nprojection/search only"];
+  }
+
+  scheduler_emit -> policy -> queue -> scheduler_run -> dispatcher -> handler -> manager;
+  manager -> controlfs;
+  manager -> mmap;
+  manager -> eventfd;
+  mmap -> journal [label="drain"];
+  eventfd -> journal [label="notify/drain"];
+
+  dispatcher -> eventbus [style=dashed, label="observable fact"];
+  manager -> eventbus [style=dashed, label="optional facts only"];
+  eventbus -> visualization [style=dashed, label="read"];
+  eventbus -> recorder [style=dashed, label="read"];
+
+  contextgate -> snapshot;
+  snapshot -> visualization [style=dashed, label="read"];
+  contextgate -> qdrant [style=dashed, label="projection only"];
+
+  eventbus -> queue [style=dotted, color=red, label="forbidden: command"];
+  mmap -> dispatcher [style=dotted, color=red, label="forbidden: bus"];
+}
