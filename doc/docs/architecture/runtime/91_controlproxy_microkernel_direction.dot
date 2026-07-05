@@ -1,0 +1,107 @@
+digraph ControlProxyMicrokernelDirection0100 {
+  // ROADMAP_ID: runtime_controlproxy_microkernel_direction_0100
+  // ROOT_GRAPH: doc/docs/architecture/00_global.dot
+  // This graph corrects the 0099 overlay direction: the code has two lanes that are not yet unified.
+  rankdir=LR;
+  compound=true;
+  splines=ortho;
+  graph [fontname="Arial", fontsize=11, label="0100 — ControlProxy direction under the MissiPy micro-kernel", labelloc=t];
+  node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10];
+  edge [fontname="Arial", fontsize=9, arrowsize=0.7];
+
+  subgraph cluster_microkernel {
+    label="Existing MissiPy micro-kernel — authority and dispatch";
+    color="#512da8";
+    bgcolor="#ede7f6";
+    node [fillcolor="#ede7f6", color="#512da8"];
+    ComponentProxy [label="ComponentProxy\nyield Event / Request", URL="../scheduler/component_proxy/14_component_proxy.svg"];
+    SchedulerEmit [label="Scheduler.emit()", URL="../scheduler/10_scheduler.svg"];
+    PolicyEngine [label="PolicyEngine.decide()\npolicy/zone authority", URL="../scheduler/10_scheduler.svg"];
+    PriorityQueue [label="PriorityQueue", URL="../scheduler/priority_queue/13_priority_queue.svg"];
+    SchedulerRun [label="Scheduler.run()\nunchanged", URL="../scheduler/10_scheduler.svg"];
+    Dispatcher [label="Dispatcher.dispatch()", URL="../scheduler/dispatcher/11_dispatcher.svg"];
+    EventBus [label="event.bus\nfacts only", URL="../scheduler/event_bus/12_event_bus.svg"];
+  }
+
+  subgraph cluster_handler_boundary {
+    label="Handler boundary — ControlProxy enters here, not beside Scheduler";
+    color="#6a1b9a";
+    bgcolor="#f3e5f5";
+    node [fillcolor="#f3e5f5", color="#6a1b9a"];
+    RouteHandler [label="ControlProxySchedulerRouteRequestHandler\n0088"];
+    DispatchFilter [label="RouteDispatchFilterEnvelope\n0098\nfilter/consistency guard\nnot policy authority"];
+  }
+
+  subgraph cluster_legacy_lane {
+    label="Lane A — current active-route handshake path";
+    color="#ef6c00";
+    bgcolor="#fff3e0";
+    node [fillcolor="#fff3e0", color="#ef6c00"];
+    SchedulerAdapter [label="handle_scheduler_route_request()\n0086 adapter"];
+    RouteHandshake [label="prepare_route_for_scheduler()\n0085"];
+    TickPump [label="tick_controlproxy()\n0084"];
+    ActiveMaterializer [label="active route materializer\n0081"];
+    LeaseState [label="lease state\nnot_leased -> leased -> active -> draining -> closed\n0083"];
+  }
+
+  subgraph cluster_generation_lane {
+    label="Lane B — newer generation/runtime path, not yet fully wired into Lane A";
+    color="#00695c";
+    bgcolor="#e0f2f1";
+    node [fillcolor="#e0f2f1", color="#00695c"];
+    GenerationTable [label="RouteGenerationTable\nroute_id -> current_generation\ng2/g3\n0091-r2"];
+    GenerationLifecycle [label="RouteGenerationLifecycle\ncandidate -> active -> draining -> closed\n0092"];
+    GenerationLock [label="RouteGenerationLock\nfcntl.flock\n0094"];
+    LockedMaterializer [label="locked materializer\nload -> verify -> materialize -> persist\n0095"];
+    Placement [label="RouteRuntimePlacementPolicy\nfile or /dev/shm explicit\n0096"];
+    RuntimeSegments [label="route@g1/g2/g3 ring.bin\nno live resize"];
+  }
+
+  subgraph cluster_unification {
+    label="Required next unification";
+    color="#c62828";
+    bgcolor="#ffebee";
+    node [fillcolor="#ffebee", color="#c62828"];
+    Coordinator [label="ControlProxyRouteCoordinator\nplanned next\nselects reuse/create/activate path"];
+  }
+
+  subgraph cluster_observation {
+    label="Observation only";
+    color="#616161";
+    bgcolor="#f5f5f5";
+    node [fillcolor="#f5f5f5", color="#616161"];
+    ExistingBusViz [label="existing-bus visualization adapter\n0093-r2\nread tap only"];
+    RouteMessageJournal [label="RouteMessageJournal\n0090"];
+    Recorder [label="Recorder / ZFS artifacts"];
+  }
+
+  ComponentProxy -> SchedulerEmit [label="emit"];
+  SchedulerEmit -> PolicyEngine [label="decide"];
+  PolicyEngine -> PriorityQueue [label="allowed -> enqueue"];
+  PolicyEngine -> EventBus [style=dashed, label="denied fact"];
+  PriorityQueue -> SchedulerRun [label="dequeue"];
+  SchedulerRun -> Dispatcher [label="loop dispatch"];
+  Dispatcher -> EventBus [style=dashed, label="publish copy"];
+  Dispatcher -> RouteHandler [label="registered handler"];
+
+  RouteHandler -> DispatchFilter [label="validate envelope"];
+  DispatchFilter -> SchedulerAdapter [label="current path"];
+  SchedulerAdapter -> RouteHandshake;
+  RouteHandshake -> TickPump;
+  TickPump -> ActiveMaterializer;
+  ActiveMaterializer -> LeaseState;
+
+  DispatchFilter -> Coordinator [style=dashed, label="next integration"];
+  Coordinator -> SchedulerAdapter [style=dashed, label="reuse active / legacy compatibility"];
+  Coordinator -> GenerationTable [style=dashed, label="create first/next generation"];
+  GenerationLock -> LockedMaterializer [label="protect critical section"];
+  GenerationTable -> LockedMaterializer [label="next_generation"];
+  LockedMaterializer -> Placement [label="resolve runtime root"];
+  Placement -> RuntimeSegments [label="materialize new segment"];
+  LockedMaterializer -> GenerationLifecycle [label="persist state"];
+
+  EventBus -> ExistingBusViz [style=dashed, label="read existing facts"];
+  RuntimeSegments -> RouteMessageJournal [style=dashed, label="drained messages"];
+  RouteMessageJournal -> Recorder [label="journal"];
+  Recorder -> EventBus [style=dotted, label="facts, not commands"];
+}
