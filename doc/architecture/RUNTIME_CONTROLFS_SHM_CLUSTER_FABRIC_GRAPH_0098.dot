@@ -1,0 +1,134 @@
+digraph runtime_controlfs_shm_cluster_fabric_graph_0098 {
+  rankdir=LR;
+  graph [
+    label="Runtime ControlFS / SHM / ControlProxy / Cluster Fabric graph — 0098 dispatch filtering semantics",
+    labelloc=t
+  ];
+  node [shape=box];
+
+  subgraph cluster_policy_zone {
+    label="Scheduler policy / zones as dispatch authority";
+    style=rounded;
+
+    securityfs [
+      label="SecurityFS\nsubsystem policy inputs\nzones / scopes"
+    ];
+    policy_engine [
+      label="PolicyEngine\nproduces zone decision\npolicy_decision_id"
+    ];
+    scheduler [
+      label="Scheduler\ndispatch authority\nNo Scheduler.run() modification"
+    ];
+    priority_queue [
+      label="PriorityQueue\ndeterministic ordering"
+    ];
+    dispatcher [
+      label="Dispatcher\nselects handler boundary"
+    ];
+
+    securityfs -> policy_engine [label="policy inputs"];
+    policy_engine -> scheduler [label="authorized=True + zone + policy_decision_id"];
+    scheduler -> priority_queue [label="enqueue approved work"];
+    priority_queue -> scheduler [label="Scheduler.run() drains ready work"];
+    scheduler -> dispatcher [label="dispatch"];
+  }
+
+  subgraph cluster_controlproxy_controlfs {
+    label="ControlProxy / ControlFS bounded subsystem: policy/zone dispatch filtering";
+    style=rounded;
+
+    controlproxy_handler [
+      label="ControlProxy route handler\ncalled by Dispatcher"
+    ];
+    dispatch_filter_envelope [
+      label="RouteDispatchFilterEnvelope\nroute_id + zone + policy_decision_id\nauthorized=True\npolicy/zone dispatch filtering\nnot a security objective"
+    ];
+    controlfs_surface [
+      shape=folder,
+      label="ControlFS surface\nactive/routes, leases, revoked, status"
+    ];
+    generation_table [
+      shape=cylinder,
+      label="generation_state.json\nroute_id -> current_generation\nincremented only when materialized"
+    ];
+    generation_lock [
+      label="route generation lock\ninter-process file lock"
+    ];
+    runtime_placement [
+      label="runtime placement policy\nfile | /dev/shm\nNot /dev/shm-only"
+    ];
+    locked_materializer [
+      label="locked generation materializer\nload -> verify -> materialize -> persist"
+    ];
+    lifecycle [
+      label="lifecycle\ncandidate -> active -> draining -> closed"
+    ];
+
+    controlproxy_handler -> dispatch_filter_envelope [label="read already-decided envelope"];
+    dispatch_filter_envelope -> controlfs_surface [label="filter dispatch into route-control state"];
+    controlfs_surface -> generation_lock [label="per route lock"];
+    generation_lock -> generation_table [label="load/verify/persist"];
+    generation_table -> runtime_placement [label="next g2/g3 generation"];
+    runtime_placement -> locked_materializer [label="resolved runtime root"];
+    locked_materializer -> lifecycle [label="candidate state"];
+  }
+
+  subgraph cluster_runtime_surfaces {
+    label="Existing runtime surfaces";
+    style=rounded;
+
+    shm_runtime [
+      shape=folder,
+      label="SHM/file runtime root\nroutes/<route_id>@gN/ring.bin\nNo live mmap resize"
+    ];
+    workers [
+      label="Workers / experts\nuse materialized routes only"
+    ];
+    event_bus [
+      shape=folder,
+      label="existing event.bus\nfacts, not commands"
+    ];
+    context_bus [
+      shape=folder,
+      label="existing context.bus\ncompact context facts"
+    ];
+    recorder [
+      label="Recorder\njournal writer"
+    ];
+    zfs_store [
+      shape=cylinder,
+      label="ZFS Store\njournal / replay / snapshots"
+    ];
+
+    shm_runtime -> workers [label="route access"];
+    workers -> event_bus [label="facts"];
+    workers -> context_bus [label="context facts"];
+    event_bus -> recorder [label="drain facts"];
+    context_bus -> recorder [label="drain context facts"];
+    recorder -> zfs_store [label="durable write"];
+  }
+
+  subgraph cluster_future_extensions {
+    label="Future extensions, not implemented now";
+    style=dashed;
+
+    network_bridge [
+      label="NetworkBridge future\ncompact facts / remote handles only"
+    ];
+    hardware_bridge [
+      label="HardwareBridge future\nDMA-backed route buffers\nnot direct /dev/shm sharing"
+    ];
+    cluster_fabric [
+      label="Hardware Cluster Fabric future lointain\nFPGA/ASIC passive observer/accelerator"
+    ];
+
+    network_bridge -> hardware_bridge [style=dashed, label="future compatibility"];
+    hardware_bridge -> cluster_fabric [style=dashed, label="future PCIe/LVDS path"];
+  }
+
+  dispatcher -> controlproxy_handler [label="handler call"];
+  lifecycle -> shm_runtime [label="materialized route generation"];
+  lifecycle -> event_bus [label="status fact"];
+  lifecycle -> context_bus [label="route/context visibility fact"];
+  shm_runtime -> network_bridge [style=dashed, label="future selected replication"];
+}
