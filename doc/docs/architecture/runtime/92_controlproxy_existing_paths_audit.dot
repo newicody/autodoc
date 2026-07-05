@@ -1,0 +1,100 @@
+digraph ControlProxyExistingPathsAudit0102 {
+  graph [
+    label="0102 ControlProxy existing paths audit — root-attached overlay, not an isolated graph",
+    labelloc=t,
+    fontsize=20
+  ];
+  rankdir=LR;
+  node [shape=box, fontsize=11];
+  edge [fontsize=10];
+
+  subgraph cluster_kernel {
+    label="Micro-kernel command path — authority";
+    style=rounded;
+    SchedulerEmit [label="Scheduler.emit()"];
+    PolicyEngine [label="PolicyEngine\nminimal admission gate"];
+    PriorityQueue [label="PriorityQueue\nsole deterministic ordering"];
+    SchedulerRun [label="Scheduler.run()\nunchanged loop"];
+    Dispatcher [label="Dispatcher\nEventType -> Handler only"];
+    Handler [label="Handler\nthin adapter"];
+    SchedulerEmit -> PolicyEngine -> PriorityQueue -> SchedulerRun -> Dispatcher -> Handler;
+  }
+
+  subgraph cluster_specialist {
+    label="Specialist branch — business logic";
+    style=rounded;
+    Specialist [label="Specialist\nreasoning / transformation / strategy"];
+  }
+
+  subgraph cluster_controlproxy_compat {
+    label="ControlProxy Scheduler-facing compatibility path";
+    style=rounded;
+    PrepareForScheduler [label="prepare_route_for_scheduler\ncompatibility wrapper candidate"];
+    HandleRouteRequest [label="handle_scheduler_route_request\ncompatibility wrapper candidate"];
+    ControlProxyHandler [label="ControlProxySchedulerRouteRequestHandler\nthin handler candidate"];
+  }
+
+  subgraph cluster_runtime_primitives {
+    label="Route runtime primitives — to be composed by RouteRuntimeManager";
+    style=rounded;
+    RouteRuntimeManager [label="RouteRuntimeManager\nplanned in 0103\nnot implemented by 0102", style="rounded,dashed"];
+    MmapRoute [label="mmap fixed-slot route\ndata plane primitive"];
+    Notifier [label="eventfd/pipe notifier\ndata plane notification"];
+    LeaseState [label="route lease state\nclient lifecycle primitive"];
+    ActiveMaterializer [label="active route materializer\nexisting primitive"];
+    GenerationTable [label="generation table g2/g3\ngeneration-state primitive"];
+    Lifecycle [label="candidate/active/draining/closed\nlifecycle primitive"];
+    Lock [label="route generation lock\ninter-process guard"];
+    LockedMaterializer [label="locked materializer\ncritical-section composition"];
+    Placement [label="runtime placement\nfile/dev_shm explicit"];
+    ControlFS [label="ControlFS\nstate surface"];
+  }
+
+  subgraph cluster_observation {
+    label="Observation and journal";
+    style=rounded;
+    EventBus [label="EventBus\nobservation only"];
+    ExistingBusReader [label="existing bus visualization adapter\nreader only"];
+    RouteMessageJournal [label="RouteMessageJournal\ndata-plane journal projection"];
+    Recorder [label="Recorder\nfuture higher-level replay projection"];
+  }
+
+  subgraph cluster_context {
+    label="Context and search authority";
+    style=rounded;
+    ContextGate [label="TaskContext / ContextGate\ncontext authority"];
+    GlobalContextSnapshot [label="GlobalContextSnapshot\nkernel context view"];
+    Qdrant [label="Qdrant\nprojection/search only"];
+  }
+
+  Handler -> Specialist [label="specialist capability"];
+  Handler -> ControlProxyHandler [label="route capability"];
+  ControlProxyHandler -> HandleRouteRequest [label="current wrapper path"];
+  HandleRouteRequest -> PrepareForScheduler [label="current wrapper path"];
+  ControlProxyHandler -> RouteRuntimeManager [style=dashed, label="0104 target after 0103"];
+  PrepareForScheduler -> RouteRuntimeManager [style=dashed, label="compat wrapper target"];
+  HandleRouteRequest -> RouteRuntimeManager [style=dashed, label="compat wrapper target"];
+
+  RouteRuntimeManager -> Placement [style=dashed, label="compose"];
+  RouteRuntimeManager -> Lock [style=dashed, label="compose"];
+  RouteRuntimeManager -> LockedMaterializer [style=dashed, label="compose"];
+  RouteRuntimeManager -> GenerationTable [style=dashed, label="compose"];
+  RouteRuntimeManager -> Lifecycle [style=dashed, label="compose"];
+  RouteRuntimeManager -> ActiveMaterializer [style=dashed, label="compose"];
+  RouteRuntimeManager -> MmapRoute [style=dashed, label="compose"];
+  RouteRuntimeManager -> Notifier [style=dashed, label="compose"];
+  RouteRuntimeManager -> LeaseState [style=dashed, label="map explicitly"];
+  RouteRuntimeManager -> ControlFS [style=dashed, label="state"];
+
+  Dispatcher -> EventBus [label="publish observation copy"];
+  EventBus -> ExistingBusReader [label="read tap"];
+  MmapRoute -> RouteMessageJournal [label="drained messages"];
+  RouteMessageJournal -> Recorder [style=dashed, label="future aggregation"];
+
+  ContextGate -> GlobalContextSnapshot;
+  ContextGate -> Qdrant [label="projection only"];
+
+  PolicyEngine -> ControlProxyHandler [style=dotted, label="decision already made before dispatch"];
+  EventBus -> MmapRoute [style=dotted, label="forbidden: EventBus does not command data plane"];
+  ControlProxyHandler -> PriorityQueue [style=dotted, label="forbidden: ControlProxy does not calculate global priority"];
+}
