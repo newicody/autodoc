@@ -1,0 +1,56 @@
+digraph controlproxy_compatibility_wrappers_0109 {
+  graph [
+    label="0109 compatibility wrapper cleanup — root-attached runtime overlay",
+    labelloc=t,
+    fontsize=18
+  ];
+  rankdir=LR;
+  node [shape=box, style="rounded"];
+
+  root [label="ROOT_GRAPH: doc/docs/architecture/00_global.dot"];
+
+  subgraph cluster_kernel {
+    label="Micro-kernel command path (unchanged)";
+    scheduler [label="Scheduler\nloop + time + queue + priority"];
+    policy [label="PolicyEngine = minimal admission before queue"];
+    queue [label="PriorityQueue = deterministic execution order"];
+    run [label="Scheduler.run()\nNo Scheduler.run() modification"];
+    dispatcher [label="Dispatcher = EventType -> Handler only"];
+    handler [label="Handler -> RouteRuntimeManager"];
+  }
+
+  subgraph cluster_legacy {
+    label="0109 compatibility wrapper cleanup";
+    prepare [label="prepare_route_for_scheduler\ncompatibility wrappers"];
+    handle [label="handle_scheduler_route_request\ncompatibility wrappers"];
+    do_not_extend [label="do not extend legacy wrappers"];
+  }
+
+  subgraph cluster_runtime {
+    label="ControlProxy runtime boundary";
+    manager [label="RouteRuntimeManager\nNo scheduler-like ControlProxy coordinator"];
+    controlfs [label="ControlFS"];
+    dataplane [label="Route mmap/eventfd = data plane, not EventBus"];
+  }
+
+  subgraph cluster_observation {
+    label="Observation boundary";
+    eventbus [label="EventBus = observation only"];
+    no_controlproxy_bus [label="No ControlProxyBus"];
+    no_route_bus [label="No RouteBus"];
+    no_visualization_bus [label="No VisualizationBus"];
+  }
+
+  specialist [label="Specialist branch owns business logic"];
+
+  root -> scheduler;
+  scheduler -> policy -> queue -> run -> dispatcher -> handler -> manager;
+  prepare -> do_not_extend;
+  handle -> do_not_extend;
+  prepare -> handler [style=dashed, label="future wrapper route"];
+  handle -> handler [style=dashed, label="future wrapper route"];
+  manager -> controlfs;
+  manager -> dataplane;
+  dispatcher -> eventbus [style=dashed, label="observable copy"];
+  specialist -> scheduler [style=dashed, label="commands/events through kernel path"];
+}
