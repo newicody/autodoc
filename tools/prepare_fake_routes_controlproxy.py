@@ -12,6 +12,14 @@ from __future__ import annotations
 import argparse
 import json
 
+import sys
+from pathlib import Path
+
+# Allow direct CLI execution from the repository root without requiring PYTHONPATH=src.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_SRC_ROOT = _REPO_ROOT / "src"
+if str(_SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SRC_ROOT))
 from runtime.controlproxy_prepare import (
     decide_route_prepare,
     route_prepare_request_from_message,
