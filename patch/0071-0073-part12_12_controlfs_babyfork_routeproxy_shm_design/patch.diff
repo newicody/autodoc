@@ -1,0 +1,725 @@
+diff --git a/doc/architecture/BABY_FORK_CONTROLFS_ROUTE_MANIFESTS.md b/doc/architecture/BABY_FORK_CONTROLFS_ROUTE_MANIFESTS.md
+new file mode 100644
+index 0000000..9d82d8b
+--- /dev/null
++++ b/doc/architecture/BABY_FORK_CONTROLFS_ROUTE_MANIFESTS.md
+@@ -0,0 +1,57 @@
++# Baby-fork ControlFS desired route manifests
++
++Status: 0071 executable route manifests.
++
++This phase gives the baby-fork smoke path real ControlFS desired manifests.
++
++## Desired routes
++
++```text
++baby_fork.retrieval
++baby_fork.variant_stub
++baby_fork.context_gate
++```
++
++## Files written
++
++```text
++<controlfs_root>/
++  desired/
++    routes/
++      baby_fork.retrieval/
++        manifest.json
++      baby_fork.variant_stub/
++        manifest.json
++      baby_fork.context_gate/
++        manifest.json
++```
++
++## Ownership
++
++The long-term owner is still the Scheduler.
++
++In this phase, a tool writes the manifests to make the route layer testable before Scheduler wiring exists.
++
++## CLI
++
++```bash
++PYTHONPATH=src:. python tools/write_baby_fork_controlfs_desired.py \
++  .var/baby_fork_controlfs
++```
++
++## Non-goals
++
++This phase does not add:
++
++```text
++active route creation
++real shared memory
++semaphores
++RouteProxy daemon
++Scheduler wiring
++SecurityFS compiler
++ControlFS watcher
++NetworkBridge
++HardwareBridge
++cluster dispatch
++```
+diff --git a/doc/architecture/BABY_FORK_ROUTEPROXY_DRY_RUN_PLAN.md b/doc/architecture/BABY_FORK_ROUTEPROXY_DRY_RUN_PLAN.md
+new file mode 100644
+index 0000000..71a3996
+--- /dev/null
++++ b/doc/architecture/BABY_FORK_ROUTEPROXY_DRY_RUN_PLAN.md
+@@ -0,0 +1,52 @@
++# Baby-fork RouteProxy dry-run plan
++
++Status: 0072 executable dry-run plan.
++
++This phase applies the existing RouteProxy dry-run reconciler to the baby-fork desired manifests.
++
++## Path
++
++```text
++write baby-fork desired manifests
++-> run RouteProxy dry-run reconciler
++-> expect create actions when active/routes is empty
++```
++
++## Expected first plan
++
++When no active route exists yet, the expected plan is:
++
++```text
++create baby_fork.context_gate
++create baby_fork.retrieval
++create baby_fork.variant_stub
++```
++
++## CLI
++
++```bash
++PYTHONPATH=src:. python tools/baby_fork_routeproxy_plan.py \
++  .var/baby_fork_controlfs
++```
++
++## What this proves
++
++This proves that the ControlFS desired state and the RouteProxy dry-run reconciler agree on the baby-fork route vocabulary.
++
++## What this does not do
++
++It does not materialize routes.
++
++It does not add:
++
++```text
++real shared memory
++semaphores
++RouteProxy daemon
++Scheduler wiring
++active route creation
++ControlFS watcher
++NetworkBridge
++HardwareBridge
++cluster dispatch
++```
+diff --git a/doc/architecture/SHM_RING_BUFFER_BOUNDARY_DESIGN.md b/doc/architecture/SHM_RING_BUFFER_BOUNDARY_DESIGN.md
+new file mode 100644
+index 0000000..33edf22
+--- /dev/null
++++ b/doc/architecture/SHM_RING_BUFFER_BOUNDARY_DESIGN.md
+@@ -0,0 +1,133 @@
++# SHM ring buffer boundary design
++
++Status: 0073 design only.
++
++This document defines the boundary for the future real SHM transport. It does not implement it.
++
++## Goal
++
++The future implementation should replace the fake JSONL route files with a local hot path:
++
++```text
++/dev/shm/autodoc/
++  event.bus
++  context.bus
++  data.index
++  routes/<route_id>/
++    ring
++    notify
++    status
++```
++
++## Boundary
++
++The runtime schemas are already defined by phase 0065:
++
++```text
++missipy.shm.event_message.v1
++missipy.shm.context_message.v1
++missipy.shm.data_handle.v1
++missipy.shm.route_message.v1
++```
++
++The real ring buffer must transport those logical messages, but it does not need to store pretty JSON internally.
++
++## Suggested frame
++
++A future frame should separate fixed header from payload:
++
++```text
++magic
++version
++schema_id
++route_id_hash
++message_id_hash
++flags
++payload_len
++payload_hash
++payload_bytes
++```
++
++## Ring behavior
++
++Minimum future behavior:
++
++```text
++single producer / single consumer first
++bounded capacity
++monotonic write sequence
++monotonic read sequence
++payload hash validation
++drop or block policy explicit
++no silent overwrite
++```
++
++## Notification
++
++Notification is separate from payload.
++
++Future options:
++
++```text
++eventfd
++futex
++POSIX semaphore
++pipe wakeup
++io_uring later
++```
++
++The notification only wakes readers. The message remains in the ring.
++
++## Safety rules
++
++The real SHM layer must not decide security.
++
++It must receive already-authorized/materialized routes from the passive RouteProxy.
++
++```text
++SecurityFS -> Scheduler -> ControlFS -> RouteProxy -> SHM Runtime
++```
++
++## Relationship with fake runtime
++
++The fake runtime writes:
++
++```text
++data.index.jsonl
++event.bus.jsonl
++context.bus.jsonl
++routes/<route_id>/messages.jsonl
++```
++
++The real runtime will replace the storage mechanism while keeping the same logical message schemas.
++
++## Non-goals
++
++This phase does not add:
++
++```text
++real shared memory implementation
++mmap implementation
++ring buffer code
++eventfd code
++futex code
++semaphore code
++RouteProxy daemon
++Scheduler wiring
++NetworkBridge
++HardwareBridge
++cluster dispatch
++```
++
++## Future implementation order
++
++Recommended next implementation order:
++
++```text
++1. tiny in-process ring buffer model
++2. file-backed mmap prototype in tmpfs
++3. /dev/shm route directory prototype
++4. eventfd or semaphore notification
++5. RouteProxy materialization
++6. Recorder tail/replay
++```
+diff --git a/doc/changelog/0071-0073-controlfs-babyfork-routeproxy-shm-design.md b/doc/changelog/0071-0073-controlfs-babyfork-routeproxy-shm-design.md
+new file mode 100644
+index 0000000..da0436d
+--- /dev/null
++++ b/doc/changelog/0071-0073-controlfs-babyfork-routeproxy-shm-design.md
+@@ -0,0 +1,31 @@
++# 0071-0073 - ControlFS baby-fork manifests, RouteProxy plan, SHM ring design
++
++## 0071 added
++
++- Baby-fork ControlFS desired route manifests.
++- `context.baby_fork_controlfs`
++- `tools/write_baby_fork_controlfs_desired.py`
++
++## 0072 added
++
++- Baby-fork RouteProxy dry-run plan helper.
++- `tools/baby_fork_routeproxy_plan.py`
++
++## 0073 added
++
++- SHM ring buffer boundary design document.
++- Explicit non-implementation guardrails.
++
++## Not added
++
++- No real shared memory.
++- No mmap implementation.
++- No ring buffer code.
++- No eventfd/futex/semaphore code.
++- No RouteProxy daemon.
++- No Scheduler wiring.
++- No active route creation.
++- No ControlFS watcher.
++- No NetworkBridge.
++- No HardwareBridge.
++- No cluster dispatch.
+diff --git a/src/context/baby_fork_controlfs.py b/src/context/baby_fork_controlfs.py
+new file mode 100644
+index 0000000..9683a7c
+--- /dev/null
++++ b/src/context/baby_fork_controlfs.py
+@@ -0,0 +1,174 @@
++"""Baby-fork ControlFS desired route manifests.
++
++This module implements phases 0071 and 0072 for the baby-fork smoke path.
++
++It deliberately does not:
++- create shared memory
++- create semaphores
++- start RouteProxy
++- start Scheduler
++- decide security
++- write active/routes
++- mutate revoked/routes
++- implement NetworkBridge or HardwareBridge
++
++It only writes desired route manifests for the known baby-fork routes and can
++run the existing RouteProxy dry-run reconciler against that ControlFS root.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++import json
++from typing import Any, Iterable
++
++from context.baby_fork_runtime_projection import (
++    BABY_FORK_CONTEXT_GATE_ROUTE,
++    BABY_FORK_CONTEXT_ID,
++    BABY_FORK_RETRIEVAL_ROUTE,
++    BABY_FORK_VARIANT_ROUTE,
++)
++from runtime.controlfs_manifest import ROUTE_MANIFEST_SCHEMA, RouteManifest, route_manifest_path
++from runtime.routeproxy_reconciler import RouteProxyPlan, build_routeproxy_plan
++
++
++BABY_FORK_CONTROLFS_CREATED_AT = "2026-07-04T20:00:00Z"
++BABY_FORK_ROUTE_MESSAGE_SCHEMA = "missipy.shm.route_message.v1"
++
++
++@dataclass(frozen=True)
++class BabyForkRouteSpec:
++    """Static desired-route spec for the baby-fork smoke project."""
++
++    route_id: str
++    task_id: str
++    zone: str
++    scope: str
++    producer: str
++    consumer: str
++    ttl_seconds: int
++    mode: str
++    message_schema: str = BABY_FORK_ROUTE_MESSAGE_SCHEMA
++    created_by: str = "scheduler"
++    created_at: str = BABY_FORK_CONTROLFS_CREATED_AT
++
++    def to_manifest(self) -> RouteManifest:
++        return RouteManifest.from_mapping(
++            {
++                "schema": ROUTE_MANIFEST_SCHEMA,
++                "route_id": self.route_id,
++                "task_id": self.task_id,
++                "zone": self.zone,
++                "scope": self.scope,
++                "producer": self.producer,
++                "consumer": self.consumer,
++                "ttl_seconds": self.ttl_seconds,
++                "mode": self.mode,
++                "message_schema": self.message_schema,
++                "created_by": self.created_by,
++                "created_at": self.created_at,
++            }
++        )
++
++
++def baby_fork_route_specs(context_id: str = BABY_FORK_CONTEXT_ID) -> tuple[BabyForkRouteSpec, ...]:
++    """Return the locked desired routes for the baby-fork smoke project."""
++
++    return (
++        BabyForkRouteSpec(
++            route_id=BABY_FORK_RETRIEVAL_ROUTE,
++            task_id=context_id,
++            zone="workers",
++            scope="context.read",
++            producer="scheduler",
++            consumer="retrieval_worker",
++            ttl_seconds=300,
++            mode="rw",
++        ),
++        BabyForkRouteSpec(
++            route_id=BABY_FORK_VARIANT_ROUTE,
++            task_id=context_id,
++            zone="workers",
++            scope="context.read",
++            producer="scheduler",
++            consumer="variant_generator_stub",
++            ttl_seconds=300,
++            mode="rw",
++        ),
++        BabyForkRouteSpec(
++            route_id=BABY_FORK_CONTEXT_GATE_ROUTE,
++            task_id=context_id,
++            zone="context",
++            scope="context.patch",
++            producer="context_gate",
++            consumer="scheduler",
++            ttl_seconds=300,
++            mode="rw",
++        ),
++    )
++
++
++def write_baby_fork_desired_manifests(
++    controlfs_root: Path | str,
++    *,
++    context_id: str = BABY_FORK_CONTEXT_ID,
++) -> tuple[Path, ...]:
++    """Write baby-fork desired route manifests under ControlFS.
++
++    Files written:
++
++    desired/routes/baby_fork.retrieval/manifest.json
++    desired/routes/baby_fork.variant_stub/manifest.json
++    desired/routes/baby_fork.context_gate/manifest.json
++    """
++
++    root = Path(controlfs_root)
++    written: list[Path] = []
++
++    for spec in baby_fork_route_specs(context_id=context_id):
++        manifest = spec.to_manifest()
++        path = route_manifest_path(root, manifest.route_id)
++        path.parent.mkdir(parents=True, exist_ok=True)
++        path.write_text(
++            json.dumps(manifest.to_mapping(), indent=2, sort_keys=True) + "\n",
++            encoding="utf-8",
++        )
++        written.append(path)
++
++    return tuple(written)
++
++
++def build_baby_fork_routeproxy_plan(
++    controlfs_root: Path | str,
++    *,
++    context_id: str = BABY_FORK_CONTEXT_ID,
++    include_noop: bool = False,
++    write_desired: bool = True,
++) -> RouteProxyPlan:
++    """Build a RouteProxy dry-run plan for baby-fork routes.
++
++    By default this writes desired route manifests first, then runs the
++    existing dry-run reconciler. It does not write active routes.
++    """
++
++    if write_desired:
++        write_baby_fork_desired_manifests(controlfs_root, context_id=context_id)
++    return build_routeproxy_plan(controlfs_root, include_noop=include_noop)
++
++
++def baby_fork_controlfs_summary(controlfs_root: Path | str, plan: RouteProxyPlan) -> dict[str, Any]:
++    """Return a JSON-serializable summary for CLI tools."""
++
++    return {
++        "controlfs_root": str(Path(controlfs_root)),
++        "desired_routes": [spec.route_id for spec in baby_fork_route_specs()],
++        "plan": plan.to_mapping(),
++        "action_counts": {
++            "create": len(plan.by_action("create")),
++            "delete": len(plan.by_action("delete")),
++            "update": len(plan.by_action("update")),
++            "noop": len(plan.by_action("noop")),
++            "error": len(plan.by_action("error")),
++        },
++    }
+diff --git a/tests/rules/test_baby_fork_controlfs_routeproxy_shm_design_rule.py b/tests/rules/test_baby_fork_controlfs_routeproxy_shm_design_rule.py
+new file mode 100644
+index 0000000..46b698c
+--- /dev/null
++++ b/tests/rules/test_baby_fork_controlfs_routeproxy_shm_design_rule.py
+@@ -0,0 +1,93 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++MANIFEST_DOC = ROOT / "doc" / "architecture" / "BABY_FORK_CONTROLFS_ROUTE_MANIFESTS.md"
++PLAN_DOC = ROOT / "doc" / "architecture" / "BABY_FORK_ROUTEPROXY_DRY_RUN_PLAN.md"
++SHM_DOC = ROOT / "doc" / "architecture" / "SHM_RING_BUFFER_BOUNDARY_DESIGN.md"
++MODULE = ROOT / "src" / "context" / "baby_fork_controlfs.py"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing file: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_baby_fork_controlfs_doc_locks_desired_routes() -> None:
++    text = _read(MANIFEST_DOC)
++
++    required_phrases = [
++        "baby_fork.retrieval",
++        "baby_fork.variant_stub",
++        "baby_fork.context_gate",
++        "desired/",
++        "routes/",
++        "active route creation",
++        "real shared memory",
++        "RouteProxy daemon",
++        "Scheduler wiring",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_baby_fork_routeproxy_plan_doc_locks_create_plan() -> None:
++    text = _read(PLAN_DOC)
++
++    required_phrases = [
++        "create baby_fork.context_gate",
++        "create baby_fork.retrieval",
++        "create baby_fork.variant_stub",
++        "does not materialize routes",
++        "real shared memory",
++        "semaphores",
++        "RouteProxy daemon",
++        "Scheduler wiring",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_shm_ring_design_is_design_only() -> None:
++    text = _read(SHM_DOC)
++
++    required_phrases = [
++        "Status: 0073 design only.",
++        "/dev/shm/autodoc/",
++        "event.bus",
++        "context.bus",
++        "data.index",
++        "routes/<route_id>/",
++        "Notification is separate from payload.",
++        "real shared memory implementation",
++        "mmap implementation",
++        "ring buffer code",
++        "eventfd code",
++        "futex code",
++        "semaphore code",
++        "RouteProxy daemon",
++        "Scheduler wiring",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_baby_fork_controlfs_module_is_manifest_and_plan_only() -> None:
++    text = _read(MODULE)
++
++    required_phrases = [
++        "It only writes desired route manifests",
++        "create shared memory",
++        "create semaphores",
++        "start RouteProxy",
++        "start Scheduler",
++        "write active/routes",
++        "mutate revoked/routes",
++        "implement NetworkBridge or HardwareBridge",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
+diff --git a/tests/test_baby_fork_controlfs.py b/tests/test_baby_fork_controlfs.py
+new file mode 100644
+index 0000000..d68d40e
+--- /dev/null
++++ b/tests/test_baby_fork_controlfs.py
+@@ -0,0 +1,52 @@
++import json
++from pathlib import Path
++
++from context.baby_fork_controlfs import (
++    BABY_FORK_CONTEXT_GATE_ROUTE,
++    BABY_FORK_RETRIEVAL_ROUTE,
++    BABY_FORK_VARIANT_ROUTE,
++    baby_fork_route_specs,
++    build_baby_fork_routeproxy_plan,
++    write_baby_fork_desired_manifests,
++)
++from runtime.controlfs_manifest import RouteManifest
++
++
++def test_baby_fork_route_specs_lock_three_routes() -> None:
++    specs = baby_fork_route_specs(context_id="ctx-baby-fork-001")
++
++    assert tuple(spec.route_id for spec in specs) == (
++        BABY_FORK_RETRIEVAL_ROUTE,
++        BABY_FORK_VARIANT_ROUTE,
++        BABY_FORK_CONTEXT_GATE_ROUTE,
++    )
++    assert all(spec.task_id == "ctx-baby-fork-001" for spec in specs)
++
++
++def test_write_baby_fork_desired_manifests(tmp_path: Path) -> None:
++    paths = write_baby_fork_desired_manifests(tmp_path, context_id="ctx-baby-fork-001")
++
++    assert len(paths) == 3
++    for path in paths:
++        assert path.exists()
++        manifest = RouteManifest.from_mapping(json.loads(path.read_text(encoding="utf-8")))
++        assert manifest.task_id == "ctx-baby-fork-001"
++
++    assert (tmp_path / "desired" / "routes" / "baby_fork.retrieval" / "manifest.json").exists()
++    assert (tmp_path / "desired" / "routes" / "baby_fork.variant_stub" / "manifest.json").exists()
++    assert (tmp_path / "desired" / "routes" / "baby_fork.context_gate" / "manifest.json").exists()
++
++
++def test_baby_fork_routeproxy_plan_creates_three_routes_when_active_empty(tmp_path: Path) -> None:
++    plan = build_baby_fork_routeproxy_plan(tmp_path, context_id="ctx-baby-fork-001")
++
++    assert len(plan.by_action("create")) == 3
++    assert len(plan.by_action("delete")) == 0
++    assert len(plan.by_action("update")) == 0
++    assert len(plan.by_action("error")) == 0
++
++    assert tuple(item.route_id for item in plan.by_action("create")) == (
++        "baby_fork.context_gate",
++        "baby_fork.retrieval",
++        "baby_fork.variant_stub",
++    )
+diff --git a/tools/baby_fork_routeproxy_plan.py b/tools/baby_fork_routeproxy_plan.py
+new file mode 100644
+index 0000000..fe0a362
+--- /dev/null
++++ b/tools/baby_fork_routeproxy_plan.py
+@@ -0,0 +1,45 @@
++#!/usr/bin/env python3
++"""Build a baby-fork RouteProxy dry-run plan from ControlFS desired manifests.
++
++Usage:
++
++    PYTHONPATH=src:. python tools/baby_fork_routeproxy_plan.py \
++      .var/baby_fork_controlfs
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++
++from context.baby_fork_controlfs import (
++    baby_fork_controlfs_summary,
++    build_baby_fork_routeproxy_plan,
++)
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Build baby-fork RouteProxy dry-run plan.")
++    parser.add_argument("controlfs_root", type=Path)
++    parser.add_argument("--context-id", default="baby_fork_smoke")
++    parser.add_argument("--include-noop", action="store_true")
++    parser.add_argument(
++        "--no-write-desired",
++        action="store_true",
++        help="Do not create/update desired manifests before building the plan.",
++    )
++    args = parser.parse_args(argv)
++
++    plan = build_baby_fork_routeproxy_plan(
++        args.controlfs_root,
++        context_id=args.context_id,
++        include_noop=args.include_noop,
++        write_desired=not args.no_write_desired,
++    )
++    print(json.dumps(baby_fork_controlfs_summary(args.controlfs_root, plan), indent=2, sort_keys=True))
++    return 1 if plan.has_errors() else 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tools/write_baby_fork_controlfs_desired.py b/tools/write_baby_fork_controlfs_desired.py
+new file mode 100644
+index 0000000..7f78f73
+--- /dev/null
++++ b/tools/write_baby_fork_controlfs_desired.py
+@@ -0,0 +1,34 @@
++#!/usr/bin/env python3
++"""Write ControlFS desired route manifests for baby-fork routes.
++
++Usage:
++
++    PYTHONPATH=src:. python tools/write_baby_fork_controlfs_desired.py \
++      .var/baby_fork_controlfs
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++
++from context.baby_fork_controlfs import write_baby_fork_desired_manifests
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Write baby-fork ControlFS desired route manifests.")
++    parser.add_argument("controlfs_root", type=Path)
++    parser.add_argument("--context-id", default="baby_fork_smoke")
++    args = parser.parse_args(argv)
++
++    paths = write_baby_fork_desired_manifests(
++        args.controlfs_root,
++        context_id=args.context_id,
++    )
++    print(json.dumps({"written": [str(path) for path in paths]}, indent=2, sort_keys=True))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

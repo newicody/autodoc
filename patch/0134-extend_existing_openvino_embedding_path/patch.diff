@@ -1,0 +1,389 @@
+diff --git a/PHASE0134_TEST_REPORT.md b/PHASE0134_TEST_REPORT.md
+new file mode 100644
+index 0000000..9927835
+--- /dev/null
++++ b/PHASE0134_TEST_REPORT.md
+@@ -0,0 +1,23 @@
++# PHASE0134_TEST_REPORT
++
++```text
++phase: 0134-extend_existing_openvino_embedding_path
++code_rule_review: done
++code_rule_update_required: true
++code_rule_reason: locks the anti-duplication rule for OpenVINO/E5 adapters and proves existing query/passage support.
++live_path_status: transition
++live_path_uses_real_backend: false
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++```
++
++Validation expected on full repository:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/inference/test_openvino_embedding_existing_path_0134.py tests/rules/test_openvino_existing_embedding_path_0134_rule.py
++PYTHONPATH=src:. pytest -q tests/inference tests/rules
++```
++
++0134 is an integration-lock phase. It does not claim a green real backend path yet; it prevents adapter duplication and prepares 0135 to wire vector indexing jobs into the existing OpenVINO/E5 membrane.
+diff --git a/doc/CHANGELOG_0134_OPENVINO_EXISTING_EMBEDDING_PATH.md b/doc/CHANGELOG_0134_OPENVINO_EXISTING_EMBEDDING_PATH.md
+new file mode 100644
+index 0000000..ec20cdb
+--- /dev/null
++++ b/doc/CHANGELOG_0134_OPENVINO_EXISTING_EMBEDDING_PATH.md
+@@ -0,0 +1,5 @@
++# Changelog 0134 — Existing OpenVINO/E5 embedding path
++
++Added tests and documentation proving that the existing OpenVINO/E5 embedding membrane already supports query/passage vector items needed by vector indexing.
++
++No new OpenVINO adapter, Scheduler integration, Qdrant runtime, or RouteProxy runtime was added.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0134.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0134.md
+new file mode 100644
+index 0000000..2e3ab5c
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0134.md
+@@ -0,0 +1,15 @@
++# 0134 operational note — Existing OpenVINO path
++
++0134 does not change RouteProxy or Scheduler. It locks the inference side before wiring vector jobs.
++
++Operational direction:
++
++```text
++Scheduler vector indexing command
++-> existing handler path
++-> RouteProxy /dev/shm frames
++-> existing OpenVINO/E5 embedding membrane
++-> Qdrant projection adapter later
++```
++
++No OpenVINO import is introduced outside `src/inference/openvino_runtime.py`.
+diff --git a/doc/architecture/OPENVINO_EXISTING_EMBEDDING_PATH_0134.md b/doc/architecture/OPENVINO_EXISTING_EMBEDDING_PATH_0134.md
+new file mode 100644
+index 0000000..9e36843
+--- /dev/null
++++ b/doc/architecture/OPENVINO_EXISTING_EMBEDDING_PATH_0134.md
+@@ -0,0 +1,65 @@
++# 0134 — Existing OpenVINO/E5 embedding path
++
++0134 extends the existing OpenVINO/E5 embedding path by tests and integration documentation.
++
++It deliberately does **not** create a new adapter. The audit shows the OpenVINO/E5 stack already exists, including:
++
++```text
++src/inference/openvino_embedding_adapter.py
++src/inference/openvino_runtime.py
++src/inference/openvino_backend.py
++src/inference/e5_pipeline.py
++src/inference/embedding_pipeline.py
++src/inference/registry.py
++src/inference/handlers.py
++```
++
++## Locked decision
++
++Do not create a parallel E5OpenVINOEmbeddingAdapter.
++
++`src/inference/openvino_embedding_adapter.py` is the existing embedding membrane. It already has:
++
++```text
++OpenVINOEmbeddingRuntimeTarget
++OpenVINOEmbeddingPolicy
++OpenVINOEmbeddingText
++OpenVINOEmbeddingVector
++OpenVINOEmbeddingBatch
++OpenVINOEmbeddingAdapter
++build_embedding_vector
++build_embedding_texts_from_hydrated_bundle
++local_multilingual_e5_openvino_target
++```
++
++`src/inference/openvino_runtime.py` is the only real OpenVINO import boundary. Scheduler remains outside OpenVINO. Qdrant remains outside OpenVINO.
++
++## E5 roles
++
++```text
++query: text is for retrieval
++passage: text is for corpus, contracts, outputs, and synthesis candidates
++```
++
++This is enough for the next vector indexing path:
++
++```text
++VectorIndexableItem
++-> OpenVINOEmbeddingText(role=query|passage)
++-> OpenVINOEmbeddingAdapter / existing E5 pipeline
++-> OpenVINOEmbeddingVector
++-> Qdrant projection adapter later
++```
++
++## Code rule review
++
++```text
++code_rule_review: done
++code_rule_update_required: true
++code_rule_reason: 0134 locks the anti-duplication rule for OpenVINO/E5 adapters. New OpenVINO/E5 capabilities must reuse/extend existing src/inference surfaces unless a documented gap proves otherwise.
++live_path_status: transition
++live_path_uses_real_backend: false
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++```
+diff --git a/doc/code-rules/0134_extend_existing_openvino_path_rule.md b/doc/code-rules/0134_extend_existing_openvino_path_rule.md
+new file mode 100644
+index 0000000..ff94792
+--- /dev/null
++++ b/doc/code-rules/0134_extend_existing_openvino_path_rule.md
+@@ -0,0 +1,27 @@
++# Code rule addendum — 0134 existing OpenVINO/E5 path
++
++Before adding any new OpenVINO or E5 adapter, audit the existing inference package.
++
++Preferred surfaces:
++
++```text
++reuse or extend src/inference/openvino_embedding_adapter.py
++reuse or extend src/inference/e5_pipeline.py
++reuse or extend src/inference/embedding_pipeline.py
++reuse or extend src/inference/openvino_backend.py
++reuse or extend src/inference/registry.py
++```
++
++`openvino` imports remain confined to `src/inference/openvino_runtime.py` unless a future code-rule update explicitly expands that boundary.
++
++Do not import OpenVINO from Scheduler, Dispatcher, PolicyEngine, RouteProxy, or context contracts.
++
++Do not create a parallel adapter such as:
++
++```text
++E5OpenVINOEmbeddingAdapter
++NewOpenVINOEmbeddingAdapter
++OpenVINOVectorIndexer
++```
++
++unless an audit documents a concrete gap in the existing stack and explains why extension is insufficient.
+diff --git a/doc/docs/architecture/runtime/134_existing_openvino_embedding_path.dot b/doc/docs/architecture/runtime/134_existing_openvino_embedding_path.dot
+new file mode 100644
+index 0000000..d6a3777
+--- /dev/null
++++ b/doc/docs/architecture/runtime/134_existing_openvino_embedding_path.dot
+@@ -0,0 +1,17 @@
++digraph existing_openvino_embedding_path_0134 {
++  rankdir=LR;
++  node [shape=box];
++
++  scheduler [label="Scheduler\noutside OpenVINO"];
++  route [label="/dev/shm vector frame"];
++  adapter [label="openvino_embedding_adapter.py\nexisting membrane"];
++  pipeline [label="e5_pipeline.py / embedding_pipeline.py\nexisting composition"];
++  runtime [label="openvino_runtime.py\nonly real openvino import"];
++  qdrant [label="qdrant_projection_adapter.py\nlater projection"];
++
++  scheduler -> route;
++  route -> adapter;
++  adapter -> pipeline;
++  pipeline -> runtime;
++  adapter -> qdrant [label="vector refs later"];
++}
+diff --git a/doc/manifests/MANIFEST_0134_CHANGED_FILES.md b/doc/manifests/MANIFEST_0134_CHANGED_FILES.md
+new file mode 100644
+index 0000000..6382013
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0134_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest 0134 — changed files
++
++- tests/inference/test_openvino_embedding_existing_path_0134.py
++- tests/rules/test_openvino_existing_embedding_path_0134_rule.py
++- doc/architecture/OPENVINO_EXISTING_EMBEDDING_PATH_0134.md
++- doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0134.md
++- doc/code-rules/0134_extend_existing_openvino_path_rule.md
++- doc/docs/architecture/runtime/134_existing_openvino_embedding_path.dot
++- doc/CHANGELOG_0134_OPENVINO_EXISTING_EMBEDDING_PATH.md
++- doc/manifests/MANIFEST_0134_CHANGED_FILES.md
++- PHASE0134_TEST_REPORT.md
++
++No parallel OpenVINO/E5 adapter source file is added. Existing inference surfaces are reused and tested.
+diff --git a/tests/inference/test_openvino_embedding_existing_path_0134.py b/tests/inference/test_openvino_embedding_existing_path_0134.py
+new file mode 100644
+index 0000000..8ecd81e
+--- /dev/null
++++ b/tests/inference/test_openvino_embedding_existing_path_0134.py
+@@ -0,0 +1,76 @@
++from __future__ import annotations
++
++import math
++
++from inference.openvino_embedding_adapter import (
++    OpenVINOEmbeddingPolicy,
++    OpenVINOEmbeddingRuntimeTarget,
++    OpenVINOEmbeddingText,
++    build_embedding_vector,
++    local_multilingual_e5_openvino_target,
++)
++
++
++def test_existing_openvino_embedding_adapter_supports_query_role_without_new_adapter() -> None:
++    policy = OpenVINOEmbeddingPolicy(
++        expected_dimension=4,
++        require_normalized=True,
++        query_prefix="query: ",
++        passage_prefix="passage: ",
++    )
++    target = OpenVINOEmbeddingRuntimeTarget(
++        model_dir="/tmp/autodoc-test-e5",
++        dimension=4,
++        normalized=True,
++        backend_ref="openvino:model:test-e5-small",
++    )
++    text = OpenVINOEmbeddingText(
++        source_ref="route-frame:vector-indexing-query",
++        text=f"{policy.query_prefix}analyse thermique cuillere bebe",
++        role="query",
++        metadata=(("phase", "0134"),),
++    )
++
++    vector = build_embedding_vector(text, (0.5, 0.5, 0.5, 0.5), target, policy)
++
++    assert vector.role == "query"
++    assert vector.source_ref == "route-frame:vector-indexing-query"
++    assert vector.dimension == 4
++    assert vector.normalized is True
++    assert math.isclose(vector.l2_norm, 1.0)
++    assert vector.backend_ref == "openvino:model:test-e5-small"
++
++
++def test_existing_openvino_embedding_adapter_supports_passage_role_for_projection() -> None:
++    policy = OpenVINOEmbeddingPolicy(expected_dimension=4, require_normalized=True)
++    target = OpenVINOEmbeddingRuntimeTarget(
++        model_dir="/tmp/autodoc-test-e5",
++        dimension=4,
++        backend_ref="openvino:model:test-e5-small",
++    )
++    text = OpenVINOEmbeddingText(
++        source_ref="sql:contract/thermal-preliminary-opinion",
++        text="passage: contrat avis thermique preliminaire",
++        role="passage",
++        metadata=(("collection_role", "contracts"),),
++    )
++
++    vector = build_embedding_vector(text, (0.5, 0.5, 0.5, 0.5), target, policy)
++    mapping = vector.to_mapping()
++
++    assert mapping["role"] == "passage"
++    assert mapping["source_ref"] == "sql:contract/thermal-preliminary-opinion"
++    assert mapping["dimension"] == 4
++    assert mapping["normalized"] is True
++    assert mapping["metadata"] == {"collection_role": "contracts"}
++
++
++def test_existing_local_e5_target_documents_real_model_boundary() -> None:
++    target = local_multilingual_e5_openvino_target(device="CPU")
++    mapping = target.to_mapping()
++
++    assert mapping["device"] == "CPU"
++    assert mapping["dimension"] == 384
++    assert mapping["normalized"] is True
++    assert mapping["runtime_import"] == "src/inference/openvino_runtime.py"
++    assert mapping["model_xml_path"].endswith("/openvino_model.xml")
+diff --git a/tests/rules/test_openvino_existing_embedding_path_0134_rule.py b/tests/rules/test_openvino_existing_embedding_path_0134_rule.py
+new file mode 100644
+index 0000000..1654f5a
+--- /dev/null
++++ b/tests/rules/test_openvino_existing_embedding_path_0134_rule.py
+@@ -0,0 +1,94 @@
++from __future__ import annotations
++
++import ast
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++ADAPTER = ROOT / "src" / "inference" / "openvino_embedding_adapter.py"
++RUNTIME = ROOT / "src" / "inference" / "openvino_runtime.py"
++DOC = ROOT / "doc" / "architecture" / "OPENVINO_EXISTING_EMBEDDING_PATH_0134.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0134_CHANGED_FILES.md"
++CODE_RULE = ROOT / "doc" / "code-rules" / "0134_extend_existing_openvino_path_rule.md"
++
++
++def test_0134_documents_extend_existing_openvino_path_not_new_adapter() -> None:
++    text = DOC.read_text(encoding="utf-8")
++    required = [
++        "0134 extends the existing OpenVINO/E5 embedding path by tests and integration documentation",
++        "Do not create a parallel E5OpenVINOEmbeddingAdapter",
++        "src/inference/openvino_embedding_adapter.py is the existing embedding membrane",
++        "src/inference/openvino_runtime.py is the only real OpenVINO import boundary",
++        "Scheduler remains outside OpenVINO",
++        "Qdrant remains outside OpenVINO",
++        "query: text is for retrieval",
++        "passage: text is for corpus, contracts, outputs, and synthesis candidates",
++        "code_rule_review: done",
++        "code_rule_update_required: true",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0134_code_rule_addendum_exists_for_openvino_reuse() -> None:
++    text = CODE_RULE.read_text(encoding="utf-8")
++    required = [
++        "Before adding any new OpenVINO or E5 adapter",
++        "reuse or extend src/inference/openvino_embedding_adapter.py",
++        "reuse or extend src/inference/e5_pipeline.py",
++        "openvino imports remain confined to src/inference/openvino_runtime.py",
++        "Do not import OpenVINO from Scheduler, Dispatcher, PolicyEngine, RouteProxy, or context contracts",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0134_existing_adapter_contains_required_query_passage_contracts() -> None:
++    text = ADAPTER.read_text(encoding="utf-8")
++    required = [
++        "class OpenVINOEmbeddingAdapter",
++        "class OpenVINOEmbeddingText",
++        "class OpenVINOEmbeddingPolicy",
++        "build_embedding_texts_from_hydrated_bundle",
++        "build_embedding_vector",
++        "local_multilingual_e5_openvino_target",
++        "query",
++        "passage",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0134_real_openvino_import_stays_in_openvino_runtime_only() -> None:
++    adapter_tree = ast.parse(ADAPTER.read_text(encoding="utf-8"))
++    adapter_imports: set[str] = set()
++    for node in ast.walk(adapter_tree):
++        if isinstance(node, ast.Import):
++            adapter_imports.update(alias.name.split(".", 1)[0] for alias in node.names)
++        elif isinstance(node, ast.ImportFrom) and node.module:
++            adapter_imports.add(node.module.split(".", 1)[0])
++    assert "openvino" not in adapter_imports
++
++    runtime_text = RUNTIME.read_text(encoding="utf-8")
++    assert "import openvino" in runtime_text
++
++
++def test_0134_manifest_does_not_add_parallel_openvino_adapter_source() -> None:
++    text = MANIFEST.read_text(encoding="utf-8")
++    required = [
++        "tests/inference/test_openvino_embedding_existing_path_0134.py",
++        "tests/rules/test_openvino_existing_embedding_path_0134_rule.py",
++        "doc/architecture/OPENVINO_EXISTING_EMBEDDING_PATH_0134.md",
++        "doc/code-rules/0134_extend_existing_openvino_path_rule.md",
++    ]
++    for phrase in required:
++        assert phrase in text
++    forbidden = [
++        "src/inference/e5_openvino_runtime_adapter.py",
++        "src/inference/new_openvino_embedding_adapter.py",
++        "src/runtime/openvino",
++        "src/kernel/scheduler.py",
++        "src/kernel/dispatcher.py",
++        "src/policy/engine.py",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text

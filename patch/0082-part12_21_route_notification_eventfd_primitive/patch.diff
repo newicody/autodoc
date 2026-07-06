@@ -1,0 +1,831 @@
+diff --git a/doc/architecture/CONTROLPROXY_ACTIVE_ROUTE_MATERIALIZER.md b/doc/architecture/CONTROLPROXY_ACTIVE_ROUTE_MATERIALIZER.md
+index 7b3b9a6..e6bced1 100644
+--- a/doc/architecture/CONTROLPROXY_ACTIVE_ROUTE_MATERIALIZER.md
++++ b/doc/architecture/CONTROLPROXY_ACTIVE_ROUTE_MATERIALIZER.md
+@@ -87,17 +87,19 @@ not_leased
+ 
+ This is the seam for the real ControlProxy materializer.
+ 
+-Later phases can replace the current direct function call with:
++Later phases should replace the current direct function call with an
++explicitly called pump/tick, not a service:
+ 
+ ```text
+-ControlProxy daemon / OpenRC service
+--> watches ControlFS desired/request state
++ControlProxy pump/tick
++-> reads ControlFS desired/request state when called
+ -> materializes runtime routes
+ -> writes active state
+ -> publishes bus facts
+ ```
+ 
+-The API and files should remain stable.
++The API and files should remain stable. No OpenRC service and no resident daemon
++are planned for this path.
+ 
+ ## Non-goals
+ 
+diff --git a/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md b/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
+index bfb575f..3d141d9 100644
+--- a/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
++++ b/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
+@@ -20,18 +20,19 @@ with a real ControlProxy implementation.
+ 
+ ```text
+ 0082 notification primitive
+-  eventfd or semaphore abstraction, still no daemon
++  eventfd abstraction with pipe fallback, no daemon and no CLI
+ 
+ 0083 route lease state
+   not_leased -> leased -> active -> draining -> closed
+ 
+-0084 ControlProxy OpenRC service skeleton
+-  watches ControlFS desired/request state
++0084 ControlProxy pump/tick
++  importable function, no service, no OpenRC, no resident daemon
++  reads ControlFS desired/request state when explicitly called
+   calls active route materializer
+   publishes bus facts
+ 
+ 0085 Scheduler handshake
+-  Scheduler waits for ready active route
++  Scheduler calls/waits on the ControlProxy pump/tick path
+   returns route_handle/lease to producer
+ 
+ 0086 VisPy adapter
+diff --git a/doc/architecture/ROUTE_NOTIFICATION_PRIMITIVE.md b/doc/architecture/ROUTE_NOTIFICATION_PRIMITIVE.md
+new file mode 100644
+index 0000000..176dace
+--- /dev/null
++++ b/doc/architecture/ROUTE_NOTIFICATION_PRIMITIVE.md
+@@ -0,0 +1,119 @@
++# Route notification primitive
++
++Status: 0082 implementation.
++
++This phase adds a real notification primitive usable from Python without a
++daemon and without adding a CLI.
++
++## Problem
++
++The mmap route from `0080-r2` can store frames, but a reader still needs a
++cheap way to know that frames are available.
++
++The notification primitive provides this sequence:
++
++```text
++writer writes RouteMessage frame to mmap route
++writer calls notifier.notify(1)
++reader/select loop sees notifier.fileno() readable
++reader drains notifier counter
++reader drains mmap route frames
++```
++
++## Implementation choice
++
++Use existing kernel/Python/libc primitives from Python:
++
++```text
++preferred: Python os.eventfd
++fallback: libc eventfd through ctypes
++fallback: non-blocking pipe
++```
++
++No custom C extension is required.
++
++## Why eventfd
++
++`eventfd` is the clean Linux primitive for counter-style wakeups:
++
++```text
++one fd
++counter semantics
++selector-friendly
++cheap wakeup
++usable across processes later
++```
++
++The pipe fallback keeps tests and non-Linux development usable.
++
++## API
++
++```text
++RouteNotifier.create(route_handle, backend="auto")
++RouteNotifier.fileno()
++RouteNotifier.notify(count=1)
++RouteNotifier.wait_once(timeout=0.0)
++RouteNotifier.drain()
++RouteNotifier.close()
++```
++
++Helper functions:
++
++```text
++notify_after_write(notifier, written_count=1)
++drain_ready_count(notifier)
++eventfd_available()
++```
++
++## No daemon, no service
++
++This phase intentionally does not add:
++
++```text
++daemon
++service
++OpenRC
++ControlFS watcher
++Scheduler call
++lease issuing
++lease handoff
++VisPy renderer
++```
++
++## No CLI
++
++This patch intentionally does not add a CLI.
++
++The rule remains:
++
++```text
++module logic is importable
++tests validate behavior
++CLI only when it is a real operator boundary
++```
++
++## Integration with mmap
++
++The primitive is used around the mmap route, not inside its layout:
++
++```text
++MmapFixedSlotRoute.write_message(...)
++RouteNotifier.notify(1)
++RouteNotifier.wait_once(...)
++RouteNotifier.drain()
++MmapFixedSlotRoute.drain()
++```
++
++The notifier does not modify slot size and does not resize mmap routes.
++
++## Next
++
++The next phase should introduce route lease state transitions without adding a
++daemon:
++
++```text
++not_leased -> leased -> active -> draining -> closed
++```
++
++A later ControlProxy pump/tick can call importable functions explicitly. It is
++not a service and not a resident daemon.
+diff --git a/doc/changelog/0082-route-notification-eventfd-primitive.md b/doc/changelog/0082-route-notification-eventfd-primitive.md
+new file mode 100644
+index 0000000..2aab54b
+--- /dev/null
++++ b/doc/changelog/0082-route-notification-eventfd-primitive.md
+@@ -0,0 +1,24 @@
++# 0082 - Route notification eventfd primitive
++
++## Added
++
++- `runtime.route_notification`
++- `RouteNotifier`
++- eventfd backend through:
++  - Python `os.eventfd` when available
++  - libc `eventfd` through `ctypes` fallback
++- non-blocking pipe fallback
++- selector-friendly `fileno()`
++- `notify()`, `drain()`, `wait_once()`
++- tests integrating notification with mmap route write/drain
++
++## Not added
++
++- No daemon.
++- No service.
++- No OpenRC.
++- No ControlFS watcher.
++- No Scheduler wiring.
++- No lease handoff.
++- No live mmap resize.
++- No CLI.
+diff --git a/src/runtime/route_notification.py b/src/runtime/route_notification.py
+new file mode 100644
+index 0000000..1273f41
+--- /dev/null
++++ b/src/runtime/route_notification.py
+@@ -0,0 +1,321 @@
++"""Route notification primitive.
++
++This module implements phase 0082.
++
++It provides a Python importable notification abstraction for mmap routes:
++
++    writer writes RouteMessage frame to mmap route
++    writer calls notifier.notify(1)
++    reader/select loop sees notifier.fileno() readable
++    reader drains notifier counter
++    reader drains mmap route frames
++
++Implementation choices:
++
++- Prefer Linux eventfd through Python's os.eventfd when available.
++- Fall back to libc eventfd through ctypes when Python lacks os.eventfd.
++- Fall back to a non-blocking pipe when eventfd is unavailable or when tests
++  request backend="pipe".
++
++This uses existing kernel/Python/libc primitives from Python. It does not
++require a custom C extension.
++
++It deliberately does not:
++- create a daemon
++- start a service
++- use OpenRC
++- watch ControlFS
++- call Scheduler
++- issue leases
++- implement lease handoff
++- mutate mmap route layout
++- resize live mmap routes
++- create POSIX shm_open objects
++- require /dev/shm
++- implement inter-process ownership rules
++- implement VisPy
++
++It is a primitive, not a CLI.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++import ctypes
++import errno
++import os
++import selectors
++import struct
++from typing import Literal
++
++
++NotificationBackend = Literal["auto", "eventfd", "pipe"]
++ResolvedBackend = Literal["eventfd", "pipe"]
++
++_U64_NATIVE = "Q"
++
++
++class RouteNotificationError(RuntimeError):
++    """Base error for route notification failures."""
++
++
++class RouteNotificationClosedError(RouteNotificationError):
++    """Raised when using a closed notifier."""
++
++
++class RouteNotificationWouldBlock(RouteNotificationError):
++    """Raised when notify cannot write without blocking."""
++
++
++@dataclass(frozen=True)
++class RouteNotificationStats:
++    """User-visible notification state."""
++
++    route_handle: str
++    backend: ResolvedBackend
++    read_fd: int
++    write_fd: int
++    pending_last_drain: int
++    closed: bool
++
++    def to_mapping(self) -> dict[str, int | str | bool]:
++        return {
++            "route_handle": self.route_handle,
++            "backend": self.backend,
++            "read_fd": self.read_fd,
++            "write_fd": self.write_fd,
++            "pending_last_drain": self.pending_last_drain,
++            "closed": self.closed,
++        }
++
++
++class RouteNotifier:
++    """Notification primitive usable with selectors.
++
++    `fileno()` returns the readable file descriptor. A consumer can register it
++    in `selectors.DefaultSelector` and drain the mmap route after readability.
++    """
++
++    def __init__(
++        self,
++        *,
++        route_handle: str,
++        backend: ResolvedBackend,
++        read_fd: int,
++        write_fd: int,
++        owns_read_fd: bool = True,
++        owns_write_fd: bool = True,
++    ):
++        self.route_handle = _safe_handle(route_handle)
++        self.backend = backend
++        self._read_fd = read_fd
++        self._write_fd = write_fd
++        self._owns_read_fd = owns_read_fd
++        self._owns_write_fd = owns_write_fd
++        self._closed = False
++        self._pending_last_drain = 0
++
++    @classmethod
++    def create(
++        cls,
++        route_handle: str,
++        *,
++        backend: NotificationBackend = "auto",
++        nonblocking: bool = True,
++    ) -> "RouteNotifier":
++        """Create a notifier.
++
++        `auto` selects eventfd when available, otherwise pipe.
++        """
++
++        if backend not in ("auto", "eventfd", "pipe"):
++            raise ValueError("backend must be auto, eventfd or pipe")
++
++        if backend in ("auto", "eventfd"):
++            fd = _create_eventfd(nonblocking=nonblocking)
++            if fd is not None:
++                return cls(
++                    route_handle=route_handle,
++                    backend="eventfd",
++                    read_fd=fd,
++                    write_fd=fd,
++                    owns_read_fd=True,
++                    owns_write_fd=False,
++                )
++            if backend == "eventfd":
++                raise RouteNotificationError("eventfd is not available on this platform")
++
++        read_fd, write_fd = os.pipe()
++        if nonblocking:
++            os.set_blocking(read_fd, False)
++            os.set_blocking(write_fd, False)
++        return cls(
++            route_handle=route_handle,
++            backend="pipe",
++            read_fd=read_fd,
++            write_fd=write_fd,
++            owns_read_fd=True,
++            owns_write_fd=True,
++        )
++
++    def fileno(self) -> int:
++        """Return readable fd for selectors."""
++
++        self._ensure_open()
++        return self._read_fd
++
++    def notify(self, count: int = 1) -> None:
++        """Signal that count route items are available."""
++
++        self._ensure_open()
++        if not isinstance(count, int) or isinstance(count, bool) or count < 1:
++            raise ValueError("count must be a positive integer")
++        if count >= 2**64:
++            raise ValueError("count must fit in uint64")
++
++        payload = struct.pack(_U64_NATIVE, count)
++        try:
++            os.write(self._write_fd, payload)
++        except BlockingIOError as exc:
++            raise RouteNotificationWouldBlock("notification fd would block") from exc
++        except OSError as exc:
++            raise RouteNotificationError(str(exc)) from exc
++
++    def drain(self) -> int:
++        """Drain all currently available notification counts."""
++
++        self._ensure_open()
++        total = 0
++
++        while True:
++            try:
++                raw = os.read(self._read_fd, 8)
++            except BlockingIOError:
++                break
++            except OSError as exc:
++                if exc.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
++                    break
++                raise RouteNotificationError(str(exc)) from exc
++
++            if raw == b"":
++                break
++            if len(raw) != 8:
++                raise RouteNotificationError("partial notification counter read")
++            total += struct.unpack(_U64_NATIVE, raw)[0]
++
++            if self.backend == "eventfd":
++                # eventfd returns the whole counter in one read.
++                break
++
++        self._pending_last_drain = total
++        return total
++
++    def wait_once(self, timeout: float | None = 0.0) -> bool:
++        """Return True when the notifier is readable within timeout."""
++
++        self._ensure_open()
++        selector = selectors.DefaultSelector()
++        try:
++            selector.register(self._read_fd, selectors.EVENT_READ)
++            return bool(selector.select(timeout))
++        finally:
++            selector.close()
++
++    def stats(self) -> RouteNotificationStats:
++        return RouteNotificationStats(
++            route_handle=self.route_handle,
++            backend=self.backend,
++            read_fd=self._read_fd,
++            write_fd=self._write_fd,
++            pending_last_drain=self._pending_last_drain,
++            closed=self._closed,
++        )
++
++    def close(self) -> None:
++        if self._closed:
++            return
++        if self._owns_read_fd:
++            _close_fd(self._read_fd)
++        if self._owns_write_fd and self._write_fd != self._read_fd:
++            _close_fd(self._write_fd)
++        self._closed = True
++
++    def __enter__(self) -> "RouteNotifier":
++        return self
++
++    def __exit__(self, exc_type, exc, tb) -> None:
++        self.close()
++
++    def _ensure_open(self) -> None:
++        if self._closed:
++            raise RouteNotificationClosedError("route notifier is closed")
++
++
++def notify_after_write(notifier: RouteNotifier, *, written_count: int = 1) -> None:
++    """Tiny helper to make write-then-notify call sites explicit."""
++
++    notifier.notify(written_count)
++
++
++def drain_ready_count(notifier: RouteNotifier) -> int:
++    """Tiny helper to make select-then-drain call sites explicit."""
++
++    return notifier.drain()
++
++
++def eventfd_available() -> bool:
++    """Return whether eventfd can be created from this Python process."""
++
++    fd = _create_eventfd(nonblocking=True)
++    if fd is None:
++        return False
++    _close_fd(fd)
++    return True
++
++
++def _create_eventfd(*, nonblocking: bool) -> int | None:
++    flags = 0
++    if nonblocking:
++        flags |= getattr(os, "EFD_NONBLOCK", 0x800)
++    flags |= getattr(os, "EFD_CLOEXEC", 0x80000)
++
++    if hasattr(os, "eventfd"):
++        try:
++            return os.eventfd(0, flags)  # type: ignore[attr-defined]
++        except (AttributeError, OSError):
++            pass
++
++    return _create_eventfd_ctypes(flags)
++
++
++def _create_eventfd_ctypes(flags: int) -> int | None:
++    try:
++        libc = ctypes.CDLL(None, use_errno=True)
++        eventfd = getattr(libc, "eventfd")
++    except (AttributeError, OSError):
++        return None
++
++    eventfd.argtypes = [ctypes.c_uint, ctypes.c_int]
++    eventfd.restype = ctypes.c_int
++    fd = int(eventfd(0, flags))
++    if fd < 0:
++        err = ctypes.get_errno()
++        if err in (errno.ENOSYS, errno.EINVAL, errno.EPERM):
++            return None
++        return None
++    return fd
++
++
++def _safe_handle(value: str) -> str:
++    if not isinstance(value, str) or not value:
++        raise ValueError("route_handle must be a non-empty string")
++    if "/" in value or "\\" in value or ".." in value:
++        raise ValueError("route_handle must not contain path traversal")
++    return value
++
++
++def _close_fd(fd: int) -> None:
++    try:
++        os.close(fd)
++    except OSError:
++        pass
+diff --git a/tests/rules/test_controlproxy_active_routes_rule.py b/tests/rules/test_controlproxy_active_routes_rule.py
+index 175c0da..549ae44 100644
+--- a/tests/rules/test_controlproxy_active_routes_rule.py
++++ b/tests/rules/test_controlproxy_active_routes_rule.py
+@@ -24,7 +24,8 @@ def test_active_route_materializer_doc_locks_real_implementation_path() -> None:
+         "missipy.controlproxy.active_route_status.v1",
+         "not_leased",
+         "Real implementation path",
+-        "ControlProxy daemon / OpenRC service",
++        "ControlProxy pump/tick",
++        "No OpenRC service and no resident daemon",
+         "No CLI",
+         "module logic is importable",
+         "CLI only when it is a real operator boundary",
+diff --git a/tests/rules/test_route_notification_rule.py b/tests/rules/test_route_notification_rule.py
+new file mode 100644
+index 0000000..5aa8311
+--- /dev/null
++++ b/tests/rules/test_route_notification_rule.py
+@@ -0,0 +1,80 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "ROUTE_NOTIFICATION_PRIMITIVE.md"
++MODULE = ROOT / "src" / "runtime" / "route_notification.py"
++SEQUENCE = ROOT / "doc" / "architecture" / "REAL_IMPLEMENTATION_SEQUENCE_0081.md"
++ACTIVE_DOC = ROOT / "doc" / "architecture" / "CONTROLPROXY_ACTIVE_ROUTE_MATERIALIZER.md"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing file: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_route_notification_doc_locks_eventfd_and_no_daemon_no_cli() -> None:
++    text = _read(DOC)
++
++    required_phrases = [
++        "Status: 0082 implementation.",
++        "writer writes RouteMessage frame to mmap route",
++        "writer calls notifier.notify(1)",
++        "reader/select loop sees notifier.fileno() readable",
++        "reader drains notifier counter",
++        "reader drains mmap route frames",
++        "preferred: Python os.eventfd",
++        "fallback: libc eventfd through ctypes",
++        "fallback: non-blocking pipe",
++        "No custom C extension is required.",
++        "Why eventfd",
++        "No daemon, no service",
++        "OpenRC",
++        "No CLI",
++        "module logic is importable",
++        "CLI only when it is a real operator boundary",
++        "does not modify slot size",
++        "does not resize mmap routes",
++        "not a service and not a resident daemon",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_route_notification_module_locks_non_goals_and_backends() -> None:
++    text = _read(MODULE)
++
++    required_phrases = [
++        "Prefer Linux eventfd through Python's os.eventfd",
++        "Fall back to libc eventfd through ctypes",
++        "Fall back to a non-blocking pipe",
++        "does not",
++        "create a daemon",
++        "start a service",
++        "use OpenRC",
++        "watch ControlFS",
++        "call Scheduler",
++        "issue leases",
++        "implement lease handoff",
++        "mutate mmap route layout",
++        "resize live mmap routes",
++        "create POSIX shm_open objects",
++        "require /dev/shm",
++        "implement inter-process ownership rules",
++        "implement VisPy",
++        "not a CLI",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_real_sequence_removes_openrc_service_plan() -> None:
++    text = _read(SEQUENCE)
++    active_doc = _read(ACTIVE_DOC)
++
++    assert "0084 ControlProxy pump/tick" in text
++    assert "no service, no OpenRC, no resident daemon" in text
++    assert "No OpenRC service and no resident daemon" in active_doc
++    assert "ControlProxy daemon / OpenRC service" not in active_doc
+diff --git a/tests/test_route_notification.py b/tests/test_route_notification.py
+new file mode 100644
+index 0000000..40c60cd
+--- /dev/null
++++ b/tests/test_route_notification.py
+@@ -0,0 +1,187 @@
++import selectors
++from pathlib import Path
++
++import pytest
++
++from context.baby_fork_controlfs import build_route_sizing_hints_from_messages, write_baby_fork_desired_manifests
++from context.baby_fork_runtime_projection import build_baby_fork_runtime_projection
++from runtime.controlfs_manifest import RouteManifest, route_manifest_path
++from runtime.controlproxy_active_routes import materialize_active_route
++from runtime.controlproxy_prepare import decide_route_prepare, route_prepare_request_from_message
++from runtime.mmap_fixed_slot_route import MmapFixedSlotRoute
++from runtime.route_notification import (
++    RouteNotificationClosedError,
++    RouteNotifier,
++    drain_ready_count,
++    eventfd_available,
++    notify_after_write,
++)
++from runtime.shm_runtime_schema import ROUTE_MESSAGE_SCHEMA
++
++
++def _message(route_id: str = "baby_fork.retrieval") -> dict:
++    return {
++        "schema": ROUTE_MESSAGE_SCHEMA,
++        "route_id": route_id,
++        "message_id": "msg:baby_fork.retrieval.reply",
++        "kind": "reply",
++        "source": "retrieval_worker",
++        "target": "scheduler",
++        "occurred_at": "2026-07-04T20:00:00Z",
++        "payload_schema": "missipy.baby_fork.route_reply.v1",
++        "payload": {
++            "context_id": "ctx-baby-fork-001",
++            "retrieved_ids": ["baby-silicone-fork", "rounded-stainless-soft-handle"],
++            "rejected_ids": ["nasa-antenna"],
++        },
++    }
++
++
++def _report() -> dict:
++    return {
++        "retrieval": {
++            "retrieved_ids": ["baby-silicone-fork", "rounded-stainless-soft-handle"],
++            "rejected_ids": ["nasa-antenna"],
++        },
++        "variant_generator_stub": {
++            "generated_variants": [
++                {"variant_id": "variant-1"},
++                {"variant_id": "variant-2"},
++            ]
++        },
++        "final_context": {
++            "context_id": "ctx-baby-fork-001",
++            "context_version": 2,
++            "selected_variant_id": "variant-1",
++        },
++    }
++
++
++def _active_record(tmp_path: Path):
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++    projection = build_baby_fork_runtime_projection(_report())
++    hints = build_route_sizing_hints_from_messages(projection.routes)
++    write_baby_fork_desired_manifests(
++        controlfs_root,
++        context_id="ctx-baby-fork-001",
++        sizing_hints=hints,
++    )
++    manifest = RouteManifest.from_path(route_manifest_path(controlfs_root, "baby_fork.retrieval"))
++    request = route_prepare_request_from_message(
++        _message(),
++        task_id=manifest.task_id,
++        zone=manifest.zone,
++        scope=manifest.scope,
++    )
++    decision = decide_route_prepare(request)
++    decision = type(decision)(
++        schema=decision.schema,
++        request_id=decision.request_id,
++        route_id=decision.route_id,
++        route_handle=decision.route_handle,
++        task_id=decision.task_id,
++        zone=decision.zone,
++        status=decision.status,
++        action=decision.action,
++        reason=decision.reason,
++        required_frame_bytes=decision.required_frame_bytes,
++        current_generation=decision.current_generation,
++        next_generation=decision.next_generation,
++        current_slot_size=decision.current_slot_size,
++        slot_size=manifest.slot_size,
++        slot_count=manifest.slot_count,
++        max_frame_bytes=manifest.max_frame_bytes,
++        max_ring_bytes=decision.max_ring_bytes,
++        max_prepare_ms=decision.max_prepare_ms,
++        drain_timeout_ms=decision.drain_timeout_ms,
++        lease_switch_timeout_ms=decision.lease_switch_timeout_ms,
++        notify=manifest.notify,
++        overflow_policy=manifest.overflow_policy,
++        decided_at=decision.decided_at,
++    )
++    return materialize_active_route(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        decision=decision,
++        desired_manifest=manifest,
++    )
++
++
++def test_pipe_notifier_counts_and_selects() -> None:
++    with RouteNotifier.create("baby_fork.retrieval@g1", backend="pipe") as notifier:
++        assert notifier.backend == "pipe"
++        assert not notifier.wait_once(timeout=0.0)
++
++        notifier.notify(2)
++        assert notifier.wait_once(timeout=0.1)
++        assert notifier.drain() == 2
++        assert notifier.drain() == 0
++
++        stats = notifier.stats()
++        assert stats.route_handle == "baby_fork.retrieval@g1"
++        assert stats.backend == "pipe"
++        assert stats.closed is False
++
++
++def test_auto_notifier_uses_eventfd_or_pipe() -> None:
++    with RouteNotifier.create("baby_fork.retrieval@g1", backend="auto") as notifier:
++        assert notifier.backend in ("eventfd", "pipe")
++        notifier.notify()
++        assert notifier.wait_once(timeout=0.1)
++        assert notifier.drain() == 1
++
++
++def test_notifier_is_selector_friendly() -> None:
++    with RouteNotifier.create("baby_fork.retrieval@g1", backend="pipe") as notifier:
++        selector = selectors.DefaultSelector()
++        try:
++            selector.register(notifier.fileno(), selectors.EVENT_READ)
++            notifier.notify(3)
++            events = selector.select(timeout=0.1)
++            assert events
++            assert notifier.drain() == 3
++        finally:
++            selector.close()
++
++
++def test_notifier_rejects_invalid_count() -> None:
++    with RouteNotifier.create("baby_fork.retrieval@g1", backend="pipe") as notifier:
++        with pytest.raises(ValueError):
++            notifier.notify(0)
++
++
++def test_notifier_close_blocks_future_use() -> None:
++    notifier = RouteNotifier.create("baby_fork.retrieval@g1", backend="pipe")
++    notifier.close()
++
++    with pytest.raises(RouteNotificationClosedError):
++        notifier.notify()
++
++
++def test_eventfd_availability_probe_returns_bool() -> None:
++    assert isinstance(eventfd_available(), bool)
++
++
++def test_notification_integrates_with_mmap_route_write_and_drain(tmp_path: Path) -> None:
++    record = _active_record(tmp_path)
++
++    with RouteNotifier.create(record.route_handle, backend="auto") as notifier:
++        route = MmapFixedSlotRoute.open(
++            record.ring_path,
++            route_handle=record.route_handle,
++            status_path=record.mmap_status_path,
++            overflow_policy=record.overflow_policy,
++        )
++        try:
++            route.write_message(_message())
++            notify_after_write(notifier, written_count=1)
++
++            assert notifier.wait_once(timeout=0.1)
++            assert drain_ready_count(notifier) == 1
++
++            drained = route.drain()
++            assert len(drained) == 1
++            assert drained[0].message().route_id == "baby_fork.retrieval"
++        finally:
++            route.close()

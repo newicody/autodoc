@@ -1,0 +1,852 @@
+diff --git a/PHASE0115_TEST_REPORT.md b/PHASE0115_TEST_REPORT.md
+new file mode 100644
+index 0000000..dced4a7
+--- /dev/null
++++ b/PHASE0115_TEST_REPORT.md
+@@ -0,0 +1,23 @@
++# PHASE0115_TEST_REPORT
++
++```text
++phase: 0115-context_exploration_planner
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: pure deterministic planner; concrete SQL/Qdrant/OpenVINO/LLM backends remain behind future adapters and handlers.
++live_path_status: transition
++live_path_uses_real_backend: n/a
++context_contract_version: missipy.context.v1
++context_contract_changed: true
++search_commands_bounded: true
++```
++
++Expected validation:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/runtime/test_context_exploration_planner.py
++PYTHONPATH=src:. pytest -q tests/rules/test_context_exploration_planner_0115_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
+diff --git a/doc/CHANGELOG_0115_CONTEXT_EXPLORATION_PLANNER.md b/doc/CHANGELOG_0115_CONTEXT_EXPLORATION_PLANNER.md
+new file mode 100644
+index 0000000..90e51b3
+--- /dev/null
++++ b/doc/CHANGELOG_0115_CONTEXT_EXPLORATION_PLANNER.md
+@@ -0,0 +1,10 @@
++# Changelog — 0115 context exploration planner
++
++- Adds a deterministic, bounded `ContextExplorationPlanner`.
++- Converts a `ContextVariationObjective` into a bounded `ContextExplorationPlan`.
++- Adds default product/project context axes such as safety, material,
++  fabrication, ergonomics, and project history.
++- Represents SQL, OpenVINO, Qdrant, and specialist work as capability hints only.
++- Does not add MVTC runtime.
++- Does not touch Scheduler, Dispatcher, PriorityQueue, PolicyEngine, EventBus,
++  ControlProxy, or RouteRuntimeManager.
+diff --git a/doc/architecture/CONTEXT_EXPLORATION_PLANNER_0115.md b/doc/architecture/CONTEXT_EXPLORATION_PLANNER_0115.md
+new file mode 100644
+index 0000000..bd4ce74
+--- /dev/null
++++ b/doc/architecture/CONTEXT_EXPLORATION_PLANNER_0115.md
+@@ -0,0 +1,71 @@
++# 0115 — Context exploration planner
++
++0115 implements the first minimal planner after the 0114-r2 context variation
++core contract.
++
++context variability is the project center.
++
++The planner turns a `ContextVariationObjective into a bounded
++ContextExplorationPlan`. It is deterministic, reference-only, and side-effect
++free. It prepares context trajectories that handlers can later execute, but it
++never calls SQL, Qdrant, OpenVINO, LLM, GitHub, EventBus, or RouteRuntimeManager
++directly.
++
++## Operational shape
++
++```text
++ContextVariationObjective
++-> ContextExplorationPlanner
++-> ContextVariationAxis[]
++-> ContextVariantCandidate[]
++-> ContextTrajectory[]
++-> ContextExplorationPlan
++```
++
++The default trajectory skeleton is:
++
++```text
++SQL hydrate -> OpenVINO embed -> Qdrant recall -> SQL re-hydrate -> specialist note
++```
++
++This is only a set of `capability_hint` strings and typed refs. Real backends are
++future adapters behind handlers.
++
++## Scheduler role
++
++Scheduler orchestrates context exploration jobs; it does not build variants itself.
++
++The Scheduler can carry the resulting plan or a command that points to it, but
++`Scheduler.run()` does not import, construct, or execute SQL/Qdrant/OpenVINO/LLM
++logic.
++
++## Why this is not the rejected capability/security direction
++
++0115 is not a security/capability envelope. It is a context planner. Policy,
++zone, and admission remain guardrails. The objective remains fast solution
++production through bounded context variation.
++
++## Guardrails
++
++- No MVTC runtime in 0115.
++- No SQL/Qdrant/OpenVINO/LLM runtime import.
++- No new EventType.
++- No Scheduler.run() modification.
++- No Dispatcher / PriorityQueue / PolicyEngine / EventBus modification.
++- EventBus observation only.
++- Route mmap/eventfd remains data plane, not EventBus.
++- Payloads remain typed references, not embedded heavy content.
++- Standard library only.
++
++## Code rule review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: planner is a pure use-case/contract layer; concrete backends remain behind future adapters and handlers.
++live_path_status: transition
++live_path_uses_real_backend: n/a
++context_contract_version: missipy.context.v1
++context_contract_changed: true
++search_commands_bounded: true
++```
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0115.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0115.md
+new file mode 100644
+index 0000000..0c3c61d
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0115.md
+@@ -0,0 +1,20 @@
++# ControlProxy operational plan — 0115 note
++
++0115 is not a ControlProxy phase.
++
++ControlProxy / RouteRuntimeManager remain secondary runtime/data-plane
++infrastructure. The context exploration planner belongs to the context branch.
++
++Current context-centered order:
++
++```text
++0115 ContextExplorationPlanner minimal
++0116 SQLContextStore minimal
++0117 ContextCollector / ContextHydrator real path
++0118 OpenVINO embedding adapter for context refs
++0119 Qdrant projection/retrieval for context refs
++0120 Specialist / LLM boundary for InferenceContextDraft
++0121 GitHub baby-fork end-to-end scenario
++```
++
++No MVTC runtime in 0115.
+diff --git a/doc/docs/architecture/runtime/108_context_exploration_planner.dot b/doc/docs/architecture/runtime/108_context_exploration_planner.dot
+new file mode 100644
+index 0000000..f38f97d
+--- /dev/null
++++ b/doc/docs/architecture/runtime/108_context_exploration_planner.dot
+@@ -0,0 +1,46 @@
++digraph context_exploration_planner_0115 {
++  graph [
++    label="0115 Context exploration planner — ROOT_GRAPH: doc/docs/architecture/00_global.dot — root-attached context overlay",
++    labelloc="t",
++    fontsize=20
++  ];
++  rankdir=LR;
++  node [shape=box, style="rounded"];
++
++  // Scheduler -> Handler -> ContextExplorationPlanner
++  // ContextVariationObjective -> ContextExplorationPlan
++  // SQL hydrate -> OpenVINO embed -> Qdrant recall -> SQL re-hydrate -> specialist note
++  scheduler [label="Scheduler\norchestrates context exploration jobs\ndoes not build variants itself"];
++  handler [label="Handler / context boundary\nexecutes planner as leaf capability"];
++  planner [label="ContextExplorationPlanner\ndeterministic, bounded, reference-only"];
++
++  objective [label="ContextVariationObjective\nuser/project objective"];
++  axes [label="ContextVariationAxis[]\nselected from templates"];
++  plan [label="ContextExplorationPlan\nbounded trajectories"];
++  candidate [label="ContextVariantCandidate\nrefs only"];
++  trajectory [label="ContextTrajectory\nordered capability hints"];
++
++  sql1 [label="SQL hydrate\ncontext.sql.hydrate_base"];
++  ov [label="OpenVINO embed\nembedding.openvino.embed_axis_query"];
++  qdrant [label="Qdrant recall\nqdrant.recall_axis_candidates"];
++  sql2 [label="SQL re-hydrate\ncontext.sql.rehydrate_recalled_ids"];
++  spec [label="specialist note\nspecialist.axis.note"];
++
++  eventbus [label="EventBus observation only", style="dashed"];
++  dataplane [label="Route mmap/eventfd remains data plane, not EventBus", style="dashed"];
++
++  scheduler -> handler;
++  handler -> planner;
++  objective -> planner;
++  planner -> axes;
++  planner -> plan;
++  plan -> candidate;
++  candidate -> trajectory;
++  trajectory -> sql1;
++  sql1 -> ov;
++  ov -> qdrant;
++  qdrant -> sql2;
++  sql2 -> spec;
++  planner -> eventbus [style=dotted];
++  dataplane -> trajectory [style=dotted, label="heavy payload refs only"];
++}
+diff --git a/doc/manifests/MANIFEST_0115_CHANGED_FILES.md b/doc/manifests/MANIFEST_0115_CHANGED_FILES.md
+new file mode 100644
+index 0000000..b13d496
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0115_CHANGED_FILES.md
+@@ -0,0 +1,16 @@
++# Manifest 0115 changed files
++
++```text
++src/context/context_exploration_planner.py
++tests/runtime/test_context_exploration_planner.py
++tests/rules/test_context_exploration_planner_0115_rule.py
++doc/architecture/CONTEXT_EXPLORATION_PLANNER_0115.md
++doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0115.md
++doc/docs/architecture/runtime/108_context_exploration_planner.dot
++doc/CHANGELOG_0115_CONTEXT_EXPLORATION_PLANNER.md
++doc/manifests/MANIFEST_0115_CHANGED_FILES.md
++PHASE0115_TEST_REPORT.md
++```
++
++0115 does not change kernel loop, dispatcher, priority queue, policy engine,
++event bus, ControlProxy, or RouteRuntimeManager files.
+diff --git a/src/context/context_exploration_planner.py b/src/context/context_exploration_planner.py
+new file mode 100644
+index 0000000..e03224c
+--- /dev/null
++++ b/src/context/context_exploration_planner.py
+@@ -0,0 +1,408 @@
++"""Deterministic context exploration planner.
++
++0115 keeps the project centered on context variability.  The planner turns a
++ContextVariationObjective into a bounded ContextExplorationPlan made of
++reference-only trajectories.  It does not call SQL, Qdrant, OpenVINO, LLM, or
++GitHub directly; it only emits capability hints that later handlers can execute
++behind declared adapters.
++
++Scheduler orchestrates context exploration jobs; it does not build variants itself.
++SQL hydrate -> OpenVINO embed -> Qdrant recall -> SQL re-hydrate -> specialist note.
++No MVTC runtime in 0115.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from typing import Iterable
++
++from src.context.context_variation_core import (
++    ContextExplorationBudget,
++    ContextExplorationPlan,
++    ContextTrajectory,
++    ContextTrajectoryStep,
++    ContextVariantCandidate,
++    ContextVariationAxis,
++    ContextVariationObjective,
++)
++
++_DEFAULT_COST_HINT = "small"
++_ALLOWED_COST_HINTS = frozenset({"tiny", "small", "medium", "large"})
++
++
++@dataclass(frozen=True, slots=True)
++class ContextAxisTemplate:
++    """Reusable axis template for deterministic context exploration."""
++
++    axis_id: str
++    label: str
++    question: str
++    tags: tuple[str, ...] = ()
++    keywords: tuple[str, ...] = ()
++    specialist_ref: str | None = None
++
++    def __post_init__(self) -> None:
++        _require_non_empty("axis_id", self.axis_id)
++        _require_non_empty("label", self.label)
++        _require_non_empty("question", self.question)
++        object.__setattr__(self, "tags", _normalize_words(self.tags))
++        object.__setattr__(self, "keywords", _normalize_words(self.keywords))
++        if self.specialist_ref is not None and not self.specialist_ref.startswith("specialist:"):
++            raise ValueError("specialist_ref must be a specialist:* reference")
++
++    def to_axis(self) -> ContextVariationAxis:
++        return ContextVariationAxis(
++            axis_id=self.axis_id,
++            label=self.label,
++            question=self.question,
++            tags=self.tags,
++        )
++
++    def matches(self, text: str) -> bool:
++        haystack = text.lower()
++        return any(keyword in haystack for keyword in self.keywords)
++
++    def to_mapping(self) -> dict[str, str | list[str] | None]:
++        return {
++            "axis_id": self.axis_id,
++            "label": self.label,
++            "question": self.question,
++            "tags": list(self.tags),
++            "keywords": list(self.keywords),
++            "specialist_ref": self.specialist_ref,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class ContextExplorationPlannerPolicy:
++    """Small deterministic policy for choosing context axes and trajectory depth."""
++
++    max_axes: int = 5
++    prefer_keyword_matches: bool = True
++    include_non_matching_axes: bool = True
++    cost_hint: str = _DEFAULT_COST_HINT
++
++    def __post_init__(self) -> None:
++        if self.max_axes <= 0:
++            raise ValueError("max_axes must be > 0")
++        if self.cost_hint not in _ALLOWED_COST_HINTS:
++            raise ValueError("cost_hint must be one of tiny, small, medium, large")
++
++    def to_mapping(self) -> dict[str, int | bool | str]:
++        return {
++            "max_axes": self.max_axes,
++            "prefer_keyword_matches": self.prefer_keyword_matches,
++            "include_non_matching_axes": self.include_non_matching_axes,
++            "cost_hint": self.cost_hint,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class ContextExplorationPlannerResult:
++    """Stable result of a planner pass."""
++
++    plan: ContextExplorationPlan
++    selected_axis_ids: tuple[str, ...]
++    skipped_axis_ids: tuple[str, ...] = ()
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "plan": self.plan.to_mapping(),
++            "selected_axis_ids": list(self.selected_axis_ids),
++            "skipped_axis_ids": list(self.skipped_axis_ids),
++        }
++
++
++class ContextExplorationPlanner:
++    """Build bounded context trajectory plans from objectives.
++
++    The planner is intentionally deterministic and side-effect free.  It is a
++    leaf capability that can later sit behind a Handler; the Scheduler should
++    only carry the resulting bounded job and must not learn Qdrant, OpenVINO,
++    SQL, LLM, GitHub, or specialist internals.
++    """
++
++    def __init__(
++        self,
++        *,
++        templates: Iterable[ContextAxisTemplate] | None = None,
++        policy: ContextExplorationPlannerPolicy | None = None,
++    ) -> None:
++        selected_templates = tuple(templates) if templates is not None else default_context_axis_templates()
++        if not selected_templates:
++            raise ValueError("templates must not be empty")
++        self._templates = selected_templates
++        self._policy = policy or ContextExplorationPlannerPolicy()
++
++    @property
++    def templates(self) -> tuple[ContextAxisTemplate, ...]:
++        return self._templates
++
++    @property
++    def policy(self) -> ContextExplorationPlannerPolicy:
++        return self._policy
++
++    def build_plan(
++        self,
++        *,
++        plan_id: str,
++        objective: ContextVariationObjective,
++        budget: ContextExplorationBudget,
++        base_context_refs: tuple[str, ...] = (),
++        payload_refs: tuple[str, ...] = (),
++        specialist_refs: tuple[str, ...] = (),
++    ) -> ContextExplorationPlannerResult:
++        """Build a bounded ContextExplorationPlan from objective and templates."""
++
++        _require_non_empty("plan_id", plan_id)
++        selected_templates, skipped_templates = self._select_templates(objective, budget)
++        axes = tuple(template.to_axis() for template in selected_templates)
++        candidates = tuple(
++            self._candidate_for_template(
++                plan_id=plan_id,
++                objective=objective,
++                template=template,
++                ordinal=index,
++                budget=budget,
++                base_context_refs=base_context_refs,
++                payload_refs=payload_refs,
++                specialist_refs=specialist_refs,
++            )
++            for index, template in enumerate(selected_templates, start=1)
++        )
++        plan = ContextExplorationPlan(
++            plan_id=plan_id,
++            objective=objective,
++            axes=axes,
++            candidates=candidates,
++            budget=budget,
++        )
++        return ContextExplorationPlannerResult(
++            plan=plan,
++            selected_axis_ids=tuple(template.axis_id for template in selected_templates),
++            skipped_axis_ids=tuple(template.axis_id for template in skipped_templates),
++        )
++
++    def _select_templates(
++        self,
++        objective: ContextVariationObjective,
++        budget: ContextExplorationBudget,
++    ) -> tuple[tuple[ContextAxisTemplate, ...], tuple[ContextAxisTemplate, ...]]:
++        limit = min(self._policy.max_axes, budget.max_variants)
++        text = f"{objective.title}\n{objective.statement}\n{objective.source_ref or ''}".lower()
++        matches = tuple(template for template in self._templates if template.matches(text))
++        non_matches = tuple(template for template in self._templates if template not in matches)
++        if self._policy.prefer_keyword_matches:
++            ordered = matches + (non_matches if self._policy.include_non_matching_axes else ())
++        else:
++            ordered = self._templates
++        if not ordered:
++            ordered = self._templates
++        selected = ordered[:limit]
++        skipped = tuple(template for template in self._templates if template not in selected)
++        return selected, skipped
++
++    def _candidate_for_template(
++        self,
++        *,
++        plan_id: str,
++        objective: ContextVariationObjective,
++        template: ContextAxisTemplate,
++        ordinal: int,
++        budget: ContextExplorationBudget,
++        base_context_refs: tuple[str, ...],
++        payload_refs: tuple[str, ...],
++        specialist_refs: tuple[str, ...],
++    ) -> ContextVariantCandidate:
++        slug = _slug(template.axis_id)
++        axis = template.to_axis()
++        merged_specialist_refs = _merge_refs(
++            specialist_refs,
++            (template.specialist_ref,) if template.specialist_ref is not None else (),
++        )
++        steps = _trajectory_steps_for_axis(
++            ordinal=ordinal,
++            axis=axis,
++            objective=objective,
++            max_depth=budget.max_depth,
++            base_context_refs=base_context_refs,
++            payload_refs=payload_refs,
++            specialist_refs=merged_specialist_refs,
++        )
++        trajectory = ContextTrajectory(
++            trajectory_id=f"traj-{ordinal:02d}-{slug}",
++            axis_ids=(axis.axis_id,),
++            steps=steps,
++            rationale=f"Explore context trajectory for axis {axis.label} with refs only.",
++        )
++        return ContextVariantCandidate(
++            variant_id=f"{plan_id}:variant:{ordinal:02d}:{slug}",
++            objective_id=objective.objective_id,
++            trajectory=trajectory,
++            context_refs=base_context_refs,
++            payload_refs=payload_refs,
++            specialist_refs=merged_specialist_refs,
++            cost_hint=self._policy.cost_hint,
++            metadata=(
++                ("axis", axis.axis_id),
++                ("planner", "0115-context-exploration-planner"),
++            ),
++        )
++
++
++def default_context_axis_templates() -> tuple[ContextAxisTemplate, ...]:
++    """Return default axes for product/project context exploration."""
++
++    return (
++        ContextAxisTemplate(
++            axis_id="safety",
++            label="Safety",
++            question="Which constraints, risks, and norms must shape this solution?",
++            tags=("risk", "constraints", "norms"),
++            keywords=("safe", "safety", "baby", "child", "risk", "norm", "danger"),
++            specialist_ref="specialist:safety",
++        ),
++        ContextAxisTemplate(
++            axis_id="material",
++            label="Material",
++            question="Which material and durability context should be recalled?",
++            tags=("material", "durability", "food-contact"),
++            keywords=("material", "silicone", "inox", "steel", "plastic", "food", "fork"),
++            specialist_ref="specialist:material",
++        ),
++        ContextAxisTemplate(
++            axis_id="fabrication",
++            label="Fabrication",
++            question="Which fabrication, cost, and tooling context should be explored?",
++            tags=("fabrication", "process", "cost"),
++            keywords=("fabrication", "manufacture", "print", "mold", "tool", "cost"),
++            specialist_ref="specialist:fabrication",
++        ),
++        ContextAxisTemplate(
++            axis_id="ergonomics",
++            label="Ergonomics",
++            question="Which usage, handling, and human factors context matters?",
++            tags=("usage", "ergonomics", "product"),
++            keywords=("ergonomic", "use", "handle", "baby", "parent", "clean"),
++            specialist_ref="specialist:ergonomics",
++        ),
++        ContextAxisTemplate(
++            axis_id="history",
++            label="Project history",
++            question="Which prior artifacts, decisions, and feedback should be recalled?",
++            tags=("history", "github", "feedback"),
++            keywords=("github", "artifact", "kanban", "project", "feedback", "decision"),
++            specialist_ref="specialist:project-history",
++        ),
++    )
++
++
++def build_minimal_context_exploration_plan(
++    *,
++    plan_id: str,
++    objective: ContextVariationObjective,
++    budget: ContextExplorationBudget,
++    base_context_refs: tuple[str, ...] = (),
++    payload_refs: tuple[str, ...] = (),
++    specialist_refs: tuple[str, ...] = (),
++    templates: Iterable[ContextAxisTemplate] | None = None,
++    policy: ContextExplorationPlannerPolicy | None = None,
++) -> ContextExplorationPlannerResult:
++    """Convenience wrapper for a pure, deterministic planner pass."""
++
++    planner = ContextExplorationPlanner(templates=templates, policy=policy)
++    return planner.build_plan(
++        plan_id=plan_id,
++        objective=objective,
++        budget=budget,
++        base_context_refs=base_context_refs,
++        payload_refs=payload_refs,
++        specialist_refs=specialist_refs,
++    )
++
++
++def _trajectory_steps_for_axis(
++    *,
++    ordinal: int,
++    axis: ContextVariationAxis,
++    objective: ContextVariationObjective,
++    max_depth: int,
++    base_context_refs: tuple[str, ...],
++    payload_refs: tuple[str, ...],
++    specialist_refs: tuple[str, ...],
++) -> tuple[ContextTrajectoryStep, ...]:
++    if max_depth <= 0:
++        raise ValueError("max_depth must be > 0")
++    slug = _slug(axis.axis_id)
++    initial_refs = _merge_refs(
++        tuple(ref for ref in (objective.source_ref, objective.parent_context_ref) if ref is not None),
++        base_context_refs,
++        payload_refs,
++    )
++    specialist_inputs = _merge_refs(initial_refs, specialist_refs)
++    all_steps = (
++        ContextTrajectoryStep(
++            step_id=f"step-{ordinal:02d}-{slug}-sql-base",
++            capability_hint="context.sql.hydrate_base",
++            input_refs=initial_refs,
++            expected_output_ref_kind="ctx",
++            note="SQL hydrate base facts/docs/artifacts by stable refs.",
++        ),
++        ContextTrajectoryStep(
++            step_id=f"step-{ordinal:02d}-{slug}-openvino-embed",
++            capability_hint="embedding.openvino.embed_axis_query",
++            input_refs=initial_refs,
++            expected_output_ref_kind="ctx",
++            note="OpenVINO embed query or refs behind adapter; no Scheduler import.",
++        ),
++        ContextTrajectoryStep(
++            step_id=f"step-{ordinal:02d}-{slug}-qdrant-recall",
++            capability_hint="qdrant.recall_axis_candidates",
++            input_refs=initial_refs,
++            expected_output_ref_kind="ctx",
++            note="Qdrant recall returns candidate IDs, not authority content.",
++        ),
++        ContextTrajectoryStep(
++            step_id=f"step-{ordinal:02d}-{slug}-sql-rehydrate",
++            capability_hint="context.sql.rehydrate_recalled_ids",
++            input_refs=initial_refs,
++            expected_output_ref_kind="ctx",
++            note="SQL re-hydrate recalled IDs before reducer/specialist use.",
++        ),
++        ContextTrajectoryStep(
++            step_id=f"step-{ordinal:02d}-{slug}-specialist-note",
++            capability_hint="specialist.axis.note",
++            input_refs=specialist_inputs,
++            expected_output_ref_kind="ctx",
++            note="Specialist annotates the axis after hydrated context is available.",
++        ),
++    )
++    return all_steps[:max_depth]
++
++
++def _merge_refs(*groups: tuple[str | None, ...]) -> tuple[str, ...]:
++    merged: list[str] = []
++    for group in groups:
++        for ref in group:
++            if ref is not None and ref not in merged:
++                merged.append(ref)
++    return tuple(merged)
++
++
++def _normalize_words(values: tuple[str, ...]) -> tuple[str, ...]:
++    normalized: list[str] = []
++    for value in values:
++        _require_non_empty("word", value)
++        word = value.strip().lower()
++        if word not in normalized:
++            normalized.append(word)
++    return tuple(normalized)
++
++
++def _require_non_empty(name: str, value: str) -> None:
++    if not value or not value.strip():
++        raise ValueError(f"{name} must not be empty")
++
++
++def _slug(value: str) -> str:
++    return "-".join(part for part in value.lower().replace("_", "-").split("-") if part) or "axis"
+diff --git a/tests/rules/test_context_exploration_planner_0115_rule.py b/tests/rules/test_context_exploration_planner_0115_rule.py
+new file mode 100644
+index 0000000..1ee6d4f
+--- /dev/null
++++ b/tests/rules/test_context_exploration_planner_0115_rule.py
+@@ -0,0 +1,78 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "context" / "context_exploration_planner.py"
++DOC = ROOT / "doc" / "architecture" / "CONTEXT_EXPLORATION_PLANNER_0115.md"
++DOT = ROOT / "doc" / "docs" / "architecture" / "runtime" / "108_context_exploration_planner.dot"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0115_CHANGED_FILES.md"
++
++
++def _read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_0115_relocks_context_variation_intent() -> None:
++    text = _read(MODULE) + "\n" + _read(DOC)
++    required = [
++        "context variability is the project center",
++        "ContextExplorationPlanner",
++        "ContextVariationObjective into a bounded ContextExplorationPlan",
++        "SQL hydrate -> OpenVINO embed -> Qdrant recall -> SQL re-hydrate -> specialist note",
++        "Scheduler orchestrates context exploration jobs; it does not build variants itself.",
++        "No MVTC runtime in 0115",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0115_planner_keeps_backends_behind_hints() -> None:
++    text = _read(MODULE)
++    forbidden_imports = [
++        "import sqlite3",
++        "import qdrant",
++        "from qdrant",
++        "import openvino",
++        "from openvino",
++        "import torch",
++        "import requests",
++        "import httpx",
++        "import socket",
++    ]
++    for phrase in forbidden_imports:
++        assert phrase not in text
++    assert "capability_hint" in text
++    assert "context.sql.hydrate_base" in text
++    assert "embedding.openvino.embed_axis_query" in text
++    assert "qdrant.recall_axis_candidates" in text
++
++
++def test_0115_graph_is_root_attached_context_overlay() -> None:
++    dot = _read(DOT)
++    required = [
++        "ROOT_GRAPH: doc/docs/architecture/00_global.dot",
++        "root-attached context overlay",
++        "Scheduler -> Handler -> ContextExplorationPlanner",
++        "ContextVariationObjective -> ContextExplorationPlan",
++        "SQL hydrate -> OpenVINO embed -> Qdrant recall -> SQL re-hydrate -> specialist note",
++        "EventBus observation only",
++        "Route mmap/eventfd remains data plane, not EventBus",
++    ]
++    for phrase in required:
++        assert phrase in dot
++
++
++def test_0115_manifest_keeps_kernel_unchanged() -> None:
++    manifest = _read(MANIFEST)
++    assert "src/context/context_exploration_planner.py" in manifest
++    assert "tests/runtime/test_context_exploration_planner.py" in manifest
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/kernel/dispatcher.py",
++        "src/kernel/queue.py",
++        "src/policy/engine.py",
++        "src/kernel/event_bus.py",
++    ]
++    for phrase in forbidden:
++        assert phrase not in manifest
+diff --git a/tests/runtime/test_context_exploration_planner.py b/tests/runtime/test_context_exploration_planner.py
+new file mode 100644
+index 0000000..6de28ab
+--- /dev/null
++++ b/tests/runtime/test_context_exploration_planner.py
+@@ -0,0 +1,126 @@
++from __future__ import annotations
++
++import pytest
++
++from src.context.context_exploration_planner import (
++    ContextAxisTemplate,
++    ContextExplorationPlanner,
++    ContextExplorationPlannerPolicy,
++    build_minimal_context_exploration_plan,
++)
++from src.context.context_variation_core import (
++    ContextExplorationBudget,
++    ContextVariationObjective,
++)
++
++
++def _objective() -> ContextVariationObjective:
++    return ContextVariationObjective(
++        objective_id="obj-baby-fork",
++        title="Baby fork GitHub project item",
++        statement="Explore a safer baby fork with material, fabrication, ergonomics, and project feedback.",
++        source_ref="github:artifact:copilot-first-pass",
++        parent_context_ref="ctx:project:baby-fork",
++    )
++
++
++def _budget(*, max_variants: int = 3, max_depth: int = 5) -> ContextExplorationBudget:
++    return ContextExplorationBudget(
++        max_variants=max_variants,
++        max_depth=max_depth,
++        max_specialist_calls=8,
++        max_retrievals=12,
++        max_wall_time_s=30.0,
++    )
++
++
++def test_planner_builds_bounded_keyword_ordered_plan() -> None:
++    result = build_minimal_context_exploration_plan(
++        plan_id="plan-baby-fork",
++        objective=_objective(),
++        budget=_budget(max_variants=3),
++        base_context_refs=("sql:project:baby-fork",),
++        payload_refs=("artifact:github:baby-fork-card",),
++    )
++
++    assert result.selected_axis_ids == ("safety", "material", "fabrication")
++    assert len(result.plan.candidates) == 3
++    first = result.plan.candidates[0]
++    assert first.variant_id == "plan-baby-fork:variant:01:safety"
++    assert first.context_refs == ("sql:project:baby-fork",)
++    assert first.payload_refs == ("artifact:github:baby-fork-card",)
++    assert "specialist:safety" in first.specialist_refs
++
++
++def test_planner_trajectory_declares_sql_openvino_qdrant_sql_specialist_steps() -> None:
++    result = build_minimal_context_exploration_plan(
++        plan_id="plan-baby-fork",
++        objective=_objective(),
++        budget=_budget(max_variants=1, max_depth=5),
++        base_context_refs=("sql:project:baby-fork",),
++        payload_refs=("artifact:github:baby-fork-card",),
++    )
++
++    hints = tuple(step.capability_hint for step in result.plan.candidates[0].trajectory.steps)
++    assert hints == (
++        "context.sql.hydrate_base",
++        "embedding.openvino.embed_axis_query",
++        "qdrant.recall_axis_candidates",
++        "context.sql.rehydrate_recalled_ids",
++        "specialist.axis.note",
++    )
++    assert all("github:artifact:copilot-first-pass" in step.input_refs for step in result.plan.candidates[0].trajectory.steps[:4])
++
++
++def test_planner_respects_depth_budget_without_scheduler_backend_calls() -> None:
++    result = build_minimal_context_exploration_plan(
++        plan_id="plan-shallow",
++        objective=_objective(),
++        budget=_budget(max_variants=2, max_depth=2),
++    )
++
++    assert len(result.plan.candidates) == 2
++    assert all(len(candidate.trajectory.steps) == 2 for candidate in result.plan.candidates)
++    assert result.plan.budget.max_depth == 2
++
++
++def test_planner_can_use_custom_templates() -> None:
++    template = ContextAxisTemplate(
++        axis_id="cleaning",
++        label="Cleaning",
++        question="Which context helps evaluate cleaning constraints?",
++        tags=("cleaning",),
++        keywords=("wash", "clean"),
++        specialist_ref="specialist:cleaning",
++    )
++    objective = ContextVariationObjective(
++        objective_id="obj-clean",
++        title="Washable baby fork",
++        statement="Find cleaning and dishwasher constraints.",
++        source_ref="github:item:clean",
++    )
++
++    result = build_minimal_context_exploration_plan(
++        plan_id="plan-clean",
++        objective=objective,
++        budget=_budget(max_variants=1),
++        templates=(template,),
++    )
++
++    assert result.selected_axis_ids == ("cleaning",)
++    assert result.plan.axes[0].tags == ("cleaning",)
++    assert result.plan.candidates[0].specialist_refs == ("specialist:cleaning",)
++
++
++def test_planner_rejects_invalid_policy_and_templates() -> None:
++    with pytest.raises(ValueError, match="max_axes must be > 0"):
++        ContextExplorationPlannerPolicy(max_axes=0)
++    with pytest.raises(ValueError, match="templates must not be empty"):
++        ContextExplorationPlanner(templates=())
++    with pytest.raises(ValueError, match="specialist_ref"):
++        ContextAxisTemplate(
++            axis_id="bad",
++            label="Bad",
++            question="Bad?",
++            specialist_ref="bad:ref",
++        )

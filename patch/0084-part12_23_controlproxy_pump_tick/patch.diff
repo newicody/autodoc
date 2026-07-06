@@ -1,0 +1,768 @@
+diff --git a/doc/architecture/CONTROLPROXY_PUMP_TICK.md b/doc/architecture/CONTROLPROXY_PUMP_TICK.md
+new file mode 100644
+index 0000000..6d2c64e
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_PUMP_TICK.md
+@@ -0,0 +1,120 @@
++# ControlProxy pump/tick
++
++Status: 0084 implementation.
++
++This phase adds an explicit importable ControlProxy pump.
++
++## Vocabulary
++
++```text
++ControlProxy = ControlFS declarative surface + RouteProxy materializer
++```
++
++## No service
++
++`0084` is not a service.
++
++It is not:
++
++```text
++daemon
++service
++OpenRC
++resident process
++watcher
++poll loop
++CLI
++```
++
++It is:
++
++```text
++tick_controlproxy(controlfs_root, runtime_root)
++```
++
++The Scheduler, a test, or a future orchestration loop can call this function
++explicitly.
++
++## What one tick does
++
++```text
++read ControlFS desired/active routes
++build RouteProxy dry-run plan
++materialize missing desired routes
++write mmap route files
++write ControlFS active route state
++publish event.bus/context.bus facts
++return structured result
++```
++
++## What one tick refuses
++
++```text
++live mmap resize
++implicit update of active route
++delete/drain cleanup
++lease issuing
++security policy decision
++Scheduler call
++```
++
++Updates are skipped with reason:
++
++```text
++update requires next generation; live mmap resize is forbidden
++```
++
++Delete/drain is skipped with reason:
++
++```text
++delete/drain cleanup is deferred to lease/drain phase
++```
++
++## Bus facts
++
++Events:
++
++```text
++controlproxy.pump.route_materialized
++controlproxy.pump.route_skipped
++controlproxy.pump.route_error
++```
++
++Context:
++
++```text
++controlproxy.pump.active_route
++```
++
++These are facts, not commands.
++
++## Implementation path
++
++This becomes the real non-daemon execution seam:
++
++```text
++Scheduler / test / caller
++-> tick_controlproxy()
++-> reconciler plan
++-> active materializer
++-> mmap route
++-> active route status
++-> bus facts
++```
++
++## No CLI
++
++This patch intentionally does not add a CLI.
++
++The rule remains:
++
++```text
++module logic is importable
++tests validate behavior
++CLI only when it is a real operator boundary
++```
++
++## Next
++
++`0085` can add Scheduler-facing handshake functions that call the pump and then
++acquire route leases. Still no service.
+diff --git a/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md b/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
+index a2e56ab..baa5647 100644
+--- a/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
++++ b/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
+@@ -27,6 +27,7 @@ with a real ControlProxy implementation.
+   file-backed lease.json plus active status update
+ 
+ 0084 ControlProxy pump/tick
++  implemented as tick_controlproxy()
+   importable function, no service, no OpenRC, no resident daemon
+   reads ControlFS desired/request state when explicitly called
+   calls active route materializer
+diff --git a/doc/changelog/0084-controlproxy-pump-tick.md b/doc/changelog/0084-controlproxy-pump-tick.md
+new file mode 100644
+index 0000000..9b268d5
+--- /dev/null
++++ b/doc/changelog/0084-controlproxy-pump-tick.md
+@@ -0,0 +1,30 @@
++# 0084 - ControlProxy pump/tick
++
++## Added
++
++- `runtime.controlproxy_pump`
++- `tick_controlproxy()`
++- `route_prepare_decision_from_manifest()`
++- pump bus facts:
++  - `controlproxy.pump.route_materialized`
++  - `controlproxy.pump.route_skipped`
++  - `controlproxy.pump.route_error`
++  - `controlproxy.pump.active_route`
++- tests proving:
++  - desired routes materialize to active routes
++  - second tick becomes noop/skipped
++  - updates are skipped, not live-resized
++  - bus facts are written
++  - no lease is issued by the pump
++
++## Not added
++
++- No daemon.
++- No service.
++- No OpenRC.
++- No watcher.
++- No polling loop.
++- No Scheduler call.
++- No lease issuing.
++- No live resize.
++- No CLI.
+diff --git a/src/runtime/controlproxy_pump.py b/src/runtime/controlproxy_pump.py
+new file mode 100644
+index 0000000..b51d5e7
+--- /dev/null
++++ b/src/runtime/controlproxy_pump.py
+@@ -0,0 +1,349 @@
++"""ControlProxy pump/tick.
++
++This module implements phase 0084.
++
++It is an explicit importable pump, not a service:
++
++    tick_controlproxy(controlfs_root, runtime_root)
++
++The pump reads ControlFS desired/active route state when called, uses the
++RouteProxy dry-run reconciler, materializes missing active routes, and publishes
++facts to event.bus/context.bus.
++
++It deliberately does not:
++- create a daemon
++- start a service
++- use OpenRC
++- run forever
++- watch ControlFS
++- sleep or poll
++- call Scheduler
++- decide security policy
++- grant leases
++- implement lease handoff
++- live resize mmap routes
++- perform delete/drain cleanup
++- implement inter-process locks
++- implement VisPy
++- add a CLI
++
++It is a synchronous tick function. Scheduler or tests can call it directly.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++import json
++from pathlib import Path
++from typing import Any, Iterable, Mapping
++
++from runtime.controlfs_manifest import RouteManifest
++from runtime.controlproxy_active_routes import ActiveRouteRecord, materialize_active_route
++from runtime.controlproxy_prepare import ROUTE_PREPARE_STATUS_SCHEMA, RoutePrepareDecision
++from runtime.routeproxy_reconciler import RouteProxyPlan, build_routeproxy_plan
++from runtime.shm_runtime_schema import (
++    CONTEXT_BUS_MESSAGE_SCHEMA,
++    EVENT_BUS_MESSAGE_SCHEMA,
++    ContextBusMessage,
++    EventBusMessage,
++)
++
++
++CONTROLPROXY_PUMP_EVENT_SCHEMA = "missipy.controlproxy.pump_event.v1"
++CONTROLPROXY_PUMP_CONTEXT_SCHEMA = "missipy.controlproxy.pump_context.v1"
++DEFAULT_TICK_AT = "2026-07-04T20:00:00Z"
++
++
++class ControlProxyPumpError(RuntimeError):
++    """Raised when the ControlProxy pump cannot complete a requested action."""
++
++
++@dataclass(frozen=True)
++class PumpActionRecord:
++    """One action attempted or skipped by the pump."""
++
++    route_id: str
++    action: str
++    status: str
++    reason: str
++    route_handle: str | None = None
++
++    def to_mapping(self) -> dict[str, Any]:
++        payload = {
++            "route_id": self.route_id,
++            "action": self.action,
++            "status": self.status,
++            "reason": self.reason,
++        }
++        if self.route_handle is not None:
++            payload["route_handle"] = self.route_handle
++        return payload
++
++
++@dataclass(frozen=True)
++class ControlProxyPumpResult:
++    """Result of one explicit ControlProxy pump tick."""
++
++    controlfs_root: str
++    runtime_root: str
++    tick_id: str
++    ticked_at: str
++    plan_before: dict[str, Any]
++    plan_after: dict[str, Any]
++    materialized_count: int
++    skipped_count: int
++    error_count: int
++    bus_event_count: int
++    bus_context_count: int
++    actions: tuple[PumpActionRecord, ...]
++    active_records: tuple[ActiveRouteRecord, ...]
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "controlfs_root": self.controlfs_root,
++            "runtime_root": self.runtime_root,
++            "tick_id": self.tick_id,
++            "ticked_at": self.ticked_at,
++            "plan_before": self.plan_before,
++            "plan_after": self.plan_after,
++            "materialized_count": self.materialized_count,
++            "skipped_count": self.skipped_count,
++            "error_count": self.error_count,
++            "bus_event_count": self.bus_event_count,
++            "bus_context_count": self.bus_context_count,
++            "actions": [action.to_mapping() for action in self.actions],
++            "active_records": [record.to_mapping() for record in self.active_records],
++        }
++
++
++def tick_controlproxy(
++    *,
++    controlfs_root: Path | str,
++    runtime_root: Path | str,
++    tick_id: str = "tick:controlproxy:001",
++    ticked_at: str = DEFAULT_TICK_AT,
++    publish_bus: bool = True,
++) -> ControlProxyPumpResult:
++    """Run one synchronous ControlProxy pump tick.
++
++    The pump:
++    - builds a RouteProxy dry-run plan
++    - materializes desired routes whose action is create
++    - refuses update/delete as future generation/drain work
++    - writes bus facts if requested
++    - returns a structured summary
++
++    No daemon, no service, no OpenRC and no CLI are involved.
++    """
++
++    plan_before = build_routeproxy_plan(controlfs_root, include_noop=True)
++    actions: list[PumpActionRecord] = []
++    records: list[ActiveRouteRecord] = []
++
++    for item in plan_before.items:
++        try:
++            desired = item.desired
++            if item.action == "create" and desired is not None:
++                decision = route_prepare_decision_from_manifest(desired, ticked_at=ticked_at)
++                record = materialize_active_route(
++                    controlfs_root=controlfs_root,
++                    runtime_root=runtime_root,
++                    decision=decision,
++                    desired_manifest=desired,
++                    replace=True,
++                )
++                records.append(record)
++                actions.append(
++                    PumpActionRecord(
++                        route_id=item.route_id,
++                        action="materialize",
++                        status="ok",
++                        reason="desired route materialized as active mmap route",
++                        route_handle=record.route_handle,
++                    )
++                )
++            elif item.action == "noop":
++                actions.append(
++                    PumpActionRecord(
++                        route_id=item.route_id,
++                        action="noop",
++                        status="skipped",
++                        reason="desired route already matches active route",
++                    )
++                )
++            elif item.action == "update":
++                actions.append(
++                    PumpActionRecord(
++                        route_id=item.route_id,
++                        action="update",
++                        status="skipped",
++                        reason="update requires next generation; live mmap resize is forbidden",
++                    )
++                )
++            elif item.action == "delete":
++                actions.append(
++                    PumpActionRecord(
++                        route_id=item.route_id,
++                        action="delete",
++                        status="skipped",
++                        reason="delete/drain cleanup is deferred to lease/drain phase",
++                    )
++                )
++            else:
++                actions.append(
++                    PumpActionRecord(
++                        route_id=item.route_id,
++                        action=str(item.action),
++                        status="skipped",
++                        reason=str(getattr(item, "reason", "unsupported plan action")),
++                    )
++                )
++        except Exception as exc:  # pragma: no cover - kept to make pump robust at boundary
++            actions.append(
++                PumpActionRecord(
++                    route_id=getattr(item, "route_id", "<unknown>"),
++                    action=str(getattr(item, "action", "error")),
++                    status="error",
++                    reason=f"{type(exc).__name__}: {exc}",
++                )
++            )
++
++    plan_after = build_routeproxy_plan(controlfs_root, include_noop=True)
++    event_count = 0
++    context_count = 0
++    if publish_bus:
++        event_count, context_count = publish_pump_result_to_bus(
++            runtime_root=runtime_root,
++            result_actions=actions,
++            active_records=records,
++            tick_id=tick_id,
++            ticked_at=ticked_at,
++        )
++
++    return ControlProxyPumpResult(
++        controlfs_root=str(Path(controlfs_root)),
++        runtime_root=str(Path(runtime_root)),
++        tick_id=tick_id,
++        ticked_at=ticked_at,
++        plan_before=plan_before.to_mapping(),
++        plan_after=plan_after.to_mapping(),
++        materialized_count=len(records),
++        skipped_count=sum(1 for action in actions if action.status == "skipped"),
++        error_count=sum(1 for action in actions if action.status == "error"),
++        bus_event_count=event_count,
++        bus_context_count=context_count,
++        actions=tuple(actions),
++        active_records=tuple(records),
++    )
++
++
++def route_prepare_decision_from_manifest(
++    manifest: RouteManifest,
++    *,
++    ticked_at: str = DEFAULT_TICK_AT,
++    generation: int = 1,
++) -> RoutePrepareDecision:
++    """Build a ready ControlProxy decision from an accepted desired manifest.
++
++    This is used by the pump after Scheduler/ControlProxy already accepted the
++    desired manifest. It does not bypass security; it only reconstructs the
++    concrete materialization decision from persisted desired state.
++    """
++
++    if manifest.slot_size is None or manifest.slot_count is None or manifest.max_frame_bytes is None:
++        raise ControlProxyPumpError("manifest must include slot_size, slot_count and max_frame_bytes")
++    if manifest.observed_frame_bytes is None:
++        raise ControlProxyPumpError("manifest must include observed_frame_bytes")
++    route_handle = f"{manifest.route_id}@g{generation}"
++    return RoutePrepareDecision(
++        schema=ROUTE_PREPARE_STATUS_SCHEMA,
++        request_id=f"prep:{manifest.route_id}:g{generation}",
++        route_id=manifest.route_id,
++        route_handle=route_handle,
++        task_id=manifest.task_id,
++        zone=manifest.zone,
++        status="ready",
++        action="create_route_generation",
++        reason="ControlProxy pump materialization from accepted desired manifest",
++        required_frame_bytes=manifest.observed_frame_bytes,
++        current_generation=None,
++        next_generation=generation,
++        current_slot_size=None,
++        slot_size=manifest.slot_size,
++        slot_count=manifest.slot_count,
++        max_frame_bytes=manifest.max_frame_bytes,
++        max_ring_bytes=manifest.slot_size * manifest.slot_count,
++        max_prepare_ms=25,
++        drain_timeout_ms=100,
++        lease_switch_timeout_ms=10,
++        notify=manifest.notify,
++        overflow_policy=manifest.overflow_policy,
++        decided_at=ticked_at,
++    )
++
++
++def publish_pump_result_to_bus(
++    *,
++    runtime_root: Path | str,
++    result_actions: Iterable[PumpActionRecord],
++    active_records: Iterable[ActiveRouteRecord],
++    tick_id: str,
++    ticked_at: str,
++) -> tuple[int, int]:
++    """Append pump facts to event.bus and context.bus JSONL files."""
++
++    root = Path(runtime_root)
++    root.mkdir(parents=True, exist_ok=True)
++
++    actions = tuple(result_actions)
++    records = tuple(active_records)
++    events = []
++    contexts = []
++
++    for index, action in enumerate(actions):
++        topic = "controlproxy.pump.route_materialized" if action.status == "ok" else "controlproxy.pump.route_skipped"
++        if action.status == "error":
++            topic = "controlproxy.pump.route_error"
++        events.append(
++            EventBusMessage.from_mapping(
++                {
++                    "schema": EVENT_BUS_MESSAGE_SCHEMA,
++                    "event_id": f"evt:{tick_id}:{index}",
++                    "topic": topic,
++                    "source": "controlproxy_pump",
++                    "occurred_at": ticked_at,
++                    "zone": "control",
++                    "payload_schema": CONTROLPROXY_PUMP_EVENT_SCHEMA,
++                    "payload": action.to_mapping(),
++                }
++            )
++        )
++
++    for index, record in enumerate(records):
++        contexts.append(
++            ContextBusMessage.from_mapping(
++                {
++                    "schema": CONTEXT_BUS_MESSAGE_SCHEMA,
++                    "context_id": record.task_id,
++                    "context_version": index + 1,
++                    "topic": "controlproxy.pump.active_route",
++                    "source": "controlproxy_pump",
++                    "occurred_at": ticked_at,
++                    "zone": "control",
++                    "payload_schema": CONTROLPROXY_PUMP_CONTEXT_SCHEMA,
++                    "payload": record.to_mapping(),
++                }
++            )
++        )
++
++    _write_jsonl(root / "event.bus.jsonl", (event.to_mapping() for event in events))
++    _write_jsonl(root / "context.bus.jsonl", (context.to_mapping() for context in contexts))
++    return len(events), len(contexts)
++
++
++def _write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with path.open("a", encoding="utf-8") as handle:
++        for row in rows:
++            handle.write(json.dumps(dict(row), sort_keys=True, separators=(",", ":")))
++            handle.write("\n")
+diff --git a/tests/rules/test_controlproxy_pump_rule.py b/tests/rules/test_controlproxy_pump_rule.py
+new file mode 100644
+index 0000000..3515109
+--- /dev/null
++++ b/tests/rules/test_controlproxy_pump_rule.py
+@@ -0,0 +1,85 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "CONTROLPROXY_PUMP_TICK.md"
++MODULE = ROOT / "src" / "runtime" / "controlproxy_pump.py"
++SEQUENCE = ROOT / "doc" / "architecture" / "REAL_IMPLEMENTATION_SEQUENCE_0081.md"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing file: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_controlproxy_pump_doc_locks_no_service_no_cli_and_tick_shape() -> None:
++    text = _read(DOC)
++
++    required_phrases = [
++        "Status: 0084 implementation.",
++        "ControlProxy = ControlFS declarative surface + RouteProxy materializer",
++        "No service",
++        "daemon",
++        "service",
++        "OpenRC",
++        "resident process",
++        "watcher",
++        "poll loop",
++        "CLI",
++        "tick_controlproxy(controlfs_root, runtime_root)",
++        "read ControlFS desired/active routes",
++        "build RouteProxy dry-run plan",
++        "materialize missing desired routes",
++        "write mmap route files",
++        "write ControlFS active route state",
++        "publish event.bus/context.bus facts",
++        "live mmap resize",
++        "implicit update of active route",
++        "delete/drain cleanup",
++        "lease issuing",
++        "security policy decision",
++        "Scheduler call",
++        "These are facts, not commands.",
++        "module logic is importable",
++        "CLI only when it is a real operator boundary",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_controlproxy_pump_module_locks_importable_non_daemon_scope() -> None:
++    text = _read(MODULE)
++
++    required_phrases = [
++        "explicit importable pump, not a service",
++        "tick_controlproxy(controlfs_root, runtime_root)",
++        "does not:",
++        "create a daemon",
++        "start a service",
++        "use OpenRC",
++        "run forever",
++        "watch ControlFS",
++        "sleep or poll",
++        "call Scheduler",
++        "decide security policy",
++        "grant leases",
++        "implement lease handoff",
++        "live resize mmap routes",
++        "perform delete/drain cleanup",
++        "implement inter-process locks",
++        "implement VisPy",
++        "add a CLI",
++        "synchronous tick function",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_real_sequence_mentions_0084_as_pump_not_service() -> None:
++    text = _read(SEQUENCE)
++
++    assert "0084 ControlProxy pump/tick" in text
++    assert "implemented as tick_controlproxy()" in text
++    assert "no service, no OpenRC, no resident daemon" in text
+diff --git a/tests/test_controlproxy_pump.py b/tests/test_controlproxy_pump.py
+new file mode 100644
+index 0000000..6ba7f97
+--- /dev/null
++++ b/tests/test_controlproxy_pump.py
+@@ -0,0 +1,142 @@
++import json
++from pathlib import Path
++
++from context.baby_fork_controlfs import build_route_sizing_hints_from_messages, write_baby_fork_desired_manifests
++from context.baby_fork_runtime_projection import build_baby_fork_runtime_projection
++from runtime.controlfs_manifest import RouteManifest, route_manifest_path
++from runtime.controlproxy_active_routes import active_status_path
++from runtime.controlproxy_pump import route_prepare_decision_from_manifest, tick_controlproxy
++from runtime.fake_route_transport import load_fake_bus_messages
++from runtime.shm_runtime_schema import ContextBusMessage, EventBusMessage
++
++
++def _report() -> dict:
++    return {
++        "retrieval": {
++            "retrieved_ids": ["baby-silicone-fork", "rounded-stainless-soft-handle"],
++            "rejected_ids": ["nasa-antenna"],
++        },
++        "variant_generator_stub": {
++            "generated_variants": [
++                {"variant_id": "variant-1"},
++                {"variant_id": "variant-2"},
++            ]
++        },
++        "final_context": {
++            "context_id": "ctx-baby-fork-001",
++            "context_version": 2,
++            "selected_variant_id": "variant-1",
++        },
++    }
++
++
++def _write_desired(controlfs_root: Path) -> None:
++    projection = build_baby_fork_runtime_projection(_report())
++    hints = build_route_sizing_hints_from_messages(projection.routes)
++    write_baby_fork_desired_manifests(
++        controlfs_root,
++        context_id="ctx-baby-fork-001",
++        sizing_hints=hints,
++    )
++
++
++def test_route_prepare_decision_from_manifest_uses_accepted_sizing(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    _write_desired(controlfs_root)
++
++    manifest = RouteManifest.from_path(route_manifest_path(controlfs_root, "baby_fork.retrieval"))
++    decision = route_prepare_decision_from_manifest(manifest)
++
++    assert decision.status == "ready"
++    assert decision.route_handle == "baby_fork.retrieval@g1"
++    assert decision.slot_size == manifest.slot_size
++    assert decision.slot_count == manifest.slot_count
++    assert decision.max_frame_bytes == manifest.max_frame_bytes
++    assert decision.required_frame_bytes == manifest.observed_frame_bytes
++
++
++def test_controlproxy_pump_materializes_missing_desired_routes(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++    _write_desired(controlfs_root)
++
++    result = tick_controlproxy(controlfs_root=controlfs_root, runtime_root=runtime_root)
++
++    assert result.materialized_count == 3
++    assert result.error_count == 0
++    assert {action.status for action in result.actions} == {"ok"}
++    assert (runtime_root / "routes" / "baby_fork.retrieval@g1" / "ring.bin").exists()
++    assert active_status_path(controlfs_root, "baby_fork.retrieval").exists()
++
++    status = json.loads(active_status_path(controlfs_root, "baby_fork.retrieval").read_text(encoding="utf-8"))
++    assert status["route_handle"] == "baby_fork.retrieval@g1"
++    assert status["lease_state"] == "not_leased"
++
++    after_actions = [item["action"] for item in result.plan_after["items"]]
++    assert set(after_actions) == {"noop"}
++
++
++def test_controlproxy_pump_second_tick_is_noop(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++    _write_desired(controlfs_root)
++
++    tick_controlproxy(controlfs_root=controlfs_root, runtime_root=runtime_root)
++    result = tick_controlproxy(controlfs_root=controlfs_root, runtime_root=runtime_root)
++
++    assert result.materialized_count == 0
++    assert result.skipped_count == 3
++    assert {action.action for action in result.actions} == {"noop"}
++
++
++def test_controlproxy_pump_publishes_bus_facts(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++    _write_desired(controlfs_root)
++
++    result = tick_controlproxy(controlfs_root=controlfs_root, runtime_root=runtime_root)
++
++    assert result.bus_event_count == 3
++    assert result.bus_context_count == 3
++
++    events = load_fake_bus_messages(runtime_root / "event.bus.jsonl")
++    contexts = load_fake_bus_messages(runtime_root / "context.bus.jsonl")
++
++    assert len(events) == 3
++    assert len(contexts) == 3
++    assert all(isinstance(event, EventBusMessage) for event in events)
++    assert all(isinstance(context, ContextBusMessage) for context in contexts)
++    assert {event.topic for event in events} == {"controlproxy.pump.route_materialized"}
++    assert {context.topic for context in contexts} == {"controlproxy.pump.active_route"}
++
++
++def test_controlproxy_pump_does_not_issue_lease(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++    _write_desired(controlfs_root)
++
++    tick_controlproxy(controlfs_root=controlfs_root, runtime_root=runtime_root)
++
++    assert not (controlfs_root / "active" / "routes" / "baby_fork.retrieval" / "lease.json").exists()
++    status = json.loads(active_status_path(controlfs_root, "baby_fork.retrieval").read_text(encoding="utf-8"))
++    assert status["lease_state"] == "not_leased"
++
++
++def test_controlproxy_pump_skips_update_instead_of_live_resize(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++    _write_desired(controlfs_root)
++    tick_controlproxy(controlfs_root=controlfs_root, runtime_root=runtime_root)
++
++    manifest_path = route_manifest_path(controlfs_root, "baby_fork.retrieval")
++    desired = json.loads(manifest_path.read_text(encoding="utf-8"))
++    desired["slot_size"] = 4096
++    desired["max_frame_bytes"] = 4096
++    manifest_path.write_text(json.dumps(desired, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++    result = tick_controlproxy(controlfs_root=controlfs_root, runtime_root=runtime_root)
++
++    update_actions = [action for action in result.actions if action.route_id == "baby_fork.retrieval"]
++    assert update_actions[0].action == "update"
++    assert update_actions[0].status == "skipped"
++    assert "live mmap resize is forbidden" in update_actions[0].reason

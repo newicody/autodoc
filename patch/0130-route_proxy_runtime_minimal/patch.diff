@@ -1,0 +1,1608 @@
+diff --git a/PHASE0130_TEST_REPORT.md b/PHASE0130_TEST_REPORT.md
+new file mode 100644
+index 0000000..f5dd3c8
+--- /dev/null
++++ b/PHASE0130_TEST_REPORT.md
+@@ -0,0 +1,23 @@
++# PHASE0130_TEST_REPORT
++
++```text
++phase: 0130-route_proxy_runtime_minimal
++code_rule_review: done
++code_rule_update_required: true
++code_rule_update_kind: supplemental_rule_file
++code_rule_reason: first live RouteProxy data-plane runtime needs an explicit local-filesystem membrane rule.
++live_path_status: first_runtime_step
++live_path_uses_real_backend: local_filesystem_only
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++```
++
++Validation performed in patch build:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests
++PYTHONPATH=src:. pytest -q tests/runtime/test_route_proxy_runtime_minimal.py tests/rules/test_route_proxy_runtime_minimal_0130_rule.py
++```
++
++0130 intentionally does not run OpenVINO or Qdrant yet. It makes the `/dev/shm` RouteProxy data-plane writable/readable/stale-able through a minimal local runtime.
+diff --git a/doc/CHANGELOG_0130_ROUTE_PROXY_RUNTIME_MINIMAL.md b/doc/CHANGELOG_0130_ROUTE_PROXY_RUNTIME_MINIMAL.md
+new file mode 100644
+index 0000000..a108e9c
+--- /dev/null
++++ b/doc/CHANGELOG_0130_ROUTE_PROXY_RUNTIME_MINIMAL.md
+@@ -0,0 +1,11 @@
++# Changelog 0130 — RouteProxy runtime minimal
++
++Added a first live local RouteProxy runtime step:
++
++- `src/runtime/route_proxy_runtime_minimal.py`
++- runtime tests for prepare/permit/write/read/stale/facts
++- rule tests for the runtime membrane
++- architecture docs and DOT graph
++- `doc/code-rules/0130_route_proxy_runtime_rule.md`
++
++No Scheduler, Dispatcher, Queue, PolicyEngine, EventBus, SQL, OpenVINO, Qdrant, GitHub, service, daemon, watcher, network client, or backend runtime is introduced.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0130.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0130.md
+new file mode 100644
+index 0000000..631c3b9
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0130.md
+@@ -0,0 +1,18 @@
++# 0130 operational note — RouteProxy runtime minimal
++
++0130 makes RouteProxy concrete for one local process without creating a daemon.
++
++```text
++Scheduler command later
++-> RouteProxyRuntimePolicy
++-> /dev/shm/autodoc/routes by default
++-> writer permit
++-> atomic frame write
++-> frame read
++-> stale marker when context generation advances
++-> observation-ready facts
++```
++
++The runtime is deliberately small. It does not call Scheduler, PolicyEngine, EventBus, SQL, OpenVINO, Qdrant, GitHub, network clients, or subprocesses.
++
++The next integration step can introduce a thin handler that calls this runtime from the Scheduler/Dispatcher path, while keeping Scheduler.run() unchanged.
+diff --git a/doc/architecture/ROUTE_PROXY_RUNTIME_MINIMAL_0130.md b/doc/architecture/ROUTE_PROXY_RUNTIME_MINIMAL_0130.md
+new file mode 100644
+index 0000000..157dd22
+--- /dev/null
++++ b/doc/architecture/ROUTE_PROXY_RUNTIME_MINIMAL_0130.md
+@@ -0,0 +1,73 @@
++# 0130 — RouteProxy runtime minimal
++
++0130 starts the first live local data-plane path after the 0129 RouteProxy flow-control contracts.
++
++RouteProxy runtime is a data-plane executor, not an orchestrator. Scheduler remains the orchestrator. Do not modify Scheduler.run() in 0130.
++
++## What this patch adds
++
++```text
++prepare a RouteProxy runtime root
++create frames/meta/facts directories
++request a writer permit
++write one route frame atomically
++read one route frame
++mark one route frame stale when context generation advances
++persist observation-ready facts
++```
++
++## Boundary lock
++
++- RouteProxy runtime is a data-plane executor, not an orchestrator.
++- Scheduler remains the orchestrator.
++- Do not modify Scheduler.run() in 0130.
++- No mount table scan is allowed.
++- `/dev/shm` remains the default local multitask route interface and future grid seam.
++- Test roots must explicitly set `require_dev_shm=False` and `allow_test_root=True`.
++- EventBus receives observation-ready facts, not payload commands.
++- SQLContextStore remains durable authority.
++- E5/OpenVINO and Qdrant are not touched by 0130.
++- GitHub exchanges artifacts only and is not part of this runtime.
++
++## Why no mount table scan
++
++Older route runtime validation could fail by resolving unrelated protected mount points such as debug tracing paths. 0130 does not scan `/proc/mounts` and does not resolve global mount entries. It validates only the configured route root and its direct runtime directories.
++
++## Runtime shape
++
++```text
++RouteProxyRuntimePolicy
++-> prepare_route_proxy_runtime()
++-> RouteProxyRuntimeState
++-> request_writer_permit()
++-> write_route_frame()
++-> read_route_frame()
++-> mark_route_frame_stale()
++-> list_observation_facts()
++```
++
++## Documentation update status
++
++documentation architecture is updated in this patch through:
++
++```text
++doc/architecture/ROUTE_PROXY_RUNTIME_MINIMAL_0130.md
++doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0130.md
++doc/docs/architecture/runtime/130_route_proxy_runtime_minimal.dot
++doc/code-rules/0130_route_proxy_runtime_rule.md
++```
++
++The code_rule supplement for RouteProxy runtime membrane is added as a dedicated rule file. It extends the principal rule set without rewriting the principal file blindly.
++
++## Phase status
++
++```text
++code_rule_review: done
++code_rule_update_required: true
++code_rule_update_kind: supplemental_rule_file
++live_path_status: first_runtime_step
++live_path_uses_real_backend: local_filesystem_only
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++```
+diff --git a/doc/code-rules/0130_route_proxy_runtime_rule.md b/doc/code-rules/0130_route_proxy_runtime_rule.md
+new file mode 100644
+index 0000000..6b8f800
+--- /dev/null
++++ b/doc/code-rules/0130_route_proxy_runtime_rule.md
+@@ -0,0 +1,23 @@
++# code_rule supplement — 0130 RouteProxy runtime membrane
++
++This supplement extends `doc/code-rules/code_rule.md` for the first RouteProxy runtime step.
++
++## Rule
++
++RouteProxy runtime may perform local filesystem IO under its configured route root, but it must remain a data-plane executor.
++
++## Mandatory boundaries
++
++- RouteProxy runtime is a data-plane executor, not an orchestrator.
++- Scheduler remains the orchestrator.
++- Scheduler.run() must not be changed for 0130.
++- RouteProxy runtime must not import network clients, OpenVINO, Qdrant, PostgreSQL drivers, VisPy, Graphviz, NetworkX, subprocess, or socket.
++- RouteProxy runtime must not scan the global mount table.
++- EventBus output must be observation-ready facts only.
++- SQLContextStore remains durable authority.
++- `/dev/shm` is the default production route root.
++- Non-`/dev/shm` roots are allowed only for tests with explicit opt-in.
++
++## Rationale
++
++The project previously hit a runtime failure while resolving unrelated protected mount points. RouteProxy runtime must validate its own root, not the whole machine.
+diff --git a/doc/docs/architecture/runtime/130_route_proxy_runtime_minimal.dot b/doc/docs/architecture/runtime/130_route_proxy_runtime_minimal.dot
+new file mode 100644
+index 0000000..eaebf12
+--- /dev/null
++++ b/doc/docs/architecture/runtime/130_route_proxy_runtime_minimal.dot
+@@ -0,0 +1,20 @@
++digraph route_proxy_runtime_minimal_0130 {
++  rankdir=LR;
++  node [shape=box];
++
++  scheduler [label="Scheduler later\norchestrator"];
++  handler [label="thin handler later"];
++  runtime [label="RouteProxy runtime minimal\ndata-plane executor"];
++  permit [label="writer permit"];
++  shm [label="/dev/shm/autodoc/routes\nframes/meta/facts"];
++  facts [label="observation-ready facts\nEventBus later"];
++  sql [label="SQLContextStore\ndurable authority later"];
++
++  scheduler -> handler [label="future command"];
++  handler -> runtime [label="call runtime"];
++  runtime -> permit [label="grant/block"];
++  permit -> shm [label="atomic frame write"];
++  runtime -> shm [label="read/stale"];
++  runtime -> facts [label="persist fact records"];
++  shm -> sql [label="validated refs persist later"];
++}
+diff --git a/doc/manifests/MANIFEST_0130_CHANGED_FILES.md b/doc/manifests/MANIFEST_0130_CHANGED_FILES.md
+new file mode 100644
+index 0000000..39381f4
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0130_CHANGED_FILES.md
+@@ -0,0 +1,14 @@
++# Manifest 0130 — changed files
++
++- src/runtime/route_proxy_runtime_minimal.py
++- tests/runtime/test_route_proxy_runtime_minimal.py
++- tests/rules/test_route_proxy_runtime_minimal_0130_rule.py
++- doc/architecture/ROUTE_PROXY_RUNTIME_MINIMAL_0130.md
++- doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0130.md
++- doc/code-rules/0130_route_proxy_runtime_rule.md
++- doc/docs/architecture/runtime/130_route_proxy_runtime_minimal.dot
++- doc/CHANGELOG_0130_ROUTE_PROXY_RUNTIME_MINIMAL.md
++- doc/manifests/MANIFEST_0130_CHANGED_FILES.md
++- PHASE0130_TEST_REPORT.md
++
++Boundary note: 0130 adds only a local RouteProxy runtime minimal and documentation/code-rule supplement. It does not edit the kernel loop or add backend clients.
+diff --git a/src/runtime/__pycache__/route_proxy_runtime_minimal.cpython-313.pyc b/src/runtime/__pycache__/route_proxy_runtime_minimal.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..ded4d81bd834a1edc53cd1abcffcfe531431fc96
+GIT binary patch
+literal 26440
+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
+Doce+r
+
+literal 0
+HcmV?d00001
+
+diff --git a/src/runtime/route_proxy_runtime_minimal.py b/src/runtime/route_proxy_runtime_minimal.py
+new file mode 100644
+index 0000000..27781be
+--- /dev/null
++++ b/src/runtime/route_proxy_runtime_minimal.py
+@@ -0,0 +1,502 @@
++"""Minimal RouteProxy runtime around route frames.
++
++0130 is the first live data-plane step after the RouteProxy flow-control
++contracts.  It prepares a local root, grants/blocks writer permits, writes route
++frames atomically, reads frames, marks routes stale, and emits observation-ready
++facts.  It is deliberately small: no daemon, no Scheduler mutation, no mount scan, no OpenVINO, no Qdrant, no PostgreSQL, and no network client.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++import hashlib
++import json
++import os
++from pathlib import Path
++import re
++from typing import Any
++
++_RUNTIME_SCHEMA = "missipy.route_proxy.runtime.v1"
++_POLICY_SCHEMA = "missipy.route_proxy.runtime_policy.v1"
++_PERMIT_SCHEMA = "missipy.route_proxy.runtime_writer_permit.v1"
++_FACT_SCHEMA = "missipy.route_proxy.runtime_observation_fact.v1"
++_FRAME_SCHEMA = "missipy.route_proxy.runtime_frame.v1"
++_STALE_SCHEMA = "missipy.route_proxy.runtime_stale_marker.v1"
++
++_TYPED_REF_RE = re.compile(r"^[a-z][a-z0-9-]*:[^\s].*$")
++_SAFE_SEGMENT_RE = re.compile(r"[^a-zA-Z0-9_.=-]+")
++_ALLOWED_OWNER_PREFIXES = ("specialist:", "worker:", "scheduler-command:", "proxy:")
++_ALLOWED_CONTEXT_PREFIXES = ("sql:", "ctx:", "ctx-result:", "cycle-state:")
++_ALLOWED_ROUTE_PREFIXES = ("route:", "route-frame:", "route-zone:", "vector-route:")
++_ALLOWED_FACT_KINDS = (
++    "route.runtime_prepared",
++    "route.writer_permit_granted",
++    "route.writer_permit_denied",
++    "route.frame_written",
++    "route.frame_read",
++    "route.frame_marked_stale",
++)
++
++
++class RouteProxyRuntimeError(RuntimeError):
++    """Raised when the minimal RouteProxy runtime refuses unsafe route IO."""
++
++
++@dataclass(frozen=True, slots=True)
++class RouteProxyRuntimePolicy:
++    """Policy for preparing a minimal RouteProxy runtime root."""
++
++    route_root: Path = Path("/dev/shm/autodoc/routes")
++    proxy_ref: str = "proxy:route-proxy"
++    require_dev_shm: bool = True
++    allow_test_root: bool = False
++    namespace: str = "autodoc"
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("proxy_ref", self.proxy_ref, required_prefixes=("proxy:",))
++        _require_non_empty("namespace", self.namespace)
++        if self.route_root.is_symlink():
++            raise RouteProxyRuntimeError("route_root must not be a symlink")
++        if self.require_dev_shm and not _is_under_dev_shm(self.route_root):
++            raise RouteProxyRuntimeError("route_root must be under /dev/shm unless allow_test_root disables the check")
++        if self.allow_test_root and self.require_dev_shm:
++            raise RouteProxyRuntimeError("allow_test_root requires require_dev_shm=False")
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _POLICY_SCHEMA,
++            "route_root": str(self.route_root),
++            "proxy_ref": self.proxy_ref,
++            "require_dev_shm": self.require_dev_shm,
++            "allow_test_root": self.allow_test_root,
++            "namespace": self.namespace,
++            "mount_scan": False,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class RouteProxyRuntimeObservationFact:
++    """Observation fact ready for EventBus publication by a caller."""
++
++    fact_ref: str
++    kind: str
++    route_ref: str
++    owner_ref: str | None = None
++    count: int = 1
++    metadata: tuple[tuple[str, str], ...] = field(default_factory=tuple)
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("fact_ref", self.fact_ref, required_prefixes=("route-proxy-fact:", "bus:"))
++        if self.kind not in _ALLOWED_FACT_KINDS:
++            raise RouteProxyRuntimeError("kind must be a locked RouteProxy runtime observation kind")
++        _require_typed_ref("route_ref", self.route_ref, required_prefixes=_ALLOWED_ROUTE_PREFIXES)
++        if self.owner_ref is not None:
++            _require_typed_ref("owner_ref", self.owner_ref, required_prefixes=_ALLOWED_OWNER_PREFIXES)
++        if self.count < 0:
++            raise RouteProxyRuntimeError("count must be >= 0")
++        object.__setattr__(self, "metadata", _normalize_metadata(self.metadata))
++
++    def to_mapping(self) -> dict[str, object | None]:
++        return {
++            "schema": _FACT_SCHEMA,
++            "fact_ref": self.fact_ref,
++            "kind": self.kind,
++            "route_ref": self.route_ref,
++            "owner_ref": self.owner_ref,
++            "count": self.count,
++            "metadata": dict(self.metadata),
++            "event_bus_role": "observation_only",
++            "payload_command": False,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class RouteProxyRuntimePermit:
++    """Runtime writer permit for one route frame."""
++
++    permit_ref: str
++    route_ref: str
++    owner_ref: str
++    context_ref: str
++    context_generation: int
++    priority: int
++    write_allowed: bool
++    frame_path: Path
++    denial_reason: str | None = None
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("permit_ref", self.permit_ref, required_prefixes=("route-permit:",))
++        _require_typed_ref("route_ref", self.route_ref, required_prefixes=_ALLOWED_ROUTE_PREFIXES)
++        _require_typed_ref("owner_ref", self.owner_ref, required_prefixes=_ALLOWED_OWNER_PREFIXES)
++        _require_typed_ref("context_ref", self.context_ref, required_prefixes=_ALLOWED_CONTEXT_PREFIXES)
++        _require_positive_int("context_generation", self.context_generation, allow_zero=False)
++        _require_priority(self.priority)
++        if self.write_allowed and self.denial_reason is not None:
++            raise RouteProxyRuntimeError("denial_reason must be None when write_allowed is true")
++        if not self.write_allowed:
++            _require_non_empty("denial_reason", self.denial_reason or "")
++
++    def to_mapping(self) -> dict[str, object | None]:
++        return {
++            "schema": _PERMIT_SCHEMA,
++            "permit_ref": self.permit_ref,
++            "route_ref": self.route_ref,
++            "owner_ref": self.owner_ref,
++            "context_ref": self.context_ref,
++            "context_generation": self.context_generation,
++            "priority": self.priority,
++            "write_allowed": self.write_allowed,
++            "frame_path": str(self.frame_path),
++            "denial_reason": self.denial_reason,
++            "scheduler_is_orchestrator": True,
++            "route_proxy_is_fast_data_plane_control": True,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class RouteProxyRuntimeState:
++    """Prepared RouteProxy runtime root."""
++
++    route_root: Path
++    proxy_ref: str
++    frames_dir: Path
++    meta_dir: Path
++    facts_dir: Path
++    policy: RouteProxyRuntimePolicy
++
++    def __post_init__(self) -> None:
++        if self.route_root.is_symlink():
++            raise RouteProxyRuntimeError("route_root must not be a symlink")
++        for path in (self.route_root, self.frames_dir, self.meta_dir, self.facts_dir):
++            if not path.exists() or not path.is_dir():
++                raise RouteProxyRuntimeError(f"runtime path is not a directory: {path}")
++            if path.is_symlink():
++                raise RouteProxyRuntimeError(f"runtime path must not be a symlink: {path}")
++
++    def frame_path_for(self, route_ref: str) -> Path:
++        _require_typed_ref("route_ref", route_ref, required_prefixes=_ALLOWED_ROUTE_PREFIXES)
++        digest = _stable_suffix(route_ref)
++        return self.frames_dir / f"{_safe_route_slug(route_ref)}.{digest}.json"
++
++    def meta_path_for(self, ref: str, suffix: str = "json") -> Path:
++        _require_typed_ref("ref", ref)
++        digest = _stable_suffix(ref)
++        return self.meta_dir / f"{_safe_route_slug(ref)}.{digest}.{suffix}"
++
++    def fact_path_for(self, fact_ref: str) -> Path:
++        _require_typed_ref("fact_ref", fact_ref, required_prefixes=("route-proxy-fact:", "bus:"))
++        return self.facts_dir / f"{_safe_route_slug(fact_ref)}.{_stable_suffix(fact_ref)}.json"
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _RUNTIME_SCHEMA,
++            "route_root": str(self.route_root),
++            "proxy_ref": self.proxy_ref,
++            "frames_dir": str(self.frames_dir),
++            "meta_dir": str(self.meta_dir),
++            "facts_dir": str(self.facts_dir),
++            "policy": self.policy.to_mapping(),
++            "scheduler_is_orchestrator": True,
++            "route_proxy_is_fast_data_plane_control": True,
++            "mount_scan": False,
++            "daemon": False,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class RouteProxyRuntimeFrame:
++    """Frame persisted under the RouteProxy runtime root."""
++
++    route_ref: str
++    owner_ref: str
++    context_ref: str
++    context_generation: int
++    payload: dict[str, Any]
++    stale: bool = False
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("route_ref", self.route_ref, required_prefixes=_ALLOWED_ROUTE_PREFIXES)
++        _require_typed_ref("owner_ref", self.owner_ref, required_prefixes=_ALLOWED_OWNER_PREFIXES)
++        _require_typed_ref("context_ref", self.context_ref, required_prefixes=_ALLOWED_CONTEXT_PREFIXES)
++        _require_positive_int("context_generation", self.context_generation, allow_zero=False)
++        if not isinstance(self.payload, dict):
++            raise RouteProxyRuntimeError("payload must be a dict")
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _FRAME_SCHEMA,
++            "route_ref": self.route_ref,
++            "owner_ref": self.owner_ref,
++            "context_ref": self.context_ref,
++            "context_generation": self.context_generation,
++            "payload": self.payload,
++            "stale": self.stale,
++            "durable_authority": False,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class RouteProxyRuntimeWriteResult:
++    """Result of an atomic route frame write."""
++
++    frame_path: Path
++    frame: RouteProxyRuntimeFrame
++    fact: RouteProxyRuntimeObservationFact
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "frame_path": str(self.frame_path),
++            "frame": self.frame.to_mapping(),
++            "fact": self.fact.to_mapping(),
++            "atomic_replace": True,
++        }
++
++
++def prepare_route_proxy_runtime(policy: RouteProxyRuntimePolicy | None = None) -> RouteProxyRuntimeState:
++    """Prepare a minimal runtime root without scanning system mount tables."""
++
++    active_policy = policy or RouteProxyRuntimePolicy()
++    root = active_policy.route_root
++    if root.exists() and root.is_symlink():
++        raise RouteProxyRuntimeError("route_root must not be a symlink")
++    root.mkdir(parents=True, exist_ok=True)
++    frames_dir = root / "frames"
++    meta_dir = root / "meta"
++    facts_dir = root / "facts"
++    for path in (frames_dir, meta_dir, facts_dir):
++        if path.exists() and path.is_symlink():
++            raise RouteProxyRuntimeError(f"runtime path must not be a symlink: {path}")
++        path.mkdir(parents=True, exist_ok=True)
++    state = RouteProxyRuntimeState(
++        route_root=root,
++        proxy_ref=active_policy.proxy_ref,
++        frames_dir=frames_dir,
++        meta_dir=meta_dir,
++        facts_dir=facts_dir,
++        policy=active_policy,
++    )
++    fact = RouteProxyRuntimeObservationFact(
++        fact_ref=f"route-proxy-fact:runtime-prepared-{_stable_suffix(str(root))}",
++        kind="route.runtime_prepared",
++        route_ref="route:runtime/root",
++        owner_ref=active_policy.proxy_ref,
++        metadata=(("route_root", str(root)),),
++    )
++    _atomic_write_json(state.fact_path_for(fact.fact_ref), fact.to_mapping())
++    return state
++
++
++def request_writer_permit(
++    state: RouteProxyRuntimeState,
++    *,
++    route_ref: str,
++    owner_ref: str,
++    context_ref: str,
++    context_generation: int,
++    priority: int,
++    write_allowed: bool = True,
++    denial_reason: str | None = None,
++) -> RouteProxyRuntimePermit:
++    """Grant or deny a writer permit and persist the permit metadata."""
++
++    frame_path = state.frame_path_for(route_ref)
++    seed = f"{route_ref}|{owner_ref}|{context_ref}|{context_generation}|{priority}|{write_allowed}|{denial_reason or ''}"
++    permit = RouteProxyRuntimePermit(
++        permit_ref=f"route-permit:{_stable_suffix(seed)}",
++        route_ref=route_ref,
++        owner_ref=owner_ref,
++        context_ref=context_ref,
++        context_generation=context_generation,
++        priority=priority,
++        write_allowed=write_allowed,
++        frame_path=frame_path,
++        denial_reason=denial_reason,
++    )
++    _assert_under_root(state, frame_path)
++    _atomic_write_json(state.meta_path_for(permit.permit_ref), permit.to_mapping())
++    fact = RouteProxyRuntimeObservationFact(
++        fact_ref=f"route-proxy-fact:permit-{_stable_suffix(permit.permit_ref)}",
++        kind="route.writer_permit_granted" if write_allowed else "route.writer_permit_denied",
++        route_ref=route_ref,
++        owner_ref=owner_ref,
++        metadata=(("permit_ref", permit.permit_ref),),
++    )
++    _atomic_write_json(state.fact_path_for(fact.fact_ref), fact.to_mapping())
++    return permit
++
++
++def write_route_frame(
++    state: RouteProxyRuntimeState,
++    permit: RouteProxyRuntimePermit,
++    payload: dict[str, Any],
++) -> RouteProxyRuntimeWriteResult:
++    """Atomically write one route frame if the writer permit is valid."""
++
++    if not permit.write_allowed:
++        raise RouteProxyRuntimeError("writer permit denies frame write")
++    _assert_under_root(state, permit.frame_path)
++    frame = RouteProxyRuntimeFrame(
++        route_ref=permit.route_ref,
++        owner_ref=permit.owner_ref,
++        context_ref=permit.context_ref,
++        context_generation=permit.context_generation,
++        payload=payload,
++    )
++    _atomic_write_json(permit.frame_path, frame.to_mapping())
++    fact = RouteProxyRuntimeObservationFact(
++        fact_ref=f"route-proxy-fact:frame-written-{_stable_suffix(permit.permit_ref)}",
++        kind="route.frame_written",
++        route_ref=permit.route_ref,
++        owner_ref=permit.owner_ref,
++        metadata=(("frame_path", str(permit.frame_path)),),
++    )
++    _atomic_write_json(state.fact_path_for(fact.fact_ref), fact.to_mapping())
++    return RouteProxyRuntimeWriteResult(frame_path=permit.frame_path, frame=frame, fact=fact)
++
++
++def read_route_frame(state: RouteProxyRuntimeState, route_ref: str) -> RouteProxyRuntimeFrame:
++    """Read one route frame by route ref."""
++
++    frame_path = state.frame_path_for(route_ref)
++    _assert_under_root(state, frame_path)
++    try:
++        data = json.loads(frame_path.read_text(encoding="utf-8"))
++    except FileNotFoundError as exc:
++        raise RouteProxyRuntimeError(f"route frame not found: {route_ref}") from exc
++    frame = RouteProxyRuntimeFrame(
++        route_ref=str(data["route_ref"]),
++        owner_ref=str(data["owner_ref"]),
++        context_ref=str(data["context_ref"]),
++        context_generation=int(data["context_generation"]),
++        payload=dict(data["payload"]),
++        stale=bool(data.get("stale", False)),
++    )
++    fact = RouteProxyRuntimeObservationFact(
++        fact_ref=f"route-proxy-fact:frame-read-{_stable_suffix(route_ref)}",
++        kind="route.frame_read",
++        route_ref=route_ref,
++        owner_ref=frame.owner_ref,
++    )
++    _atomic_write_json(state.fact_path_for(fact.fact_ref), fact.to_mapping())
++    return frame
++
++
++def mark_route_frame_stale(
++    state: RouteProxyRuntimeState,
++    *,
++    route_ref: str,
++    new_context_generation: int,
++) -> RouteProxyRuntimeFrame:
++    """Mark an existing frame stale when the context generation advances."""
++
++    current = read_route_frame(state, route_ref)
++    _require_positive_int("new_context_generation", new_context_generation, allow_zero=False)
++    if new_context_generation <= current.context_generation:
++        raise RouteProxyRuntimeError("new_context_generation must be greater than current context_generation")
++    stale_frame = RouteProxyRuntimeFrame(
++        route_ref=current.route_ref,
++        owner_ref=current.owner_ref,
++        context_ref=current.context_ref,
++        context_generation=new_context_generation,
++        payload=current.payload,
++        stale=True,
++    )
++    frame_path = state.frame_path_for(route_ref)
++    _atomic_write_json(frame_path, stale_frame.to_mapping())
++    marker = {
++        "schema": _STALE_SCHEMA,
++        "route_ref": route_ref,
++        "old_context_generation": current.context_generation,
++        "new_context_generation": new_context_generation,
++        "frame_path": str(frame_path),
++    }
++    _atomic_write_json(state.meta_path_for(f"route-frame:{route_ref}:stale"), marker)
++    fact = RouteProxyRuntimeObservationFact(
++        fact_ref=f"route-proxy-fact:frame-stale-{_stable_suffix(route_ref + str(new_context_generation))}",
++        kind="route.frame_marked_stale",
++        route_ref=route_ref,
++        owner_ref=current.owner_ref,
++        metadata=(("new_context_generation", str(new_context_generation)),),
++    )
++    _atomic_write_json(state.fact_path_for(fact.fact_ref), fact.to_mapping())
++    return stale_frame
++
++
++def list_observation_facts(state: RouteProxyRuntimeState) -> tuple[dict[str, Any], ...]:
++    """Return persisted observation facts for tests and later passive bridges."""
++
++    facts: list[dict[str, Any]] = []
++    for path in sorted(state.facts_dir.glob("*.json")):
++        facts.append(json.loads(path.read_text(encoding="utf-8")))
++    return tuple(facts)
++
++
++def _is_under_dev_shm(path: Path) -> bool:
++    try:
++        resolved = path.resolve(strict=False)
++    except OSError as exc:
++        raise RouteProxyRuntimeError(f"cannot resolve route_root: {path}") from exc
++    dev_shm = Path("/dev/shm").resolve(strict=False)
++    return resolved == dev_shm or dev_shm in resolved.parents
++
++
++def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    tmp_path = path.with_name(f".{path.name}.tmp-{os.getpid()}")
++    tmp_path.write_text(json.dumps(data, sort_keys=True, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
++    os.replace(tmp_path, path)
++
++
++def _assert_under_root(state: RouteProxyRuntimeState, path: Path) -> None:
++    try:
++        root = state.route_root.resolve(strict=True)
++        target_parent = path.parent.resolve(strict=True)
++    except OSError as exc:
++        raise RouteProxyRuntimeError("cannot resolve runtime path") from exc
++    if target_parent != root and root not in target_parent.parents:
++        raise RouteProxyRuntimeError("route frame path escapes runtime root")
++
++
++def _require_typed_ref(name: str, value: str, *, required_prefixes: tuple[str, ...] | None = None) -> None:
++    if not isinstance(value, str) or not _TYPED_REF_RE.match(value):
++        raise RouteProxyRuntimeError(f"{name} must be a typed ref")
++    if required_prefixes is not None and not value.startswith(required_prefixes):
++        raise RouteProxyRuntimeError(f"{name} must start with one of: {', '.join(required_prefixes)}")
++
++
++def _require_non_empty(name: str, value: str) -> None:
++    if not isinstance(value, str) or not value.strip():
++        raise RouteProxyRuntimeError(f"{name} must not be empty")
++
++
++def _require_positive_int(name: str, value: int, *, allow_zero: bool) -> None:
++    if not isinstance(value, int):
++        raise RouteProxyRuntimeError(f"{name} must be an integer")
++    if allow_zero:
++        if value < 0:
++            raise RouteProxyRuntimeError(f"{name} must be >= 0")
++    elif value <= 0:
++        raise RouteProxyRuntimeError(f"{name} must be > 0")
++
++
++def _require_priority(value: int) -> None:
++    _require_positive_int("priority", value, allow_zero=True)
++    if value > 10_000:
++        raise RouteProxyRuntimeError("priority must be between 0 and 10000")
++
++
++def _normalize_metadata(values: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
++    normalized: list[tuple[str, str]] = []
++    for key, value in values:
++        _require_non_empty("metadata key", key)
++        _require_non_empty("metadata value", value)
++        normalized.append((key.strip(), value.strip()))
++    return tuple(normalized)
++
++
++def _safe_route_slug(route_ref: str) -> str:
++    return _SAFE_SEGMENT_RE.sub("-", route_ref).strip("-.") or "route"
++
++
++def _stable_suffix(seed: str) -> str:
++    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
+diff --git a/tests/rules/__pycache__/test_route_proxy_runtime_minimal_0130_rule.cpython-313-pytest-9.0.2.pyc b/tests/rules/__pycache__/test_route_proxy_runtime_minimal_0130_rule.cpython-313-pytest-9.0.2.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..02d5fd7f1c77d637fde230e268cb9a255603aeb0
+GIT binary patch
+literal 10019
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/rules/__pycache__/test_route_proxy_runtime_minimal_0130_rule.cpython-313.pyc b/tests/rules/__pycache__/test_route_proxy_runtime_minimal_0130_rule.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..fc4bc452ebe86afe1d806840724eb8479b8943ac
+GIT binary patch
+literal 4653
+zcmbtXUu+Y}8K1S+e>aX3LcmQ(*cft&35lT)I4BoNaUg$)4R&%(1-jM7o+NwNyJmJB
+z;#GxmtyCo^RYX;3K|KjxD&_h_pY9$jUi#7pTTuyGaSzo!(WhQQA9_#yX6$v0FZ8bM
+zNFL98`_0TZGvDv~ezOw@_z{%9Y)^c6wi%%>X~!<kN`u?^J2W1k6iRWEXo4f0NZXD{
+z2XVl^bJ97%6JA8O_%OQV8s;jal7Y&9eLY<5Bw?k-lHy$;BHmlxlxt8xDCK6ght|Xg
+zQZMWKSnX$0e@!YdX%mwQHEDoJo0+sJ)s_l&pbvQxfL04@HAAbFwSv&v$6755j>!I3
+z)VK&|39_nchHNOBs>h+vUzd%=R}T1SIdzh@Jfxr+N)DUdL@O9r$`ft5C{=}0PEnPd
+zoE^#+EoVkcTTL=aFDeF38wG;RBgw?f^r&<_nV9{Fl$?oAk57$CQ{(aRsY}<S6DLod
+z7|LZ#e_G4nK~l(K-4v-%+G`>D9keZ9PF9t9tQ)%7J#{HQeq}T@&8Ctrk6nsi9gRs>
+z#;=X0Ks8M_XcrzDaMj$-FQD-N-L&N>S#^M#02(PS<v7Qw=q4S-%74(}qTn7kIMp%Z
+zXhUPI2&vB56F-1aGMwQQINt2ZS`WS+M3@thh!#+UkALkd81sYge#%*1timxU>O#b4
+z{xC@o`Z_&lv3ky;qKmSakqvn;pOsZC;$@sJ7#cY)!sUswDr#`<a4JLwp&3p=Cj%!&
+zM1pg&qUxfth~L!djcIIb4wjuSinS3#uw;KkR8)2sW_Mf@a~imSXvlL}Eb3`kj9Qb;
+zYIkwQyg0gqRpUnm9ac(XWeMw|Hm75<#5`({U^!D1=jF7aS4_>z#jGZ0#I%-!o6P8D
+zBz5E3Wlc5kvXKJYan0gPfv^?jg0ZL(#VDFXqr=fe9;@$<#}lyUjCdnMWUx$zQS=xL
+ztw8rJ&J`=Rp8}68<iI>;3#je7Cf!0I4+jeBuvKFb`gz$%FPf*RJA!}Hy%zHMET$8P
+z^BNKNxRxBw&4CFx;<TKx#AVAz_bbu8SbTEk+GvEg_)3pXXn6^~Q&0%bSnm8Hk#($7
+z4-=tS=M3u8Q3iu3ZSRSKD%>g#&maN7tEe;Nz=m}RPKMbpWwrF}8dB%r5;HPUuucxb
+zqBL^pF{oD1OQHGxdu#7K>05oTBph3by%d7?N7hE3oLwC$2?Hy!ZHK?by)w3Q0JU|l
+zx?cp_e|hi8f!}wRywOrHy6pt%4$Oo0#+wOWzAN6UNaAKVKoTHFb<B!2>_Fef4(RcK
+zIOmMBP7gw|jW}BmFy@MrCa{3e?M7VYF^Fhz#w?&k_X;z+@ytAF-$+IK+wKHHp!vUF
+zqInvwE?V!Q(eDyFqjc16{EU8E_>B0?gY*b)W1`}0RJX$fH9l1LA*1LF4Vcg`ZFOJn
+z6mS7k;eIO2Ygr{-jAC^`QJJ)xN~-~2PRRmlqnHK=X|ABds0sq8r(3Q?!^kgx-J$`Y
+zmlRc_afjv^D{zOQT1saX7-)I&dNHl#7a|VJYX^MNLa&o2`{>o~r&T*tmJd)mr(`l%
+zt>KCspdVuF^4Q_n=|jpYV1>j0Q(YNwOGOkuwHP4n#sJa-Qyqq%egi5Bo3<^Xt1NUq
+zxmyytN<x$(#m$h?yo;2Qw`=v@R}>`MywK`i8Q%$^wnGd?e+~AOygj9055>?S5`tOZ
+zz>o(7ke#@l5M+`!FhsL+LkZVsD>|~FRC1b4Tp+jkYz3RJs9arE1hh4lFq%R3c);BT
+z#plf$0h)2tjoyR$3|DRLuTCo;MQDagLPl&XDQ5?oaU|*8Hk3AG+iKe(qNytgy~PUZ
+z7!9S-iVV%s3t)*ONgbu3*tRk)2xMUI_Zn27yZ6{+=QlM|e9C28kaANhShtTqAVhh=
+zNtE*3hS+wq%N{@5HVCoJ){LU_vj|a(Xq1Bp=dFuyX;7>cI{zu^J|95i2u%F|E)Xv6
+z2trzGvZl7%*puV{8LFA=pi?fP2QE1F-io;k&a=*W4$>Sq^olM{=rzXytGp@$mR))t
+zVgPg<LnkbkoK<99ry8PI0jBT50#@;Io{U(dyBM|c2-F0!rnD&QlB!7sRn7zXT*4Vi
+z$>lX-=tCDE!^v5FWT-aHMVMR%*FvuVp{0(*vx(1#AD@48eyek!+&Qpu`DyEB=c%Wc
+zo_C&kHt{bOC4M$A$Pqe%z?LfZk5I2BZd%b>v|LLN4vUt%5|}Kv4tW(Dq?>;8=yza;
+z_>|>cAaZ_jNii+2ijBJ(xxH+8?chc_sIFfx%)t)QSl0=?-bm1L%DQ2>@-oq}<(^8!
+zfHSb*2HYD1hqx<eZ(Dvv2L@-zY8rIL+14$0g}hiUdd#}zuZXV@EoZqa#|BepGNg~L
+z3kDM)I*g1Ej4e;~{NR#+>ktui8Up6`|NF}zF_`8&o$7O_Dy-t%$LD_i{#JW$xxIJe
+zZmGSu)P8nTco!H(sPlKOm8&mX+J5W(mG|NP-!!lCFNOB?%qN#0Pdu8~68g$Q-;1WU
+z`|-7Sxg+tX*q<k!O>A}~o;M|41`a;tKS@7UAE{e`!Og(n)1#jad^YgM0jfT^Hu;c$
+zEIbmnLXmPPvT<bN&SvQ3)1GqZ^z)|SuY9QW@V391M&Z}psA=DNUwL2ertr>2cvCoD
+z;*Xbw<KK+JJnV)=;s2Y-06rQS%AQOH7HrgOWHNr!UnA`OW^=90$h#@TYU#V*3|wb9
+zdX%MT(7jF+#-?x3MBZ=u8GoNH=5fDu@EV0v3dlPqiMsa$b5?Q)>@tDi0t0|FITZ1j
+z0o8sR&{u)k7G@6xiFU&0#VdeJYzD&_8RxWJK~K2GIwVDx>fbFeXqptTITWs^W}q|=
+zD3R#vM`EuZNYAQ4w5+XvG+g5tz?!od<l(wUh@`36V%Q9Yt8Wh&&fXrjjS&Yq1ABXe
+zREShSNd==94d}S|R&-=EOk)+$9Sn<LIEv~!4E8D2j3ifK;%WHRm_+NA&{-BbpZvHa
+zbe4oc$|T-K7ATiEw9R`N(b(5OG#DFaJ`6F}O)$K|Rf~^n@Iq;|{E{?Zpzm@?BH+=8
+zoQ4Yc6}<Pe${eANZh1jRftV}7yC3UXb_t>dL?<9(I=pBSiRsEw1?g~_y9p&k>_Nfk
+z5eourd!Hg^MkUO9FH~aE2%*%8<_Y~iRR3^t9QOqZe~J8GpwQnu!s^)1?`?Uy%AT%G
+z&*3dkU)j^Q!IeG7R`?gbz`ASg&_iF@*HbzgEBj(A?iX(V>dZ&k^$*JKBc*pH%kIe)
+z=L?twfArJ!Y}peo^<FJ|uEJO$xZb;V;o(48=q>e+m4&et?`wCEJMsExhzq|ybC4VS
+L=jjfvn;HCXdEUI@
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/rules/test_route_proxy_runtime_minimal_0130_rule.py b/tests/rules/test_route_proxy_runtime_minimal_0130_rule.py
+new file mode 100644
+index 0000000..94149ef
+--- /dev/null
++++ b/tests/rules/test_route_proxy_runtime_minimal_0130_rule.py
+@@ -0,0 +1,110 @@
++from __future__ import annotations
++
++import ast
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "runtime" / "route_proxy_runtime_minimal.py"
++DOC = ROOT / "doc" / "architecture" / "ROUTE_PROXY_RUNTIME_MINIMAL_0130.md"
++RULE = ROOT / "doc" / "code-rules" / "0130_route_proxy_runtime_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0130_CHANGED_FILES.md"
++
++
++def test_0130_docs_and_rule_lock_runtime_boundaries() -> None:
++    text = DOC.read_text(encoding="utf-8")
++    rule = RULE.read_text(encoding="utf-8")
++    required = [
++        "RouteProxy runtime is a data-plane executor, not an orchestrator",
++        "Scheduler remains the orchestrator",
++        "Do not modify Scheduler.run() in 0130",
++        "No mount table scan is allowed",
++        "EventBus receives observation-ready facts, not payload commands",
++        "SQLContextStore remains durable authority",
++        "E5/OpenVINO and Qdrant are not touched by 0130",
++        "documentation architecture is updated in this patch",
++        "code_rule supplement for RouteProxy runtime membrane",
++    ]
++    for phrase in required:
++        assert phrase in text or phrase in rule
++
++
++def test_0130_manifest_lists_docs_runtime_tests_and_code_rule_supplement() -> None:
++    text = MANIFEST.read_text(encoding="utf-8")
++    required = [
++        "src/runtime/route_proxy_runtime_minimal.py",
++        "tests/runtime/test_route_proxy_runtime_minimal.py",
++        "tests/rules/test_route_proxy_runtime_minimal_0130_rule.py",
++        "doc/architecture/ROUTE_PROXY_RUNTIME_MINIMAL_0130.md",
++        "doc/code-rules/0130_route_proxy_runtime_rule.md",
++    ]
++    for phrase in required:
++        assert phrase in text
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/kernel/dispatcher.py",
++        "src/kernel/queue.py",
++        "src/policy/engine.py",
++        "src/observability/event_bus.py",
++        "requests",
++        "httpx",
++        "openvino.runtime",
++        "qdrant_client",
++        "psycopg",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++
++
++def test_0130_runtime_module_has_no_unapproved_imports() -> None:
++    tree = ast.parse(MODULE.read_text(encoding="utf-8"))
++    imports: set[str] = set()
++    for node in ast.walk(tree):
++        if isinstance(node, ast.Import):
++            imports.update(alias.name.split(".", 1)[0] for alias in node.names)
++        elif isinstance(node, ast.ImportFrom) and node.module:
++            imports.add(node.module.split(".", 1)[0])
++    forbidden = {
++        "requests",
++        "httpx",
++        "socket",
++        "subprocess",
++        "openvino",
++        "qdrant",
++        "qdrant_client",
++        "psycopg",
++        "sqlite3",
++        "graphviz",
++        "networkx",
++        "vispy",
++        "src",
++    }
++    assert sorted(imports & forbidden) == []
++
++
++def test_0130_runtime_module_does_not_become_scheduler_or_event_bus() -> None:
++    text = MODULE.read_text(encoding="utf-8")
++    forbidden = [
++        "Scheduler(",
++        "Scheduler.run(",
++        "Dispatcher(",
++        "PolicyEngine(",
++        "PriorityQueue(",
++        "EventType(",
++        "LocalServerOrchestrator",
++        "qdrant_client",
++        "openvino.runtime",
++        "requests.",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++    required = [
++        "no mount scan",
++        '"mount_scan": False',
++        '"daemon": False',
++        '"scheduler_is_orchestrator": True',
++        '"route_proxy_is_fast_data_plane_control": True',
++        '"event_bus_role": "observation_only"',
++        '"payload_command": False',
++    ]
++    for phrase in required:
++        assert phrase in text
+diff --git a/tests/runtime/__pycache__/test_route_proxy_runtime_minimal.cpython-313-pytest-9.0.2.pyc b/tests/runtime/__pycache__/test_route_proxy_runtime_minimal.cpython-313-pytest-9.0.2.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..c1c1f83d0cb8f56978e4e943331c576ad89f6c9b
+GIT binary patch
+literal 20721
+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
+BEo%S(
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/runtime/__pycache__/test_route_proxy_runtime_minimal.cpython-313.pyc b/tests/runtime/__pycache__/test_route_proxy_runtime_minimal.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..6083428c0a0f16005bde2d0956d07ef0184877f8
+GIT binary patch
+literal 7253
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/runtime/test_route_proxy_runtime_minimal.py b/tests/runtime/test_route_proxy_runtime_minimal.py
+new file mode 100644
+index 0000000..12a8759
+--- /dev/null
++++ b/tests/runtime/test_route_proxy_runtime_minimal.py
+@@ -0,0 +1,153 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++import pytest
++
++from runtime.route_proxy_runtime_minimal import (
++    RouteProxyRuntimeError,
++    RouteProxyRuntimePolicy,
++    list_observation_facts,
++    mark_route_frame_stale,
++    prepare_route_proxy_runtime,
++    read_route_frame,
++    request_writer_permit,
++    write_route_frame,
++)
++
++
++def make_policy(root: Path) -> RouteProxyRuntimePolicy:
++    return RouteProxyRuntimePolicy(
++        route_root=root,
++        proxy_ref="proxy:route-proxy-test",
++        require_dev_shm=False,
++        allow_test_root=True,
++        namespace="autodoc-test",
++    )
++
++
++def test_prepare_runtime_root_creates_minimal_directories_without_mount_scan(tmp_path: Path) -> None:
++    state = prepare_route_proxy_runtime(make_policy(tmp_path / "routes"))
++
++    assert state.route_root.exists()
++    assert state.frames_dir.exists()
++    assert state.meta_dir.exists()
++    assert state.facts_dir.exists()
++    mapping = state.to_mapping()
++    assert mapping["mount_scan"] is False
++    assert mapping["daemon"] is False
++    assert mapping["scheduler_is_orchestrator"] is True
++    assert mapping["route_proxy_is_fast_data_plane_control"] is True
++
++
++def test_prepare_runtime_root_rejects_symlink_root(tmp_path: Path) -> None:
++    target = tmp_path / "target"
++    target.mkdir()
++    link = tmp_path / "routes"
++    link.symlink_to(target, target_is_directory=True)
++
++    with pytest.raises(RouteProxyRuntimeError, match="route_root must not be a symlink"):
++        RouteProxyRuntimePolicy(
++            route_root=link,
++            require_dev_shm=False,
++            allow_test_root=True,
++        )
++
++
++def test_request_permit_write_and_read_frame_roundtrip(tmp_path: Path) -> None:
++    state = prepare_route_proxy_runtime(make_policy(tmp_path / "routes"))
++    permit = request_writer_permit(
++        state,
++        route_ref="route:deliberation/cycle-1/round-1/opinion-thermal",
++        owner_ref="specialist:thermal",
++        context_ref="cycle-state:cycle-1",
++        context_generation=4,
++        priority=900,
++    )
++    assert permit.write_allowed is True
++    assert permit.frame_path.parent == state.frames_dir
++
++    result = write_route_frame(state, permit, {"summary": "ok", "risk": "low"})
++    assert result.frame_path.exists()
++    assert result.to_mapping()["atomic_replace"] is True
++
++    frame = read_route_frame(state, permit.route_ref)
++    assert frame.payload == {"summary": "ok", "risk": "low"}
++    assert frame.context_generation == 4
++    assert frame.stale is False
++
++
++def test_denied_permit_blocks_write(tmp_path: Path) -> None:
++    state = prepare_route_proxy_runtime(make_policy(tmp_path / "routes"))
++    permit = request_writer_permit(
++        state,
++        route_ref="route:deliberation/cycle-1/round-1/opinion-material",
++        owner_ref="specialist:material",
++        context_ref="cycle-state:cycle-1",
++        context_generation=4,
++        priority=100,
++        write_allowed=False,
++        denial_reason="context_generation_changed",
++    )
++
++    assert permit.denial_reason == "context_generation_changed"
++    with pytest.raises(RouteProxyRuntimeError, match="writer permit denies"):
++        write_route_frame(state, permit, {"summary": "blocked"})
++
++
++def test_mark_route_frame_stale_advances_generation(tmp_path: Path) -> None:
++    state = prepare_route_proxy_runtime(make_policy(tmp_path / "routes"))
++    permit = request_writer_permit(
++        state,
++        route_ref="route:deliberation/cycle-2/round-1/opinion-safety",
++        owner_ref="specialist:safety",
++        context_ref="cycle-state:cycle-2",
++        context_generation=7,
++        priority=500,
++    )
++    write_route_frame(state, permit, {"summary": "needs refresh"})
++
++    stale = mark_route_frame_stale(
++        state,
++        route_ref=permit.route_ref,
++        new_context_generation=8,
++    )
++    assert stale.stale is True
++    assert stale.context_generation == 8
++    assert read_route_frame(state, permit.route_ref).stale is True
++
++    with pytest.raises(RouteProxyRuntimeError, match="greater than current"):
++        mark_route_frame_stale(state, route_ref=permit.route_ref, new_context_generation=8)
++
++
++def test_observation_facts_are_persisted_as_lightweight_records(tmp_path: Path) -> None:
++    state = prepare_route_proxy_runtime(make_policy(tmp_path / "routes"))
++    permit = request_writer_permit(
++        state,
++        route_ref="route:deliberation/cycle-3/round-1/demand-vector",
++        owner_ref="scheduler-command:vector-indexing",
++        context_ref="cycle-state:cycle-3",
++        context_generation=1,
++        priority=600,
++    )
++    write_route_frame(state, permit, {"frame_type": "demand"})
++    read_route_frame(state, permit.route_ref)
++
++    kinds = {fact["kind"] for fact in list_observation_facts(state)}
++    assert {
++        "route.runtime_prepared",
++        "route.writer_permit_granted",
++        "route.frame_written",
++        "route.frame_read",
++    }.issubset(kinds)
++
++
++def test_default_policy_requires_dev_shm() -> None:
++    policy = RouteProxyRuntimePolicy()
++    assert str(policy.route_root).startswith("/dev/shm")
++    assert policy.require_dev_shm is True
++
++
++def test_non_dev_shm_root_is_rejected_without_test_override(tmp_path: Path) -> None:
++    with pytest.raises(RouteProxyRuntimeError, match="route_root must be under /dev/shm"):
++        RouteProxyRuntimePolicy(route_root=tmp_path / "routes", require_dev_shm=True)

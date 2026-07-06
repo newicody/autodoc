@@ -1,0 +1,230 @@
+diff --git a/PHASE0141_R1_TEST_REPORT.md b/PHASE0141_R1_TEST_REPORT.md
+new file mode 100644
+index 0000000..8397e7f
+--- /dev/null
++++ b/PHASE0141_R1_TEST_REPORT.md
+@@ -0,0 +1,24 @@
++# PHASE0141_R1_TEST_REPORT
++
++```text
++phase: 0141-r1-qdrant_collection_conflict_idempotent_fix
++code_rule_review: done
++code_rule_update_required: false
++live_path_status: smoke
++live_path_uses_real_backend: true
++context_contract_changed: false
++search_commands_bounded: n/a
++```
++
++Validation performed in patch build:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/tools/test_qdrant_projection_operator_rest_smoke_0140.py tests/rules/test_qdrant_projection_operator_rest_smoke_0140_rule.py
++```
++
++Expected result:
++
++```text
++8 passed
++```
+diff --git a/doc/CHANGELOG_0141_R1_QDRANT_COLLECTION_CONFLICT_IDEMPOTENT.md b/doc/CHANGELOG_0141_R1_QDRANT_COLLECTION_CONFLICT_IDEMPOTENT.md
+new file mode 100644
+index 0000000..cc586c2
+--- /dev/null
++++ b/doc/CHANGELOG_0141_R1_QDRANT_COLLECTION_CONFLICT_IDEMPOTENT.md
+@@ -0,0 +1,8 @@
++# Changelog 0141-r1 — Qdrant collection conflict idempotent
++
++Fixed:
++
++- `tools/run_qdrant_projection_live_smoke.py` now treats HTTP 409 on collection ensure as idempotent collection-already-exists.
++- Added a unit test that simulates the Qdrant 409 response.
++
++No new Qdrant adapter, Scheduler integration, RouteProxy worker, daemon, or qdrant_client dependency was added.
+diff --git a/doc/architecture/QDRANT_COLLECTION_CONFLICT_IDEMPOTENT_0141_R1.md b/doc/architecture/QDRANT_COLLECTION_CONFLICT_IDEMPOTENT_0141_R1.md
+new file mode 100644
+index 0000000..fbd8ba1
+--- /dev/null
++++ b/doc/architecture/QDRANT_COLLECTION_CONFLICT_IDEMPOTENT_0141_R1.md
+@@ -0,0 +1,23 @@
++# 0141-r1 — Qdrant collection conflict is idempotent
++
++0141-r1 fixes the live smoke path after the first successful Qdrant run.
++
++When `tools/run_qdrant_projection_live_smoke.py --execute` ensures the smoke collection, Qdrant may return HTTP 409 because the collection already exists.  For this operator smoke, that is not a failure; it means the collection is already available and the smoke should continue with upsert and search.
++
++Boundary:
++
++- extends the existing tools/run_qdrant_projection_live_smoke.py operator
++- keeps src/inference/qdrant_projection_adapter.py as the existing Qdrant projection membrane
++- does not create VectorQdrantProjectionAdapter
++- does not import Qdrant from Scheduler, RouteProxy, PolicyEngine, Dispatcher, or context contracts
++- Qdrant remains projection and recall only
++- SQLContextStore remains durable context authority
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++live_path_status: smoke
++live_path_uses_real_backend: true
++context_contract_changed: false
++search_commands_bounded: n/a
++```
+diff --git a/doc/code-rules/0141_r1_qdrant_conflict_idempotent_rule.md b/doc/code-rules/0141_r1_qdrant_conflict_idempotent_rule.md
+new file mode 100644
+index 0000000..1a77b7f
+--- /dev/null
++++ b/doc/code-rules/0141_r1_qdrant_conflict_idempotent_rule.md
+@@ -0,0 +1,7 @@
++# Code rule addendum — 0141-r1 Qdrant smoke idempotency
++
++Qdrant operator smoke tools must treat HTTP 409 during collection ensure as an idempotent collection-already-exists result.
++
++This exception applies only to `tools/run_qdrant_projection_live_smoke.py` collection ensure.  It must not be generalized into Scheduler, RouteProxy, PolicyEngine, Dispatcher, or context contracts.
++
++Do not create VectorQdrantProjectionAdapter for this case; extend the existing operator smoke tool and keep `src/inference/qdrant_projection_adapter.py` as the projection membrane.
+diff --git a/doc/manifests/MANIFEST_0141_R1_CHANGED_FILES.md b/doc/manifests/MANIFEST_0141_R1_CHANGED_FILES.md
+new file mode 100644
+index 0000000..2216d3d
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0141_R1_CHANGED_FILES.md
+@@ -0,0 +1,12 @@
++# Manifest 0141-r1 — changed files
++
++- tools/run_qdrant_projection_live_smoke.py
++- tests/tools/test_qdrant_projection_operator_rest_smoke_0140.py
++- tests/rules/test_qdrant_projection_operator_rest_smoke_0140_rule.py
++- doc/architecture/QDRANT_COLLECTION_CONFLICT_IDEMPOTENT_0141_R1.md
++- doc/code-rules/0141_r1_qdrant_conflict_idempotent_rule.md
++- doc/CHANGELOG_0141_R1_QDRANT_COLLECTION_CONFLICT_IDEMPOTENT.md
++- doc/manifests/MANIFEST_0141_R1_CHANGED_FILES.md
++- PHASE0141_R1_TEST_REPORT.md
++
++Boundary: this is an idempotency fix for the existing Qdrant smoke operator only.
+diff --git a/tests/rules/test_qdrant_projection_operator_rest_smoke_0140_rule.py b/tests/rules/test_qdrant_projection_operator_rest_smoke_0140_rule.py
+index ce1d2c3..c42ca72 100644
+--- a/tests/rules/test_qdrant_projection_operator_rest_smoke_0140_rule.py
++++ b/tests/rules/test_qdrant_projection_operator_rest_smoke_0140_rule.py
+@@ -18,6 +18,8 @@ def test_0140_tool_extends_existing_qdrant_smoke_without_new_adapter() -> None:
+         "run_operator_rest_smoke",
+         "build_smoke_projection_point",
+         "qdrant_rest_point_from_projection",
++        "allow_http_statuses=(409,)",
++        "idempotent_conflict",
+         "urllib.request",
+         "does not create VectorQdrantProjectionAdapter",
+     ]
+diff --git a/tests/tools/test_qdrant_projection_operator_rest_smoke_0140.py b/tests/tools/test_qdrant_projection_operator_rest_smoke_0140.py
+index be886d1..8a182cf 100644
+--- a/tests/tools/test_qdrant_projection_operator_rest_smoke_0140.py
++++ b/tests/tools/test_qdrant_projection_operator_rest_smoke_0140.py
+@@ -5,6 +5,7 @@ import math
+ from pathlib import Path
+ 
+ from tools.run_qdrant_projection_live_smoke import (
++    _qdrant_request,
+     build_qdrant_projection_smoke_plan,
+     deterministic_normalized_vector,
+     qdrant_put_collection_payload,
+@@ -12,6 +13,8 @@ from tools.run_qdrant_projection_live_smoke import (
+     qdrant_search_payload,
+ )
+ 
++import urllib.error
++
+ 
+ def _write(path: Path, text: str) -> None:
+     path.parent.mkdir(parents=True, exist_ok=True)
+@@ -67,3 +70,28 @@ def test_0140_builds_qdrant_rest_payloads_without_qdrant_client() -> None:
+     assert search_payload["limit"] == 1
+     assert search_payload["with_payload"] is True
+     assert search_payload["with_vector"] is False
++
++
++def test_0140_qdrant_collection_conflict_is_idempotent(monkeypatch) -> None:
++    def raise_conflict(*args, **kwargs):
++        raise urllib.error.HTTPError(
++            url="http://127.0.0.1:6333/collections/autodoc_smoke_e5_384",
++            code=409,
++            msg="Conflict",
++            hdrs=None,
++            fp=None,
++        )
++
++    monkeypatch.setattr("urllib.request.urlopen", raise_conflict)
++
++    result = _qdrant_request(
++        "PUT",
++        "http://127.0.0.1:6333/collections/autodoc_smoke_e5_384",
++        qdrant_put_collection_payload(384),
++        allow_http_statuses=(409,),
++    )
++
++    assert result["status"] == "ok"
++    assert result["http_status"] == 409
++    assert result["already_exists"] is True
++    assert result["idempotent_conflict"] is True
+diff --git a/tools/run_qdrant_projection_live_smoke.py b/tools/run_qdrant_projection_live_smoke.py
+index 275d0bf..39b871d 100755
+--- a/tools/run_qdrant_projection_live_smoke.py
++++ b/tools/run_qdrant_projection_live_smoke.py
+@@ -135,6 +135,7 @@ class QdrantProjectionSmokePlan:
+             "- reuses src/context/vector_indexing_job_plan.py as projection job contract",
+             "- 0140 uses the existing QdrantProjectionExecutor injection seam instead of a new adapter",
+             "- operator REST execution lives in tools/run_qdrant_projection_live_smoke.py only",
++            "- HTTP 409 while ensuring a collection is treated as idempotent collection-already-exists",
+             "- does not create VectorQdrantProjectionAdapter",
+             "- does not import Qdrant from Scheduler, RouteProxy, PolicyEngine, Dispatcher, or context contracts",
+             "- Qdrant stores projection/recall indexes, not durable truth",
+@@ -232,7 +233,12 @@ def run_operator_rest_smoke(plan: QdrantProjectionSmokePlan) -> int:
+         upsert_payload = {"points": [rest_point]}
+         search_payload = qdrant_search_payload(point.vector, limit=1)
+ 
+-        _qdrant_request("PUT", _qdrant_url(plan, f"/collections/{plan.collection}"), put_collection)
++        _qdrant_request(
++            "PUT",
++            _qdrant_url(plan, f"/collections/{plan.collection}"),
++            put_collection,
++            allow_http_statuses=(409,),
++        )
+         _qdrant_request("PUT", _qdrant_url(plan, f"/collections/{plan.collection}/points?wait=true"), upsert_payload)
+         search_response = _qdrant_request(
+             "POST",
+@@ -352,7 +358,14 @@ def _delegate_to_adapter_entrypoint(plan: QdrantProjectionSmokePlan) -> int:
+     return completed.returncode
+ 
+ 
+-def _qdrant_request(method: str, url: str, payload: dict[str, object], *, timeout: float = 5.0) -> dict[str, Any]:
++def _qdrant_request(
++    method: str,
++    url: str,
++    payload: dict[str, object],
++    *,
++    timeout: float = 5.0,
++    allow_http_statuses: tuple[int, ...] = (),
++) -> dict[str, Any]:
+     data = json.dumps(payload).encode("utf-8")
+     request = urllib.request.Request(
+         url,
+@@ -360,8 +373,18 @@ def _qdrant_request(method: str, url: str, payload: dict[str, object], *, timeou
+         headers={"Content-Type": "application/json"},
+         method=method,
+     )
+-    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - operator local smoke URL is explicit.
+-        raw = response.read().decode("utf-8")
++    try:
++        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - operator local smoke URL is explicit.
++            raw = response.read().decode("utf-8")
++    except urllib.error.HTTPError as exc:
++        if exc.code in allow_http_statuses:
++            return {
++                "status": "ok",
++                "http_status": exc.code,
++                "already_exists": True,
++                "idempotent_conflict": True,
++            }
++        raise
+     if not raw:
+         return {}
+     decoded = json.loads(raw)

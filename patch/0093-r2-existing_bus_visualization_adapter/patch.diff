@@ -1,0 +1,730 @@
+diff --git a/PHASE0093_R2_TEST_REPORT.md b/PHASE0093_R2_TEST_REPORT.md
+new file mode 100644
+index 0000000..46b4c25
+--- /dev/null
++++ b/PHASE0093_R2_TEST_REPORT.md
+@@ -0,0 +1,46 @@
++# Phase 0093-r2 test report
++
++Scope: read existing event.bus/context.bus objects and project observable facts
++to a stable VisPy/browser-ready snapshot.
++
++## Commands to run
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/runtime/test_bus_visualization_adapter.py
++PYTHONPATH=src:. pytest -q tests/rules/test_bus_visualization_adapter_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Local patch-generation validation
++
++```text
++git apply --check: passed in patch worktree
++python -m py_compile new files: passed
++pytest targeted new tests: passed in minimal compatibility worktree
++```
++
++Full repository pytest must be run by apply_patch_queue.py in the developer
++checkout.
++
++## code_rule alignment
++
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: 0093-r2 adds an importable read adapter that attaches to an
++existing EventBus and existing context snapshot source. It does not instantiate
++EventBus, does not create a parallel bus, and does not add a CLI, daemon,
++watcher, service, backend, Scheduler modification, Qdrant, LLM, OpenVINO,
++network path, VisPy dependency, or browser runtime.
++live_path_status: green
++live_path_uses_real_backend: false
++context_contract_version: n/a
++context_contract_changed: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
+diff --git a/doc/architecture/BUS_VISUALIZATION_ADAPTER_0093_R2.md b/doc/architecture/BUS_VISUALIZATION_ADAPTER_0093_R2.md
+new file mode 100644
+index 0000000..f3ccb83
+--- /dev/null
++++ b/doc/architecture/BUS_VISUALIZATION_ADAPTER_0093_R2.md
+@@ -0,0 +1,73 @@
++# Existing bus visualization adapter — 0093-r2
++
++Status: implementation patch.
++
++0093-r2 replaces the rejected 0093 direction. The adapter reads existing
++event.bus/context.bus objects. It does not instantiate EventBus, does not create
++a new bus, and does not build a parallel observation path. It only attaches a
++read tap to an already-created event bus and reads the already-produced context
++snapshot source.
++
++## Operational path
++
++```text
++existing EventBus + existing context source
++-> event_bus.subscribe() read tap
++-> drain_existing_event_bus_reader()
++-> read_existing_bus_visualization_snapshot()
++-> ExistingBusVisualizationSnapshot.to_mapping()
++-> VisPy/browser renderer later
++```
++
++The subscription is a read handle on the existing EventBus. It is not a new bus
++and it is not an execution authority. Context is read from an existing
++GlobalContextSnapshot, mapping snapshot, or object exposing last_snapshot such
++as the current ContextEngine. The adapter is a one-shot read/projection layer.
++
++## Boundaries
++
++- No CLI.
++- No OpenRC service and no resident daemon.
++- No watcher.
++- No Scheduler.run() modification.
++- No kernel loop modification.
++- EventBus is observation only.
++- Events/bus facts are facts, not commands.
++- ControlProxy does not decide security.
++- Scheduler/policy/zone remain the authority.
++- The adapter reads existing event.bus/context.bus objects.
++- The adapter does not instantiate EventBus.
++- The adapter does not create a parallel bus.
++- No Qdrant.
++- No LLM.
++- No OpenVINO.
++- No network, GitHub API, VisPy dependency, or browser launch.
++- stdlib only.
++
++## Why attach instead of create
++
++The system already defines EventBus as the observation channel. 0093-r2 must not
++invent a new bus for visualization. A visualization surface should receive the
++same facts as other observers by subscribing to the existing bus and by reading
++the existing context snapshot source.
++
++## code_rule alignment
++
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: 0093-r2 adds a small importable projection adapter for
++existing observable bus facts. It does not add a CLI, daemon, watcher, service,
++backend, Scheduler modification, Qdrant, LLM, OpenVINO, network path, VisPy
++dependency, browser runtime, or parallel bus. EventBus remains observation only
++and Scheduler/policy/zone remain the authority.
++live_path_status: green
++live_path_uses_real_backend: false
++context_contract_version: n/a
++context_contract_changed: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
+diff --git a/doc/manifests/MANIFEST_0093_R2_CHANGED_FILES.md b/doc/manifests/MANIFEST_0093_R2_CHANGED_FILES.md
+new file mode 100644
+index 0000000..cec237d
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0093_R2_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest 0093-r2 changed files
++
++```text
++src/runtime/bus_visualization_adapter.py
++tests/runtime/test_bus_visualization_adapter.py
++tests/rules/test_bus_visualization_adapter_rule.py
++doc/architecture/BUS_VISUALIZATION_ADAPTER_0093_R2.md
++doc/manifests/MANIFEST_0093_R2_CHANGED_FILES.md
++PHASE0093_R2_TEST_REPORT.md
++```
++
++0093-r2 adds an importable existing-bus visualization read adapter with focused
++tests and phase documentation. It leaves kernel-loop files untouched.
+diff --git a/src/runtime/bus_visualization_adapter.py b/src/runtime/bus_visualization_adapter.py
+new file mode 100644
+index 0000000..0df4189
+--- /dev/null
++++ b/src/runtime/bus_visualization_adapter.py
+@@ -0,0 +1,358 @@
++"""Read existing event.bus/context.bus facts for VisPy/browser views.
++
++0093-r2 is deliberately a read adapter for existing runtime objects. It does not
++instantiate EventBus, does not create a new bus, and does not build a parallel
++observation path. The adapter attaches a read tap to an already-created event
++bus through event_bus.subscribe(), drains already-published observable facts, and
++projects the current context snapshot source.
++
++Operational intent:
++
++    existing EventBus + existing context source
++    -> event_bus.subscribe() read tap
++    -> drain_existing_event_bus_reader()
++    -> read_existing_bus_visualization_snapshot()
++    -> ExistingBusVisualizationSnapshot.to_mapping()
++
++Boundaries deliberately kept out of this module:
++- No CLI.
++- No OpenRC service and no resident daemon.
++- No watcher.
++- No Scheduler.run() modification.
++- No kernel loop modification.
++- EventBus is observation only.
++- Events/bus facts are facts, not commands.
++- ControlProxy does not decide security.
++- Scheduler/policy/zone remain the authority.
++- The adapter reads existing event.bus/context.bus objects.
++- The adapter does not instantiate EventBus.
++- The adapter does not create a parallel bus.
++- No Qdrant.
++- No LLM.
++- No OpenVINO.
++- No network, GitHub API, VisPy dependency, or browser launch.
++- stdlib only.
++"""
++
++from __future__ import annotations
++
++from asyncio import QueueEmpty
++from collections.abc import Iterable, Mapping
++from dataclasses import dataclass
++from enum import Enum
++from queue import Empty
++from types import MappingProxyType
++from typing import Any, Protocol
++
++from contracts.context import GlobalContextSnapshot
++from contracts.event import Event, EventType
++
++BUS_VISUALIZATION_SCHEMA = "missipy.bus_visualization.v1"
++BUS_VISUALIZATION_SOURCE = "existing event.bus/context.bus"
++
++JsonScalar = str | int | float | bool | None
++JsonValue = JsonScalar | tuple["JsonValue", ...] | Mapping[str, "JsonValue"]
++
++
++class ExistingEventReader(Protocol):
++    """Minimal queue contract returned by the existing EventBus."""
++
++    def get_nowait(self) -> Event:
++        """Return the next observable event without waiting, or raise when empty."""
++        ...
++
++    def empty(self) -> bool:
++        """Return whether the read queue is empty."""
++        ...
++
++
++class ExistingEventBus(Protocol):
++    """Minimal read-attachment contract of the existing EventBus."""
++
++    def subscribe(self, event_type: EventType | None = None) -> ExistingEventReader:
++        """Return a read queue for already-created EventBus observers."""
++        ...
++
++
++class ExistingContextSnapshotSource(Protocol):
++    """Minimal contract exposed by the existing context source."""
++
++    last_snapshot: GlobalContextSnapshot | None
++
++
++@dataclass(frozen=True, slots=True)
++class ExistingBusVisualizationTap:
++    """Read tap attached to existing event.bus/context.bus objects.
++
++    The tap owns no bus. It only keeps the read queue returned by the already
++    instantiated EventBus and a reference to the existing context source.
++    """
++
++    event_reader: ExistingEventReader
++    context_source: (
++        GlobalContextSnapshot
++        | Mapping[str, Mapping[str, Any]]
++        | ExistingContextSnapshotSource
++        | None
++    ) = None
++
++
++@dataclass(frozen=True, slots=True)
++class BusEventView:
++    """Serializable observable view of one EventBus fact."""
++
++    index: int
++    event_id: str
++    event_type: str
++    source: str
++    dest: str
++    priority: int
++    timestamp_ns: int
++    correlation_id: str | None
++    has_payload: bool
++    metadata: Mapping[str, JsonValue]
++
++    def to_mapping(self) -> dict[str, JsonValue]:
++        return {
++            "index": self.index,
++            "event_id": self.event_id,
++            "event_type": self.event_type,
++            "source": self.source,
++            "dest": self.dest,
++            "priority": self.priority,
++            "timestamp_ns": self.timestamp_ns,
++            "correlation_id": self.correlation_id,
++            "has_payload": self.has_payload,
++            "metadata": _thaw_json_value(self.metadata),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class ContextComponentView:
++    """Serializable observable view of one component context fact."""
++
++    name: str
++    fields: Mapping[str, JsonValue]
++
++    def to_mapping(self) -> dict[str, JsonValue]:
++        return {
++            "name": self.name,
++            "fields": _thaw_json_value(self.fields),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class ExistingBusVisualizationSnapshot:
++    """Stable snapshot for VisPy/browser adapters.
++
++    The snapshot is a representation of observable facts only. It does not
++    command components and it does not choose policy.
++    """
++
++    schema: str
++    source: str
++    max_events: int
++    events: tuple[BusEventView, ...]
++    components: tuple[ContextComponentView, ...]
++    event_limit_reached: bool
++
++    @property
++    def event_count(self) -> int:
++        return len(self.events)
++
++    @property
++    def component_count(self) -> int:
++        return len(self.components)
++
++    def to_mapping(self) -> dict[str, JsonValue]:
++        return {
++            "schema": self.schema,
++            "source": self.source,
++            "max_events": self.max_events,
++            "event_count": self.event_count,
++            "component_count": self.component_count,
++            "event_limit_reached": self.event_limit_reached,
++            "events": tuple(event.to_mapping() for event in self.events),
++            "components": tuple(component.to_mapping() for component in self.components),
++        }
++
++
++def attach_existing_bus_visualization_tap(
++    event_bus: ExistingEventBus,
++    *,
++    context_source: (
++        GlobalContextSnapshot
++        | Mapping[str, Mapping[str, Any]]
++        | ExistingContextSnapshotSource
++        | None
++    ) = None,
++    event_type: EventType | None = None,
++) -> ExistingBusVisualizationTap:
++    """Attach a visualization read tap to the existing EventBus.
++
++    This function calls event_bus.subscribe() on the object supplied by the
++    runtime. It does not instantiate EventBus and it does not create a parallel
++    bus. The returned tap can be read later by
++    read_existing_bus_visualization_snapshot().
++    """
++
++    event_reader = event_bus.subscribe(event_type)
++    return ExistingBusVisualizationTap(
++        event_reader=event_reader,
++        context_source=context_source,
++    )
++
++
++def read_existing_bus_visualization_snapshot(
++    tap: ExistingBusVisualizationTap,
++    *,
++    max_events: int = 256,
++) -> ExistingBusVisualizationSnapshot:
++    """Read a one-shot visualization snapshot from an existing-bus tap."""
++
++    events = drain_existing_event_bus_reader(tap.event_reader, max_events=max_events)
++    limit = _validate_max_events(max_events)
++    event_limit_reached = len(events) >= limit and not tap.event_reader.empty()
++    return build_existing_bus_visualization_snapshot(
++        events,
++        context_source=tap.context_source,
++        max_events=limit,
++        event_limit_reached=event_limit_reached,
++    )
++
++
++def drain_existing_event_bus_reader(
++    event_reader: ExistingEventReader,
++    *,
++    max_events: int = 256,
++) -> tuple[Event, ...]:
++    """Drain at most max_events observable events without waiting.
++
++    This function is intentionally one-shot. It is not a watcher and it does not
++    create a task or loop. The caller owns scheduling and authorization.
++    """
++
++    limit = _validate_max_events(max_events)
++    events: list[Event] = []
++    while len(events) < limit:
++        try:
++            event = event_reader.get_nowait()
++        except (Empty, QueueEmpty):
++            break
++        events.append(event)
++        task_done = getattr(event_reader, "task_done", None)
++        if callable(task_done):
++            task_done()
++    return tuple(events)
++
++
++def build_existing_bus_visualization_snapshot(
++    events: Iterable[Event],
++    *,
++    context_source: (
++        GlobalContextSnapshot
++        | Mapping[str, Mapping[str, Any]]
++        | ExistingContextSnapshotSource
++        | None
++    ) = None,
++    max_events: int = 256,
++    event_limit_reached: bool = False,
++) -> ExistingBusVisualizationSnapshot:
++    """Project existing event.bus/context.bus facts into a stable snapshot."""
++
++    limit = _validate_max_events(max_events)
++    selected_events = tuple(events)[:limit]
++    context_snapshot = _resolve_existing_context_snapshot(context_source)
++    return ExistingBusVisualizationSnapshot(
++        schema=BUS_VISUALIZATION_SCHEMA,
++        source=BUS_VISUALIZATION_SOURCE,
++        max_events=limit,
++        events=tuple(_event_to_view(index, event) for index, event in enumerate(selected_events)),
++        components=_context_to_views(context_snapshot),
++        event_limit_reached=event_limit_reached,
++    )
++
++
++def _resolve_existing_context_snapshot(
++    context_source: (
++        GlobalContextSnapshot
++        | Mapping[str, Mapping[str, Any]]
++        | ExistingContextSnapshotSource
++        | None
++    ),
++) -> GlobalContextSnapshot | Mapping[str, Mapping[str, Any]] | None:
++    if context_source is None:
++        return None
++    if isinstance(context_source, GlobalContextSnapshot):
++        return context_source
++    if isinstance(context_source, Mapping):
++        return context_source
++    snapshot = getattr(context_source, "last_snapshot", None)
++    if snapshot is None:
++        return None
++    if isinstance(snapshot, GlobalContextSnapshot):
++        return snapshot
++    if isinstance(snapshot, Mapping):
++        return snapshot
++    raise TypeError(f"Invalid existing context snapshot: {snapshot!r}")
++
++
++def _event_to_view(index: int, event: Event) -> BusEventView:
++    return BusEventView(
++        index=index,
++        event_id=event.id,
++        event_type=event.type.name,
++        source=event.source,
++        dest=event.dest,
++        priority=event.priority,
++        timestamp_ns=event.timestamp_ns,
++        correlation_id=event.correlation_id,
++        has_payload=event.payload is not None,
++        metadata=_freeze_json_mapping(event.metadata),
++    )
++
++
++def _context_to_views(
++    context_snapshot: GlobalContextSnapshot | Mapping[str, Mapping[str, Any]] | None,
++) -> tuple[ContextComponentView, ...]:
++    if context_snapshot is None:
++        return ()
++    if isinstance(context_snapshot, GlobalContextSnapshot):
++        components = context_snapshot.components
++    else:
++        components = context_snapshot
++    return tuple(
++        ContextComponentView(name=name, fields=_freeze_json_mapping(fields))
++        for name, fields in sorted(components.items())
++    )
++
++
++def _validate_max_events(max_events: int) -> int:
++    if isinstance(max_events, bool) or max_events <= 0:
++        raise ValueError("max_events must be a positive integer")
++    return max_events
++
++
++def _freeze_json_mapping(data: Mapping[str, Any]) -> Mapping[str, JsonValue]:
++    frozen = {str(key): _freeze_json_value(value) for key, value in data.items()}
++    return MappingProxyType(frozen)
++
++
++def _freeze_json_value(value: Any) -> JsonValue:
++    if isinstance(value, Enum):
++        return value.name
++    if isinstance(value, Mapping):
++        return _freeze_json_mapping(value)
++    if isinstance(value, (tuple, list)):
++        return tuple(_freeze_json_value(item) for item in value)
++    if isinstance(value, (str, int, float, bool)) or value is None:
++        return value
++    return repr(value)
++
++
++def _thaw_json_value(value: JsonValue) -> JsonValue:
++    if isinstance(value, Mapping):
++        return {str(key): _thaw_json_value(item) for key, item in value.items()}
++    if isinstance(value, tuple):
++        return tuple(_thaw_json_value(item) for item in value)
++    return value
+diff --git a/tests/rules/test_bus_visualization_adapter_rule.py b/tests/rules/test_bus_visualization_adapter_rule.py
+new file mode 100644
+index 0000000..7c79cb3
+--- /dev/null
++++ b/tests/rules/test_bus_visualization_adapter_rule.py
+@@ -0,0 +1,78 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "runtime" / "bus_visualization_adapter.py"
++DOC = ROOT / "doc" / "architecture" / "BUS_VISUALIZATION_ADAPTER_0093_R2.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0093_R2_CHANGED_FILES.md"
++
++
++def _read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_0093_r2_existing_bus_adapter_locks_operational_intent() -> None:
++    text = _read(MODULE) + "\n" + _read(DOC)
++    required = [
++        "reads existing event.bus/context.bus objects",
++        "does not instantiate EventBus",
++        "does not create a parallel bus",
++        "event_bus.subscribe()",
++        "VisPy/browser",
++        "EventBus is observation only",
++        "Events/bus facts are facts, not commands",
++        "No CLI",
++        "No OpenRC service and no resident daemon",
++        "No watcher",
++        "No Scheduler.run() modification",
++        "ControlProxy does not decide security",
++        "Scheduler/policy/zone remain the authority",
++        "No Qdrant",
++        "No LLM",
++        "No OpenVINO",
++        "stdlib only",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0093_r2_existing_bus_adapter_does_not_create_bus_or_ui_runtime() -> None:
++    module = _read(MODULE)
++    lowered = module.lower()
++    forbidden = [
++        "event_bus = eventbus(",
++        "eventbus()",
++        "asyncio.queue(",
++        "import vispy",
++        "from vispy",
++        "import webbrowser",
++        "asyncio.create_task",
++        "subprocess",
++        "argparse",
++        "click",
++        "import qdrant",
++        "from qdrant",
++        "import openvino",
++        "from openvino",
++    ]
++    for phrase in forbidden:
++        assert phrase not in lowered
++
++
++def test_0093_r2_manifest_contains_only_adapter_surface() -> None:
++    manifest = _read(MANIFEST)
++    assert "src/runtime/bus_visualization_adapter.py" in manifest
++    assert "tests/runtime/test_bus_visualization_adapter.py" in manifest
++    assert "tests/rules/test_bus_visualization_adapter_rule.py" in manifest
++    assert "Scheduler.run" not in manifest
++    assert "PriorityQueue" not in manifest
++    assert "Dispatcher" not in manifest
++    assert "src/kernel/" not in manifest
++
++
++def test_0093_r2_report_declares_existing_bus_scope() -> None:
++    report = _read(ROOT / "PHASE0093_R2_TEST_REPORT.md")
++    assert "existing EventBus" in report
++    assert "does not instantiate" in report
++    assert "does not create a parallel bus" in report
+diff --git a/tests/runtime/test_bus_visualization_adapter.py b/tests/runtime/test_bus_visualization_adapter.py
+new file mode 100644
+index 0000000..a229b89
+--- /dev/null
++++ b/tests/runtime/test_bus_visualization_adapter.py
+@@ -0,0 +1,126 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from types import MappingProxyType
++
++import pytest
++
++from contracts.context import GlobalContextSnapshot
++from contracts.event import Event, EventType
++from kernel.event_bus import EventBus
++from runtime.bus_visualization_adapter import (
++    BUS_VISUALIZATION_SCHEMA,
++    BUS_VISUALIZATION_SOURCE,
++    attach_existing_bus_visualization_tap,
++    build_existing_bus_visualization_snapshot,
++    drain_existing_event_bus_reader,
++    read_existing_bus_visualization_snapshot,
++)
++
++
++@dataclass(slots=True)
++class ExistingContextSource:
++    last_snapshot: GlobalContextSnapshot | None
++
++
++def _event(event_type: EventType, source: str, *, payload: object | None = None) -> Event:
++    return Event(
++        event_type,
++        source=source,
++        dest="vis.observer",
++        payload=payload,
++        priority=7,
++        correlation_id="corr-1",
++        metadata=MappingProxyType({"lane": "event.bus", "nested": {"value": 1}}),
++        timestamp_ns=123,
++        id=f"event-{source}",
++    )
++
++
++@pytest.mark.asyncio
++async def test_adapter_reads_existing_event_bus_and_existing_context_source() -> None:
++    event_bus = EventBus()
++    context_source = ExistingContextSource(
++        last_snapshot=GlobalContextSnapshot(
++            timestamp=1.0,
++            components={
++                "worker.b": {"ready": False},
++                "worker.a": {"ready": True, "depth": 2},
++            },
++        )
++    )
++    tap = attach_existing_bus_visualization_tap(
++        event_bus,
++        context_source=context_source,
++    )
++
++    await event_bus.publish(_event(EventType.CONTEXT_REQUEST, "scheduler"))
++    await event_bus.publish(_event(EventType.POLICY_DENIED, "policy"))
++
++    snapshot = read_existing_bus_visualization_snapshot(tap, max_events=8)
++
++    assert snapshot.schema == BUS_VISUALIZATION_SCHEMA
++    assert snapshot.source == BUS_VISUALIZATION_SOURCE
++    assert snapshot.event_count == 2
++    assert snapshot.component_count == 2
++    assert [component.name for component in snapshot.components] == ["worker.a", "worker.b"]
++
++    mapping = snapshot.to_mapping()
++    assert mapping["events"][0]["event_type"] == "CONTEXT_REQUEST"
++    assert mapping["events"][0]["has_payload"] is False
++    assert mapping["events"][1]["event_type"] == "POLICY_DENIED"
++    assert mapping["components"][0]["fields"] == {"ready": True, "depth": 2}
++
++
++@pytest.mark.asyncio
++async def test_adapter_uses_existing_subscription_without_replacing_bus() -> None:
++    event_bus = EventBus()
++    tap = attach_existing_bus_visualization_tap(event_bus)
++
++    await event_bus.publish(_event(EventType.CONTEXT_REPLY, "component.a", payload={"ok": True}))
++    await event_bus.publish(_event(EventType.ERROR, "component.b"))
++
++    snapshot = read_existing_bus_visualization_snapshot(tap, max_events=4)
++
++    assert snapshot.event_count == 2
++    assert snapshot.events[0].event_type == "CONTEXT_REPLY"
++    assert snapshot.events[0].has_payload is True
++    assert snapshot.events[1].event_type == "ERROR"
++
++
++@pytest.mark.asyncio
++async def test_drain_existing_event_bus_reader_respects_max_events() -> None:
++    event_bus = EventBus()
++    tap = attach_existing_bus_visualization_tap(event_bus)
++    for index in range(3):
++        await event_bus.publish(_event(EventType.TICK, f"component.{index}"))
++
++    drained = drain_existing_event_bus_reader(tap.event_reader, max_events=2)
++
++    assert [event.source for event in drained] == ["component.0", "component.1"]
++    assert not tap.event_reader.empty()
++
++    snapshot = read_existing_bus_visualization_snapshot(tap, max_events=1)
++    assert snapshot.event_limit_reached is False
++    assert snapshot.events[0].source == "component.2"
++
++
++def test_build_existing_bus_visualization_snapshot_accepts_snapshot_mapping() -> None:
++    snapshot = build_existing_bus_visualization_snapshot(
++        [_event(EventType.LOAD, "loader")],
++        context_source={"component.a": {"ready": True}},
++        max_events=3,
++    )
++
++    assert snapshot.event_count == 1
++    assert snapshot.component_count == 1
++    assert snapshot.components[0].to_mapping() == {
++        "name": "component.a",
++        "fields": {"ready": True},
++    }
++
++
++@pytest.mark.parametrize("max_events", [0, -1, False])
++def test_existing_bus_visualization_adapter_rejects_invalid_max_events(max_events: int) -> None:
++    with pytest.raises(ValueError, match="max_events must be a positive integer"):
++        build_existing_bus_visualization_snapshot([], max_events=max_events)

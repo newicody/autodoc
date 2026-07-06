@@ -1,0 +1,656 @@
+diff --git a/src/context/baby_fork_runtime_projection.py b/src/context/baby_fork_runtime_projection.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/context/baby_fork_runtime_projection.py
+@@ -0,0 +1,296 @@
++"""Baby-fork smoke project projection to SHM Runtime schemas.
++
++This module implements the P4 integration step without changing the existing
++baby-fork smoke pipeline.
++
++It deliberately does not:
++- create shared memory
++- create semaphores
++- start RouteProxy
++- call Scheduler
++- mutate ControlFS
++- replace the baby-fork smoke project
++
++It only projects an existing baby-fork report into compact runtime messages:
++DataHandle, EventBusMessage, ContextBusMessage and RouteMessage.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++import json
++from typing import Any, Mapping
++
++from runtime.shm_runtime_schema import (
++    CONTEXT_BUS_MESSAGE_SCHEMA,
++    DATA_HANDLE_SCHEMA,
++    EVENT_BUS_MESSAGE_SCHEMA,
++    ROUTE_MESSAGE_SCHEMA,
++    ContextBusMessage,
++    DataHandle,
++    EventBusMessage,
++    RouteMessage,
++)
++
++
++BABY_FORK_CONTEXT_ID = "baby_fork_smoke"
++BABY_FORK_RETRIEVAL_ROUTE = "baby_fork.retrieval"
++BABY_FORK_VARIANT_ROUTE = "baby_fork.variant_stub"
++BABY_FORK_CONTEXT_GATE_ROUTE = "baby_fork.context_gate"
++
++BABY_FORK_REPORT_SCHEMA = "missipy.baby_fork.report.v1"
++BABY_FORK_RETRIEVAL_COMPLETED_SCHEMA = "missipy.baby_fork.retrieval_completed.v1"
++BABY_FORK_VARIANTS_GENERATED_SCHEMA = "missipy.baby_fork.variants_generated.v1"
++BABY_FORK_CONTEXT_VERSIONED_SCHEMA = "missipy.baby_fork.context_versioned.v1"
++BABY_FORK_ROUTE_REPLY_SCHEMA = "missipy.baby_fork.route_reply.v1"
++BABY_FORK_CONTEXT_PATCH_SCHEMA = "missipy.baby_fork.context_patch.v1"
++
++
++@dataclass(frozen=True)
++class BabyForkRuntimeProjection:
++    """Runtime-message projection of a baby-fork smoke report."""
++
++    data_handles: tuple[DataHandle, ...]
++    events: tuple[EventBusMessage, ...]
++    contexts: tuple[ContextBusMessage, ...]
++    routes: tuple[RouteMessage, ...]
++
++    def to_mapping(self) -> dict[str, Any]:
++        """Return a JSON-serializable representation."""
++
++        return {
++            "data_handles": [item.to_mapping() for item in self.data_handles],
++            "events": [item.to_mapping() for item in self.events],
++            "contexts": [item.to_mapping() for item in self.contexts],
++            "routes": [item.to_mapping() for item in self.routes],
++        }
++
++
++def build_baby_fork_runtime_projection(
++    report: Mapping[str, Any],
++    *,
++    report_uri: str = ".var/baby_fork_smoke/baby_fork_report.json",
++    occurred_at: str = "2026-07-04T20:00:00Z",
++) -> BabyForkRuntimeProjection:
++    """Project a baby-fork smoke report into runtime schema messages.
++
++    The report may be the current smoke-project JSON result. The function is
++    intentionally tolerant of missing optional fields because the current smoke
++    project is still evolving.
++    """
++
++    context_id = _context_id(report)
++    context_version = _context_version(report)
++    selected_variant_id = _selected_variant_id(report)
++
++    evidence_handle = DataHandle.from_mapping(
++        {
++            "schema": DATA_HANDLE_SCHEMA,
++            "handle_id": f"{context_id}:report",
++            "storage": "zfs",
++            "uri": report_uri,
++            "content_schema": BABY_FORK_REPORT_SCHEMA,
++            "size_bytes": _stable_size(report),
++            "hash": "sha256:projection",
++            "producer": "baby_fork_smoke_project",
++            "zone": "workers",
++            "created_at": occurred_at,
++            "ttl_seconds": 3600,
++        }
++    )
++
++    retrieved_ids = _retrieved_ids(report)
++    rejected_ids = _rejected_ids(report)
++    variants = _variants(report)
++
++    retrieval_event = EventBusMessage.from_mapping(
++        {
++            "schema": EVENT_BUS_MESSAGE_SCHEMA,
++            "event_id": "evt:baby_fork.retrieval.completed",
++            "topic": "retrieval.completed",
++            "source": "retrieval_worker",
++            "occurred_at": occurred_at,
++            "zone": "workers",
++            "payload_schema": BABY_FORK_RETRIEVAL_COMPLETED_SCHEMA,
++            "payload": {
++                "route_id": BABY_FORK_RETRIEVAL_ROUTE,
++                "context_id": context_id,
++                "retrieved_ids": retrieved_ids,
++                "rejected_ids": rejected_ids,
++                "retrieved_count": len(retrieved_ids),
++                "rejected_count": len(rejected_ids),
++            },
++            "data_handles": [evidence_handle.to_mapping()],
++        }
++    )
++
++    variants_event = EventBusMessage.from_mapping(
++        {
++            "schema": EVENT_BUS_MESSAGE_SCHEMA,
++            "event_id": "evt:baby_fork.variants.generated",
++            "topic": "variants.generated",
++            "source": "variant_generator_stub",
++            "occurred_at": occurred_at,
++            "zone": "workers",
++            "payload_schema": BABY_FORK_VARIANTS_GENERATED_SCHEMA,
++            "payload": {
++                "route_id": BABY_FORK_VARIANT_ROUTE,
++                "context_id": context_id,
++                "variant_count": len(variants),
++                "selected_variant_id": selected_variant_id,
++            },
++        }
++    )
++
++    context_message = ContextBusMessage.from_mapping(
++        {
++            "schema": CONTEXT_BUS_MESSAGE_SCHEMA,
++            "context_id": context_id,
++            "context_version": context_version,
++            "topic": "context.versioned",
++            "source": "context_gate",
++            "occurred_at": occurred_at,
++            "zone": "context",
++            "payload_schema": BABY_FORK_CONTEXT_VERSIONED_SCHEMA,
++            "payload": {
++                "selected_variant_id": selected_variant_id,
++                "route_id": BABY_FORK_CONTEXT_GATE_ROUTE,
++            },
++            "data_handles": [evidence_handle.to_mapping()],
++        }
++    )
++
++    retrieval_reply = RouteMessage.from_mapping(
++        {
++            "schema": ROUTE_MESSAGE_SCHEMA,
++            "route_id": BABY_FORK_RETRIEVAL_ROUTE,
++            "message_id": "msg:baby_fork.retrieval.reply",
++            "kind": "reply",
++            "source": "retrieval_worker",
++            "target": "scheduler",
++            "occurred_at": occurred_at,
++            "payload_schema": BABY_FORK_ROUTE_REPLY_SCHEMA,
++            "payload": {
++                "context_id": context_id,
++                "retrieved_ids": retrieved_ids,
++                "rejected_ids": rejected_ids,
++            },
++            "data_handles": [evidence_handle.to_mapping()],
++        }
++    )
++
++    variant_event = RouteMessage.from_mapping(
++        {
++            "schema": ROUTE_MESSAGE_SCHEMA,
++            "route_id": BABY_FORK_VARIANT_ROUTE,
++            "message_id": "msg:baby_fork.variant_stub.event",
++            "kind": "event",
++            "source": "variant_generator_stub",
++            "target": "scheduler",
++            "occurred_at": occurred_at,
++            "payload_schema": BABY_FORK_VARIANTS_GENERATED_SCHEMA,
++            "payload": {
++                "context_id": context_id,
++                "variant_count": len(variants),
++                "selected_variant_id": selected_variant_id,
++            },
++        }
++    )
++
++    context_patch = RouteMessage.from_mapping(
++        {
++            "schema": ROUTE_MESSAGE_SCHEMA,
++            "route_id": BABY_FORK_CONTEXT_GATE_ROUTE,
++            "message_id": "msg:baby_fork.context_gate.patch",
++            "kind": "context_patch",
++            "source": "context_gate",
++            "target": "scheduler",
++            "occurred_at": occurred_at,
++            "payload_schema": BABY_FORK_CONTEXT_PATCH_SCHEMA,
++            "payload": {
++                "context_id": context_id,
++                "context_version": context_version,
++                "selected_variant_id": selected_variant_id,
++            },
++        }
++    )
++
++    return BabyForkRuntimeProjection(
++        data_handles=(evidence_handle,),
++        events=(retrieval_event, variants_event),
++        contexts=(context_message,),
++        routes=(retrieval_reply, variant_event, context_patch),
++    )
++
++
++def build_baby_fork_runtime_projection_json(
++    report: Mapping[str, Any],
++    *,
++    report_uri: str = ".var/baby_fork_smoke/baby_fork_report.json",
++    occurred_at: str = "2026-07-04T20:00:00Z",
++) -> str:
++    """Return the projection as deterministic JSON."""
++
++    projection = build_baby_fork_runtime_projection(
++        report,
++        report_uri=report_uri,
++        occurred_at=occurred_at,
++    )
++    return json.dumps(projection.to_mapping(), indent=2, sort_keys=True)
++
++
++def _context_id(report: Mapping[str, Any]) -> str:
++    final_context = _mapping(report.get("final_context"))
++    return str(final_context.get("context_id") or report.get("context_id") or BABY_FORK_CONTEXT_ID)
++
++
++def _context_version(report: Mapping[str, Any]) -> int:
++    final_context = _mapping(report.get("final_context"))
++    for key in ("context_version", "version"):
++        value = final_context.get(key)
++        if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
++            return value
++    value = report.get("context_version")
++    if isinstance(value, int) and not isinstance(value, bool) and value >= 1:
++        return value
++    return 2
++
++
++def _selected_variant_id(report: Mapping[str, Any]) -> str:
++    final_context = _mapping(report.get("final_context"))
++    value = final_context.get("selected_variant_id") or report.get("selected_variant_id")
++    if value:
++        return str(value)
++    variants = _variants(report)
++    if variants:
++        first = _mapping(variants[0])
++        if first.get("variant_id"):
++            return str(first["variant_id"])
++        if first.get("id"):
++            return str(first["id"])
++    return "variant-1"
++
++
++def _retrieved_ids(report: Mapping[str, Any]) -> list[str]:
++    retrieval = _mapping(report.get("retrieval"))
++    value = retrieval.get("retrieved_ids") or report.get("retrieved_ids") or []
++    return [str(item) for item in value] if isinstance(value, list) else []
++
++
++def _rejected_ids(report: Mapping[str, Any]) -> list[str]:
++    retrieval = _mapping(report.get("retrieval"))
++    value = retrieval.get("rejected_ids") or report.get("rejected_ids") or []
++    return [str(item) for item in value] if isinstance(value, list) else []
++
++
++def _variants(report: Mapping[str, Any]) -> list[Any]:
++    value = report.get("variants") or []
++    return list(value) if isinstance(value, list) else []
++
++
++def _stable_size(report: Mapping[str, Any]) -> int:
++    return len(json.dumps(dict(report), sort_keys=True, separators=(",", ":")).encode("utf-8"))
++
++
++def _mapping(value: Any) -> Mapping[str, Any]:
++    return value if isinstance(value, Mapping) else {}
+
+diff --git a/tools/export_baby_fork_runtime_projection.py b/tools/export_baby_fork_runtime_projection.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tools/export_baby_fork_runtime_projection.py
+@@ -0,0 +1,49 @@
++#!/usr/bin/env python3
++"""Export a baby-fork report as runtime schema messages.
++
++Usage:
++
++    PYTHONPATH=src:. python tools/export_baby_fork_runtime_projection.py \
++      .var/baby_fork_smoke/baby_fork_report.json
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import sys
++
++from context.baby_fork_runtime_projection import build_baby_fork_runtime_projection
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Project a baby-fork report to runtime messages.")
++    parser.add_argument("report", type=Path, help="Path to baby_fork_report.json")
++    parser.add_argument("--occurred-at", default="2026-07-04T20:00:00Z")
++    args = parser.parse_args(argv)
++
++    try:
++        report = json.loads(args.report.read_text(encoding="utf-8"))
++    except OSError as exc:
++        print(f"ERROR: {exc}", file=sys.stderr)
++        return 1
++    except json.JSONDecodeError as exc:
++        print(f"INVALID JSON: {exc}", file=sys.stderr)
++        return 2
++
++    if not isinstance(report, dict):
++        print("INVALID JSON: report must be an object", file=sys.stderr)
++        return 2
++
++    projection = build_baby_fork_runtime_projection(
++        report,
++        report_uri=str(args.report),
++        occurred_at=args.occurred_at,
++    )
++    print(json.dumps(projection.to_mapping(), indent=2, sort_keys=True))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+
+diff --git a/doc/architecture/BABY_FORK_RUNTIME_MESSAGE_PROJECTION.md b/doc/architecture/BABY_FORK_RUNTIME_MESSAGE_PROJECTION.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/architecture/BABY_FORK_RUNTIME_MESSAGE_PROJECTION.md
+@@ -0,0 +1,107 @@
++# Baby-fork runtime message projection
++
++Status: Priority 4 adapter.
++
++This phase connects the baby-fork smoke project to the ControlFS / SHM Runtime vocabulary without changing the existing smoke pipeline.
++
++## Goal
++
++The baby-fork smoke project already proves:
++
++```text
++TaskContext v1
++-> retrieval
++-> VariantGeneratorStub
++-> ContextGate
++-> TaskContext v2
++-> report/journal
++```
++
++This phase adds a projection layer that converts the existing baby-fork report into compact runtime schema messages:
++
++```text
++DataHandle
++EventBusMessage
++ContextBusMessage
++RouteMessage
++```
++
++## Routes
++
++Locked baby-fork route names:
++
++```text
++baby_fork.retrieval
++baby_fork.variant_stub
++baby_fork.context_gate
++```
++
++## Projected messages
++
++The projection emits:
++
++```text
++data_handles:
++  baby_fork_smoke:report
++
++events:
++  retrieval.completed
++  variants.generated
++
++contexts:
++  context.versioned
++
++routes:
++  baby_fork.retrieval reply
++  baby_fork.variant_stub event
++  baby_fork.context_gate context_patch
++```
++
++## Why projection instead of direct rewrite?
++
++This phase deliberately avoids modifying the current baby-fork core pipeline.
++
++It is safer to keep the proven smoke project stable and add an adapter:
++
++```text
++baby_fork_report.json
++-> runtime projection
++-> event/context/route/data-handle messages
++```
++
++Later, the smoke project can emit those messages directly.
++
++## CLI
++
++```bash
++PYTHONPATH=src:. python tools/export_baby_fork_runtime_projection.py \
++  .var/baby_fork_smoke/baby_fork_report.json
++```
++
++## Non-goals
++
++This phase does not add:
++
++```text
++real shared memory
++semaphores
++ring buffer
++RouteProxy daemon
++Scheduler wiring
++ControlFS mutation
++NetworkBridge
++HardwareBridge
++cluster dispatch
++```
++
++## Next phase after this
++
++The next phase should decide whether to:
++
++```text
++1. wire baby-fork CLI to optionally export this projection
++2. add a fake local route transport for tests
++3. define recorder ingestion for runtime schema messages
++```
++
++No real shm/semaphore should be introduced until the message-level flow is stable.
+
+diff --git a/doc/changelog/0066-baby-fork-runtime-message-projection.md b/doc/changelog/0066-baby-fork-runtime-message-projection.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelog/0066-baby-fork-runtime-message-projection.md
+@@ -0,0 +1,28 @@
++# 0066 - Baby-fork runtime message projection
++
++## Added
++
++- `context.baby_fork_runtime_projection`
++- `BabyForkRuntimeProjection`
++- projection from baby-fork report to:
++  - `DataHandle`
++  - `EventBusMessage`
++  - `ContextBusMessage`
++  - `RouteMessage`
++- CLI tool `tools/export_baby_fork_runtime_projection.py`
++- documentation for baby-fork runtime projection
++- tests for projected route IDs and message schemas
++- rule tests locking adapter-only scope
++
++## Not added
++
++- No change to baby-fork core pipeline.
++- No real shared memory.
++- No semaphores.
++- No ring buffer.
++- No RouteProxy daemon.
++- No Scheduler wiring.
++- No ControlFS mutation.
++- No NetworkBridge.
++- No HardwareBridge.
++- No cluster dispatch.
+
+diff --git a/tests/test_baby_fork_runtime_projection.py b/tests/test_baby_fork_runtime_projection.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/test_baby_fork_runtime_projection.py
+@@ -0,0 +1,80 @@
++import json
++
++from context.baby_fork_runtime_projection import (
++    BABY_FORK_CONTEXT_GATE_ROUTE,
++    BABY_FORK_RETRIEVAL_ROUTE,
++    BABY_FORK_VARIANT_ROUTE,
++    build_baby_fork_runtime_projection,
++    build_baby_fork_runtime_projection_json,
++)
++from runtime.shm_runtime_schema import (
++    CONTEXT_BUS_MESSAGE_SCHEMA,
++    DATA_HANDLE_SCHEMA,
++    EVENT_BUS_MESSAGE_SCHEMA,
++    ROUTE_MESSAGE_SCHEMA,
++    parse_runtime_message,
++)
++
++
++def _report() -> dict:
++    return {
++        "ok": True,
++        "snapshot_count": 6,
++        "retrieval": {
++            "retrieved_ids": ["baby-silicone-fork", "rounded-stainless-soft-handle"],
++            "rejected_ids": ["nasa-antenna"],
++        },
++        "variants": [
++            {"variant_id": "variant-1", "label": "soft silicone baby fork", "score": 0.86},
++            {"variant_id": "variant-2", "label": "rounded stainless with soft handle", "score": 0.74},
++        ],
++        "final_context": {
++            "context_id": "baby_fork_smoke",
++            "context_version": 2,
++            "selected_variant_id": "variant-1",
++        },
++    }
++
++
++def test_projection_contains_locked_baby_fork_routes() -> None:
++    projection = build_baby_fork_runtime_projection(_report())
++
++    route_ids = {message.route_id for message in projection.routes}
++
++    assert route_ids == {
++        BABY_FORK_RETRIEVAL_ROUTE,
++        BABY_FORK_VARIANT_ROUTE,
++        BABY_FORK_CONTEXT_GATE_ROUTE,
++    }
++
++
++def test_projection_contains_event_context_and_data_handle_schemas() -> None:
++    projection = build_baby_fork_runtime_projection(_report())
++
++    assert projection.data_handles[0].schema == DATA_HANDLE_SCHEMA
++    assert {event.schema for event in projection.events} == {EVENT_BUS_MESSAGE_SCHEMA}
++    assert projection.contexts[0].schema == CONTEXT_BUS_MESSAGE_SCHEMA
++    assert {route.schema for route in projection.routes} == {ROUTE_MESSAGE_SCHEMA}
++
++
++def test_projection_preserves_retrieval_and_selection_summary() -> None:
++    projection = build_baby_fork_runtime_projection(_report())
++
++    retrieval = projection.events[0]
++    context = projection.contexts[0]
++
++    assert retrieval.topic == "retrieval.completed"
++    assert retrieval.payload["retrieved_ids"] == ["baby-silicone-fork", "rounded-stainless-soft-handle"]
++    assert retrieval.payload["rejected_ids"] == ["nasa-antenna"]
++    assert context.topic == "context.versioned"
++    assert context.payload["selected_variant_id"] == "variant-1"
++
++
++def test_projection_json_round_trips_through_runtime_parser() -> None:
++    payload = json.loads(build_baby_fork_runtime_projection_json(_report()))
++
++    for section in ("data_handles", "events", "contexts", "routes"):
++        assert payload[section], f"missing projection section: {section}"
++        for item in payload[section]:
++            parsed = parse_runtime_message(item)
++            assert parsed.schema == item["schema"]
+
+diff --git a/tests/rules/test_baby_fork_runtime_projection_rule.py b/tests/rules/test_baby_fork_runtime_projection_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_baby_fork_runtime_projection_rule.py
+@@ -0,0 +1,55 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "BABY_FORK_RUNTIME_MESSAGE_PROJECTION.md"
++MODULE = ROOT / "src" / "context" / "baby_fork_runtime_projection.py"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing file: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_baby_fork_projection_document_locks_adapter_scope() -> None:
++    text = _read(DOC)
++
++    required_phrases = [
++        "This phase connects the baby-fork smoke project",
++        "without changing the existing smoke pipeline",
++        "baby_fork.retrieval",
++        "baby_fork.variant_stub",
++        "baby_fork.context_gate",
++        "DataHandle",
++        "EventBusMessage",
++        "ContextBusMessage",
++        "RouteMessage",
++        "real shared memory",
++        "semaphores",
++        "RouteProxy daemon",
++        "Scheduler wiring",
++        "ControlFS mutation",
++        "NetworkBridge",
++        "HardwareBridge",
++        "cluster dispatch",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_baby_fork_projection_module_is_adapter_only() -> None:
++    text = _read(MODULE)
++
++    required_phrases = [
++        "It only projects an existing baby-fork report",
++        "create shared memory",
++        "create semaphores",
++        "start RouteProxy",
++        "call Scheduler",
++        "mutate ControlFS",
++        "replace the baby-fork smoke project",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text

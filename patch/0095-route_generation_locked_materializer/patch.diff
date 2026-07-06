@@ -1,0 +1,380 @@
+diff --git a/PHASE0095_TEST_REPORT.md b/PHASE0095_TEST_REPORT.md
+new file mode 100644
+index 0000000..15478e0
+--- /dev/null
++++ b/PHASE0095_TEST_REPORT.md
+@@ -0,0 +1,33 @@
++# PHASE0095_TEST_REPORT
++
++```text
++phase: 0095-route_generation_locked_materializer
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: importable composition around 0094 lock and 0091-r2 materializer; no new rule required.
++live_path_status: transition
++live_path_uses_real_backend: n/a
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++external_dependencies_added: false
++```
++
++Expected validation:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/runtime/test_route_generation_locked_materializer.py
++PYTHONPATH=src:. pytest -q tests/rules/test_route_generation_locked_materializer_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++Local generation notes:
++
++```text
++- patch generated as add-only files;
++- no Scheduler, Queue, Dispatcher or Component contract files are touched;
++- no CLI/service/watcher is added;
++- no live mmap resize is introduced.
++```
+diff --git a/doc/architecture/ROUTE_GENERATION_LOCKED_MATERIALIZER_0095.md b/doc/architecture/ROUTE_GENERATION_LOCKED_MATERIALIZER_0095.md
+new file mode 100644
+index 0000000..e05faf2
+--- /dev/null
++++ b/doc/architecture/ROUTE_GENERATION_LOCKED_MATERIALIZER_0095.md
+@@ -0,0 +1,50 @@
++# 0095 — locked route generation materializer
++
++0095 composes the 0094 route generation lock with the 0091-r2 generation table
++materializer. The operational path is intentionally small:
++
++```text
++with acquire_route_generation_lock(controlfs_root, route_id):
++    load -> verify -> materialize -> persist
++```
++
++The goal is to protect the ControlProxy-side table:
++
++```text
++route_id -> current_generation
++```
++
++This is the safe step before concurrent g2/g3 updates. The table remains
++incremented only when a new route generation is materialized. Normal Scheduler
++handshakes, route writes, route reads and notifier wakeups do not allocate a
++new generation.
++
++## Boundary
++
++- No CLI.
++- No OpenRC service and no resident daemon.
++- No watcher or inotify loop.
++- No Scheduler.run() modification.
++- No PriorityQueue, Dispatcher or Component tick contract modification.
++- No live mmap resize.
++- ControlProxy does not decide security.
++- Scheduler/policy/zone remain the authority.
++- Not /dev/shm-only; the runtime root remains injectable and can still be file-backed.
++- standard library only.
++
++0095 does not replace policy/zone/scope authorization. It only serializes the
++local ControlFS mutation once an already-authorized `RoutePrepareDecision`
++reaches the generation materializer.
++
++## code_rule review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: 0095 adds an importable IO-boundary composition around an existing lock and materializer; no new programming rule is needed.
++live_path_status: transition
++live_path_uses_real_backend: n/a
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++```
+diff --git a/doc/manifests/MANIFEST_0095_CHANGED_FILES.md b/doc/manifests/MANIFEST_0095_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0d8c991
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0095_CHANGED_FILES.md
+@@ -0,0 +1,14 @@
++# Manifest 0095 — locked route generation materializer
++
++```text
++src/runtime/route_generation_locked_materializer.py
++tests/runtime/test_route_generation_locked_materializer.py
++tests/rules/test_route_generation_locked_materializer_rule.py
++doc/architecture/ROUTE_GENERATION_LOCKED_MATERIALIZER_0095.md
++doc/manifests/MANIFEST_0095_CHANGED_FILES.md
++PHASE0095_TEST_REPORT.md
++```
++
++0095 adds a small locked façade around the existing generation materializer. It
++keeps the patch scope intentionally narrow and does not edit the existing table
++or lock primitive modules.
+diff --git a/src/runtime/route_generation_locked_materializer.py b/src/runtime/route_generation_locked_materializer.py
+new file mode 100644
+index 0000000..034d3f4
+--- /dev/null
++++ b/src/runtime/route_generation_locked_materializer.py
+@@ -0,0 +1,63 @@
++"""Locked materializer for ControlProxy route generation allocation.
++
++This module implements phase 0095. It composes the phase 0094
++inter-process route generation lock with the phase 0091-r2 generation table
++materializer. The operational critical section is intentionally small:
++load -> verify -> materialize -> persist.
++
++The lock protects route_id -> current_generation allocation for g2/g3 route
++updates. The generation table is incremented only when a new route generation
++is materialized by materialize_route_generation_candidate(). Normal Scheduler
++handshakes, route writes, route reads and notifier wakeups do not allocate a
++generation.
++
++Boundaries deliberately kept out of this module:
++- No CLI.
++- No OpenRC service and no resident daemon.
++- No watcher or inotify loop.
++- No Scheduler.run() modification.
++- No PriorityQueue, Dispatcher or Component tick contract modification.
++- No policy/zone/scope decision in ControlProxy.
++- ControlProxy does not decide security.
++- Scheduler/policy/zone remain the authority.
++- No live mmap resize.
++- Not /dev/shm-only; callers may still pass a file-backed runtime root.
++- standard library only.
++"""
++from __future__ import annotations
++
++from pathlib import Path
++
++from runtime.controlproxy_prepare import RoutePrepareDecision
++from runtime.route_generation_lock import acquire_route_generation_lock
++from runtime.route_generation_table import (
++    RouteGenerationCandidateResult,
++    materialize_route_generation_candidate,
++)
++
++
++def materialize_route_generation_candidate_with_lock(
++    *,
++    controlfs_root: Path | str,
++    runtime_root: Path | str,
++    decision: RoutePrepareDecision,
++    blocking: bool = True,
++) -> RouteGenerationCandidateResult:
++    """Materialize one route generation while holding the route table lock.
++
++    The function does not decide whether the request is authorized. It expects
++    the caller to provide the Scheduler/policy/zone-authorized prepare decision
++    already used by the unlocked materializer. Its only added responsibility is
++    serializing the ControlFS generation table mutation for one logical route.
++    """
++
++    with acquire_route_generation_lock(
++        controlfs_root=controlfs_root,
++        route_id=decision.route_id,
++        blocking=blocking,
++    ):
++        return materialize_route_generation_candidate(
++            controlfs_root=controlfs_root,
++            runtime_root=runtime_root,
++            decision=decision,
++        )
+diff --git a/tests/rules/test_route_generation_locked_materializer_rule.py b/tests/rules/test_route_generation_locked_materializer_rule.py
+new file mode 100644
+index 0000000..fed8922
+--- /dev/null
++++ b/tests/rules/test_route_generation_locked_materializer_rule.py
+@@ -0,0 +1,57 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "runtime" / "route_generation_locked_materializer.py"
++DOC = ROOT / "doc" / "architecture" / "ROUTE_GENERATION_LOCKED_MATERIALIZER_0095.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0095_CHANGED_FILES.md"
++
++
++def _read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_0095_locked_materializer_locks_operational_intent() -> None:
++    text = _read(MODULE) + "\n" + _read(DOC)
++    required = [
++        "with acquire_route_generation_lock",
++        "load -> verify -> materialize -> persist",
++        "route_id -> current_generation",
++        "g2/g3",
++        "No CLI",
++        "No OpenRC service and no resident daemon",
++        "No watcher",
++        "No Scheduler.run() modification",
++        "No live mmap resize",
++        "ControlProxy does not decide security",
++        "Scheduler/policy/zone remain the authority",
++        "Not /dev/shm-only",
++        "standard library only",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0095_locked_materializer_does_not_import_kernel_or_backends() -> None:
++    source = _read(MODULE)
++    forbidden = [
++        "kernel.scheduler",
++        "kernel.queue",
++        "runtime.dispatcher",
++        "openvino",
++        "qdrant",
++        "subprocess",
++        "argparse",
++    ]
++    for phrase in forbidden:
++        assert phrase not in source
++
++
++def test_0095_manifest_keeps_patch_scope_small() -> None:
++    manifest = _read(MANIFEST)
++    assert "src/runtime/route_generation_locked_materializer.py" in manifest
++    assert "tests/runtime/test_route_generation_locked_materializer.py" in manifest
++    assert "tests/rules/test_route_generation_locked_materializer_rule.py" in manifest
++    assert "route_generation_table.py" not in manifest
++    assert "route_generation_lock.py" not in manifest
+diff --git a/tests/runtime/test_route_generation_locked_materializer.py b/tests/runtime/test_route_generation_locked_materializer.py
+new file mode 100644
+index 0000000..781987a
+--- /dev/null
++++ b/tests/runtime/test_route_generation_locked_materializer.py
+@@ -0,0 +1,127 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++import pytest
++
++from runtime.controlproxy_prepare import ROUTE_PREPARE_STATUS_SCHEMA, RoutePrepareDecision
++from runtime.mmap_fixed_slot_route import route_dir_for_handle, route_file_size
++from runtime.route_generation_lock import (
++    RouteGenerationFileLock,
++    RouteGenerationLockUnavailable,
++    route_generation_lock_path,
++)
++from runtime.route_generation_locked_materializer import (
++    materialize_route_generation_candidate_with_lock,
++)
++from runtime.route_generation_table import load_route_generation_table, next_generation_for_route
++
++
++def _decision(
++    *,
++    route_id: str = "route-a",
++    generation: int = 1,
++    action: str = "create_route_generation",
++    slot_size: int = 512,
++    slot_count: int = 2,
++    status: str = "ready",
++) -> RoutePrepareDecision:
++    return RoutePrepareDecision(
++        schema=ROUTE_PREPARE_STATUS_SCHEMA,
++        request_id=f"prep:{route_id}:g{generation}",
++        route_id=route_id,
++        route_handle=f"{route_id}@g{generation}",
++        task_id="task-a",
++        zone="workers",
++        status=status,  # type: ignore[arg-type]
++        action=action,  # type: ignore[arg-type]
++        reason="pytest locked generation allocation",
++        required_frame_bytes=128,
++        current_generation=(generation - 1) if generation > 1 else None,
++        next_generation=generation,
++        current_slot_size=None,
++        slot_size=slot_size,
++        slot_count=slot_count,
++        max_frame_bytes=slot_size,
++        max_ring_bytes=slot_size * slot_count * 8,
++        max_prepare_ms=25,
++        drain_timeout_ms=100,
++        lease_switch_timeout_ms=10,
++        notify="eventfd",
++        overflow_policy="reject",
++        decided_at="2026-07-05T00:00:00Z",
++    )
++
++
++def test_locked_materializer_materializes_g1_then_g2_under_route_lock(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++
++    first = materialize_route_generation_candidate_with_lock(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        decision=_decision(generation=1, slot_size=512, slot_count=2),
++    )
++
++    g1_ring = Path(first.record.ring_path)
++    assert g1_ring.exists()
++    assert g1_ring.stat().st_size == route_file_size(512, 2)
++    assert route_generation_lock_path(controlfs_root, "route-a").exists()
++    assert first.table.next_generation == 2
++
++    second = materialize_route_generation_candidate_with_lock(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        decision=_decision(
++            generation=2,
++            action="create_next_generation",
++            slot_size=1024,
++            slot_count=3,
++        ),
++    )
++
++    assert g1_ring.stat().st_size == route_file_size(512, 2)
++    assert Path(second.record.ring_path).stat().st_size == route_file_size(1024, 3)
++    assert second.record.route_handle == "route-a@g2"
++    assert second.table.next_generation == 3
++    assert [record.generation for record in second.table.generations] == [1, 2]
++    assert next_generation_for_route(controlfs_root, "route-a") == 3
++
++
++def test_locked_materializer_refuses_allocation_when_route_lock_is_held(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++
++    with RouteGenerationFileLock(controlfs_root=controlfs_root, route_id="route-a"):
++        with pytest.raises(RouteGenerationLockUnavailable):
++            materialize_route_generation_candidate_with_lock(
++                controlfs_root=controlfs_root,
++                runtime_root=runtime_root,
++                decision=_decision(generation=1),
++                blocking=False,
++            )
++
++    assert not (route_dir_for_handle(runtime_root, "route-a@g1") / "ring.bin").exists()
++    assert next_generation_for_route(controlfs_root, "route-a") == 1
++
++
++def test_locked_materializer_releases_lock_after_table_error(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++
++    with pytest.raises(Exception, match="only ready decisions"):
++        materialize_route_generation_candidate_with_lock(
++            controlfs_root=controlfs_root,
++            runtime_root=runtime_root,
++            decision=_decision(status="denied"),
++        )
++
++    result = materialize_route_generation_candidate_with_lock(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        decision=_decision(generation=1),
++        blocking=False,
++    )
++
++    assert result.record.generation == 1
++    assert load_route_generation_table(controlfs_root, "route-a").next_generation == 2

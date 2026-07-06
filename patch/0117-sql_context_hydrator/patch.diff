@@ -1,0 +1,1544 @@
+diff --git a/PHASE0117_TEST_REPORT.md b/PHASE0117_TEST_REPORT.md
+new file mode 100644
+index 0000000..cec1ea8
+--- /dev/null
++++ b/PHASE0117_TEST_REPORT.md
+@@ -0,0 +1,21 @@
++# Phase 0117 test report
++
++Patch: `0117-sql_context_hydrator`
++
++Expected validation:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/runtime/test_sql_context_hydrator.py
++PYTHONPATH=src:. pytest -q tests/rules/test_sql_context_hydrator_0117_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++Local focused validation on reconstructed 0116 base:
++
++```text
++compileall: OK
++runtime 0117: OK
++rules 0117: OK
++```
+diff --git a/doc/CHANGELOG_0117_SQL_CONTEXT_HYDRATOR.md b/doc/CHANGELOG_0117_SQL_CONTEXT_HYDRATOR.md
+new file mode 100644
+index 0000000..23f1850
+--- /dev/null
++++ b/doc/CHANGELOG_0117_SQL_CONTEXT_HYDRATOR.md
+@@ -0,0 +1,11 @@
++# 0117 — SQLContextHydrator
++
++Added a bounded read-side SQL hydration boundary:
++
++- immutable hydration requests over `sql:*` refs;
++- deterministic hydration policy for record count, child fan-out and body size;
++- serializable hydrated fragments and bundles;
++- runtime tests over the 0116 SQLite SQLContextStore;
++- rule guardrails preventing kernel, runtime, Qdrant, OpenVINO, PostgreSQL driver or LLM coupling.
++
++No Scheduler, Queue, Dispatcher, PolicyEngine, EventBus, RouteRuntimeManager, Qdrant, OpenVINO, PostgreSQL driver, or LLM runtime coupling was added.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0117.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0117.md
+new file mode 100644
+index 0000000..19fa00a
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0117.md
+@@ -0,0 +1,30 @@
++# ControlProxy operational plan — 0117 update
++
++0117 does not extend ControlProxy and does not add a route-runtime service.
++
++The operational axis is now the SQL context read path:
++
++```text
++SQLContextStore = durable authority
++SQLContextHydrator = bounded read-side hydration by sql:* refs
++Qdrant = projection
++OpenVINO = embedding adapter
++LLM = specialist boundary
++RouteRuntimeManager = data-plane infrastructure only
++EventBus = observation only
++```
++
++Local machine status preserved:
++
++```text
++PostgreSQL 18 service: postgresql-18
++PostgreSQL data_directory: /srv/autodoc/postgres/data
++PostgreSQL active storage: fast_pool
++Backups/snapshots: data_pool
++Qdrant binary: /usr/local/bin/qdrant
++Qdrant storage: /srv/autodoc/qdrant/storage
++Qdrant logs: /var/log/qdrant.log and /var/log/qdrant.err owned qdrant:logs
++OpenVINO: 2026.2.1, CPU and GPU visible
++```
++
++Next patches should reduce hydrated SQL fragments into context drafts, then add OpenVINO and Qdrant adapters behind explicit specialist boundaries.
+diff --git a/doc/architecture/SQL_CONTEXT_HYDRATOR_0117.md b/doc/architecture/SQL_CONTEXT_HYDRATOR_0117.md
+new file mode 100644
+index 0000000..d168f10
+--- /dev/null
++++ b/doc/architecture/SQL_CONTEXT_HYDRATOR_0117.md
+@@ -0,0 +1,53 @@
++# 0117 — SQLContextHydrator
++
++0117 adds the read-side hydration boundary above the 0116 SQL store.
++
++SQLContextHydrator converts sql:* refs into lightweight hydrated context fragments. SQLContextStore is durable context authority.
++
++The local installation target remains explicit:
++
++```text
++active PostgreSQL lives on fast_pool
++PostgreSQL data_directory = /srv/autodoc/postgres/data
++data_pool receives ZFS snapshots and backups
++Qdrant 1.18.2 lives on /srv/autodoc/qdrant as projection only
++OpenVINO 2026.2.1 is available in the Python AI environment with CPU and GPU devices
++```
++
++No PostgreSQL/Qdrant/OpenVINO/LLM runtime import in SQLContextHydrator.
++
++## Boundary
++
++`src/context/sql_context_hydrator.py` provides:
++
++- `SqlContextHydrationRequest`: immutable list of `sql:*` refs to hydrate;
++- `SqlContextHydrationPolicy`: deterministic bounds for record count, child fan-out and body size;
++- `HydratedSqlContextFragment`: small fragment derived from SQL authority;
++- `SqlHydratedContextBundle`: serializable bundle for later context reducers/specialists;
++- `SQLContextHydrator`: read-only adapter over an injected `SQLContextStore`-like object.
++
++The hydrator does not open a database itself. It consumes the 0116 store interface and returns bounded fragments.
++
++## Authority vs projection
++
++Qdrant is vector projection and retrieval, not context authority. OpenVINO produces local embeddings behind an adapter. LLM/specialist code consumes hydrated fragments later; it does not own the durable context source.
++
++The intended path is now:
++
++```text
++Context refs / objective / artifact
++-> SQLContextStore
++-> SQLContextHydrator
++-> HydratedSqlContextFragment[]
++-> ContextReducer / InferenceContextDraft
++-> OpenVINO adapter can embed hydrated text
++-> Qdrant projection can store/search vectors by sql_id
++-> SQLContextHydrator re-hydrates recalled sql:* refs
++-> specialist / LLM boundary
++```
++
++Scheduler orchestrates context exploration jobs; it does not build variants itself.
++
++## MVTC
++
++MVTC remains future, not runtime in 0117. 0117 only produces deterministic hydrated fragments that future exploration machinery can consume.
+diff --git a/doc/docs/architecture/runtime/110_sql_context_hydrator.dot b/doc/docs/architecture/runtime/110_sql_context_hydrator.dot
+new file mode 100644
+index 0000000..001fab6
+--- /dev/null
++++ b/doc/docs/architecture/runtime/110_sql_context_hydrator.dot
+@@ -0,0 +1,26 @@
++digraph sql_context_hydrator_0117 {
++  rankdir=LR;
++  node [shape=box];
++
++  Artifact [label="artifact / objective / sql:* refs"];
++  SQLContextStore [label="SQLContextStore\ndurable authority"];
++  SQLContextHydrator [label="SQLContextHydrator\nbounded read side"];
++  Fragments [label="Hydrated fragments\nref + title + bounded body"];
++  Reducer [label="ContextReducer\nfuture reduction"];
++  Draft [label="InferenceContextDraft"];
++  OpenVINO [label="OpenVINO adapter\nembeddings only"];
++  Qdrant [label="Qdrant projection\nvector search by sql_id"];
++  Specialist [label="specialist / LLM boundary"];
++  Scheduler [label="Scheduler orchestrates jobs\ndoes not hydrate itself"];
++
++  Artifact -> SQLContextStore;
++  SQLContextStore -> SQLContextHydrator [label="read sql:* refs"];
++  SQLContextHydrator -> Fragments;
++  Fragments -> Reducer;
++  Reducer -> Draft;
++  Fragments -> OpenVINO [style=dashed, label="later adapter"];
++  OpenVINO -> Qdrant [style=dashed, label="vectors + sql_id"];
++  Qdrant -> SQLContextHydrator [style=dashed, label="recalled sql:* refs"];
++  Draft -> Specialist;
++  Scheduler -> SQLContextHydrator [style=dashed, label="job carries refs only"];
++}
+diff --git a/doc/manifests/MANIFEST_0117_CHANGED_FILES.md b/doc/manifests/MANIFEST_0117_CHANGED_FILES.md
+new file mode 100644
+index 0000000..a0552a8
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0117_CHANGED_FILES.md
+@@ -0,0 +1,28 @@
++# 0117 changed files
++
++Patch id: `0117-sql_context_hydrator`
++
++## Added
++
++- `src/context/sql_context_hydrator.py`
++- `tests/runtime/test_sql_context_hydrator.py`
++- `tests/rules/test_sql_context_hydrator_0117_rule.py`
++- `doc/architecture/SQL_CONTEXT_HYDRATOR_0117.md`
++- `doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0117.md`
++- `doc/docs/architecture/runtime/110_sql_context_hydrator.dot`
++- `doc/CHANGELOG_0117_SQL_CONTEXT_HYDRATOR.md`
++- `doc/manifests/MANIFEST_0117_CHANGED_FILES.md`
++- `PHASE0117_TEST_REPORT.md`
++
++## Not changed
++
++- Scheduler loop
++- PriorityQueue
++- Dispatcher
++- PolicyEngine
++- EventBus
++- RouteRuntimeManager
++- ControlProxy runtime code
++- Qdrant runtime code
++- OpenVINO runtime code
++- PostgreSQL service configuration
+diff --git a/src/context/__pycache__/sql_context_hydrator.cpython-313.pyc b/src/context/__pycache__/sql_context_hydrator.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..2a131d8eaf287118f562344da0e4d615365730fc
+GIT binary patch
+literal 16444
+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
+ZQ#|p+?-Wly@jJwG;%8omc$go{{{!5*LyiCd
+
+literal 0
+HcmV?d00001
+
+diff --git a/src/context/__pycache__/sql_context_store.cpython-313.pyc b/src/context/__pycache__/sql_context_store.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..1864f677e98989512bc52b891ccceb85cf8efec4
+GIT binary patch
+literal 23700
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/src/context/sql_context_hydrator.py b/src/context/sql_context_hydrator.py
+new file mode 100644
+index 0000000..f2e9ea9
+--- /dev/null
++++ b/src/context/sql_context_hydrator.py
+@@ -0,0 +1,333 @@
++"""SQL context hydration boundary for 0117.
++
++SQLContextHydrator converts sql:* refs into lightweight hydrated context
++fragments. SQLContextStore remains durable context authority. The hydrator
++only consumes an injected store interface and produces immutable fragments;
++it does not import PostgreSQL, Qdrant, OpenVINO, LLM runtimes, sockets, or
++Scheduler internals.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++from typing import Protocol
++
++from src.context.sql_context_store import (
++    SqlContextQuery,
++    SqlContextRecord,
++    SqlContextStoreSnapshot,
++    allowed_sql_context_kinds,
++)
++
++_ALLOWED_KINDS = frozenset(allowed_sql_context_kinds())
++_FRAGMENT_SCHEMA = "missipy.sql_context_hydrator.fragment.v1"
++_BUNDLE_SCHEMA = "missipy.sql_context_hydrator.bundle.v1"
++
++
++class SqlContextReadableStore(Protocol):
++    """Read-only subset required by the SQL hydrator."""
++
++    def get_record(self, context_ref: str) -> SqlContextRecord | None: ...
++
++    def list_records(self, query: SqlContextQuery | None = None) -> SqlContextStoreSnapshot: ...
++
++
++@dataclass(frozen=True, slots=True)
++class SqlContextHydrationPolicy:
++    """Bounded deterministic hydration policy."""
++
++    max_records: int = 64
++    max_body_chars: int = 8_192
++    max_children_per_parent: int = 16
++
++    def __post_init__(self) -> None:
++        if self.max_records <= 0:
++            raise ValueError("max_records must be > 0")
++        if self.max_body_chars <= 0:
++            raise ValueError("max_body_chars must be > 0")
++        if self.max_children_per_parent <= 0:
++            raise ValueError("max_children_per_parent must be > 0")
++
++
++@dataclass(frozen=True, slots=True)
++class SqlContextHydrationRequest:
++    """Request to hydrate SQL context refs into lightweight fragments."""
++
++    context_refs: tuple[str, ...]
++    include_children: bool = False
++    child_kinds: tuple[str, ...] = ()
++
++    def __post_init__(self) -> None:
++        refs = _normalize_refs(self.context_refs)
++        if not refs:
++            raise ValueError("context_refs must not be empty")
++        object.__setattr__(self, "context_refs", refs)
++        object.__setattr__(self, "child_kinds", _normalize_kinds(self.child_kinds))
++
++
++@dataclass(frozen=True, slots=True)
++class HydratedSqlContextFragment:
++    """Lightweight fragment hydrated from SQL authority."""
++
++    context_ref: str
++    kind: str
++    title: str
++    body: str
++    parent_ref: str | None = None
++    metadata: tuple[tuple[str, str], ...] = field(default_factory=tuple)
++    relation: str = "requested"
++    truncated: bool = False
++
++    def __post_init__(self) -> None:
++        _require_sql_ref(self.context_ref)
++        _require_kind(self.kind)
++        _require_non_empty("title", self.title)
++        _require_non_empty("body", self.body)
++        if self.parent_ref is not None:
++            _require_typed_ref("parent_ref", self.parent_ref)
++        if self.relation not in {"requested", "child"}:
++            raise ValueError("relation must be requested or child")
++        object.__setattr__(self, "metadata", _normalize_metadata(self.metadata))
++
++    @property
++    def projection_ref(self) -> str:
++        """Stable ref that later projection adapters may use without authority."""
++
++        return f"ctx-fragment:{self.context_ref}"
++
++    def to_mapping(self) -> dict[str, object | None]:
++        return {
++            "schema": _FRAGMENT_SCHEMA,
++            "context_ref": self.context_ref,
++            "projection_ref": self.projection_ref,
++            "kind": self.kind,
++            "title": self.title,
++            "body": self.body,
++            "parent_ref": self.parent_ref,
++            "metadata": dict(self.metadata),
++            "relation": self.relation,
++            "truncated": self.truncated,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class SqlHydratedContextBundle:
++    """Deterministic hydration result for specialist/context adapters."""
++
++    fragments: tuple[HydratedSqlContextFragment, ...]
++    missing_context_refs: tuple[str, ...] = ()
++    capped: bool = False
++
++    def __post_init__(self) -> None:
++        object.__setattr__(self, "fragments", tuple(self.fragments))
++        object.__setattr__(self, "missing_context_refs", _normalize_refs(self.missing_context_refs, allow_empty=True))
++
++    @property
++    def fragment_count(self) -> int:
++        return len(self.fragments)
++
++    @property
++    def context_refs(self) -> tuple[str, ...]:
++        return tuple(fragment.context_ref for fragment in self.fragments)
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _BUNDLE_SCHEMA,
++            "fragment_count": self.fragment_count,
++            "context_refs": list(self.context_refs),
++            "missing_context_refs": list(self.missing_context_refs),
++            "capped": self.capped,
++            "fragments": [fragment.to_mapping() for fragment in self.fragments],
++        }
++
++
++class SQLContextHydrator:
++    """Hydrate sql:* refs from an injected SQLContextStore read boundary."""
++
++    def __init__(
++        self,
++        store: SqlContextReadableStore,
++        policy: SqlContextHydrationPolicy | None = None,
++    ) -> None:
++        self._store = store
++        self._policy = policy or SqlContextHydrationPolicy()
++
++    @property
++    def policy(self) -> SqlContextHydrationPolicy:
++        return self._policy
++
++    def hydrate(self, request: SqlContextHydrationRequest) -> SqlHydratedContextBundle:
++        fragments: list[HydratedSqlContextFragment] = []
++        missing: list[str] = []
++        seen: set[str] = set()
++        capped = False
++
++        for ref in request.context_refs:
++            record = self._store.get_record(ref)
++            if record is None:
++                missing.append(ref)
++                continue
++            capped = self._append_fragment(fragments, seen, record, "requested") or capped
++            if capped:
++                break
++            if request.include_children:
++                capped = self._append_children(fragments, seen, record.context_ref, request.child_kinds) or capped
++                if capped:
++                    break
++
++        return SqlHydratedContextBundle(
++            fragments=tuple(fragments),
++            missing_context_refs=tuple(missing),
++            capped=capped,
++        )
++
++    def _append_children(
++        self,
++        fragments: list[HydratedSqlContextFragment],
++        seen: set[str],
++        parent_ref: str,
++        child_kinds: tuple[str, ...],
++    ) -> bool:
++        if child_kinds:
++            snapshots = tuple(
++                self._store.list_records(
++                    SqlContextQuery(
++                        kind=kind,
++                        parent_ref=parent_ref,
++                        limit=self._policy.max_children_per_parent,
++                    )
++                )
++                for kind in child_kinds
++            )
++        else:
++            snapshots = (
++                self._store.list_records(
++                    SqlContextQuery(
++                        parent_ref=parent_ref,
++                        limit=self._policy.max_children_per_parent,
++                    )
++                ),
++            )
++        capped = False
++        for snapshot in snapshots:
++            for record in snapshot.records:
++                capped = self._append_fragment(fragments, seen, record, "child") or capped
++                if capped:
++                    return True
++        return capped
++
++    def _append_fragment(
++        self,
++        fragments: list[HydratedSqlContextFragment],
++        seen: set[str],
++        record: SqlContextRecord,
++        relation: str,
++    ) -> bool:
++        if record.context_ref in seen:
++            return False
++        if len(fragments) >= self._policy.max_records:
++            return True
++        fragments.append(fragment_from_sql_record(record, self._policy, relation=relation))
++        seen.add(record.context_ref)
++        return len(fragments) >= self._policy.max_records
++
++
++def fragment_from_sql_record(
++    record: SqlContextRecord,
++    policy: SqlContextHydrationPolicy | None = None,
++    *,
++    relation: str = "requested",
++) -> HydratedSqlContextFragment:
++    """Convert a durable SQL record into a bounded hydration fragment."""
++
++    effective = policy or SqlContextHydrationPolicy()
++    body, truncated = _truncate(record.body, effective.max_body_chars)
++    return HydratedSqlContextFragment(
++        context_ref=record.context_ref,
++        kind=record.kind,
++        title=record.title,
++        body=body,
++        parent_ref=record.parent_ref,
++        metadata=record.metadata,
++        relation=relation,
++        truncated=truncated,
++    )
++
++
++def build_sql_context_hydration_request(
++    *context_refs: str,
++    include_children: bool = False,
++    child_kinds: tuple[str, ...] = (),
++) -> SqlContextHydrationRequest:
++    """Convenience builder for a deterministic hydration request."""
++
++    return SqlContextHydrationRequest(
++        context_refs=tuple(context_refs),
++        include_children=include_children,
++        child_kinds=child_kinds,
++    )
++
++
++def _truncate(value: str, max_chars: int) -> tuple[str, bool]:
++    if len(value) <= max_chars:
++        return value, False
++    return value[:max_chars], True
++
++
++def _normalize_refs(values: tuple[str, ...], *, allow_empty: bool = False) -> tuple[str, ...]:
++    normalized: list[str] = []
++    seen: set[str] = set()
++    for value in values:
++        _require_sql_ref(value)
++        if value not in seen:
++            normalized.append(value)
++            seen.add(value)
++    if not allow_empty and not normalized:
++        raise ValueError("context_refs must not be empty")
++    return tuple(normalized)
++
++
++def _normalize_kinds(values: tuple[str, ...]) -> tuple[str, ...]:
++    normalized: list[str] = []
++    seen: set[str] = set()
++    for value in values:
++        _require_kind(value)
++        if value not in seen:
++            normalized.append(value)
++            seen.add(value)
++    return tuple(normalized)
++
++
++def _normalize_metadata(values: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
++    normalized: list[tuple[str, str]] = []
++    seen: set[str] = set()
++    for key, value in values:
++        _require_non_empty("metadata key", key)
++        _require_non_empty("metadata value", value)
++        if key in seen:
++            raise ValueError("metadata keys must be unique")
++        seen.add(key)
++        normalized.append((key, value))
++    return tuple(sorted(normalized))
++
++
++def _require_sql_ref(value: str) -> None:
++    _require_typed_ref("context_ref", value)
++    if not value.startswith("sql:"):
++        raise ValueError("context_ref must start with sql:")
++
++
++def _require_typed_ref(name: str, value: str) -> None:
++    _require_non_empty(name, value)
++    if ":" not in value or value.split(":", 1)[0] == "":
++        raise ValueError(f"{name} must be a typed reference")
++
++
++def _require_kind(value: str) -> None:
++    if value not in _ALLOWED_KINDS:
++        raise ValueError("kind must be an allowed SQL context kind")
++
++
++def _require_non_empty(name: str, value: str) -> None:
++    if not value or not value.strip():
++        raise ValueError(f"{name} must not be empty")
+diff --git a/tests/rules/__pycache__/test_sql_context_hydrator_0117_rule.cpython-313-pytest-9.0.2.pyc b/tests/rules/__pycache__/test_sql_context_hydrator_0117_rule.cpython-313-pytest-9.0.2.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..24c9f45ece3c7283de3b1871844ab0dd1fe7b225
+GIT binary patch
+literal 9263
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/rules/__pycache__/test_sql_context_hydrator_0117_rule.cpython-313.pyc b/tests/rules/__pycache__/test_sql_context_hydrator_0117_rule.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..1485f3b328f88a1a9a50c3a8ae39e5cb2cad0317
+GIT binary patch
+literal 4723
+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
+E9{?}QX#fBK
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/rules/__pycache__/test_sql_context_store_0116_rule.cpython-313.pyc b/tests/rules/__pycache__/test_sql_context_store_0116_rule.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..0379243dcd72838d9bd2f77efeda4b965df27ac9
+GIT binary patch
+literal 4176
+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
+O>*PlNJ_bWqgZ~05yF9%B
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/rules/test_sql_context_hydrator_0117_rule.py b/tests/rules/test_sql_context_hydrator_0117_rule.py
+new file mode 100644
+index 0000000..4368412
+--- /dev/null
++++ b/tests/rules/test_sql_context_hydrator_0117_rule.py
+@@ -0,0 +1,96 @@
++from __future__ import annotations
++
++import ast
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "context" / "sql_context_hydrator.py"
++DOC = ROOT / "doc" / "architecture" / "SQL_CONTEXT_HYDRATOR_0117.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0117_CHANGED_FILES.md"
++DOT = ROOT / "doc" / "docs" / "architecture" / "runtime" / "110_sql_context_hydrator.dot"
++
++
++def test_0117_documents_sql_hydration_boundary() -> None:
++    text = DOC.read_text(encoding="utf-8")
++    required = [
++        "SQLContextHydrator converts sql:* refs into lightweight hydrated context fragments",
++        "SQLContextStore is durable context authority",
++        "active PostgreSQL lives on fast_pool",
++        "data_pool receives ZFS snapshots and backups",
++        "Qdrant is vector projection and retrieval, not context authority",
++        "OpenVINO produces local embeddings behind an adapter",
++        "Scheduler orchestrates context exploration jobs; it does not build variants itself",
++        "No PostgreSQL/Qdrant/OpenVINO/LLM runtime import in SQLContextHydrator",
++        "MVTC remains future, not runtime in 0117",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0117_manifest_does_not_touch_kernel_or_runtime_authority() -> None:
++    text = MANIFEST.read_text(encoding="utf-8")
++    required = [
++        "src/context/sql_context_hydrator.py",
++        "tests/runtime/test_sql_context_hydrator.py",
++        "tests/rules/test_sql_context_hydrator_0117_rule.py",
++        "doc/architecture/SQL_CONTEXT_HYDRATOR_0117.md",
++        "doc/docs/architecture/runtime/110_sql_context_hydrator.dot",
++    ]
++    for phrase in required:
++        assert phrase in text
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/kernel/dispatcher.py",
++        "src/kernel/queue.py",
++        "src/policy/engine.py",
++        "src/runtime/route_runtime_manager.py",
++        "src/observability/event_bus.py",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++
++
++def test_0117_module_has_no_backend_runtime_imports() -> None:
++    tree = ast.parse(MODULE.read_text(encoding="utf-8"))
++    imports: set[str] = set()
++    for node in ast.walk(tree):
++        if isinstance(node, ast.Import):
++            imports.update(alias.name.split(".", 1)[0] for alias in node.names)
++        elif isinstance(node, ast.ImportFrom) and node.module:
++            imports.add(node.module.split(".", 1)[0])
++    forbidden = {
++        "openvino",
++        "qdrant",
++        "psycopg",
++        "sqlite3",
++        "requests",
++        "httpx",
++        "socket",
++        "subprocess",
++        "src.kernel",
++        "src.runtime",
++        "src.policy",
++    }
++    assert sorted(imports & forbidden) == []
++
++
++def test_0117_module_does_not_create_events_or_scheduler_commands() -> None:
++    text = MODULE.read_text(encoding="utf-8")
++    forbidden = ["EventType(", "Scheduler(", "Dispatcher(", "PolicyEngine(", "PriorityQueue("]
++    for phrase in forbidden:
++        assert phrase not in text
++
++
++def test_0117_graph_shows_hydration_before_projection_and_specialists() -> None:
++    text = DOT.read_text(encoding="utf-8")
++    required = [
++        "SQLContextStore",
++        "SQLContextHydrator",
++        "Hydrated fragments",
++        "OpenVINO adapter",
++        "Qdrant projection",
++        "InferenceContextDraft",
++        "specialist / LLM boundary",
++    ]
++    for phrase in required:
++        assert phrase in text
+diff --git a/tests/runtime/__pycache__/test_sql_context_hydrator.cpython-313-pytest-9.0.2.pyc b/tests/runtime/__pycache__/test_sql_context_hydrator.cpython-313-pytest-9.0.2.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..02b3ca072767fd924143923af9c00d27a528ff2e
+GIT binary patch
+literal 12614
+zcmeG?U2hxLl{4h!=a7`B4_k>No0j54bRtT!C0TYXD~=pjl~X6yl!;t*F`&tj&6Jv9
+z?og?v-39#6#b#gH1r`Ci`{b7b_Wpv!J{61p08*4nV&DP+TA;{V0=Xz+^r7e6nYlBh
+zsSoFC3p9h_;koyo`*rTUbH46wJRTL``Q5J;-``FM!tXKRJU$B%cYhAZ$AT=#;x%DW
+zq+$wj-!&igvwyM}FnlRtF-SwK#D6Wk7@?8HD2*;kR9cMD7|SQu;)@BISnQ%*ke1}Y
+z^TPXtcFQq2$gm_}A%^t;7G_v4U=fD(0TyLg|7~A7{wWSFEt*nJ)AUNNQq(o$dYYI$
+z@{PCVb*-Y_tt@O5Xs)7D^Evs0QcE5XzoVCm`3-aU)_Sp2P>c^sO5Uoa++o##M4{>j
+z>#9*P2UcnB_L{0ylvS#)F=DFbby`UK%zo&vSW(>`Wav>fyWNZ>Mw-X*I*$a1Ul7FI
+zKLGNvup&AIQ#PUrSz!q%+8?Jph2??vQbAY=IeD@u`((dN<bWKML+682b{~hR8I~h*
+z6xK(SW9I|UP%kbg<Sx1U>3S~;>E!h%NnrAYf}USTPF|q8UNOT?ax=aJ=~RwZimSPN
+zWpj`vZ|Q}N6tX-8Oitz2D|d8StZZa9`)(I2ch+xRaOhcUX%Utq2o$%Ani;ex(m_*l
+z)|INOCizKGE0}>wu~Je^g6*5pa*pECVsUs)t>g;1O72M<2b;gMuKnb~`1phwVCZIO
+z9&=KcH<Q-hQVS_okh+{n2WS`Yo^~ThBIrTT3t%&bjp4jlTZGLpcoovnQa5i2v#}vU
+z!%)dg7PVrfm@5@GRmI5PQP*;2e7$U_6o-nNk4AtDPC&rG9cSSBrpzm2Yg%Otr!Z#i
+z?D2_-b7NF3>thwz%ElO7*DA#|m8Cjtd!1&=8)mP<+EjiDY<A8CeE~X%!O!>)0QZDP
+zv6J=K@Vz&iB+?+qYUJ298D#j;8aetXJkT6?rI|d|>^a#?jyI2vHv3=wJRXWfANwPL
+z;Aee8Ale|D^5tf7pxJY*nS8N%^z`Ra5Xr(o*3(M%QZsq9+4FoeIowVbOWu2H7ltLY
+z95Xx&?3g_Otn)Ej;fE|MI9pv4v*JOA%b|7tHDA`ZgzMJ!XnxtJ&u7Vn1wqiWBX()w
+zf8nUI4=-jcAy?a;Awl+M1CydmmM15DQ^YEk11s>6ww@*2X>HGt;CvungOb9rmR@i_
+zwmm~a*5}N?8C&j1ORc`PDv<QndRv4sxijfZ?RWY(kdio*axmi`4GMw=A1^ta4UUT}
+z6<Rs!jK|Z~fRpF`!x%$OTh6~K%EGLu`DexQ4`H>Qcc~o=Rx9$ARxA45YJEeig<qex
+zN0v|m>K`o~Z!3VL7LjB6!)%nDyDQG#F8r)zZ|`;P2%Nk4@_)JK&a>A#@9?m*#}1^7
+z9GWufP|6AWEJ!F`vyy!lV$X0EVoqDmzkL?Ma2_IX9v0y|?8o6$M-C^y5{G;K?l?UB
+zG#8!kwcLw)SqqN|`f@hFcI|)iU8^5z*G6F1_AUR*H?nKF8YuT?eC$gcmygItvvGSb
+zO3$ztC1(#h|L$Hae|%d=4_v3HAAgDp%|r2tZ+7;fxH)}lq`Yw^ZAAakMpCmW#KzM`
+zhHK|}9h95sKc{A`vZ=IT25+rvg_8QvZ~B24!5IWoPZBu;bt%@!IUt10a}Pz<Gjun(
+zPj?=D(rD?7qQPWFY^y;nq{Yo~Z0D>qY(VT`Pr$ILT4H94+s1U-um(DT!#Rs!x@Dj<
+z)<9=AkLN3QN1b_JcuKK`o*BdT=($Yw_tiX_OsMs?^l$d96%C`P-FDPIq%eRZJvb8>
+zw!_>>7^{zFaK<pq$(CWlJm@%-q<fgsNKtz+LzZ2oQjqF`nQ#UV{lKD`(bvlxsGur2
+zY9^I@u2h1K%QUaAp?Yq{pjbhLwo=q!QA;{d80LUt+|k#;d_z*@c1gdLD=AuTO*JEm
+zky}+U+e}<$3k{QflTt7SdzDq4uH`C<dbeE4X>1A1n0Halh%-3D3_Gi2CR({>Mk~6q
+zmMfQmSLp;rWx@<wQ`9NNlWs~lXlt8IcoUP}#91q0jcMAOnDLU0dlP58i79WLbKb;x
+zZ(_<o%`w&TP*4yB^DN^#>><A7&NOUOST%sb%o0|S)y(#gp(ZZA@jck|XbhaF$4=gR
+z^HJBy`={z%Bli|QiT5|+gSGhJ_VLTrH?sBP@7Ck*-MjjUlx#?;nv|-NQ}-`3P?JtI
+zi2ZJnQ&lO&lNPc=PJJ}Z^J;Di3OIEg+v7wWf$S!BdAueauacSS(2NCZ(oBQc?-t}s
+z$9d91cE}8NYLnF56cljkI%|<raRl;Nug7ZAv0q+hT~9Zpmuu3?RWkkHH3n)DG;hCK
+zWV$N7Y$dl5htXhB-IEXagV%Tsj_i=>_O5O;q|ur*S|vBC6E`ealWsJK{cb_NG-@Tc
+z5r@vOsP4%}e8R25>+X;nthX0x(hGIq=!q$qMwMLrpCJZn(!~a`-z{>nic`eowg;~x
+zHK*bTkkCQcP<i<ACkz-EXyWc2fM2fxXL(1?bJJuW11|6-O@bgZ;6g1XLHKXbfD0d}
+zv~n&TNa-4I5pKYNFX`Jd;Ch93!-j86Fnqnj0(|hmIOw3(zT^7=7|)WB0y9AigI_T|
+z=F@N5YS({1liC%`MnUaLEPwnAYS-aS09WnmvehmL{A<at)dWEG|5vwxV=4G);Z=~@
+zmIC&}v`E1hAb?k`yQt+$>jhQG-vMtaxXZw+hM0oxG$ZX}Y7^}TVwytm3W8w-FCsvW
+z(lmls0iZJtTbaZR)PLzY1WaM*auo(TgSn_I&^HiVK!9!ydJ(}af=dYI5WJ4yGJ<&o
+zR{*5rOe)jwVFnw_0%G4su!!Iqg0}#eVMpN8A7I{f1WO3s0bs-dbda0Vd&|vyPE*=h
+zrrg?K?4mcJIh==a95md0MdzdNE6v!6=HSWZz|iL*5{d5mgNfk1tDkiXu^vaJEmVgV
+zssv$8T4)ga-GUtau)8^c?~nzQX?9-CO+f*tuCul{6-OYynVD>4E^TEl)ulOr_eUDB
+z!R^>!Epw?#ZdRqaUtg=<Sgy|B#MJ!Fnsl>4?01WmTghz?UT2h?j3Yqv#g;T@;PU^b
+zzyInO$pgk8?%4Z3|JN=Tz;8YUt>WVtDEr6;|Cf{vgvo|Li);w~4a$b#fnWSDBO5|o
+zHbAW5+ma37+>3st)sntjt#4wrz~qlv66Z-@izRDYqVzNz#r@?9NU9Ye0<-txK8AZI
+z%hol1!CL@!9BK>9Uj4G-=PZsRd|1h2poZ(n7Rwx4*jubvwwIwe6G78l$!P_ppcdB4
+z5YNm(UB^~4=#QaolyS!JAq5S{n%L0pUV`S^HlALpNiS8&eD(Ca1#8lLgV^sD<V!E{
+zq=oE|c@%FpNzF|`0jI9B7C9A1w#od{_6J7TKo*F*{|<uaVEbbQeR%9)(N~DSf_-5}
+z(OFOl<yPCXf_<>Ziq)Ry0U0KBcxc6;0w<wgW){g??Exk3&R#-OzwLp5Qi#c%aLZRL
+zvI3g0^(=J^5IGJ?)L2+R$?c`HE1Zwt(W6;F$*qMdW!uvhP>QS^MD5C)gD72lB+6xu
+zB*#25=Q(FEo?bhIh7J)>>R@TWT8Vqe9CzfMS1Zm|EAicGeM76&A!sCb;Q<DlG3D$D
+z_a6dE-Ft*P4qizNC?#9M9d4b@=fMpq9YpC`lLt|{0i_-uQ0kTYJl5pl&%$8>O8aqm
+z$mOhq0fz&~Vfe1K2JGB<bv`MfEb_Pi?~A{nH66K5PXO~iB>>WXQ(DX2wcWFZnZN|z
+zZvm4%M-B5RrXA~DDXUbmuDvkJ9WDJVHX@q7q5)b|W*;po4?b_T0D4o=V8Ij6n>w2M
+zDQJ-5GFxF0f;W1g=~wrOh~Ri#g$$zzqga0e!5IKhePW;L6}a1iDv)Pz(1te%LGgUM
+znw=T6CUa=t!g;Jdj{s$*8R0!1-q+yqFuaWop@)Iq0I-*vVRmnQu*~kT!7@XP3-vzq
+z%v%Z}TX_Sn4$)O;8g*miFYQWTGaP>uKKUT`Yq7fW<68J1b_4$I;Jt;<qC(<`<+=y|
+zL-p0U>e9Ql@O!&{A9Fo~!S(Qq*?*g@lGHD+SO6XN_Pa$=AI<WVh3r5csAV=q%}rr}
+zO<c#;I1NW2o4K3+9|8s**ZpWi8m>vhRWf@2Lk7UP-XQk7MMkUAu$A0K9Gos#RQKcq
+ze*Z&WgCjd+wB2<--jGIW(nytzKLF+;kj5Ltez(YYRT{C9+lWI~SXB4q1O5OQ=~lAv
+z-;(jCwOh13n06Zm=+$n$cL&c0G~rn;NjdtW9Ky4v`Q)&EChKpzhJgWXbnURG)3qtk
+zRwL}I9$g;xcvjsy9rR+a7U^ldGbPs`Wy$ue2G9?j4cGzg;0k*E*yCxdqx{M8yOoZ=
+z$PQ@xz_U6JSIM}B?X(Dd3CRilU$bGxm$Qzh%&vvGbHw#&dl+B*Anm%A@49@EyH~jG
+zzSL1GcUFaK@oq1j^$*dRi!(N+#k;jSbCuVEYhm3UzICSN7qkwf<l2y&v^AHA+#~m9
+zBlc=VpJBDQ7Uay(Uab(U)(lA1zU!O){Jth!5nxv^bGJ$=#j9tVN!gQ?!aJKLc?0BD
+z+V{|Bikl`W<%|lVIWw?Yq()_ri=ntoX3)CWxjDit`tnAmQxulpZ^(Q&VYxv%dCq;b
+z1TE4c01%Vx-oYN%C7e61uB1f~zKpe7z4hrByJAYwYNb~ZxIXwcr#sH3%`cyp%%B}C
+zW^FUi`XbU@N3eu|3BLuzm{*=V<P8b(9JdJkTb_|ACJ7x^efwQ(r3j7@D;}@3EZYar
+z7V^gU0s#2i<Acq<SDNwOX5u8m<TzY7MbY-STj(Bn5Uh8NLG)VcwfyUKDRqCKCY`R5
+z<!WZxf;DNmLF{)6@}<*Oa@&K~89gWC2;?`hZ497R$y_xxXTh2@*C6)01^LnoJZT|2
+zWbPvfM%yGcHw6Wpy3ShUR2<nRbL{hv7o@3LS*IGiV+?^C3Oq5%bzM`_N6e_Atgb_;
+zswfmh0>nj}D;I2S&F2*Bl19e5)Bsm1;1bJE;Yv1KxZqi4$j)QC#Y`DApRsRObll#S
+zw~Z-g_<3Qw%^cjT7Q2_s25;?6=C6~n-c1DP@?t6v#Z`YOuvuHXCwy^DFRYi;OZ1<h
+z2$Uhgz)k#_UlhgP2}6Grgr5n276PJg7r~!ng196;4xSK`kFSVParW`^aq&mu<5XO{
+R0x%&?{AnmAzAmy3{t8d;*rEUc
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/runtime/__pycache__/test_sql_context_hydrator.cpython-313.pyc b/tests/runtime/__pycache__/test_sql_context_hydrator.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..ecec965293ff96018ca3e2c9ee81f62d7a317070
+GIT binary patch
+literal 4707
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/runtime/__pycache__/test_sql_context_store_minimal.cpython-313.pyc b/tests/runtime/__pycache__/test_sql_context_store_minimal.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..c2aa7cb6079038a7c0542f083ff14c5e7daf47fa
+GIT binary patch
+literal 5840
+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
+b@&~6PeE-3bPCkBcD$FnZw>!e0Vsrct6Kz;7
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/runtime/test_sql_context_hydrator.py b/tests/runtime/test_sql_context_hydrator.py
+new file mode 100644
+index 0000000..413167f
+--- /dev/null
++++ b/tests/runtime/test_sql_context_hydrator.py
+@@ -0,0 +1,120 @@
++from __future__ import annotations
++
++from src.context.sql_context_hydrator import (
++    SQLContextHydrator,
++    SqlContextHydrationPolicy,
++    build_sql_context_hydration_request,
++    fragment_from_sql_record,
++)
++from src.context.sql_context_store import SQLiteSqlContextStore, SqlContextRecord
++
++
++def _store_with_context() -> SQLiteSqlContextStore:
++    store = SQLiteSqlContextStore()
++    store.initialize_schema()
++    store.upsert_record(
++        SqlContextRecord(
++            context_ref="sql:document:root",
++            kind="document",
++            title="Root artifact",
++            body="Root body from SQL authority.",
++            parent_ref="github:artifact:root",
++            metadata=(("origin", "github"),),
++        )
++    )
++    store.upsert_record(
++        SqlContextRecord(
++            context_ref="sql:chunk:001",
++            kind="chunk",
++            title="Chunk A",
++            body="Hydrated chunk A.",
++            parent_ref="sql:document:root",
++        )
++    )
++    store.upsert_record(
++        SqlContextRecord(
++            context_ref="sql:fact:001",
++            kind="fact",
++            title="Fact A",
++            body="Hydrated fact A.",
++            parent_ref="sql:document:root",
++        )
++    )
++    return store
++
++
++def test_sql_context_hydrator_hydrates_requested_record() -> None:
++    store = _store_with_context()
++    hydrator = SQLContextHydrator(store)
++
++    bundle = hydrator.hydrate(build_sql_context_hydration_request("sql:document:root"))
++
++    assert bundle.fragment_count == 1
++    assert bundle.context_refs == ("sql:document:root",)
++    assert bundle.fragments[0].relation == "requested"
++    assert bundle.fragments[0].projection_ref == "ctx-fragment:sql:document:root"
++    assert bundle.to_mapping()["missing_context_refs"] == []
++
++
++def test_sql_context_hydrator_can_include_children_by_kind() -> None:
++    store = _store_with_context()
++    hydrator = SQLContextHydrator(store)
++
++    bundle = hydrator.hydrate(
++        build_sql_context_hydration_request(
++            "sql:document:root",
++            include_children=True,
++            child_kinds=("chunk",),
++        )
++    )
++
++    assert bundle.context_refs == ("sql:document:root", "sql:chunk:001")
++    assert [fragment.relation for fragment in bundle.fragments] == ["requested", "child"]
++
++
++def test_sql_context_hydrator_records_missing_refs_and_deduplicates_requests() -> None:
++    store = _store_with_context()
++    hydrator = SQLContextHydrator(store)
++
++    bundle = hydrator.hydrate(
++        build_sql_context_hydration_request(
++            "sql:document:root",
++            "sql:document:root",
++            "sql:document:missing",
++        )
++    )
++
++    assert bundle.context_refs == ("sql:document:root",)
++    assert bundle.missing_context_refs == ("sql:document:missing",)
++
++
++def test_sql_context_hydrator_policy_bounds_records_and_body_size() -> None:
++    store = _store_with_context()
++    hydrator = SQLContextHydrator(
++        store,
++        SqlContextHydrationPolicy(max_records=1, max_body_chars=4, max_children_per_parent=4),
++    )
++
++    bundle = hydrator.hydrate(
++        build_sql_context_hydration_request("sql:document:root", include_children=True)
++    )
++
++    assert bundle.capped is True
++    assert bundle.fragment_count == 1
++    assert bundle.fragments[0].body == "Root"
++    assert bundle.fragments[0].truncated is True
++
++
++def test_fragment_from_sql_record_is_mapping_serializable() -> None:
++    record = SqlContextRecord(
++        context_ref="sql:fact:serializable",
++        kind="fact",
++        title="Serializable fact",
++        body="Body",
++        metadata=(("z", "last"), ("a", "first")),
++    )
++
++    fragment = fragment_from_sql_record(record)
++
++    assert fragment.to_mapping()["schema"] == "missipy.sql_context_hydrator.fragment.v1"
++    assert fragment.metadata == (("a", "first"), ("z", "last"))

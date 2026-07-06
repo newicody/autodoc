@@ -1,0 +1,1051 @@
+diff --git a/PHASE0104_TEST_REPORT.md b/PHASE0104_TEST_REPORT.md
+new file mode 100644
+index 0000000..8c51205
+--- /dev/null
++++ b/PHASE0104_TEST_REPORT.md
+@@ -0,0 +1,31 @@
++# Phase 0104 test report
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: 0104 keeps the existing micro-kernel path and only adds a thin runtime handler binding.
++live_path_status: transition
++live_path_uses_real_backend: n/a
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++external_dependencies_added: false
++```
++
++## Expected validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/runtime/test_controlproxy_route_runtime_handler.py
++PYTHONPATH=src:. pytest -q tests/rules/test_controlproxy_route_runtime_handler_0104_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Local patch validation
++
++```text
++git apply --check: OK
++py_compile new Python files: OK
++rule test syntax: OK
++```
+diff --git a/doc/CHANGELOG_0104_CONTROLPROXY_ROUTE_RUNTIME_HANDLER.md b/doc/CHANGELOG_0104_CONTROLPROXY_ROUTE_RUNTIME_HANDLER.md
+new file mode 100644
+index 0000000..cf4b2d4
+--- /dev/null
++++ b/doc/CHANGELOG_0104_CONTROLPROXY_ROUTE_RUNTIME_HANDLER.md
+@@ -0,0 +1,7 @@
++# 0104 — ControlProxy route runtime handler binding
++
++- Added a thin Scheduler-facing runtime binding for ControlProxy route requests.
++- Kept `Scheduler.run()`, Dispatcher, PriorityQueue and PolicyEngine untouched.
++- Kept EventBus as observation only.
++- Kept route mmap/eventfd as data plane, not EventBus.
++- Added tests proving the existing `ControlProxySchedulerRouteRequestHandler` injection point can delegate to `RouteRuntimeManager`.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0104.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0104.md
+new file mode 100644
+index 0000000..9e87371
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0104.md
+@@ -0,0 +1,52 @@
++# ControlProxy operational plan — 0104
++
++0104 remplace la direction risquée du coordinateur scheduler-like par un raccord mince :
++
++```text
++Dispatcher
++-> ControlProxySchedulerRouteRequestHandler
++-> build_controlproxy_route_runtime_request_handler(manager)
++-> RouteRuntimeManager.handle_prepare_decision()
++```
++
++## Décision de plan
++
++Le futur bloc principal reste `RouteRuntimeManager`, pas `ControlProxyRouteCoordinator`.
++
++Le handler n'est pas le lieu de la logique route. Le handler doit seulement :
++
++1. recevoir le payload porté par le Scheduler/Dispatcher ;
++2. vérifier que l'enveloppe de filtrage dispatch est présente ;
++3. extraire une `RoutePrepareDecision` ;
++4. déléguer au `RouteRuntimeManager`.
++
++## Compatibilité
++
++Compatibility wrappers remain temporary adapters.
++
++Les helpers issus des phases précédentes peuvent rester provisoirement :
++
++```text
++prepare_route_for_scheduler()
++handle_scheduler_route_request()
++ControlProxySchedulerRouteRequestHandler
++```
++
++Mais leur direction doit converger vers le binding 0104 puis vers le manager runtime.
++
++## Invariants opérationnels
++
++- Handler remains an adapter thin enough to call RouteRuntimeManager.
++- RouteRuntimeManager owns route runtime work.
++- Dispatcher remains EventType -> Handler only.
++- No Scheduler.run() modification.
++- No PriorityQueue, Dispatcher or PolicyEngine modification.
++- ControlProxy does not manage global priorities.
++- ControlProxy does not decide policy or zone authority.
++- No EventBus creation and no bus duplication.
++- Route mmap/eventfd is a data plane, not EventBus.
++- Specialist branch owns business logic.
++
++## Prochaine phase
++
++0105 doit clarifier priorités/admission : priorité numérique portée par l'événement, admission minimale par PolicyEngine, ordre déterministe par PriorityQueue. ControlProxy ne doit pas recalculer les priorités globales.
+diff --git a/doc/architecture/CONTROLPROXY_ROUTE_RUNTIME_HANDLER_0104.md b/doc/architecture/CONTROLPROXY_ROUTE_RUNTIME_HANDLER_0104.md
+new file mode 100644
+index 0000000..59cd1b0
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_ROUTE_RUNTIME_HANDLER_0104.md
+@@ -0,0 +1,73 @@
++# 0104 — ControlProxy route runtime handler binding
++
++0104 amincit le raccord Scheduler-facing de ControlProxy sans modifier le micro-kernel.
++
++La décision verrouillée par 0101/0102 reste inchangée :
++
++```text
++Scheduler -> PolicyEngine -> PriorityQueue -> Scheduler.run() -> Dispatcher -> Handler -> RouteRuntimeManager
++```
++
++## Responsabilités
++
++- Scheduler: boucle, temps, queue et priorité.
++- PolicyEngine: admission minimale avant queue.
++- PriorityQueue: ordre déterministe.
++- Dispatcher: `EventType -> Handler` seulement.
++- Handler: adaptation mince entre l'événement/requête Scheduler et une capacité.
++- RouteRuntimeManager: travail runtime route/ControlFS/mmap/eventfd.
++- Specialist branch: logique métier / raisonnement / transformation.
++- EventBus: observation seulement.
++- Route mmap/eventfd: data plane, pas EventBus.
++
++## Ce que 0104 ajoute
++
++`src/runtime/controlproxy_route_runtime_handler.py` fournit une fonction injectable dans
++`ControlProxySchedulerRouteRequestHandler` :
++
++```text
++build_controlproxy_route_runtime_request_handler(manager)
++```
++
++Ce callable lit une enveloppe Scheduler/policy/zone déjà présente, extrait une
++`RoutePrepareDecision`, vérifie que l'enveloppe et la décision ciblent la même route et la
++même zone, puis appelle :
++
++```text
++RouteRuntimeManager.handle_prepare_decision(decision)
++```
++
++## Invariants verrouillés
++
++- Handler remains an adapter thin enough to call RouteRuntimeManager.
++- RouteRuntimeManager owns route runtime work.
++- Dispatcher remains EventType -> Handler only.
++- No Scheduler.run() modification.
++- No PriorityQueue, Dispatcher or PolicyEngine modification.
++- ControlProxy does not manage global priorities.
++- ControlProxy does not decide policy or zone authority.
++- No EventBus creation and no bus duplication.
++- Route mmap/eventfd is a data plane, not EventBus.
++- Specialist branch owns business logic.
++- Compatibility wrappers remain temporary adapters.
++
++## Pourquoi ce n'est pas un Scheduler bis
++
++Le binding 0104 ne calcule pas la priorité, ne choisit pas une policy, ne dépile aucune queue,
++ne possède aucun bus et ne pilote aucun spécialiste. Il reçoit uniquement un payload déjà passé
++par le chemin Scheduler/Policy/Queue/Dispatcher/Handler, puis délègue l'effet runtime route au
++manager.
++
++## Rapport `code_rule.md`
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: 0104 applique la règle existante du chemin noyau et ne crée pas de nouvelle technique de programmation.
++live_path_status: transition
++live_path_uses_real_backend: n/a
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++external_dependencies_added: false
++```
+diff --git a/doc/docs/architecture/runtime/94_controlproxy_route_runtime_handler.dot b/doc/docs/architecture/runtime/94_controlproxy_route_runtime_handler.dot
+new file mode 100644
+index 0000000..59908cf
+--- /dev/null
++++ b/doc/docs/architecture/runtime/94_controlproxy_route_runtime_handler.dot
+@@ -0,0 +1,29 @@
++digraph ControlProxyRouteRuntimeHandler0104 {
++  graph [
++    label="0104 ControlProxy route runtime handler binding\nROOT_GRAPH: doc/docs/architecture/00_global.dot",
++    labelloc="t",
++    fontsize=20
++  ];
++  node [shape=box, style="rounded"];
++  edge [fontsize=10];
++
++  SchedulerRun [label="Scheduler.run()\nqueue + priority loop"];
++  Dispatcher [label="Dispatcher\nEventType -> Handler only"];
++  ThinHandler [label="ControlProxySchedulerRouteRequestHandler\nthin Handler adapter"];
++  RuntimeBinding [label="controlproxy_route_runtime_handler\nvalidate envelope + extract decision"];
++  RouteRuntimeManager [label="RouteRuntimeManager\nroute runtime work"];
++  ControlFS [label="ControlFS\ngeneration state + lifecycle"];
++  DataPlane [label="mmap/eventfd data plane\nnot EventBus"];
++  EventBusObservation [label="existing EventBus\nobservation only"];
++  SpecialistBranch [label="specialist branch\nbusiness logic"];
++
++  SchedulerRun -> Dispatcher;
++  Dispatcher -> ThinHandler;
++  ThinHandler -> RuntimeBinding;
++  RuntimeBinding -> RouteRuntimeManager;
++  RouteRuntimeManager -> ControlFS;
++  RouteRuntimeManager -> DataPlane;
++
++  Dispatcher -> EventBusObservation [style=dashed, label="observable copy"];
++  SpecialistBranch -> SchedulerRun [style=dashed, label="commands/events through kernel path"];
++}
+diff --git a/doc/manifests/MANIFEST_0104_CHANGED_FILES.md b/doc/manifests/MANIFEST_0104_CHANGED_FILES.md
+new file mode 100644
+index 0000000..a36de15
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0104_CHANGED_FILES.md
+@@ -0,0 +1,15 @@
++# Manifest 0104 — ControlProxy route runtime handler binding
++
++```text
++src/runtime/controlproxy_route_runtime_handler.py
++tests/runtime/test_controlproxy_route_runtime_handler.py
++tests/rules/test_controlproxy_route_runtime_handler_0104_rule.py
++doc/architecture/CONTROLPROXY_ROUTE_RUNTIME_HANDLER_0104.md
++doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0104.md
++doc/docs/architecture/runtime/94_controlproxy_route_runtime_handler.dot
++doc/CHANGELOG_0104_CONTROLPROXY_ROUTE_RUNTIME_HANDLER.md
++doc/manifests/MANIFEST_0104_CHANGED_FILES.md
++PHASE0104_TEST_REPORT.md
++```
++
++0104 does not change kernel-loop, queue, dispatcher, policy-engine, or component-contract files.
+diff --git a/src/runtime/__pycache__/controlproxy_route_runtime_handler.cpython-313.pyc b/src/runtime/__pycache__/controlproxy_route_runtime_handler.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..d14af5e216460fc0ae65d52696523a8bff6ce4b6
+GIT binary patch
+literal 11024
+zcmcIKTTmQVcDHAG9?TPFcnO5mJcKkB3|Nv^)&p4*LXW}1G7Yw}pq*`I8W``;J$rjb
+z2%Jsu&ql6%SRZkgO}T2>Bvp%kQvS$?H<b_XSH4m;WJrO#*ors1RVn|Z#tSJW`;~KU
+zchB@7kmX9HVQ$~P=RVK-obKIV&`03nx9`07lM{se79Xt3WmLG`n;an@6Om9Na-w6D
+zOE{=Qz`AqPncyj(a8Va~=11KL5A`Ix)XSb-qjd=%^|88p)Sn2@0IPdOgNYCgCBih!
+zp1q^>i3Zw`h|maot{aUe8fjyqi8cvjnxAeS;HI0-IdDU?rImCM(bq;q|8(nXPGgVs
+z$g~Gq1MnBT;9xyM&?Ees!+^hL+z4$uMvOo4s94`d-s5Sz)q;1iLu_EJN5x}egw;C4
+z<6@N6j){WU$ZE&MPO*vA1hGqOX0=YSTWn#qF0n^!Wwmbcgm{G2dc-z*Vy->bE8XP@
+znV8Qg!mz63shYh<)kjN$n3|W<g{(}4c}Yp*eI}!%Gs>JWt5RWHE#&3#f|AcH$af`0
+znv-eV=esvAX|gc*>fkwHF+*id$j{4yl%=wiUh0=0Wwbnwzmd^$QXZzSPMuNSlT-PO
+zst7qXqvVCWibH(|tReuIs_8;XPD2&fIvW=zU>R$784bJ0urpPWve_j;ktkIcFZz7_
+z!k8)yzj-Ha)ZWU;%J{IL$@F0+1>028f}#qr>r5I(3u#GSP!+T9qOo7|se+m~EhwjA
+z!h)L4%w|#&E@^hTM>8tT<d@zq$OXC2eq=!2JvEz2EsZF18AX0>unjv@UXU`1CX76U
+z4NWZNWTF3xaNDGYs$`dNG3(jtEGdGNmU4N(ZXSs$D{5hG9x<8%bR0~${)3tYbrII4
+zNN54hiIf%=Rr&*5w1!jCDo|Qc^TGmS1Ys_#&PZ7yXP_V>Yln|W%PGJ%5FHUB0BV+1
+zK#5ey&ok_q$YkfgUeJUTa1!GZlUOs*mM-LAa0T~_WrT$VDK{V^+Gc@GG(iG#<|QGQ
+zl@y=`?$w$Tmk@KX4JixkDa=qwNzEHahuMKZnkHn`xl9V!8`-Qv`~F!eh1{Hzma?jp
+z78VLH+~jpYHKj|8`;DUwuydtN#usKYS)h+^HX~=#nlMY%1z~XT!t0C&C4(0CsGO6i
+zd;@l-p<J*|C{8&80PE)Gk@Mknz<(g9KI91DA)Euw%4AOhL4pyo@=(sIz&(gH#5kK!
+znxit{0y-$rn3d<uK^0>A<k?veO5~ga<S=e%g`~Niq&4rUSlss&>b4lC`y~ZX%}Arg
+z9J+TH7*LwY%DU&Sl*<9~ps@}Klgdh(rn?wEU|hWkW{L>;9@?DOlqKliKK|C^#7Oeq
+z_{hC$<0DCN;@ZTdm=uR^kKDbcH?n>1!yFrgOl%3(O@{mt6DfKxm48?OWtC){p0sF`
+zG-#BxkO$L54?u%{<bcL;Su14oDO1C<8`vwnxZPGLKPJ<Ja$vn2B1fH~gYu%2y5{(p
+zOYgBumVIhd%tt_%(XR$!lI3gTQbq$UxQG;#s*Guhti_ipMg(C-u24BGXws|<+T$r1
+zi@9}gGO0)lax$s=l1YP=pdLsje^`*RCM28$d{8Z)1%Xgh0DF?jw3>oSQ!=R`iBm}_
+zpQo7_K(v-j(kSe37k)%f3@j-50i^N()B0!~22hU-Xf!ooDwctiVR~|CdQ3`~prpZQ
+zG@e_c4KN`q5CIw*-yf45ew4OZ?Gr#IH;BrztmrN+tLC*DDuAKGi`&gYSxbcz#Gu2p
+zOXN=iRCGbjjkRfa7n$~mo(mlHie6}~WAHFqe6ZGa(>}3Y^kcnZ)BR$D7+_Ga{xmoj
+zibeF^Z=mcru%WEwzd8p?F5h~`6yvmwt`<en{-RvlC#+~_#>JM&j?)0lrh6?WrhfKl
+z$ts9dI4#dgz^qBoW_gt^{h`5>y(ukE`vefW2fBAb&Vxw-F*UguCLyE_eon;Y81uy@
+z$vA7SEyhi6$KDD(O*+_H59)bwkq`;CJms-^irj1F9%Sy26}?v9>iv)v59oQoijL}v
+zQ_M5PdB=m**{#|n5uH<E>uCykm0hrU#Hv^C)~uB~;1Vx^%#j#BwtU%AL{;_8NSn-<
+zre*<M5=+)in_v-k`Ss^VGYiCw)Qd(^aJfm$M?2xBd#x2|7d$e-(|MdncdIk#u<3q~
+zeqauee2{s>r_QG{sXUwIDW~(AoSoH>VghYPXfT<~saignQ8IZ@9_Q>Ve1NtyWg=cP
+z>M~5E{V5bHWZNJ9Xz0VCEq~{RzjJNk7Y}~^VC%%CjT4tj{!2TN?`+qP?K&ONP?<P_
+zp|YC<>W$tV8~%>9#$R;&yko2L>_+F=lK(90ov8NSbCbI8mbY!g+qQact!=Y^=pWOc
+zpZlkwUk#P6yj|)a|5vZbv`)&-;D`Vw5<iB@$7IT6RYE2!Y^yk?OhRKTu(LT{aZWl@
+z$m(W@0}9B_cohMdbXp9f@RJaBOgbj{DHKI^!HiC8Mv=eZ>>)AN^6>RSCYu(diffRz
+zltsU(TEXdMy2o%b?54z2IdR4S%jXT{VmX7>XiG1dhLm|*mY2ayy1`UV##9C?F)nja
+zlp^3Ej1R!RfHP$9ShvA<`(2A9`anr@H9cw!14j=%31c`IP-iNu=^nF_!N&ELSXg7(
+z9+>$M@G@94P&514m*h<Qpj&VnZ3>DNvgaj@7e6~$ie7*0-D&S#Tl~~lYQI$Uwr=~|
+zH~ig<+wRnGTjTlS`CFyv?Z@6P!jbK!4*1_`I<?;N=_{qCp|3rBy{}C8I-kLG6~=<a
+zkYO0p{UuaBCWmOn3e!O+^RlefA=>c;BdYos#vY(WEf&StJkA3XI>(kzvtY#ZVyY3!
+zfxcyo-^VII&;kX;A;(+>Nqu=WX;R)`sMByL#%8n+YFbt0&`a>FzxtBotWJ9$r@^r+
+z<jdBhKMVdexYati(K=XaJ+r;<d8hU0>cr0;{PaPo_4Ibjjj!umNGz90EanQ0p<hDf
+ze1R%DKL#2Uj)?fDF)W6lSUz>~<@R_o<}e0?P}5e;bSy+0ak3^Xnz3lX0{u-L+&7ym
+z4yqdU39aHRj-C9>3kO?2ucqmF?10CoN3cM5&hWC@v3A@l&{@&0Lh)zhH~iaQhGHc?
+zwjJs!@m*hZo&1d7=o(tNT?`#B@k4ujooj+CHxqZmt|R2~?K+`W#@aK%?K1e9&0FJS
+zAQLj?#$$XB*jsc=l5?Op!MXCj$1B_<hwQcdn{kF)<`!X?i%|xo0nkRVJORWocI;My
+zIK$=`+Rx-oGtM)J1%s>88R-ml7D9c97L7E=49%qHWJoSp(FKIv5Tw8CV%Qf110q{%
+z)BRTt%6i0o&!GiK!tJI3Emt@&HE=hs@dM;`l2{U{a1)O4iixqtpeY)6SD&n!HL8a^
+z<;H+x8QGCD^cF++KNtNmVT?H$Z|fe@tmqyiF+erkn;@(h3fFDSp<kUr`;<%_9s!v1
+zR3d@PSrzc5T`^-&bmp~Jp!n|<vJ-iID>AYX8Tov!6d8N$*$y{vh2tCH`1<13z#AI_
+zZ<NAUi{7h@m!FeCiryRJb&#=}SZ697P4xFoD>3+OH%srpXbFB=JruCRXUz`RHLmO>
+zfym0;T6K<EtHSX;@NlpX0am|4P~d)U`L@Bj0_ILCtZli5W_n^~$%_9lX>mwQALH0|
+z;q**7Aqq4+y=5a~CfUE4R&*4{;t!P)7{m|>T>k9VrvJw0@0R>`i~PQ$L#Jv)@jF<v
+z=ICU~bdw0N+?!K40xk(4lcdMyI8~9Oa5hV2ceWgpj;V^>Vm?1mehS<#;{qk)xa<g#
+zvvwD(B3I&(LC7>uI+EaQ)y!XUy#T`3KzM7{0C7!KVh3>7TsDZiW{leg@zg*(Hi)+d
+z;<Z8QY9Mtsh_43XvqAjT_yzXnw?P87c!m=LHb}4r60|`=HIR@E60U(%a^irU`Wi^R
+zZA?QAq`?M>)a*K9gG6f}Q5&SO2GVGQG}S<wY>?&}$~D^{Ej5r98>F=c*R55^chGRP
+zEx&P3qL4CwQPK|*x<<5x`BBs95iG}CcWaPHUyznh7Zk0K%c&F%p5doknL^9`6^yPI
+z1>I+9)J&S51fJIehR1DcWKUkwegJ_cMInO~AiyhVx*IYCkcmV;M$+KkX!`r$x>L*_
+z%`8FcM~|cmltSJ$IVUSJWw}2+tjLdQ8XBxln4(E)nPpk8t5$uino=R>tcMq*M>X?@
+zuz{k-Z>-0jtw>=()9cd|a^^|QRzuP+2`w#I*sq+_7Bdhq+W~G!PG)A8^sxF+rn6af
+z5n@x!L+d`oSXxd)O3SbYb-E9drV1cJNy$bMrJ<7Xv>Z`LnVA@Yj2NYuD=@;DU{cK)
+zZzB+3>jv*BAR?{+;n6akPAV<ZyD)=kG7alP&)}R`{0Kq+4)y{xtDATuPfl*O4{Uh`
+zH#~!2@g9eEeC?~ZO1_?z;ho@-)$Y|trQoTRo7<k?W<y`e)3*~kvmLtdS?@2~ih&yt
+zhJ?Xib=3J_s(|o&(i(7o5pF6w;r_em@iph#^k(!-*#(c#A#!XrwRUl{Azt=igO@aS
+zubo{FZ8n`R*I|Q?G<2+rYq8DxzOo-10wmN1J9xMm>@5eeAw=qrt`4uYZiZhehq0mF
+z*3f_r5nDqP8yd;6SJu0W10$OqH_J`f(oBxV)}zJv_09I-atpS!k|Vuqsp9F&o2^6T
+zBiPbL+E1-Ji~UzO+pd+{vE?X<3UHpO&B&|e4s19^8avmbYuU}{+46C05bU#bVoMik
+z?O7Wx#x88OTr78EOOL(f1h({&Hn#TA=8-Gqlh|^KboQ@{#WSOu!kgt7w!A{>5izGW
+z!>7xqv7yhtR6n-FNh5BLp?d%t%B0ohu5}TB?o~S(0S5TL*hz@bi1og*)>c}cU&YEE
+zLm#n=pj&_!q%qK0VHeoa7h7jX54i1^;E0lUc+D{gK1Gz=28*lSsHQva^VPj19d{vn
+z<|hKI18EM2=tP&5rAI2M4w1L^2$?`wL30T3Q}|g(d5p2hCDy_uh>pQnrse2cSi6S>
+zo{PSX1!gU&h{XgJlUTfi#k*Kw6iELFi|=BAZZ@69;sF-l!y<{r_py+$K%rfJc!&bF
+zG9@ex2N`+E(&v2#zVzusjc@9H`4Pmw=(@3xW#2mvc%g)Ek{~*s!95_hbkCfTnA5#h
+zY{9e<^kKdoi|yvIquUs)^O)=3mldHYoDYk?fuHshD8R?|G(0)^$@wi$_lBq2P&W;&
+zt1WANpYo-K*H#icp70ajmZyEg)BZ)M_0O}9ojd-fCn*@=?}p^ZcC`6%qU>l5xmRv}
+zeTH1R#+7{6{-O8Np1){WZCQsY`v1k>|I6N$;iB)_w#WDQ^$&iu;W-K_tL)%{L%U8V
+zYAa`*4_)Z+O5%ThA0+<koQCnsuZ}cd=lPnPTqQj+3-Ff~7GOU}Z5$XVS!@R`Cq~ii
+zx^EMt9zutq5rT^<Eu26L`X06#p0#eg`eW~1><%`475cE^pP`~*fc`wXKYIVe_g62L
+z!o5Xr?~Xt6<UHWa-(TeW4NXyzMHtM(&xvtj0xI^y->)Vf?FmW86pmn*<*8IO0L+VW
+zHVD49aX_cB+sY|T+eLFQUU$KJNO+wAi$m~WTCcP4K(Q#nPwR#P4i{)y^^^jAD<jBN
+zCq8M}@^o%^I=91(j|1EO;L4rn4^^S)pTG<(;Z;#Z&|qGNWL#f#K%nNN!#Zvn1A+>D
+z!QJOVpv2Brvag2HfyCAyIu4O_CRM_6yYXU}3A>^y{qjOCza)Sk0J8j)rz-51F^cX)
+zrvdnmJatl(ONK{Ep;n8<G{UgZ5p)#_$b$#MAKm)!){{gja2zlR(k6c*8d>qbYhuR!
+z^m=0ba`F6lF(6j$J*LDPR^EI8iXXxBFN5Mq2j(Z{h%LGO0#v^=a%mpcUv99W&_En5
+zKs#N8q82wYHe>Ny1Y!8PA2-{czz09t4o7QnWXI6$VgM7frbqP682T$%<Yh4Qa+r~t
+zfbCFd*aemqwHmvglSgFGsx>^EK@A*6t2k8H_c8Fn&Qq72{m>cZXH+%InD7APq5`E@
+z{3rZ0)F}IrTZ7cU{qCo(zt3--xV&-VvK_&RVqo;!Ao#Cgp_f7Mw`0NoH$)2uAli6E
+z4?&6sfe~GX108_gIc&z_8T>SKOZKDpK;AtJ&F>Zi_YX#M%xzE@vw3<Ob0@})&wIve
+z5}_;=#PT>S<iG?VN)!!YfhlW>3K(W%{sc>8?}G!2q8+Tl*(gl2Jm1>0e=am5^dS~(
+z6ta5FTKnMUc&0hAZm7@dc&x$r!{Ez4&@93q!xv(Zn?Jl8egB)L0Wq?s={1t?@KwcZ
+z0W$yag#|^?*25_^n>9Xn)8f)hit@N$G;6xQ@->XCQ8zZD4bokC_y|TbUa-2M4z`0L
+zLiD5NySR8wM$Qa}jSv*k4IjA}6pk}vb?8Sf>~jI*tz1X#2=fVIUG}Y?!30QO;|&IK
+zg6@Nl778-^LZ!-K`?$z(D4CnX+<`Ps!PGWt7RLYhZ3$$<0b5aQYQv%(3f+6z_&VhZ
+z{SY3}=xbj<QFd}1_qC&i<Ns@raNYkw`u~lb`ZekLHEDjvJ2}TQuT_+N<XG?8!?pS1
+z;GJUcosEt}k+ki(Iqpqv{o)?M``2FL@IUEUO>c1B&m1uhTumr;oy5^oW{>x|Fc;Yl
+z3S}qUzjPhnbHTmb<Kf1*?O?R*#0prAP-of0s$SwgzE_9Uy~b|Nz4s<}k_+!ma8541
+c7vQ<jUdYWg>_xm#G+VWDv&ZlFz{8IIziOgUX8-^I
+
+literal 0
+HcmV?d00001
+
+diff --git a/src/runtime/controlproxy_route_runtime_handler.py b/src/runtime/controlproxy_route_runtime_handler.py
+new file mode 100644
+index 0000000..8eb32a8
+--- /dev/null
++++ b/src/runtime/controlproxy_route_runtime_handler.py
+@@ -0,0 +1,265 @@
++"""Thin ControlProxy Scheduler handler binding for RouteRuntimeManager.
++
++Phase 0104 wires the already-existing Dispatcher handler injection point to the
++RouteRuntimeManager introduced in 0103. The binding is intentionally narrow:
++
++- No CLI.
++- No OpenRC service and no resident daemon.
++- No watcher.
++- No Scheduler.run() modification.
++- No PriorityQueue, Dispatcher or PolicyEngine modification.
++- Dispatcher remains EventType -> Handler only.
++- Handler remains an adapter thin enough to call RouteRuntimeManager.
++- RouteRuntimeManager owns route runtime work.
++- ControlProxy does not manage global priorities.
++- ControlProxy does not decide policy or zone authority.
++- No EventBus creation and no bus duplication.
++- Route mmap/eventfd is a data plane, not EventBus.
++- Specialist branch owns business logic.
++
++The Scheduler-facing payload must already carry the policy/zone dispatch filter
++fields from 0098 and a RoutePrepareDecision from the prepare path. This module
++only validates that the envelope and decision agree, then delegates the runtime
++effect to RouteRuntimeManager.handle_prepare_decision().
++"""
++from __future__ import annotations
++
++from collections.abc import Callable, Mapping
++from dataclasses import dataclass, field
++from types import MappingProxyType
++from typing import Any
++
++from runtime.controlproxy_prepare import (
++    ROUTE_PREPARE_STATUS_SCHEMA,
++    RoutePrepareDecision,
++)
++from runtime.route_dispatch_filter_envelope import (
++    RouteDispatchFilterEnvelope,
++    require_route_dispatch_filter_envelope,
++)
++from runtime.route_runtime_manager import (
++    RouteRuntimeManager,
++    RouteRuntimeManagerResult,
++)
++
++RouteRuntimeRequestHandler = Callable[[object], RouteRuntimeManagerResult]
++
++
++class ControlProxyRouteRuntimeHandlerError(ValueError):
++    """Raised when a Scheduler route payload cannot be delegated safely."""
++
++
++@dataclass(frozen=True, slots=True)
++class ControlProxyRouteRuntimeHandlerRequest:
++    """Validated Scheduler payload for the ControlProxy runtime route handler."""
++
++    envelope: RouteDispatchFilterEnvelope
++    decision: RoutePrepareDecision
++    metadata: Mapping[str, Any] = field(default_factory=dict)
++
++    def __post_init__(self) -> None:
++        if self.envelope.route_id != self.decision.route_id:
++            raise ControlProxyRouteRuntimeHandlerError(
++                "dispatch envelope route_id must match route prepare decision"
++            )
++        if self.envelope.zone != self.decision.zone:
++            raise ControlProxyRouteRuntimeHandlerError(
++                "dispatch envelope zone must match route prepare decision"
++            )
++        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
++
++    @classmethod
++    def from_payload(cls, payload: object) -> "ControlProxyRouteRuntimeHandlerRequest":
++        """Build a validated runtime-handler request from a Scheduler payload."""
++
++        envelope = require_route_dispatch_filter_envelope(payload)
++        decision_payload = _read_field(payload, "decision")
++        if decision_payload is None:
++            raise ControlProxyRouteRuntimeHandlerError(
++                "route runtime handler payload requires a decision field"
++            )
++        decision = route_prepare_decision_from_payload(decision_payload)
++        return cls(
++            envelope=envelope,
++            decision=decision,
++            metadata=_read_mapping_field(payload, "metadata"),
++        )
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "envelope": self.envelope.to_mapping(),
++            "decision": self.decision.to_mapping(),
++            "metadata": dict(self.metadata),
++            "purpose": "thin Handler adapter to RouteRuntimeManager",
++        }
++
++
++def build_controlproxy_route_runtime_request_handler(
++    manager: RouteRuntimeManager,
++) -> RouteRuntimeRequestHandler:
++    """Return the callable injected into ControlProxySchedulerRouteRequestHandler.
++
++    The returned callable is the official 0104 bridge:
++
++    Dispatcher -> ControlProxySchedulerRouteRequestHandler -> this callable ->
++    RouteRuntimeManager.
++    """
++
++    def handle(payload: object) -> RouteRuntimeManagerResult:
++        request = ControlProxyRouteRuntimeHandlerRequest.from_payload(payload)
++        return manager.handle_prepare_decision(request.decision)
++
++    return handle
++
++
++def handle_controlproxy_route_runtime_request(
++    payload: object,
++    *,
++    manager: RouteRuntimeManager,
++) -> RouteRuntimeManagerResult:
++    """Handle one Scheduler route payload by delegating to RouteRuntimeManager."""
++
++    return build_controlproxy_route_runtime_request_handler(manager)(payload)
++
++
++def route_prepare_decision_from_payload(payload: object) -> RoutePrepareDecision:
++    """Parse a RoutePrepareDecision from an object or mapping payload."""
++
++    if isinstance(payload, RoutePrepareDecision):
++        return payload
++    raw = _decision_mapping(payload)
++    schema = _require_str(raw, "schema")
++    if schema != ROUTE_PREPARE_STATUS_SCHEMA:
++        raise ControlProxyRouteRuntimeHandlerError(
++            f"unsupported route prepare decision schema: {schema!r}"
++        )
++    return RoutePrepareDecision(
++        schema=schema,
++        request_id=_require_str(raw, "request_id"),
++        route_id=_require_str(raw, "route_id"),
++        route_handle=_optional_str(raw, "route_handle"),
++        task_id=_require_str(raw, "task_id"),
++        zone=_require_str(raw, "zone"),
++        status=_require_str(raw, "status"),  # type: ignore[arg-type]
++        action=_require_str(raw, "action"),  # type: ignore[arg-type]
++        reason=_require_str(raw, "reason"),
++        required_frame_bytes=_require_int(raw, "required_frame_bytes"),
++        current_generation=_optional_int(raw, "current_generation"),
++        next_generation=_optional_int(raw, "next_generation"),
++        current_slot_size=_optional_int(raw, "current_slot_size"),
++        slot_size=_optional_int(raw, "slot_size"),
++        slot_count=_optional_int(raw, "slot_count"),
++        max_frame_bytes=_optional_int(raw, "max_frame_bytes"),
++        max_ring_bytes=_require_int(raw, "max_ring_bytes"),
++        max_prepare_ms=_require_int(raw, "max_prepare_ms"),
++        drain_timeout_ms=_require_int(raw, "drain_timeout_ms"),
++        lease_switch_timeout_ms=_require_int(raw, "lease_switch_timeout_ms"),
++        notify=_optional_str(raw, "notify"),
++        overflow_policy=_optional_str(raw, "overflow_policy"),
++        decided_at=_require_str(raw, "decided_at"),
++    )
++
++
++def _decision_mapping(payload: object) -> Mapping[str, Any]:
++    if isinstance(payload, Mapping):
++        return payload
++    to_mapping = getattr(payload, "to_mapping", None)
++    if callable(to_mapping):
++        raw = to_mapping()
++        if isinstance(raw, Mapping):
++            return raw
++    fields = (
++        "schema",
++        "request_id",
++        "route_id",
++        "route_handle",
++        "task_id",
++        "zone",
++        "status",
++        "action",
++        "reason",
++        "required_frame_bytes",
++        "current_generation",
++        "next_generation",
++        "current_slot_size",
++        "slot_size",
++        "slot_count",
++        "max_frame_bytes",
++        "max_ring_bytes",
++        "max_prepare_ms",
++        "drain_timeout_ms",
++        "lease_switch_timeout_ms",
++        "notify",
++        "overflow_policy",
++        "decided_at",
++    )
++    raw = {name: getattr(payload, name, None) for name in fields}
++    if raw["schema"] is None:
++        raise ControlProxyRouteRuntimeHandlerError(
++            "route prepare decision payload must be a mapping, RoutePrepareDecision, "
++            "or object exposing RoutePrepareDecision fields"
++        )
++    return raw
++
++
++def _read_field(payload: object, field_name: str) -> Any:
++    if isinstance(payload, Mapping):
++        return payload.get(field_name)
++    return getattr(payload, field_name, None)
++
++
++def _read_mapping_field(payload: object, field_name: str) -> Mapping[str, Any]:
++    value = _read_field(payload, field_name)
++    if isinstance(value, Mapping):
++        return value
++    return {}
++
++
++def _require_str(raw: Mapping[str, Any], field_name: str) -> str:
++    value = raw.get(field_name)
++    if not isinstance(value, str) or not value:
++        raise ControlProxyRouteRuntimeHandlerError(
++            f"route prepare decision field {field_name} must be a non-empty string"
++        )
++    return value
++
++
++def _optional_str(raw: Mapping[str, Any], field_name: str) -> str | None:
++    value = raw.get(field_name)
++    if value is None:
++        return None
++    if not isinstance(value, str):
++        raise ControlProxyRouteRuntimeHandlerError(
++            f"route prepare decision field {field_name} must be a string"
++        )
++    return value
++
++
++def _require_int(raw: Mapping[str, Any], field_name: str) -> int:
++    value = raw.get(field_name)
++    if not isinstance(value, int) or isinstance(value, bool):
++        raise ControlProxyRouteRuntimeHandlerError(
++            f"route prepare decision field {field_name} must be an integer"
++        )
++    return value
++
++
++def _optional_int(raw: Mapping[str, Any], field_name: str) -> int | None:
++    value = raw.get(field_name)
++    if value is None:
++        return None
++    if not isinstance(value, int) or isinstance(value, bool):
++        raise ControlProxyRouteRuntimeHandlerError(
++            f"route prepare decision field {field_name} must be an integer when present"
++        )
++    return value
++
++
++__all__ = (
++    "ControlProxyRouteRuntimeHandlerError",
++    "ControlProxyRouteRuntimeHandlerRequest",
++    "RouteRuntimeRequestHandler",
++    "build_controlproxy_route_runtime_request_handler",
++    "handle_controlproxy_route_runtime_request",
++    "route_prepare_decision_from_payload",
++)
+diff --git a/tests/rules/__pycache__/test_controlproxy_route_runtime_handler_0104_rule.cpython-313-pytest-9.0.2.pyc b/tests/rules/__pycache__/test_controlproxy_route_runtime_handler_0104_rule.cpython-313-pytest-9.0.2.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..ad21e088b5012cab86fbc012a0a8854f83054872
+GIT binary patch
+literal 7242
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/rules/__pycache__/test_controlproxy_route_runtime_handler_0104_rule.cpython-313.pyc b/tests/rules/__pycache__/test_controlproxy_route_runtime_handler_0104_rule.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..842228c4a4a99ec3f117aa228bf850d136c99dca
+GIT binary patch
+literal 3862
+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
+Um*huZkN5K9|2x;i53>#ZA9aRAf&c&j
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/rules/test_controlproxy_route_runtime_handler_0104_rule.py b/tests/rules/test_controlproxy_route_runtime_handler_0104_rule.py
+new file mode 100644
+index 0000000..7d20e46
+--- /dev/null
++++ b/tests/rules/test_controlproxy_route_runtime_handler_0104_rule.py
+@@ -0,0 +1,87 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "runtime" / "controlproxy_route_runtime_handler.py"
++DOC = ROOT / "doc" / "architecture" / "CONTROLPROXY_ROUTE_RUNTIME_HANDLER_0104.md"
++PLAN = ROOT / "doc" / "architecture" / "CONTROLPROXY_OPERATIONAL_PLAN_0104.md"
++GRAPH = ROOT / "doc" / "docs" / "architecture" / "runtime" / "94_controlproxy_route_runtime_handler.dot"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0104_CHANGED_FILES.md"
++
++
++def _read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_0104_route_runtime_handler_locks_thin_handler_language() -> None:
++    text = _read(MODULE) + "\n" + _read(DOC) + "\n" + _read(PLAN)
++    required = [
++        "Handler remains an adapter thin enough to call RouteRuntimeManager",
++        "RouteRuntimeManager owns route runtime work",
++        "Dispatcher remains EventType -> Handler only",
++        "No Scheduler.run() modification",
++        "No PriorityQueue, Dispatcher or PolicyEngine modification",
++        "ControlProxy does not manage global priorities",
++        "ControlProxy does not decide policy or zone authority",
++        "No EventBus creation and no bus duplication",
++        "Route mmap/eventfd is a data plane, not EventBus",
++        "Specialist branch owns business logic",
++        "Compatibility wrappers remain temporary adapters",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0104_route_runtime_handler_does_not_import_kernel_or_bus() -> None:
++    text = _read(MODULE)
++    forbidden = [
++        "kernel.scheduler",
++        "kernel.dispatcher",
++        "kernel.queue",
++        "policy.engine",
++        "EventBus(",
++        "from kernel.event_bus",
++        "import argparse",
++        "subprocess",
++        "openvino",
++        "qdrant",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++
++
++def test_0104_route_runtime_handler_manifest_avoids_kernel_files() -> None:
++    manifest = _read(MANIFEST)
++    required = [
++        "src/runtime/controlproxy_route_runtime_handler.py",
++        "tests/runtime/test_controlproxy_route_runtime_handler.py",
++        "tests/rules/test_controlproxy_route_runtime_handler_0104_rule.py",
++    ]
++    for path in required:
++        assert path in manifest
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/kernel/dispatcher.py",
++        "src/kernel/queue.py",
++        "src/policy/engine.py",
++    ]
++    for path in forbidden:
++        assert path not in manifest
++
++
++def test_0104_route_runtime_handler_graph_is_not_scheduler_bis() -> None:
++    graph = _read(GRAPH)
++    required = [
++        "ROOT_GRAPH: doc/docs/architecture/00_global.dot",
++        "SchedulerRun -> Dispatcher",
++        "Dispatcher -> ThinHandler",
++        "ThinHandler -> RuntimeBinding",
++        "RuntimeBinding -> RouteRuntimeManager",
++        "RouteRuntimeManager -> DataPlane",
++        "DataPlane [label=\"mmap/eventfd data plane\\nnot EventBus\"]",
++        "EventBusObservation [label=\"existing EventBus\\nobservation only\"]",
++        "SpecialistBranch [label=\"specialist branch\\nbusiness logic\"]",
++    ]
++    for phrase in required:
++        assert phrase in graph
+diff --git a/tests/runtime/__pycache__/test_controlproxy_route_runtime_handler.cpython-313.pyc b/tests/runtime/__pycache__/test_controlproxy_route_runtime_handler.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..db12c447b8f475b06fd19f3af3c1e7d0ea26e34d
+GIT binary patch
+literal 6390
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/runtime/test_controlproxy_route_runtime_handler.py b/tests/runtime/test_controlproxy_route_runtime_handler.py
+new file mode 100644
+index 0000000..d3b1b87
+--- /dev/null
++++ b/tests/runtime/test_controlproxy_route_runtime_handler.py
+@@ -0,0 +1,141 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++
++import pytest
++
++from contracts.event import Event, EventType
++from runtime.controlproxy_prepare import ROUTE_PREPARE_STATUS_SCHEMA, RoutePrepareDecision
++from runtime.controlproxy_route_runtime_handler import (
++    ControlProxyRouteRuntimeHandlerError,
++    ControlProxyRouteRuntimeHandlerRequest,
++    build_controlproxy_route_runtime_request_handler,
++    handle_controlproxy_route_runtime_request,
++    route_prepare_decision_from_payload,
++)
++from runtime.controlproxy_scheduler_handler import ControlProxySchedulerRouteRequestHandler
++from runtime.route_runtime_manager import RouteRuntimeManager
++
++
++@dataclass(frozen=True, slots=True)
++class PayloadObject:
++    route_id: str
++    zone: str
++    policy_decision_id: str
++    authorized: bool
++    decision: RoutePrepareDecision
++    source: str = "pytest.scheduler"
++
++
++def _decision(*, route_id: str = "route-a", zone: str = "workers") -> RoutePrepareDecision:
++    return RoutePrepareDecision(
++        schema=ROUTE_PREPARE_STATUS_SCHEMA,
++        request_id=f"prep:{route_id}",
++        route_id=route_id,
++        route_handle=f"{route_id}@g1",
++        task_id="task-a",
++        zone=zone,
++        status="ready",
++        action="create_route_generation",
++        reason="pytest controlproxy route runtime handler",
++        required_frame_bytes=128,
++        current_generation=None,
++        next_generation=1,
++        current_slot_size=None,
++        slot_size=512,
++        slot_count=2,
++        max_frame_bytes=512,
++        max_ring_bytes=8192,
++        max_prepare_ms=25,
++        drain_timeout_ms=100,
++        lease_switch_timeout_ms=10,
++        notify="eventfd",
++        overflow_policy="reject",
++        decided_at="2026-07-05T00:00:00Z",
++    )
++
++
++def _payload(decision: RoutePrepareDecision) -> dict[str, object]:
++    return {
++        "route_id": decision.route_id,
++        "zone": decision.zone,
++        "policy_decision_id": "policy-1",
++        "authorized": True,
++        "source": "pytest.scheduler",
++        "decision": decision.to_mapping(),
++    }
++
++
++def _event(payload: object) -> Event:
++    return Event(
++        EventType.CONTEXT_REQUEST,
++        source="pytest.scheduler",
++        dest="controlproxy.route",
++        payload=payload,
++    )
++
++
++@pytest.mark.asyncio
++async def test_scheduler_handler_can_delegate_to_route_runtime_manager(tmp_path: Path) -> None:
++    manager = RouteRuntimeManager.from_roots(
++        controlfs_root=tmp_path / "controlfs",
++        runtime_root=tmp_path / "runtime",
++    )
++    request_handler = build_controlproxy_route_runtime_request_handler(manager)
++    handler = ControlProxySchedulerRouteRequestHandler(route_request_handler=request_handler)
++
++    result = await handler.handle(_event(_payload(_decision())))
++
++    assert result.action == "materialize_generation"
++    assert result.status == "candidate"
++    assert result.route_id == "route-a"
++    assert Path(result.payload["record"]["ring_path"]).exists()
++
++
++def test_runtime_handler_accepts_payload_object_and_decision_object(tmp_path: Path) -> None:
++    manager = RouteRuntimeManager.from_roots(
++        controlfs_root=tmp_path / "controlfs",
++        runtime_root=tmp_path / "runtime",
++    )
++    decision = _decision(route_id="route-b", zone="workers")
++    payload = PayloadObject(
++        route_id="route-b",
++        zone="workers",
++        policy_decision_id="policy-2",
++        authorized=True,
++        decision=decision,
++    )
++
++    result = handle_controlproxy_route_runtime_request(payload, manager=manager)
++
++    assert result.action == "materialize_generation"
++    assert result.route_id == "route-b"
++
++
++def test_route_runtime_handler_request_rejects_missing_decision() -> None:
++    with pytest.raises(ControlProxyRouteRuntimeHandlerError, match="requires a decision field"):
++        ControlProxyRouteRuntimeHandlerRequest.from_payload(
++            {
++                "route_id": "route-c",
++                "zone": "workers",
++                "policy_decision_id": "policy-3",
++                "authorized": True,
++            }
++        )
++
++
++def test_route_runtime_handler_rejects_mismatched_envelope_and_decision() -> None:
++    payload = _payload(_decision(route_id="route-d"))
++    payload["route_id"] = "other-route"
++
++    with pytest.raises(ControlProxyRouteRuntimeHandlerError, match="route_id must match"):
++        ControlProxyRouteRuntimeHandlerRequest.from_payload(payload)
++
++
++def test_route_prepare_decision_from_payload_accepts_mapping_projection() -> None:
++    decision = _decision(route_id="route-e")
++
++    parsed = route_prepare_decision_from_payload(decision.to_mapping())
++
++    assert parsed == decision

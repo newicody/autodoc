@@ -1,0 +1,601 @@
+diff --git a/doc/architecture/GRAPH_ARCHITECTURE_AUDIT_0099.md b/doc/architecture/GRAPH_ARCHITECTURE_AUDIT_0099.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/architecture/GRAPH_ARCHITECTURE_AUDIT_0099.md
+@@ -0,0 +1,135 @@
++# 0099 — Architecture graph inventory and alignment audit
++
++## Purpose
++
++This patch answers the architecture-graph review request directly.
++
++The repository currently has two graph families that must not diverge:
++
++1. `doc/docs/architecture/00_global.dot` is the historical root roadmap graph.
++   It links to the scheduler, context, services, experts, validation, learning and
++   observability individual graphs.
++2. `doc/architecture/RUNTIME_CONTROLFS_SHM_CLUSTER_FABRIC_GRAPH*.dot` and the
++   recent ControlProxy runtime phase documents describe the ControlFS / mmap /
++   SHM route path added by phases 0079 through 0098.
++
++0099 does not treat the ControlProxy graph as an isolated island. It records it
++as a runtime overlay subgraph attached to the existing global architecture map.
++
++## Graph structure to respect
++
++The structure to respect is:
++
++```text
++doc/docs/architecture/00_global.dot
++  -> scheduler/10_scheduler.dot
++  -> scheduler/dispatcher/...
++  -> scheduler/event_bus/...
++  -> scheduler/priority_queue/...
++  -> scheduler/component_proxy/...
++  -> context/20_context.dot
++  -> context/21_collector.dot
++  -> context/22_reducer.dot
++  -> context/23_snapshot.dot
++  -> context/36_local_context_loop_design.dot
++  -> services/30_services.dot
++  -> experts/40_experts.dot
++  -> validation/50_validation.dot
++  -> learning/60_learning.dot
++  -> observability/70_observability.dot
++  -> runtime/90_controlproxy_runtime_overlay.dot
++```
++
++The new `runtime/90_controlproxy_runtime_overlay.dot` is a subgraph of the root
++architecture family. It is not a separate runtime authority and not a second
++root graph.
++
++## Review of important individual graphs
++
++| Area | Existing graph family | 0099 finding | 0099 action |
++| --- | --- | --- | --- |
++| Scheduler loop | `scheduler/10_scheduler.dot` and scheduler subgraphs | Still the authority for `emit -> policy -> queue -> run -> dispatcher -> handler`. | Keep unchanged; add runtime overlay links back to Scheduler, Policy, Queue and Dispatcher. |
++| Dispatcher | `scheduler/dispatcher/*` and root Dispatcher node | The ControlProxy path must remain a handler target, not a Scheduler shortcut. | Represent `Dispatcher -> ControlProxySchedulerRouteRequestHandler`. |
++| Event bus | `scheduler/event_bus/*` and root EventBus node | EventBus is facts/observation only. 0093-r2 must read an existing bus, not create one. | Represent an existing event.bus read tap only. |
++| Context | `context/20_context.dot` and local context loop graphs | TaskContext/ContextGate remain context authorities; Qdrant is projection/search. | Add TaskContext, ContextGate and Qdrant projection edge in the overlay. |
++| Services | `services/30_services.dot` | Runtime route work is not a general service daemon. | Keep route runtime out of services; show it as ControlProxy/ControlFS runtime overlay. |
++| Observability | `observability/70_observability.dot` | Recorder/journal must receive drained facts, not commands. | Represent `RouteMessageJournal -> Recorder/ZFS`. |
++| ControlFS/SHM runtime | `doc/architecture/RUNTIME_CONTROLFS_SHM_CLUSTER_FABRIC_GRAPH*.dot` | Recent phases were represented, but not reconciled with the root graph family. | Add the canonical overlay graph and this audit. |
++| Future cluster/bridge | ADR-0062 and runtime fabric docs | NetworkBridge/HardwareBridge are future boundaries. | Keep them dotted/future only. |
++
++## Missing pieces found and represented
++
++0099 adds explicit graph coverage for the important pieces that were not visible
++together in the root-level graph family:
++
++- `ControlProxySchedulerRouteRequestHandler` from 0088.
++- `RouteWriteNotifyDrain` from 0089.
++- `RouteMessageJournal` from 0090.
++- `RouteGenerationTable` with g2/g3 generation state from 0091-r2.
++- `RouteGenerationLifecycle` from 0092.
++- existing-bus visualization adapter from 0093-r2.
++- `RouteGenerationLock` from 0094.
++- locked materializer from 0095.
++- runtime placement policy from 0096.
++- ControlProxy graph alignment from 0097.
++- `RouteDispatchFilterEnvelope` from 0098.
++- the nuance that the policy/zone mechanism is mainly dispatch filtering, not
++  the business objective of security.
++
++## Scheduler.run() decision
++
++Do not release the `Scheduler.run()` constraint yet.
++
++The current architecture can still express the ControlProxy path as:
++
++```text
++Component.tick()
++-> yield Event / Request
++-> ComponentProxy
++-> Scheduler.emit()
++-> PolicyEngine.decide()
++-> PriorityQueue
++-> Scheduler.run()
++-> Dispatcher.dispatch()
++-> ControlProxy handler
++-> Request.reply
++-> ComponentProxy
++-> tick().asend(result)
++```
++
++The constraint can be reconsidered only if a concrete isolated handler proves
++that `Dispatcher -> Handler` cannot express the runtime path without breaking
++determinism, replayability, or the event/queue authority model.
++
++## ControlProxy / ControlFS / dispatch filtering
++
++The preferred wording is now:
++
++```text
++ControlProxy/ControlFS is a bounded runtime subsystem.
++ControlFS is the Unix-state surface.
++ControlProxy owns route/control code around ControlFS.
++Dispatcher calls the ControlProxy handler.
++Scheduler/policy/zone remain the dispatch authority.
++ControlProxy enforces the dispatch envelope; it does not invent policy.
++```
++
++The mechanism has a security-inspired shape, but its operational purpose here is
++dispatch filtering and zone routing.
++
++## 0099 code-rule alignment
++
++- No CLI.
++- No daemon.
++- No service.
++- No OpenRC unit.
++- No watcher.
++- No Scheduler.run() modification.
++- No PriorityQueue modification.
++- No Dispatcher modification.
++- No Component.tick/yield/reply contract modification.
++- No Qdrant dependency added.
++- No LLM or OpenVINO path added.
++- No generated SVG added.
++- Documentation is not pretending that an isolated graph is integrated.
++- The new graph is explicitly a root-attached runtime overlay.
+diff --git a/doc/docs/architecture/runtime/90_controlproxy_runtime_overlay.dot b/doc/docs/architecture/runtime/90_controlproxy_runtime_overlay.dot
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/docs/architecture/runtime/90_controlproxy_runtime_overlay.dot
+@@ -0,0 +1,170 @@
++digraph ControlProxyRuntimeOverlay {
++  // ROADMAP_ID: runtime_controlproxy_overlay_0099
++  // ROOT_GRAPH: doc/docs/architecture/00_global.dot
++  // This graph is a root-attached runtime overlay, not an isolated island.
++  rankdir=LR;
++  compound=true;
++  splines=ortho;
++  graph [fontname="Arial", fontsize=11, label="Runtime overlay — ControlProxy / ControlFS / mmap route path (0099)", labelloc=t];
++  node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10];
++  edge [fontname="Arial", fontsize=9, arrowsize=0.7];
++
++  subgraph cluster_existing_root {
++    label="Existing root graph family";
++    color="#455a64";
++    bgcolor="#eceff1";
++    node [fillcolor="#eceff1", color="#455a64"];
++
++    RootGlobal [label="00_global.dot\nroot architecture", URL="../00_global.svg"];
++    SchedulerGraph [label="scheduler/10_scheduler.dot", URL="../scheduler/10_scheduler.svg"];
++    DispatcherGraph [label="scheduler dispatcher graphs", URL="../scheduler/dispatcher/11_dispatcher.svg"];
++    EventBusGraph [label="scheduler event_bus graphs", URL="../scheduler/event_bus/12_event_bus.svg"];
++    ContextGraph [label="context graphs\n20..41", URL="../context/20_context.svg"];
++    ObservabilityGraph [label="observability/70_observability.dot", URL="../observability/70_observability.svg"];
++  }
++
++  subgraph cluster_scheduler_authority {
++    label="Scheduler / policy / queue / dispatcher authority";
++    color="#512da8";
++    bgcolor="#ede7f6";
++    node [fillcolor="#ede7f6", color="#512da8"];
++
++    ComponentProxy [label="ComponentProxy"];
++    Scheduler [label="Scheduler.emit()"];
++    PolicyZone [label="PolicyEngine + zone\ndispatch authority"];
++    PriorityQueue [label="PriorityQueue"];
++    SchedulerRun [label="Scheduler.run()\nunchanged"];
++    Dispatcher [label="Dispatcher.dispatch()"];
++    RouteFilter [label="RouteDispatchFilterEnvelope\n0098\ndispatch filtering, not policy invention"];
++    RouteHandler [label="ControlProxySchedulerRouteRequestHandler\n0088"];
++  }
++
++  subgraph cluster_controlproxy_controlfs {
++    label="ControlProxy / ControlFS bounded subsystem";
++    color="#ef6c00";
++    bgcolor="#fff3e0";
++    node [fillcolor="#fff3e0", color="#ef6c00"];
++
++    ControlProxy [label="ControlProxy\nroute/control code"];
++    ControlFS [label="ControlFS\nUnix-state surface"];
++    SchedulerAdapter [label="handle_scheduler_route_request()\n0086 adapter"];
++    RouteHandshake [label="prepare_route_for_scheduler()\n0085"];
++    TickPump [label="tick_controlproxy()\n0084 importable pump"];
++    ActiveMaterializer [label="active route materializer\n0081"];
++    LeaseState [label="route lease state\nnot_leased -> leased -> active -> draining -> closed\n0083"];
++    GenerationTable [label="RouteGenerationTable\nroute_id -> current_generation\ng2/g3\n0091-r2"];
++    GenerationLock [label="RouteGenerationLock\nfcntl.flock\n0094"];
++    LockedMaterializer [label="locked materializer\nload -> verify -> materialize -> persist\n0095"];
++    Placement [label="RouteRuntimePlacementPolicy\nfile or /dev/shm explicit\n0096"];
++    GenerationLifecycle [label="RouteGenerationLifecycle\ncandidate -> active -> draining -> closed -> cleanup\n0092"];
++  }
++
++  subgraph cluster_mmap_runtime {
++    label="mmap / SHM route runtime";
++    color="#00695c";
++    bgcolor="#e0f2f1";
++    node [fillcolor="#e0f2f1", color="#00695c"];
++
++    RuntimeRoot [label="runtime_root\nfile or /dev/shm namespace"];
++    G1 [label="route@g1/ring.bin\nactive segment"];
++    G2 [label="route@g2/ring.bin\ncandidate generation"];
++    G3 [label="route@g3/ring.bin\nnext generation"];
++    MmapFixedSlotRoute [label="MmapFixedSlotRoute\n0080"];
++    RouteNotifier [label="RouteNotifier\neventfd/pipe\n0082"];
++    WriteNotifyDrain [label="RouteWriteNotifyDrain\nwrite -> notify -> selector -> drain\n0089"];
++  }
++
++  subgraph cluster_observation {
++    label="Observation and journal path";
++    color="#666666";
++    bgcolor="#f5f5f5";
++    node [fillcolor="#f5f5f5", color="#666666"];
++
++    ExistingEventBus [label="existing event.bus\nfacts only"];
++    ExistingContextBus [label="existing context.bus / snapshot\nread source"];
++    BusVizAdapter [label="existing-bus visualization adapter\nread tap only\n0093-r2"];
++    RouteMessageJournal [label="RouteMessageJournal\nJSONL deterministic\n0090"];
++    Recorder [label="Recorder / journal ingestion"];
++    ZFSArtifacts [label="ZFS artifacts\nlocal source of truth"];
++  }
++
++  subgraph cluster_context_authority {
++    label="Context authority and projection";
++    color="#0288d1";
++    bgcolor="#e1f5fe";
++    node [fillcolor="#e1f5fe", color="#0288d1"];
++
++    TaskContext [label="TaskContext\nauthority"];
++    ContextGate [label="ContextGate\nauthority"];
++    QdrantProjection [label="Qdrant\nprojection/search only"];
++  }
++
++  subgraph cluster_future_boundaries {
++    label="Future boundaries — not active in 0099";
++    color="#9e9e9e";
++    bgcolor="#fafafa";
++    node [fillcolor="#fafafa", color="#9e9e9e", style="rounded,filled,dashed"];
++
++    NetworkBridge [label="NetworkBridge\nfuture"];
++    HardwareBridge [label="HardwareBridge\nfuture"];
++    ClusterFabric [label="distributed cluster fabric\nfuture"];
++  }
++
++  RootGlobal -> SchedulerGraph [style=dotted, label="zoom"];
++  RootGlobal -> ContextGraph [style=dotted, label="zoom"];
++  RootGlobal -> ObservabilityGraph [style=dotted, label="zoom"];
++  RootGlobal -> ControlProxy [style=dashed, label="runtime overlay"];
++  SchedulerGraph -> ComponentProxy [style=dotted];
++  DispatcherGraph -> Dispatcher [style=dotted];
++  EventBusGraph -> ExistingEventBus [style=dotted];
++  ContextGraph -> TaskContext [style=dotted];
++  ObservabilityGraph -> Recorder [style=dotted];
++
++  ComponentProxy -> Scheduler [label="emit(Event / Request)"];
++  Scheduler -> PolicyZone [label="decide"];
++  PolicyZone -> PriorityQueue [label="allowed -> enqueue"];
++  PolicyZone -> ExistingEventBus [style=dashed, label="denied fact"];
++  PriorityQueue -> SchedulerRun [label="dequeue"];
++  SchedulerRun -> Dispatcher [label="dispatch loop unchanged"];
++  Dispatcher -> RouteFilter [label="handler input"];
++  RouteFilter -> RouteHandler [label="accepted envelope"];
++  RouteHandler -> ControlProxy [label="call bounded subsystem"];
++
++  ControlProxy -> SchedulerAdapter [label="Scheduler-facing adapter"];
++  SchedulerAdapter -> RouteHandshake [label="prepare"];
++  RouteHandshake -> TickPump [label="importable pump"];
++  TickPump -> ActiveMaterializer [label="materialize"];
++  ActiveMaterializer -> LeaseState [label="state"];
++  ActiveMaterializer -> GenerationTable [label="route generation"];
++  GenerationLock -> LockedMaterializer [label="protect critical section"];
++  GenerationTable -> LockedMaterializer [label="next_generation"];
++  Placement -> RuntimeRoot [label="resolve"];
++  LockedMaterializer -> RuntimeRoot [label="create candidate"];
++  LockedMaterializer -> GenerationLifecycle [label="persist state"];
++  ControlFS -> GenerationTable [label="generation_state.json"];
++  ControlFS -> LeaseState [label="status.json"];
++
++  RuntimeRoot -> G1;
++  RuntimeRoot -> G2;
++  RuntimeRoot -> G3;
++  G1 -> MmapFixedSlotRoute;
++  G2 -> MmapFixedSlotRoute;
++  G3 -> MmapFixedSlotRoute;
++  MmapFixedSlotRoute -> WriteNotifyDrain [label="write/drain"];
++  RouteNotifier -> WriteNotifyDrain [label="notify/drain fd"];
++  WriteNotifyDrain -> RouteMessageJournal [label="drained RouteMessage"];
++  RouteMessageJournal -> Recorder [label="ingest facts"];
++  Recorder -> ZFSArtifacts [label="persist"];
++  ExistingEventBus -> BusVizAdapter [style=dashed, label="read existing facts"];
++  ExistingContextBus -> BusVizAdapter [style=dashed, label="read existing snapshot"];
++
++  TaskContext -> ContextGate [label="gate"];
++  ContextGate -> ExistingContextBus [label="context facts"];
++  ContextGate -> QdrantProjection [style=dashed, label="projection/search only"];
++
++  ExistingEventBus -> Recorder [style=dashed, label="facts, not commands"];
++  ExistingEventBus -> ObservabilityGraph [style=dotted, label="observable"];
++  NetworkBridge -> ClusterFabric [style=dashed];
++  HardwareBridge -> ClusterFabric [style=dashed];
++  ClusterFabric -> RuntimeRoot [style=dashed, label="future only"];
++}
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0099.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0099.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0099.md
+@@ -0,0 +1,88 @@
++# ControlProxy operational plan — 0099 graph audit update
++
++## Status after 0098
++
++The ControlProxy route path now has enough runtime pieces to require a graph audit
++before adding more mechanics.
++
++Completed runtime line:
++
++```text
++0079 ControlProxy prepare/sizing + bus visibility
++0080 mmap fixed-slot route
++0081 active route materializer
++0082 RouteNotifier eventfd/pipe
++0083 route lease state
++0084 tick_controlproxy()
++0085 scheduler-facing prepare handshake
++0086 scheduler request/reply adapter
++0088 concrete scheduler handler
++0089 write -> notify -> selector -> drain
++0090 RouteMessage journal
++0091-r2 route generation table g2/g3
++0092 generation lifecycle cleanup
++0093-r2 existing bus visualization read tap
++0094 generation lock
++0095 locked materializer
++0096 explicit runtime placement
++0097 graph alignment
++0098 dispatch filter envelope
++0099 architecture graph inventory and runtime overlay
++```
++
++## Corrected interpretation
++
++The policy/zone mechanism is now described as dispatch filtering first:
++
++```text
++policy/zone dispatch filtering
++not a separate ControlProxy security authority
++```
++
++The mechanism is security-inspired, but its role here is to decide and constrain
++where work is dispatched.
++
++## Graph integration rule
++
++Every future runtime graph must answer four questions:
++
++1. Which root graph node owns the zoom?
++2. Which individual graph is being extended?
++3. Is this a command path or an observation path?
++4. Does the patch alter `Scheduler.run()` or only add a handler/use-case?
++
++If a graph cannot answer those questions, it is isolated and must not be added as
++an architectural authority.
++
++## Scheduler.run() release rule
++
++Do not modify `Scheduler.run()` yet.
++
++A future patch may propose a Scheduler.run() change only after a concrete handler
++shows that the current path cannot express the behavior:
++
++```text
++Scheduler.emit()
++-> PolicyEngine.decide()
++-> PriorityQueue
++-> Scheduler.run()
++-> Dispatcher
++-> Handler
++```
++
++Until that proof exists, the next coding work should compose around Dispatcher
++and handlers.
++
++## Proposed next steps
++
++0100 should integrate `RouteDispatchFilterEnvelope` into the 0088 handler path
++without changing Scheduler.run().
++
++0101 should add route-zone policy records if the existing PolicyEngine contract
++has a clean extension point.
++
++0102 should add a graph consistency test that reads the graph registry and
++ensures runtime graph files declare their root anchor.
++
++0103 can then revisit whether ControlProxy deserves a package-level facade class
++or remains a small set of cooperating classes under `src/runtime/`.
+diff --git a/doc/manifests/MANIFEST_0099_CHANGED_FILES.md b/doc/manifests/MANIFEST_0099_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0099_CHANGED_FILES.md
+@@ -0,0 +1,23 @@
++# Manifest 0099 — architecture graph inventory
++
++## Added
++
++```text
++doc/architecture/GRAPH_ARCHITECTURE_AUDIT_0099.md
++doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0099.md
++doc/docs/architecture/runtime/90_controlproxy_runtime_overlay.dot
++doc/manifests/MANIFEST_0099_CHANGED_FILES.md
++tests/rules/test_architecture_graph_inventory_0099_rule.py
++PHASE0099_TEST_REPORT.md
++```
++
++## Intent
++
++0099 performs the graph audit requested after 0098. It records how the
++ControlProxy runtime graph attaches to the existing root graph family and checks
++that the runtime path is represented as a subgraph/overlay, not as an isolated
++authority.
++
++## Kernel loop impact
++
++0099 does not change the kernel loop, queue, dispatcher, or component contract.
+diff --git a/tests/rules/test_architecture_graph_inventory_0099_rule.py b/tests/rules/test_architecture_graph_inventory_0099_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_architecture_graph_inventory_0099_rule.py
+@@ -0,0 +1,123 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++AUDIT = ROOT / "doc" / "architecture" / "GRAPH_ARCHITECTURE_AUDIT_0099.md"
++PLAN = ROOT / "doc" / "architecture" / "CONTROLPROXY_OPERATIONAL_PLAN_0099.md"
++DOT = ROOT / "doc" / "docs" / "architecture" / "runtime" / "90_controlproxy_runtime_overlay.dot"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0099_CHANGED_FILES.md"
++
++
++def _read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_0099_graph_audit_files_exist() -> None:
++    assert AUDIT.exists()
++    assert PLAN.exists()
++    assert DOT.exists()
++    assert MANIFEST.exists()
++
++
++def test_0099_audit_names_root_and_individual_graph_families() -> None:
++    text = _read(AUDIT)
++    required = [
++        "doc/docs/architecture/00_global.dot",
++        "scheduler/10_scheduler.dot",
++        "scheduler/dispatcher/",
++        "scheduler/event_bus/",
++        "scheduler/priority_queue/",
++        "scheduler/component_proxy/",
++        "context/20_context.dot",
++        "context/36_local_context_loop_design.dot",
++        "services/30_services.dot",
++        "experts/40_experts.dot",
++        "validation/50_validation.dot",
++        "learning/60_learning.dot",
++        "observability/70_observability.dot",
++        "runtime/90_controlproxy_runtime_overlay.dot",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0099_overlay_is_attached_not_isolated() -> None:
++    text = _read(AUDIT) + "\n" + _read(DOT)
++    required = [
++        "root-attached runtime overlay",
++        "not an isolated island",
++        "ROOT_GRAPH: doc/docs/architecture/00_global.dot",
++        "RootGlobal -> ControlProxy",
++        "SchedulerGraph -> ComponentProxy",
++        "DispatcherGraph -> Dispatcher",
++        "EventBusGraph -> ExistingEventBus",
++        "ContextGraph -> TaskContext",
++        "ObservabilityGraph -> Recorder",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0099_overlay_covers_controlproxy_phases() -> None:
++    text = _read(DOT)
++    required = [
++        "ControlProxySchedulerRouteRequestHandler",
++        "handle_scheduler_route_request()",
++        "prepare_route_for_scheduler()",
++        "tick_controlproxy()",
++        "active route materializer",
++        "route lease state",
++        "RouteGenerationTable",
++        "route_id -> current_generation",
++        "RouteGenerationLock",
++        "locked materializer",
++        "RouteRuntimePlacementPolicy",
++        "RouteGenerationLifecycle",
++        "RouteNotifier",
++        "RouteWriteNotifyDrain",
++        "RouteMessageJournal",
++        "existing-bus visualization adapter",
++        "RouteDispatchFilterEnvelope",
++        "g2/g3",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0099_dispatch_filtering_language_is_not_security_authority() -> None:
++    text = _read(AUDIT) + "\n" + _read(PLAN) + "\n" + _read(DOT)
++    required = [
++        "dispatch filtering",
++        "not policy invention",
++        "not a separate ControlProxy security authority",
++        "Scheduler/policy/zone remain the dispatch authority",
++        "facts, not commands",
++        "Qdrant\\nprojection/search only",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0099_scheduler_run_constraint_remains_documented() -> None:
++    text = _read(AUDIT) + "\n" + _read(PLAN)
++    required = [
++        "Do not release the `Scheduler.run()` constraint yet.",
++        "Do not modify `Scheduler.run()` yet.",
++        "Scheduler.emit()",
++        "PolicyEngine.decide()",
++        "PriorityQueue",
++        "Scheduler.run()",
++        "Dispatcher",
++        "Handler",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0099_manifest_stays_doc_and_rule_only() -> None:
++    text = _read(MANIFEST)
++    assert "src/kernel/scheduler.py" not in text
++    assert "src/kernel/queue.py" not in text
++    assert "src/kernel/dispatcher.py" not in text
++    assert "src/contracts/component.py" not in text
++    assert "doc/docs/architecture/runtime/90_controlproxy_runtime_overlay.dot" in text
++    assert "tests/rules/test_architecture_graph_inventory_0099_rule.py" in text
+diff --git a/PHASE0099_TEST_REPORT.md b/PHASE0099_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/PHASE0099_TEST_REPORT.md
+@@ -0,0 +1,26 @@
++# Phase 0099 test report
++
++```text
++phase: 0099
++name: architecture_graph_inventory
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: graph audit and documentation-only overlay; no new runtime technique
++```
++
++## Intended validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/rules/test_architecture_graph_inventory_0099_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Local generation validation
++
++This patch is documentation and rule-test only. It adds no runtime dependency,
++CLI, service, daemon, watcher, OpenRC unit, Qdrant path, LLM path or OpenVINO
++path.
++
++The added Python rule test compiles successfully in isolation.

@@ -1,0 +1,590 @@
+diff --git a/doc/architecture/INPROCESS_RING_BUFFER_MODEL.md b/doc/architecture/INPROCESS_RING_BUFFER_MODEL.md
+new file mode 100644
+index 0000000..c9516fb
+--- /dev/null
++++ b/doc/architecture/INPROCESS_RING_BUFFER_MODEL.md
+@@ -0,0 +1,84 @@
++# In-process ring buffer model
++
++Status: 0076 model only.
++
++This phase introduces a tiny in-process ring buffer model for validated `RouteMessage` objects.
++
++It is not `/dev/shm`. It is not `mmap`. It is not a daemon.
++
++## Goal
++
++Test the future ring-buffer rules before touching kernel IPC:
++
++```text
++bounded capacity
++FIFO ordering
++monotonic sequence
++explicit overflow behavior
++no silent overwrite
++validated RouteMessage at boundary
++```
++
++## Overflow policies
++
++Supported policies:
++
++```text
++reject
++drop_oldest
++```
++
++`reject` raises an explicit overflow error.
++
++`drop_oldest` explicitly drops the oldest unread slot and increments `dropped_count`.
++
++There is no silent overwrite.
++
++## Route runtime model
++
++The route runtime is a route registry:
++
++```text
++route_id -> InProcessRingBuffer
++```
++
++It accepts only validated `missipy.shm.route_message.v1` messages.
++
++## CLI
++
++```bash
++PYTHONPATH=src:. python tools/replay_fake_routes_to_ring.py \
++  .var/baby_fork_fake_runtime \
++  --capacity 4
++```
++
++## Non-goals
++
++This phase does not add:
++
++```text
++real shared memory
++mmap
++semaphores
++eventfd
++futex
++RouteProxy daemon
++ControlFS watcher
++Scheduler wiring
++thread/process safety
++NetworkBridge
++HardwareBridge
++cluster dispatch
++```
++
++## Future implementation path
++
++Next steps:
++
++```text
++1. keep this model as behavioral reference
++2. add byte-frame codec for RouteMessage
++3. test frame encode/decode independently
++4. then build file-backed mmap prototype in tmpfs
++5. then move to /dev/shm route directories
++```
+diff --git a/doc/changelog/0076-inprocess-ring-buffer-model.md b/doc/changelog/0076-inprocess-ring-buffer-model.md
+new file mode 100644
+index 0000000..6f08810
+--- /dev/null
++++ b/doc/changelog/0076-inprocess-ring-buffer-model.md
+@@ -0,0 +1,29 @@
++# 0076 - In-process ring buffer model
++
++## Added
++
++- `runtime.inprocess_ring_buffer`
++- `InProcessRingBuffer`
++- `InProcessRouteRuntime`
++- explicit overflow policies:
++  - `reject`
++  - `drop_oldest`
++- monotonic slot sequence
++- ring stats
++- CLI tool `tools/replay_fake_routes_to_ring.py`
++- tests for ordering, capacity and overflow
++- rule tests locking model-only scope
++
++## Not added
++
++- No real shared memory.
++- No mmap.
++- No semaphores.
++- No eventfd/futex.
++- No RouteProxy daemon.
++- No ControlFS watcher.
++- No Scheduler wiring.
++- No thread/process safety.
++- No NetworkBridge.
++- No HardwareBridge.
++- No cluster dispatch.
+diff --git a/src/runtime/inprocess_ring_buffer.py b/src/runtime/inprocess_ring_buffer.py
+new file mode 100644
+index 0000000..163c4a6
+--- /dev/null
++++ b/src/runtime/inprocess_ring_buffer.py
+@@ -0,0 +1,227 @@
++"""In-process ring buffer model for RouteMessage flow.
++
++This module implements phase 0076.
++
++It deliberately does not:
++- create shared memory
++- use mmap
++- create semaphores
++- use eventfd
++- use futex
++- implement a RouteProxy daemon
++- watch ControlFS
++- call Scheduler
++- provide thread/process safety
++- implement NetworkBridge or HardwareBridge
++
++It only models bounded ring behavior in-process using validated RouteMessage
++objects, so the runtime can test ordering, capacity and explicit overflow
++semantics before real /dev/shm transport exists.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from typing import Any, Literal, Mapping
++
++from runtime.shm_runtime_schema import RouteMessage, parse_runtime_message
++
++
++OverflowPolicy = Literal["reject", "drop_oldest"]
++
++
++class RingBufferError(RuntimeError):
++    """Base error for in-process ring buffer failures."""
++
++
++class RingBufferOverflowError(RingBufferError):
++    """Raised when a ring buffer is full and overflow policy is reject."""
++
++
++@dataclass(frozen=True)
++class RingSlot:
++    """One message slot in the in-process ring model."""
++
++    sequence: int
++    message: RouteMessage
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "sequence": self.sequence,
++            "message": self.message.to_mapping(),
++        }
++
++
++@dataclass(frozen=True)
++class RingBufferStats:
++    """Current in-process ring buffer stats."""
++
++    capacity: int
++    occupancy: int
++    write_sequence: int
++    read_sequence: int
++    dropped_count: int
++    overflow_policy: str
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "capacity": self.capacity,
++            "occupancy": self.occupancy,
++            "write_sequence": self.write_sequence,
++            "read_sequence": self.read_sequence,
++            "dropped_count": self.dropped_count,
++            "overflow_policy": self.overflow_policy,
++        }
++
++
++class InProcessRingBuffer:
++    """Bounded in-process ring for validated RouteMessage objects.
++
++    The model is intentionally small and deterministic:
++
++    - single producer / single consumer assumption
++    - no blocking
++    - no concurrency guarantees
++    - explicit overflow policy
++    - no silent overwrite
++    """
++
++    def __init__(self, capacity: int, *, overflow_policy: OverflowPolicy = "reject"):
++        if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity < 1:
++            raise ValueError("capacity must be a positive integer")
++        if overflow_policy not in ("reject", "drop_oldest"):
++            raise ValueError("overflow_policy must be 'reject' or 'drop_oldest'")
++
++        self.capacity = capacity
++        self.overflow_policy: OverflowPolicy = overflow_policy
++        self._slots: list[RingSlot] = []
++        self._next_sequence = 0
++        self._read_sequence = 0
++        self._dropped_count = 0
++
++    def write(self, message: RouteMessage | Mapping[str, Any]) -> RingSlot:
++        """Validate and write a RouteMessage into the ring.
++
++        If the ring is full:
++        - reject: raise RingBufferOverflowError
++        - drop_oldest: explicitly drop the oldest unread slot
++        """
++
++        route_message = _route_message(message)
++
++        if len(self._slots) >= self.capacity:
++            if self.overflow_policy == "reject":
++                raise RingBufferOverflowError("ring buffer is full")
++            dropped = self._slots.pop(0)
++            self._dropped_count += 1
++            self._read_sequence = max(self._read_sequence, dropped.sequence + 1)
++
++        slot = RingSlot(sequence=self._next_sequence, message=route_message)
++        self._slots.append(slot)
++        self._next_sequence += 1
++        return slot
++
++    def peek(self, max_items: int | None = None) -> tuple[RingSlot, ...]:
++        """Read slots without consuming them."""
++
++        if max_items is None:
++            return tuple(self._slots)
++        if max_items < 0:
++            raise ValueError("max_items must be non-negative")
++        return tuple(self._slots[:max_items])
++
++    def drain(self, max_items: int | None = None) -> tuple[RingSlot, ...]:
++        """Read and consume slots in FIFO order."""
++
++        if max_items is None:
++            count = len(self._slots)
++        else:
++            if max_items < 0:
++                raise ValueError("max_items must be non-negative")
++            count = min(max_items, len(self._slots))
++
++        drained = tuple(self._slots[:count])
++        del self._slots[:count]
++
++        if drained:
++            self._read_sequence = drained[-1].sequence + 1
++
++        return drained
++
++    def clear(self) -> None:
++        """Remove all buffered messages."""
++
++        if self._slots:
++            self._read_sequence = self._slots[-1].sequence + 1
++        self._slots.clear()
++
++    def stats(self) -> RingBufferStats:
++        """Return current ring stats."""
++
++        return RingBufferStats(
++            capacity=self.capacity,
++            occupancy=len(self._slots),
++            write_sequence=self._next_sequence,
++            read_sequence=self._read_sequence,
++            dropped_count=self._dropped_count,
++            overflow_policy=self.overflow_policy,
++        )
++
++
++class InProcessRouteRuntime:
++    """Small route_id -> InProcessRingBuffer registry.
++
++    This is still an in-process model, not a RouteProxy materialization layer.
++    """
++
++    def __init__(self, *, route_capacity: int = 16, overflow_policy: OverflowPolicy = "reject"):
++        if not isinstance(route_capacity, int) or isinstance(route_capacity, bool) or route_capacity < 1:
++            raise ValueError("route_capacity must be a positive integer")
++        self.route_capacity = route_capacity
++        self.overflow_policy: OverflowPolicy = overflow_policy
++        self._routes: dict[str, InProcessRingBuffer] = {}
++
++    def route_ids(self) -> tuple[str, ...]:
++        """Return known route IDs."""
++
++        return tuple(sorted(self._routes))
++
++    def ensure_route(self, route_id: str) -> InProcessRingBuffer:
++        """Create or return a route buffer."""
++
++        if "/" in route_id or "\\" in route_id or ".." in route_id or not route_id:
++            raise ValueError("route_id must be a logical route id, not a path")
++        if route_id not in self._routes:
++            self._routes[route_id] = InProcessRingBuffer(
++                self.route_capacity,
++                overflow_policy=self.overflow_policy,
++            )
++        return self._routes[route_id]
++
++    def send(self, message: RouteMessage | Mapping[str, Any]) -> RingSlot:
++        """Write a RouteMessage to the matching route buffer."""
++
++        route_message = _route_message(message)
++        return self.ensure_route(route_message.route_id).write(route_message)
++
++    def drain_route(self, route_id: str, max_items: int | None = None) -> tuple[RingSlot, ...]:
++        """Drain one route buffer."""
++
++        return self.ensure_route(route_id).drain(max_items=max_items)
++
++    def stats(self) -> dict[str, dict[str, Any]]:
++        """Return stats for all route buffers."""
++
++        return {
++            route_id: self._routes[route_id].stats().to_mapping()
++            for route_id in self.route_ids()
++        }
++
++
++def _route_message(message: RouteMessage | Mapping[str, Any]) -> RouteMessage:
++    if isinstance(message, RouteMessage):
++        return message
++    parsed = parse_runtime_message(message)
++    if not isinstance(parsed, RouteMessage):
++        raise TypeError(f"expected RouteMessage, got {type(parsed).__name__}")
++    return parsed
+diff --git a/tests/rules/test_inprocess_ring_buffer_model_rule.py b/tests/rules/test_inprocess_ring_buffer_model_rule.py
+new file mode 100644
+index 0000000..fb681ac
+--- /dev/null
++++ b/tests/rules/test_inprocess_ring_buffer_model_rule.py
+@@ -0,0 +1,63 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "INPROCESS_RING_BUFFER_MODEL.md"
++MODULE = ROOT / "src" / "runtime" / "inprocess_ring_buffer.py"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing file: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_inprocess_ring_buffer_doc_locks_model_only_scope() -> None:
++    text = _read(DOC)
++
++    required_phrases = [
++        "Status: 0076 model only.",
++        "bounded capacity",
++        "FIFO ordering",
++        "monotonic sequence",
++        "explicit overflow behavior",
++        "no silent overwrite",
++        "validated RouteMessage",
++        "reject",
++        "drop_oldest",
++        "real shared memory",
++        "mmap",
++        "semaphores",
++        "eventfd",
++        "futex",
++        "RouteProxy daemon",
++        "ControlFS watcher",
++        "Scheduler wiring",
++        "thread/process safety",
++        "NetworkBridge",
++        "HardwareBridge",
++        "cluster dispatch",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_inprocess_ring_buffer_module_is_not_ipc() -> None:
++    text = _read(MODULE)
++
++    required_phrases = [
++        "It only models bounded ring behavior in-process",
++        "create shared memory",
++        "use mmap",
++        "create semaphores",
++        "use eventfd",
++        "use futex",
++        "implement a RouteProxy daemon",
++        "watch ControlFS",
++        "call Scheduler",
++        "provide thread/process safety",
++        "implement NetworkBridge or HardwareBridge",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
+diff --git a/tests/test_inprocess_ring_buffer.py b/tests/test_inprocess_ring_buffer.py
+new file mode 100644
+index 0000000..e991db7
+--- /dev/null
++++ b/tests/test_inprocess_ring_buffer.py
+@@ -0,0 +1,96 @@
++import pytest
++
++from runtime.inprocess_ring_buffer import (
++    InProcessRingBuffer,
++    InProcessRouteRuntime,
++    RingBufferOverflowError,
++)
++from runtime.shm_runtime_schema import ROUTE_MESSAGE_SCHEMA
++
++
++def _route_message(message_id: str = "msg-001", route_id: str = "baby_fork.retrieval") -> dict:
++    return {
++        "schema": ROUTE_MESSAGE_SCHEMA,
++        "route_id": route_id,
++        "message_id": message_id,
++        "kind": "reply",
++        "source": "retrieval_worker",
++        "target": "scheduler",
++        "occurred_at": "2026-07-04T20:00:00Z",
++        "payload_schema": "missipy.baby_fork.route_reply.v1",
++        "payload": {"context_id": "ctx-baby-fork-001"},
++    }
++
++
++def test_ring_buffer_preserves_fifo_order_and_sequences() -> None:
++    ring = InProcessRingBuffer(capacity=3)
++
++    ring.write(_route_message("msg-001"))
++    ring.write(_route_message("msg-002"))
++    ring.write(_route_message("msg-003"))
++
++    drained = ring.drain()
++
++    assert [slot.sequence for slot in drained] == [0, 1, 2]
++    assert [slot.message.message_id for slot in drained] == ["msg-001", "msg-002", "msg-003"]
++    assert ring.stats().occupancy == 0
++    assert ring.stats().read_sequence == 3
++    assert ring.stats().write_sequence == 3
++
++
++def test_ring_buffer_rejects_overflow_by_default() -> None:
++    ring = InProcessRingBuffer(capacity=1)
++
++    ring.write(_route_message("msg-001"))
++
++    with pytest.raises(RingBufferOverflowError):
++        ring.write(_route_message("msg-002"))
++
++    assert ring.stats().occupancy == 1
++    assert ring.stats().dropped_count == 0
++
++
++def test_ring_buffer_drop_oldest_is_explicit_and_counted() -> None:
++    ring = InProcessRingBuffer(capacity=2, overflow_policy="drop_oldest")
++
++    ring.write(_route_message("msg-001"))
++    ring.write(_route_message("msg-002"))
++    ring.write(_route_message("msg-003"))
++
++    drained = ring.drain()
++
++    assert [slot.message.message_id for slot in drained] == ["msg-002", "msg-003"]
++    assert ring.stats().dropped_count == 1
++    assert ring.stats().read_sequence == 3
++
++
++def test_route_runtime_sends_to_route_specific_buffers() -> None:
++    runtime = InProcessRouteRuntime(route_capacity=2)
++
++    runtime.send(_route_message("msg-001", "baby_fork.retrieval"))
++    runtime.send(_route_message("msg-002", "baby_fork.variant_stub"))
++
++    assert runtime.route_ids() == ("baby_fork.retrieval", "baby_fork.variant_stub")
++    assert runtime.stats()["baby_fork.retrieval"]["occupancy"] == 1
++    assert runtime.stats()["baby_fork.variant_stub"]["occupancy"] == 1
++
++    retrieved = runtime.drain_route("baby_fork.retrieval")
++    assert retrieved[0].message.message_id == "msg-001"
++
++
++def test_ring_rejects_non_route_message_mapping() -> None:
++    ring = InProcessRingBuffer(capacity=1)
++
++    with pytest.raises(TypeError):
++        ring.write({
++            "schema": "missipy.shm.data_handle.v1",
++            "handle_id": "h1",
++            "storage": "zfs",
++            "uri": "zfs://example",
++            "content_schema": "missipy.example.v1",
++            "size_bytes": 1,
++            "hash": "sha256:abc",
++            "producer": "test",
++            "zone": "workers",
++            "created_at": "2026-07-04T20:00:00Z",
++        })
+diff --git a/tools/replay_fake_routes_to_ring.py b/tools/replay_fake_routes_to_ring.py
+new file mode 100644
+index 0000000..a875582
+--- /dev/null
++++ b/tools/replay_fake_routes_to_ring.py
+@@ -0,0 +1,55 @@
++#!/usr/bin/env python3
++"""Replay fake runtime route messages into an in-process ring runtime.
++
++Usage:
++
++    PYTHONPATH=src:. python tools/replay_fake_routes_to_ring.py \
++      .var/baby_fork_fake_runtime \
++      --capacity 4
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++
++from runtime.fake_route_transport import FakeLocalRouteTransport
++from runtime.inprocess_ring_buffer import InProcessRouteRuntime, RingBufferOverflowError
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Replay fake route messages into in-process ring buffers.")
++    parser.add_argument("fake_runtime_root", type=Path)
++    parser.add_argument("--capacity", type=int, default=4)
++    parser.add_argument("--overflow-policy", choices=("reject", "drop_oldest"), default="reject")
++    args = parser.parse_args(argv)
++
++    fake = FakeLocalRouteTransport(args.fake_runtime_root)
++    runtime = InProcessRouteRuntime(
++        route_capacity=args.capacity,
++        overflow_policy=args.overflow_policy,
++    )
++
++    sent = 0
++    errors: list[dict[str, str]] = []
++
++    for route_id in fake.route_ids():
++        for message in fake.receive(route_id):
++            try:
++                runtime.send(message)
++                sent += 1
++            except RingBufferOverflowError as exc:
++                errors.append({"route_id": route_id, "error": str(exc)})
++
++    print(json.dumps({
++        "sent": sent,
++        "errors": errors,
++        "stats": runtime.stats(),
++    }, indent=2, sort_keys=True))
++
++    return 1 if errors else 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

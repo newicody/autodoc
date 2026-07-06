@@ -1,0 +1,549 @@
+diff --git a/doc/architecture/ROUTE_MESSAGE_FRAME_CODEC.md b/doc/architecture/ROUTE_MESSAGE_FRAME_CODEC.md
+new file mode 100644
+index 0000000..c5f5036
+--- /dev/null
++++ b/doc/architecture/ROUTE_MESSAGE_FRAME_CODEC.md
+@@ -0,0 +1,93 @@
++# RouteMessage frame codec
++
++Status: 0077 codec only.
++
++This phase adds a byte-level frame codec for validated `RouteMessage` payloads.
++
++It is not shared memory. It is not `mmap`. It is not a ring buffer implementation.
++
++## Goal
++
++Prepare the future SHM transport by proving this transformation:
++
++```text
++RouteMessage object
++-> deterministic payload bytes
++-> binary frame
++-> decode
++-> validated RouteMessage object
++```
++
++## Frame header
++
++The first frame version uses a fixed header:
++
++```text
++magic          8 bytes
++version        uint16
++flags          uint16
++header_size    uint32
++payload_size   uint32
++payload_sha256 32 bytes
++```
++
++Payload is canonical JSON for now.
++
++The binary wrapper already checks:
++
++```text
++magic
++version
++header size
++frame length
++payload SHA-256
++RouteMessage schema validation
++```
++
++## CLI
++
++```bash
++PYTHONPATH=src:. python tools/roundtrip_route_frame.py \
++  .var/baby_fork_fake_runtime \
++  --route-id baby_fork.variant_stub
++```
++
++## Relationship to the ring model
++
++Phase 0076 models ring behavior with Python objects.
++
++Phase 0077 models the byte frame that a future ring can store.
++
++The future ring can later move from object slots to byte frames.
++
++## Non-goals
++
++This phase does not add:
++
++```text
++real shared memory
++mmap
++semaphores
++eventfd
++futex
++ring buffer implementation
++RouteProxy daemon
++ControlFS watcher
++Scheduler wiring
++zero-copy transport
++NetworkBridge
++HardwareBridge
++cluster dispatch
++```
++
++## Future implementation path
++
++Recommended next steps:
++
++```text
++1. integrate frame codec with in-process ring model
++2. add frame size limits
++3. add byte capacity accounting
++4. then prototype mmap file-backed ring
++5. then move to /dev/shm route directories
++```
+diff --git a/doc/changelog/0077-route-message-frame-codec.md b/doc/changelog/0077-route-message-frame-codec.md
+new file mode 100644
+index 0000000..fdff237
+--- /dev/null
++++ b/doc/changelog/0077-route-message-frame-codec.md
+@@ -0,0 +1,27 @@
++# 0077 - RouteMessage frame codec
++
++## Added
++
++- `runtime.route_frame_codec`
++- fixed binary frame header
++- deterministic RouteMessage JSON payload
++- SHA-256 payload validation
++- decode-time RouteMessage schema validation
++- CLI `tools/roundtrip_route_frame.py`
++- tests for roundtrip, corruption and schema rejection
++- rule tests locking codec-only scope
++
++## Not added
++
++- No real shared memory.
++- No mmap.
++- No semaphores.
++- No eventfd/futex.
++- No ring buffer implementation.
++- No RouteProxy daemon.
++- No ControlFS watcher.
++- No Scheduler wiring.
++- No zero-copy transport.
++- No NetworkBridge.
++- No HardwareBridge.
++- No cluster dispatch.
+diff --git a/src/runtime/route_frame_codec.py b/src/runtime/route_frame_codec.py
+new file mode 100644
+index 0000000..7b5a42c
+--- /dev/null
++++ b/src/runtime/route_frame_codec.py
+@@ -0,0 +1,189 @@
++"""Byte-level RouteMessage frame codec.
++
++This module implements phase 0077.
++
++It deliberately does not:
++- create shared memory
++- use mmap
++- create semaphores
++- use eventfd
++- use futex
++- implement a ring buffer
++- start RouteProxy
++- watch ControlFS
++- call Scheduler
++- provide zero-copy transport
++- implement NetworkBridge or HardwareBridge
++
++It only encodes a validated RouteMessage into a deterministic bytes frame and
++decodes that frame back into a validated RouteMessage.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++import hashlib
++import json
++import struct
++from typing import Any, Mapping
++
++from runtime.shm_runtime_schema import ROUTE_MESSAGE_SCHEMA, RouteMessage, parse_runtime_message
++
++
++FRAME_MAGIC = b"MSPYRTF1"
++FRAME_VERSION = 1
++FRAME_HEADER_FORMAT = ">8sHHII32s"
++FRAME_HEADER_SIZE = struct.calcsize(FRAME_HEADER_FORMAT)
++FRAME_SCHEMA = "missipy.shm.route_frame.v1"
++
++
++class RouteFrameError(ValueError):
++    """Base error for route frame codec failures."""
++
++
++class RouteFrameDecodeError(RouteFrameError):
++    """Raised when a route frame cannot be decoded or validated."""
++
++
++@dataclass(frozen=True)
++class RouteFrameHeader:
++    """Fixed route frame header."""
++
++    magic: bytes
++    version: int
++    flags: int
++    header_size: int
++    payload_size: int
++    payload_sha256: str
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "magic": self.magic.decode("ascii", errors="replace"),
++            "version": self.version,
++            "flags": self.flags,
++            "header_size": self.header_size,
++            "payload_size": self.payload_size,
++            "payload_sha256": self.payload_sha256,
++        }
++
++
++@dataclass(frozen=True)
++class RouteFrame:
++    """Decoded route frame with validated RouteMessage payload."""
++
++    schema: str
++    header: RouteFrameHeader
++    message: RouteMessage
++    payload_bytes: bytes
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "header": self.header.to_mapping(),
++            "message": self.message.to_mapping(),
++        }
++
++
++def encode_route_message_frame(message: RouteMessage | Mapping[str, Any], *, flags: int = 0) -> bytes:
++    """Encode a validated RouteMessage into a deterministic bytes frame.
++
++    The payload is canonical JSON for now. The frame wrapper is binary and
++    already checks magic, version, size and SHA-256 during decode.
++    """
++
++    if not isinstance(flags, int) or isinstance(flags, bool) or flags < 0 or flags > 0xFFFF:
++        raise ValueError("flags must be an integer in range 0..65535")
++
++    route_message = _route_message(message)
++    payload = _canonical_payload(route_message)
++    digest = hashlib.sha256(payload).digest()
++
++    header = struct.pack(
++        FRAME_HEADER_FORMAT,
++        FRAME_MAGIC,
++        FRAME_VERSION,
++        flags,
++        FRAME_HEADER_SIZE,
++        len(payload),
++        digest,
++    )
++    return header + payload
++
++
++def decode_route_message_frame(frame: bytes | bytearray | memoryview) -> RouteFrame:
++    """Decode a route frame and validate its RouteMessage payload."""
++
++    data = bytes(frame)
++    if len(data) < FRAME_HEADER_SIZE:
++        raise RouteFrameDecodeError("frame is shorter than header")
++
++    magic, version, flags, header_size, payload_size, digest = struct.unpack(
++        FRAME_HEADER_FORMAT,
++        data[:FRAME_HEADER_SIZE],
++    )
++
++    if magic != FRAME_MAGIC:
++        raise RouteFrameDecodeError("invalid frame magic")
++    if version != FRAME_VERSION:
++        raise RouteFrameDecodeError(f"unsupported frame version: {version}")
++    if header_size != FRAME_HEADER_SIZE:
++        raise RouteFrameDecodeError(f"unsupported header size: {header_size}")
++
++    expected_size = header_size + payload_size
++    if len(data) != expected_size:
++        raise RouteFrameDecodeError(
++            f"invalid frame length: got {len(data)}, expected {expected_size}"
++        )
++
++    payload = data[header_size:]
++    if hashlib.sha256(payload).digest() != digest:
++        raise RouteFrameDecodeError("payload SHA-256 mismatch")
++
++    try:
++        raw = json.loads(payload.decode("utf-8"))
++    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
++        raise RouteFrameDecodeError(f"invalid payload JSON: {exc}") from exc
++
++    parsed = parse_runtime_message(raw)
++    if not isinstance(parsed, RouteMessage):
++        raise RouteFrameDecodeError(f"expected RouteMessage payload, got {type(parsed).__name__}")
++
++    if parsed.schema != ROUTE_MESSAGE_SCHEMA:
++        raise RouteFrameDecodeError(f"unexpected route message schema: {parsed.schema}")
++
++    return RouteFrame(
++        schema=FRAME_SCHEMA,
++        header=RouteFrameHeader(
++            magic=magic,
++            version=version,
++            flags=flags,
++            header_size=header_size,
++            payload_size=payload_size,
++            payload_sha256="sha256:" + digest.hex(),
++        ),
++        message=parsed,
++        payload_bytes=payload,
++    )
++
++
++def inspect_route_message_frame(frame: bytes | bytearray | memoryview) -> dict[str, Any]:
++    """Decode a frame and return a JSON-serializable inspection mapping."""
++
++    return decode_route_message_frame(frame).to_mapping()
++
++
++def _route_message(message: RouteMessage | Mapping[str, Any]) -> RouteMessage:
++    if isinstance(message, RouteMessage):
++        return message
++    parsed = parse_runtime_message(message)
++    if not isinstance(parsed, RouteMessage):
++        raise TypeError(f"expected RouteMessage, got {type(parsed).__name__}")
++    return parsed
++
++
++def _canonical_payload(message: RouteMessage) -> bytes:
++    return json.dumps(
++        message.to_mapping(),
++        sort_keys=True,
++        separators=(",", ":"),
++    ).encode("utf-8")
+diff --git a/tests/rules/test_route_message_frame_codec_rule.py b/tests/rules/test_route_message_frame_codec_rule.py
+new file mode 100644
+index 0000000..9180588
+--- /dev/null
++++ b/tests/rules/test_route_message_frame_codec_rule.py
+@@ -0,0 +1,64 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "ROUTE_MESSAGE_FRAME_CODEC.md"
++MODULE = ROOT / "src" / "runtime" / "route_frame_codec.py"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing file: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_route_message_frame_codec_doc_locks_codec_only_scope() -> None:
++    text = _read(DOC)
++
++    required_phrases = [
++        "Status: 0077 codec only.",
++        "RouteMessage object",
++        "deterministic payload bytes",
++        "binary frame",
++        "validated RouteMessage object",
++        "magic",
++        "payload SHA-256",
++        "RouteMessage schema validation",
++        "real shared memory",
++        "mmap",
++        "semaphores",
++        "eventfd",
++        "futex",
++        "ring buffer implementation",
++        "RouteProxy daemon",
++        "ControlFS watcher",
++        "Scheduler wiring",
++        "zero-copy transport",
++        "NetworkBridge",
++        "HardwareBridge",
++        "cluster dispatch",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_route_message_frame_codec_module_is_codec_only() -> None:
++    text = _read(MODULE)
++
++    required_phrases = [
++        "It only encodes a validated RouteMessage",
++        "create shared memory",
++        "use mmap",
++        "create semaphores",
++        "use eventfd",
++        "use futex",
++        "implement a ring buffer",
++        "start RouteProxy",
++        "watch ControlFS",
++        "call Scheduler",
++        "provide zero-copy transport",
++        "implement NetworkBridge or HardwareBridge",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
+diff --git a/tests/test_route_frame_codec.py b/tests/test_route_frame_codec.py
+new file mode 100644
+index 0000000..1295e72
+--- /dev/null
++++ b/tests/test_route_frame_codec.py
+@@ -0,0 +1,89 @@
++import pytest
++
++from runtime.route_frame_codec import (
++    FRAME_HEADER_SIZE,
++    FRAME_MAGIC,
++    FRAME_SCHEMA,
++    RouteFrameDecodeError,
++    decode_route_message_frame,
++    encode_route_message_frame,
++)
++from runtime.shm_runtime_schema import ROUTE_MESSAGE_SCHEMA
++
++
++def _route_message(message_id: str = "msg-001") -> dict:
++    return {
++        "schema": ROUTE_MESSAGE_SCHEMA,
++        "route_id": "baby_fork.variant_stub",
++        "message_id": message_id,
++        "kind": "event",
++        "source": "variant_generator_stub",
++        "target": "scheduler",
++        "occurred_at": "2026-07-04T20:00:00Z",
++        "payload_schema": "missipy.baby_fork.variants_generated.v1",
++        "payload": {
++            "context_id": "ctx-baby-fork-001",
++            "variant_count": 2,
++            "variant_ids": ["variant-1", "variant-2"],
++        },
++    }
++
++
++def test_route_frame_roundtrip_validates_route_message() -> None:
++    encoded = encode_route_message_frame(_route_message())
++    decoded = decode_route_message_frame(encoded)
++
++    assert encoded.startswith(FRAME_MAGIC)
++    assert decoded.schema == FRAME_SCHEMA
++    assert decoded.header.header_size == FRAME_HEADER_SIZE
++    assert decoded.header.payload_size == len(decoded.payload_bytes)
++    assert decoded.header.payload_sha256.startswith("sha256:")
++    assert decoded.message.route_id == "baby_fork.variant_stub"
++    assert decoded.message.message_id == "msg-001"
++    assert decoded.message.payload["variant_count"] == 2
++
++
++def test_route_frame_is_deterministic_for_same_message() -> None:
++    first = encode_route_message_frame(_route_message())
++    second = encode_route_message_frame(_route_message())
++
++    assert first == second
++
++
++def test_route_frame_detects_payload_corruption() -> None:
++    encoded = bytearray(encode_route_message_frame(_route_message()))
++    encoded[-1] ^= 0x01
++
++    with pytest.raises(RouteFrameDecodeError, match="SHA-256"):
++        decode_route_message_frame(encoded)
++
++
++def test_route_frame_detects_bad_magic() -> None:
++    encoded = bytearray(encode_route_message_frame(_route_message()))
++    encoded[0] = 0
++
++    with pytest.raises(RouteFrameDecodeError, match="magic"):
++        decode_route_message_frame(encoded)
++
++
++def test_route_frame_rejects_non_route_payload_on_encode() -> None:
++    with pytest.raises(TypeError):
++        encode_route_message_frame({
++            "schema": "missipy.shm.data_handle.v1",
++            "handle_id": "h1",
++            "storage": "zfs",
++            "uri": "zfs://example",
++            "content_schema": "missipy.example.v1",
++            "size_bytes": 1,
++            "hash": "sha256:abc",
++            "producer": "test",
++            "zone": "workers",
++            "created_at": "2026-07-04T20:00:00Z",
++        })
++
++
++def test_route_frame_rejects_trailing_bytes() -> None:
++    encoded = encode_route_message_frame(_route_message()) + b"x"
++
++    with pytest.raises(RouteFrameDecodeError, match="frame length"):
++        decode_route_message_frame(encoded)
+diff --git a/tools/roundtrip_route_frame.py b/tools/roundtrip_route_frame.py
+new file mode 100644
+index 0000000..5c86713
+--- /dev/null
++++ b/tools/roundtrip_route_frame.py
+@@ -0,0 +1,51 @@
++#!/usr/bin/env python3
++"""Encode/decode fake route messages through the RouteMessage frame codec.
++
++Usage:
++
++    PYTHONPATH=src:. python tools/roundtrip_route_frame.py \
++      .var/baby_fork_fake_runtime \
++      --route-id baby_fork.variant_stub
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++
++from runtime.fake_route_transport import FakeLocalRouteTransport
++from runtime.route_frame_codec import decode_route_message_frame, encode_route_message_frame
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Roundtrip fake route messages through binary frames.")
++    parser.add_argument("fake_runtime_root", type=Path)
++    parser.add_argument("--route-id", help="Only roundtrip one route id.")
++    args = parser.parse_args(argv)
++
++    fake = FakeLocalRouteTransport(args.fake_runtime_root)
++    route_ids = (args.route_id,) if args.route_id else fake.route_ids()
++
++    frames = []
++    for route_id in route_ids:
++        for message in fake.receive(route_id):
++            encoded = encode_route_message_frame(message)
++            decoded = decode_route_message_frame(encoded)
++            frames.append({
++                "route_id": decoded.message.route_id,
++                "message_id": decoded.message.message_id,
++                "frame_size": len(encoded),
++                "payload_size": decoded.header.payload_size,
++                "payload_sha256": decoded.header.payload_sha256,
++            })
++
++    print(json.dumps({
++        "frame_count": len(frames),
++        "frames": frames,
++    }, indent=2, sort_keys=True))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

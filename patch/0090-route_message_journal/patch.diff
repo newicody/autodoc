@@ -1,0 +1,636 @@
+diff --git a/src/runtime/route_message_journal.py b/src/runtime/route_message_journal.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/runtime/route_message_journal.py
+@@ -0,0 +1,252 @@
++"""Recorder/journal ingestion for drained RouteMessage objects.
++
++This module implements phase 0090. It ingests RouteMessage objects already
++returned by the 0089 RouteSelectorDrainResult and writes deterministic JSONL
++journal records.
++
++It deliberately does not:
++- create a daemon
++- start a service
++- use OpenRC
++- run forever
++- watch ControlFS
++- sleep or poll
++- add a CLI
++- call Scheduler
++- decide security policy
++- grant leases
++- resize live mmap routes
++- own notifier lifecycle
++- read mmap routes directly
++- implement route generation g2/g3
++- perform drain/closed cleanup
++- implement inter-process locks
++- require /dev/shm
++- use Qdrant
++- use an LLM
++- use OpenVINO
++
++The journal records are facts about RouteMessage objects that were already
++drained. They are not commands and they do not authorize transport.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++import hashlib
++import json
++from pathlib import Path
++from typing import Any, Mapping
++
++from runtime.route_write_notify_drain import RouteSelectorDrainResult
++from runtime.shm_runtime_schema import ROUTE_MESSAGE_SCHEMA, RouteMessage
++
++ROUTE_MESSAGE_JOURNAL_RECORD_SCHEMA = "missipy.recorder.route_message_journal_record.v1"
++
++
++@dataclass(frozen=True, slots=True)
++class RouteMessageJournalRecord:
++    """One RouteMessage drained from a route and persisted as a journal fact."""
++
++    schema: str
++    record_id: str
++    source_surface: str
++    route_handle: str
++    sequence: int
++    message_schema: str
++    message_id: str
++    route_id: str
++    kind: str
++    source: str
++    target: str
++    occurred_at: str
++    payload_schema: str
++    payload_hash: str
++    message: dict[str, Any]
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "record_id": self.record_id,
++            "source_surface": self.source_surface,
++            "route_handle": self.route_handle,
++            "sequence": self.sequence,
++            "message_schema": self.message_schema,
++            "message_id": self.message_id,
++            "route_id": self.route_id,
++            "kind": self.kind,
++            "source": self.source,
++            "target": self.target,
++            "occurred_at": self.occurred_at,
++            "payload_schema": self.payload_schema,
++            "payload_hash": self.payload_hash,
++            "message": dict(self.message),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class RouteMessageJournalSummary:
++    """Summary of one drained-route journal write."""
++
++    journal_path: str
++    route_handle: str
++    record_count: int
++    appended: bool
++    sequences: tuple[int, ...]
++    message_ids: tuple[str, ...]
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "journal_path": self.journal_path,
++            "route_handle": self.route_handle,
++            "record_count": self.record_count,
++            "appended": self.appended,
++            "sequences": list(self.sequences),
++            "message_ids": list(self.message_ids),
++        }
++
++
++def records_from_drained_route_messages(
++    drained: RouteSelectorDrainResult,
++) -> tuple[RouteMessageJournalRecord, ...]:
++    """Convert a RouteSelectorDrainResult into immutable journal records.
++
++    The function assumes upstream Scheduler/policy/zone already authorized the
++    route work. It only records facts about messages that were drained.
++    """
++
++    _validate_drained_result(drained)
++    source_surface = f"routes/{drained.route_handle}"
++    records: list[RouteMessageJournalRecord] = []
++    for sequence, message in zip(drained.drained_sequences, drained.messages, strict=True):
++        records.append(_record_from_message(source_surface, drained.route_handle, sequence, message))
++    return tuple(records)
++
++
++def write_drained_route_messages_journal(
++    journal_path: Path | str,
++    drained: RouteSelectorDrainResult,
++    *,
++    append: bool = False,
++) -> RouteMessageJournalSummary:
++    """Write drained RouteMessage records to a deterministic JSONL journal."""
++
++    records = records_from_drained_route_messages(drained)
++    path = Path(journal_path)
++    path.parent.mkdir(parents=True, exist_ok=True)
++    mode = "a" if append else "w"
++    with path.open(mode, encoding="utf-8") as handle:
++        for record in records:
++            handle.write(json.dumps(record.to_mapping(), sort_keys=True, separators=(",", ":")))
++            handle.write("\n")
++    return RouteMessageJournalSummary(
++        journal_path=str(path),
++        route_handle=drained.route_handle,
++        record_count=len(records),
++        appended=append,
++        sequences=tuple(record.sequence for record in records),
++        message_ids=tuple(record.message_id for record in records),
++    )
++
++
++def load_route_message_journal(path: Path | str) -> tuple[RouteMessageJournalRecord, ...]:
++    """Load records written by write_drained_route_messages_journal."""
++
++    journal_path = Path(path)
++    if not journal_path.exists():
++        return ()
++    records: list[RouteMessageJournalRecord] = []
++    for line in journal_path.read_text(encoding="utf-8").splitlines():
++        if not line.strip():
++            continue
++        raw = json.loads(line)
++        records.append(_record_from_mapping(raw))
++    return tuple(records)
++
++
++def _record_from_message(
++    source_surface: str,
++    route_handle: str,
++    sequence: int,
++    message: RouteMessage,
++) -> RouteMessageJournalRecord:
++    mapping = message.to_mapping()
++    message_schema = str(mapping["schema"])
++    if message_schema != ROUTE_MESSAGE_SCHEMA:
++        raise ValueError("journal only accepts RouteMessage records")
++    return RouteMessageJournalRecord(
++        schema=ROUTE_MESSAGE_JOURNAL_RECORD_SCHEMA,
++        record_id=f"{source_surface}:{sequence}:{message.message_id}",
++        source_surface=source_surface,
++        route_handle=route_handle,
++        sequence=sequence,
++        message_schema=message_schema,
++        message_id=message.message_id,
++        route_id=message.route_id,
++        kind=message.kind,
++        source=message.source,
++        target=message.target,
++        occurred_at=message.occurred_at,
++        payload_schema=message.payload_schema,
++        payload_hash=_stable_hash(mapping),
++        message=mapping,
++    )
++
++
++def _record_from_mapping(raw: Mapping[str, Any]) -> RouteMessageJournalRecord:
++    schema = str(raw["schema"])
++    if schema != ROUTE_MESSAGE_JOURNAL_RECORD_SCHEMA:
++        raise ValueError("unsupported route message journal record schema")
++    message = dict(raw["message"])
++    RouteMessage.from_mapping(message)
++    return RouteMessageJournalRecord(
++        schema=schema,
++        record_id=str(raw["record_id"]),
++        source_surface=str(raw["source_surface"]),
++        route_handle=str(raw["route_handle"]),
++        sequence=_require_int(raw, "sequence"),
++        message_schema=str(raw["message_schema"]),
++        message_id=str(raw["message_id"]),
++        route_id=str(raw["route_id"]),
++        kind=str(raw["kind"]),
++        source=str(raw["source"]),
++        target=str(raw["target"]),
++        occurred_at=str(raw["occurred_at"]),
++        payload_schema=str(raw["payload_schema"]),
++        payload_hash=str(raw["payload_hash"]),
++        message=message,
++    )
++
++
++def _validate_drained_result(drained: RouteSelectorDrainResult) -> None:
++    if drained.drained_count != len(drained.drained_sequences):
++        raise ValueError("drained result is inconsistent")
++    if drained.drained_count != len(drained.messages):
++        raise ValueError("drained result is inconsistent")
++    if drained.drained_count != len(drained.message_ids):
++        raise ValueError("drained result is inconsistent")
++    for expected, message in zip(drained.message_ids, drained.messages, strict=True):
++        if expected != message.message_id:
++            raise ValueError("drained result message_ids do not match messages")
++
++
++def _require_int(raw: Mapping[str, Any], field: str) -> int:
++    value = raw[field]
++    if not isinstance(value, int) or isinstance(value, bool):
++        raise ValueError(f"{field} must be an integer")
++    return value
++
++
++def _stable_hash(mapping: Mapping[str, Any]) -> str:
++    data = json.dumps(dict(mapping), sort_keys=True, separators=(",", ":")).encode("utf-8")
++    return "sha256:" + hashlib.sha256(data).hexdigest()
++
++
++__all__ = (
++    "ROUTE_MESSAGE_JOURNAL_RECORD_SCHEMA",
++    "RouteMessageJournalRecord",
++    "RouteMessageJournalSummary",
++    "load_route_message_journal",
++    "records_from_drained_route_messages",
++    "write_drained_route_messages_journal",
++)
+diff --git a/tests/runtime/test_route_message_journal.py b/tests/runtime/test_route_message_journal.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/runtime/test_route_message_journal.py
+@@ -0,0 +1,115 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++import pytest
++
++from runtime.mmap_fixed_slot_route import MmapFixedSlotRoute, route_file_size
++from runtime.route_message_journal import (
++    ROUTE_MESSAGE_JOURNAL_RECORD_SCHEMA,
++    RouteMessageJournalSummary,
++    load_route_message_journal,
++    records_from_drained_route_messages,
++    write_drained_route_messages_journal,
++)
++from runtime.route_notification import RouteNotifier
++from runtime.route_write_notify_drain import (
++    RouteSelectorDrainResult,
++    drain_notified_route_messages,
++    write_route_message_and_notify,
++)
++from runtime.shm_runtime_schema import ROUTE_MESSAGE_SCHEMA, RouteMessage
++
++
++def _route(tmp_path: Path) -> MmapFixedSlotRoute:
++    ring_path = tmp_path / "ring.bin"
++    with ring_path.open("wb") as handle:
++        handle.truncate(route_file_size(slot_size=768, slot_count=4))
++    route = MmapFixedSlotRoute.open(
++        ring_path,
++        route_handle="route-a",
++        status_path=tmp_path / "status.json",
++        overflow_policy="reject",
++    )
++    route.initialize(slot_size=768, slot_count=4)
++    return route
++
++
++def _message(message_id: str = "msg-001", value: int = 42) -> RouteMessage:
++    return RouteMessage(
++        schema=ROUTE_MESSAGE_SCHEMA,
++        route_id="route-a",
++        message_id=message_id,
++        kind="event",
++        source="producer-a",
++        target="consumer-a",
++        occurred_at="2026-07-05T00:00:00Z",
++        payload_schema="missipy.test.route_payload.v1",
++        payload={"value": value},
++    )
++
++
++def test_journal_records_drained_route_messages_as_jsonl(tmp_path: Path) -> None:
++    route = _route(tmp_path)
++    try:
++        with RouteNotifier.create("route-a", backend="pipe") as notifier:
++            write_route_message_and_notify(route, notifier, _message("msg-001", 42))
++            write_route_message_and_notify(route, notifier, _message("msg-002", 43))
++
++            drained = drain_notified_route_messages(route, notifier, timeout=0.1)
++            journal_path = tmp_path / "recorder" / "route_messages.jsonl"
++            summary = write_drained_route_messages_journal(journal_path, drained)
++
++        assert isinstance(summary, RouteMessageJournalSummary)
++        assert summary.route_handle == "route-a"
++        assert summary.record_count == 2
++        assert summary.appended is False
++        assert summary.sequences == (0, 1)
++        assert summary.message_ids == ("msg-001", "msg-002")
++
++        records = load_route_message_journal(journal_path)
++        assert [record.schema for record in records] == [
++            ROUTE_MESSAGE_JOURNAL_RECORD_SCHEMA,
++            ROUTE_MESSAGE_JOURNAL_RECORD_SCHEMA,
++        ]
++        assert [record.source_surface for record in records] == ["routes/route-a", "routes/route-a"]
++        assert [record.sequence for record in records] == [0, 1]
++        assert [record.message_id for record in records] == ["msg-001", "msg-002"]
++        assert records[0].message["payload"] == {"value": 42}
++        assert records[1].payload_hash.startswith("sha256:")
++    finally:
++        route.close()
++
++
++def test_empty_drain_writes_empty_journal(tmp_path: Path) -> None:
++    drained = RouteSelectorDrainResult(
++        route_handle="route-a",
++        selector_ready=False,
++        notification_count=0,
++        drained_count=0,
++        drained_sequences=(),
++        message_ids=(),
++        messages=(),
++    )
++    journal_path = tmp_path / "empty.jsonl"
++
++    summary = write_drained_route_messages_journal(journal_path, drained)
++
++    assert summary.record_count == 0
++    assert journal_path.read_text(encoding="utf-8") == ""
++    assert load_route_message_journal(journal_path) == ()
++
++
++def test_records_reject_inconsistent_drain_result() -> None:
++    drained = RouteSelectorDrainResult(
++        route_handle="route-a",
++        selector_ready=True,
++        notification_count=1,
++        drained_count=2,
++        drained_sequences=(0,),
++        message_ids=("msg-001",),
++        messages=(_message("msg-001"),),
++    )
++
++    with pytest.raises(ValueError, match="drained result is inconsistent"):
++        records_from_drained_route_messages(drained)
+diff --git a/tests/rules/test_route_message_journal_rule.py b/tests/rules/test_route_message_journal_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_route_message_journal_rule.py
+@@ -0,0 +1,124 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "ROUTE_MESSAGE_JOURNAL_0090.md"
++MODULE = ROOT / "src" / "runtime" / "route_message_journal.py"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0090_CHANGED_FILES.md"
++REPORT = ROOT / "PHASE0090_TEST_REPORT.md"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing file: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_0090_doc_locks_recorder_journal_scope() -> None:
++    text = _read(DOC)
++    required_phrases = [
++        "Status: 0090 implementation.",
++        "Recorder/journal ingestion for RouteMessage objects drained from an active route",
++        "RouteSelectorDrainResult",
++        "RouteMessage",
++        "deterministic JSONL journal",
++        "write_drained_route_messages_journal",
++        "load_route_message_journal",
++        "No daemon, no service, no OpenRC",
++        "No resident watcher",
++        "No CLI",
++        "No direct mmap read",
++        "No notifier ownership",
++        "No Scheduler loop modification",
++        "Scheduler/policy/zone remain upstream authorities",
++        "ControlProxy does not decide security",
++        "no live mmap resize",
++        "no route generation g2/g3",
++        "no drain/closed cleanup",
++        "no Qdrant, no LLM, no OpenVINO",
++        "journal records are facts, not commands",
++    ]
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_0090_module_is_importable_recorder_boundary_not_service() -> None:
++    text = _read(MODULE)
++    required_phrases = [
++        "Recorder/journal ingestion for drained RouteMessage objects",
++        "RouteSelectorDrainResult",
++        "RouteMessage",
++        "deterministic JSONL",
++        "create a daemon",
++        "start a service",
++        "use OpenRC",
++        "run forever",
++        "watch ControlFS",
++        "sleep or poll",
++        "add a CLI",
++        "call Scheduler",
++        "decide security policy",
++        "grant leases",
++        "resize live mmap routes",
++        "own notifier lifecycle",
++        "read mmap routes directly",
++        "implement route generation g2/g3",
++        "perform drain/closed cleanup",
++        "implement inter-process locks",
++        "require /dev/shm",
++        "use Qdrant",
++        "use an LLM",
++        "use OpenVINO",
++        "not commands",
++    ]
++    for phrase in required_phrases:
++        assert phrase in text
++
++    forbidden_snippets = [
++        "argparse",
++        "subprocess",
++        "while True",
++        "time.sleep",
++        "MmapFixedSlotRoute",
++        "RouteNotifier",
++        "authorized = True",
++        "policy_decision_id =",
++    ]
++    for snippet in forbidden_snippets:
++        assert snippet not in text
++
++
++def test_0090_manifest_and_report_preserve_kernel_loop_boundary() -> None:
++    manifest = _read(MANIFEST)
++    report = _read(REPORT)
++
++    assert "src/runtime/route_message_journal.py" in manifest
++    assert "tests/runtime/test_route_message_journal.py" in manifest
++    assert "tests/rules/test_route_message_journal_rule.py" in manifest
++
++    forbidden_paths = [
++        "src/kernel/scheduler.py",
++        "src/kernel/queue.py",
++        "src/kernel/dispatcher.py",
++        "src/runtime/component.py",
++    ]
++    for path in forbidden_paths:
++        assert path not in manifest
++
++    required_report_phrases = [
++        "code_rule_review: done",
++        "code_rule_update_required: false",
++        "live_path_status: green",
++        "live_path_uses_real_backend: true",
++        "context_contract_version: n/a",
++        "context_contract_changed: false",
++        "external_dependencies_added: false",
++        "scheduler_modified: false",
++        "network_added: false",
++        "github_api_added: false",
++        "qdrant_added: false",
++        "llm_or_openvino_added: false",
++        "search_commands_bounded: n/a",
++    ]
++    for phrase in required_report_phrases:
++        assert phrase in report
+diff --git a/doc/architecture/ROUTE_MESSAGE_JOURNAL_0090.md b/doc/architecture/ROUTE_MESSAGE_JOURNAL_0090.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/architecture/ROUTE_MESSAGE_JOURNAL_0090.md
+@@ -0,0 +1,35 @@
++# 0090 — Route message journal
++
++Status: 0090 implementation.
++
++0090 adds Recorder/journal ingestion for RouteMessage objects drained from an active route. It consumes the 0089 `RouteSelectorDrainResult`, turns each drained `RouteMessage` into a deterministic JSONL journal record, and exposes `write_drained_route_messages_journal` plus `load_route_message_journal` as importable functions.
++
++## Operational path
++
++```text
++producer write mmap
++-> notifier.notify
++-> consumer selector/drain
++-> RouteSelectorDrainResult
++-> route message journal records
++-> deterministic JSONL journal
++```
++
++The journal is an audit surface. The journal records are facts, not commands.
++
++## Boundaries
++
++No daemon, no service, no OpenRC.
++No resident watcher.
++No CLI.
++No direct mmap read.
++No notifier ownership.
++No Scheduler loop modification.
++Scheduler/policy/zone remain upstream authorities.
++ControlProxy does not decide security.
++
++0090 performs no authorization, no lease grant, no policy decision, no live mmap resize, no route generation g2/g3, no drain/closed cleanup, no inter-process lock, no Qdrant, no LLM, no OpenVINO.
++
++## Why this belongs before 0091
++
++Before route generations g2/g3 are introduced, drained messages need a deterministic journal projection. This gives the next phases a replayable fact stream without changing the live route layout.
+diff --git a/doc/manifests/MANIFEST_0090_CHANGED_FILES.md b/doc/manifests/MANIFEST_0090_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0090_CHANGED_FILES.md
+@@ -0,0 +1,19 @@
++# Manifest — 0090 route message journal
++
++0090 adds the importable Recorder/journal ingestion step for drained route messages.
++
++## Changed files
++
++```text
++src/runtime/route_message_journal.py
++tests/runtime/test_route_message_journal.py
++tests/rules/test_route_message_journal_rule.py
++doc/architecture/ROUTE_MESSAGE_JOURNAL_0090.md
++doc/manifests/MANIFEST_0090_CHANGED_FILES.md
++PHASE0090_TEST_REPORT.md
++```
++
++## Boundary statement
++
++0090 does not change kernel-loop, queue, dispatcher, or component-contract files.
++It also does not add a CLI, daemon, service, resident watcher, policy bypass, live mmap resize, Qdrant path, LLM path, or OpenVINO path.
+diff --git a/PHASE0090_TEST_REPORT.md b/PHASE0090_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/PHASE0090_TEST_REPORT.md
+@@ -0,0 +1,55 @@
++# 0090 — Test report — Route message journal
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/runtime/test_route_message_journal.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Expected result
++
++```text
++status: green
++```
++
++## code_rule review block
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: 0090 adds a real importable Recorder/journal ingestion boundary for RouteMessage objects already drained by 0089, without adding a CLI, daemon, watcher, Scheduler-loop change, policy bypass, backend dependency, or live resize.
++live_path_status: green
++live_path_uses_real_backend: true
++context_contract_version: n/a
++context_contract_changed: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++## Manual rule checklist
++
++```text
++no_unnecessary_cli: true
++no_daemon_service_openrc: true
++no_resident_watcher: true
++scheduler_loop_unchanged: true
++priority_queue_unchanged: true
++dispatcher_unchanged: true
++component_tick_contract_unchanged: true
++controlproxy_policy_decision_added: false
++policy_zone_scope_bypass_added: false
++docs_match_runtime_scope: true
++abstraction_added_only_for_import_boundary: true
++```
++
++## Validation note
++
++The current execution container cannot clone GitHub directly because DNS resolution is unavailable. The patch was generated as an additive patch-queue artifact. The new Python files were syntax-compiled locally; full repository validation must be run by `apply_patch_queue.py` on the target repository.

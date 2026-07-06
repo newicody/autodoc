@@ -1,0 +1,683 @@
+diff --git a/PHASE0097_TEST_REPORT.md b/PHASE0097_TEST_REPORT.md
+new file mode 100644
+index 0000000..f04a977
+--- /dev/null
++++ b/PHASE0097_TEST_REPORT.md
+@@ -0,0 +1,38 @@
++# PHASE0097_TEST_REPORT
++
++```text
++phase: 0097-controlproxy_graph_alignment
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: architecture graph alignment and naming discipline; no new programming technique is introduced.
++live_path_status: n/a
++live_path_uses_real_backend: n/a
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++```
++
++Expected validation:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/rules/test_controlproxy_graph_alignment_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++Review notes:
++
++```text
++- The route runtime placement diagram is integrated into a root graph.
++- ControlProxy/ControlFS are described as one bounded subsystem.
++- Dispatcher remains the handler boundary.
++- Scheduler.run() remains locked until an explicit loop-extension design.
++- ControlProxy enforces an authorized route envelope but does not decide policy.
++```
+diff --git a/doc/architecture/CONTROLPROXY_GRAPH_ALIGNMENT_0097.md b/doc/architecture/CONTROLPROXY_GRAPH_ALIGNMENT_0097.md
+new file mode 100644
+index 0000000..c4f581a
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_GRAPH_ALIGNMENT_0097.md
+@@ -0,0 +1,165 @@
++# 0097 — ControlProxy graph alignment and zone boundary
++
++Status: architecture alignment patch.
++
++0097 corrects the graph direction after the route runtime placement work. The
++runtime placement graph must not live as an isolated phase diagram. It belongs
++inside the root Runtime ControlFS / SHM / RouteProxy / Cluster Fabric graph as a
++ControlProxy/ControlFS subgraph.
++
++## Decision
++
++```text
++Root graph, not an isolated phase graph.
++```
++
++The route generation and runtime placement path is represented as a subgraph of
++the global architecture:
++
++```text
++SecurityFS / policy / zones
++-> Scheduler / PolicyEngine
++-> PriorityQueue / Scheduler.run() / Dispatcher
++-> ControlProxy route handler
++-> ControlProxy/ControlFS route-control block
++-> locked generation materializer
++-> route@gN/ring.bin under file or /dev/shm placement
++-> existing event.bus/context.bus facts
++-> Recorder / ZFS Store
++```
++
++## ControlProxy / ControlFS boundary
++
++ControlProxy and ControlFS should be treated as one bounded subsystem, but not as
++one monolithic class. The useful shape is:
++
++```text
++ControlProxy subsystem
++  ControlFS store/surface
++  Route request adapter
++  Route generation table
++  Route generation lock
++  Locked materializer
++  Runtime placement policy
++  Route lifecycle cleanup
++  Bus visibility projection
++```
++
++ControlFS is the Unix filesystem state surface. ControlProxy is the code block
++that owns the route-control behavior around that surface. The older RouteProxy
++wording remains useful only as a sub-role: the passive materialization role
++inside the ControlProxy subsystem.
++
++## Security and zones
++
++The wording must stay precise:
++
++```text
++ControlProxy enforces authorized route decisions but does not decide policy.
++Scheduler/policy/zone remain the authority.
++```
++
++ControlProxy may reject an invalid request envelope, for example when a route
++request is missing:
++
++```text
++authorized=True
++policy_decision_id
++zone
++route_id
++```
++
++That rejection is a boundary guard, not a new security decision. The actual
++decision remains upstream in Scheduler/policy/zone. Zone metadata travels with
++the route decision as capability metadata and then constrains where ControlFS
++state and route generations are recorded.
++
++## Dispatcher is not redundant
++
++Dispatcher and ControlProxy are not duplicates:
++
++```text
++Dispatcher selects and invokes the registered handler.
++ControlProxy route handler performs the route-control behavior behind that handler.
++```
++
++So the correct line is:
++
++```text
++Scheduler.run() -> Dispatcher -> ControlProxy route handler -> ControlProxy/ControlFS
++```
++
++not:
++
++```text
++Scheduler.run() -> ControlProxy directly
++```
++
++## Scheduler.run() lock
++
++The current lock remains in force:
++
++```text
++No Scheduler.run() modification.
++```
++
++The lock can be reopened only by an explicit loop-extension design. The minimum
++criteria are:
++
++1. a concrete handler exists and is tested;
++2. Dispatcher can no longer express the required behavior without hiding state;
++3. PolicyEngine and zone checks stay before execution;
++4. a rule test names the Scheduler files allowed to change;
++5. the patch explains why the change is kernel-loop work and not ControlProxy shortcut work.
++
++Until those criteria are met, ControlProxy continues to integrate through a
++handler boundary.
++
++## What was missing from the graph
++
++The graph must show these items together, otherwise the architecture is easy to
++misread:
++
++- SecurityFS / policy / zones before ControlProxy.
++- Dispatcher before ControlProxy handler.
++- ControlProxy/ControlFS as one bounded subsystem.
++- Generation table and lock before materialization.
++- Runtime placement as a policy inside ControlProxy, not inside Scheduler.
++- g2/g3 route generations and No live mmap resize.
++- Existing event.bus/context.bus as observation surfaces, not bus creation.
++- Recorder and ZFS after facts, not on the hot route-write path.
++- NetworkBridge and HardwareBridge as future extensions only.
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: architecture graph alignment and naming discipline; no new programming technique is introduced.
++live_path_status: n/a
++live_path_uses_real_backend: n/a
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++```
++
++## Boundaries kept
++
++- No CLI.
++- No OpenRC service and no resident daemon.
++- No watcher.
++- No Scheduler.run() modification.
++- No PriorityQueue, Dispatcher, or Component tick contract modification.
++- ControlProxy does not decide security.
++- Scheduler/policy/zone remain the authority.
++- EventBus/context bus are existing observation surfaces, not commands.
++- No live mmap resize; g2/g3 generations remain the update path.
++- Not /dev/shm-only.
++- No NetworkBridge or HardwareBridge implementation.
++- No Qdrant, LLM, or OpenVINO path.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0097.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0097.md
+new file mode 100644
+index 0000000..9d5d0b8
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0097.md
+@@ -0,0 +1,76 @@
++# ControlProxy operational plan update — 0097
++
++0097 updates the plan after graph review.
++
++## Structural rule for architecture graphs
++
++ControlProxy route diagrams should be integrated into the root runtime graph as a
++subgraph, not delivered as isolated phase-only graphs.
++
++```text
++Root graph, not an isolated phase graph.
++```
++
++Allowed structure:
++
++```text
++root Runtime ControlFS / SHM / Cluster Fabric graph
++  cluster_policy_zone
++  cluster_controlproxy_controlfs
++  cluster_runtime_surfaces
++  cluster_future_extensions
++```
++
++## Current trunk after 0097
++
++```text
++0088 Scheduler handler boundary
++0089 producer write -> notify -> selector/drain
++0090 RouteMessage journal
++0091-r2 generation table: route_id -> current_generation
++0092 candidate -> active -> draining -> closed cleanup
++0093-r2 existing bus visualization adapter
++0094 route generation file lock
++0095 locked materializer
++0096 explicit runtime placement: file root or real /dev/shm root
++0097 integrated root graph + ControlProxy/ControlFS/zone alignment
++```
++
++## Next priorities
++
++1. **0098 — route zone capability envelope**
++   Implement a small importable guard that turns the existing Scheduler-facing
++   request into a route capability envelope carrying `route_id`, `zone`,
++   `policy_decision_id`, and authorized status. It must reject missing authority
++   metadata but not decide policy.
++
++2. **0099 — placement-aware route reply**
++   Expose selected runtime placement in the Scheduler-facing route reply without
++   modifying `Scheduler.run()`.
++
++3. **0100 — file-backed to /dev/shm generation migration test**
++   Validate `g1` file-backed and `g2` `/dev/shm`-backed without live resize.
++
++4. **Only later — kernel loop change decision**
++   Reopen `Scheduler.run()` only if Dispatcher + Handler cannot express the
++   concrete behavior without hiding state. The default remains no loop change.
++
++## ControlProxy module shape
++
++ControlProxy/ControlFS should converge toward one bounded code subsystem made of
++small classes/modules, not one mega-class:
++
++```text
++ControlProxyFacade
++  ControlFSStore
++  RouteRequestAdapter
++  RouteGenerationTable
++  RouteGenerationLock
++  RouteGenerationMaterializer
++  RouteRuntimePlacement
++  RouteLifecycle
++  RouteBusProjection
++```
++
++Dispatcher is still required. It is the kernel dispatch boundary; ControlProxy is
++one handler target behind that boundary.
+diff --git a/doc/architecture/RUNTIME_CONTROLFS_SHM_CLUSTER_FABRIC_GRAPH_0097.dot b/doc/architecture/RUNTIME_CONTROLFS_SHM_CLUSTER_FABRIC_GRAPH_0097.dot
+new file mode 100644
+index 0000000..bdcb647
+--- /dev/null
++++ b/doc/architecture/RUNTIME_CONTROLFS_SHM_CLUSTER_FABRIC_GRAPH_0097.dot
+@@ -0,0 +1,130 @@
++digraph runtime_controlfs_shm_cluster_fabric_graph_0097 {
++  rankdir=LR;
++  graph [
++    label="Runtime ControlFS / SHM / ControlProxy / Cluster Fabric graph — 0097 integrated root",
++    labelloc=t
++  ];
++  node [shape=box];
++
++  subgraph cluster_policy_zone {
++    label="SecurityFS / Scheduler policy / zones";
++    style=rounded;
++
++    securityfs [
++      label="SecurityFS\nsubsystem rules / zones / scopes"
++    ];
++    policy_engine [
++      label="PolicyEngine\ncompiles rules and zone decisions"
++    ];
++    scheduler [
++      label="Scheduler\ndecision authority\nNo Scheduler.run() modification"
++    ];
++    priority_queue [
++      label="PriorityQueue\ndeterministic command ordering"
++    ];
++    dispatcher [
++      label="Dispatcher\nselects handler boundary"
++    ];
++
++    securityfs -> policy_engine [label="read rules"];
++    policy_engine -> scheduler [label="authorized decision + zone + policy_decision_id"];
++    scheduler -> priority_queue [label="enqueue approved work"];
++    priority_queue -> scheduler [label="Scheduler.run() drains ready work"];
++    scheduler -> dispatcher [label="dispatch"];
++  }
++
++  subgraph cluster_controlproxy_controlfs {
++    label="ControlProxy / ControlFS bounded subsystem";
++    style=rounded;
++
++    controlproxy_handler [
++      label="ControlProxy route handler\ncalled by Dispatcher\nvalidates authorized envelope"
++    ];
++    controlfs_surface [
++      shape=folder,
++      label="ControlFS surface\n/run/autodoc/controlfs\nactive/routes, leases, revoked, status"
++    ];
++    generation_table [
++      shape=cylinder,
++      label="generation_state.json\nroute_id -> current_generation\nincremented only when materialized"
++    ];
++    generation_lock [
++      label="route generation lock\ninter-process file lock"
++    ];
++    runtime_placement [
++      label="runtime placement policy\nfile | /dev/shm\nNot /dev/shm-only"
++    ];
++    locked_materializer [
++      label="locked generation materializer\nload -> verify -> materialize -> persist"
++    ];
++    lifecycle [
++      label="lifecycle\ncandidate -> active -> draining -> closed"
++    ];
++
++    controlproxy_handler -> controlfs_surface [label="writes route-control state"];
++    controlfs_surface -> generation_lock [label="per route lock"];
++    generation_lock -> generation_table [label="load/verify/persist"];
++    generation_table -> runtime_placement [label="next g2/g3 generation"];
++    runtime_placement -> locked_materializer [label="resolved runtime root"];
++    locked_materializer -> lifecycle [label="candidate state"];
++  }
++
++  subgraph cluster_runtime_surfaces {
++    label="Existing runtime surfaces";
++    style=rounded;
++
++    shm_runtime [
++      shape=folder,
++      label="SHM/file runtime root\nroutes/<route_id>@gN/ring.bin\nNo live mmap resize"
++    ];
++    event_bus [
++      shape=folder,
++      label="existing event.bus\nfacts, not commands"
++    ];
++    context_bus [
++      shape=folder,
++      label="existing context.bus\ncompact context facts"
++    ];
++    workers [
++      label="Workers / experts\nuse materialized routes only"
++    ];
++    recorder [
++      label="Recorder\njournal writer"
++    ];
++    zfs_store [
++      shape=cylinder,
++      label="ZFS Store\njournal / contracts / replay / snapshots"
++    ];
++
++    shm_runtime -> workers [label="route access"];
++    workers -> event_bus [label="facts"];
++    workers -> context_bus [label="context patches/facts"];
++    event_bus -> recorder [label="drain facts"];
++    context_bus -> recorder [label="drain context facts"];
++    recorder -> zfs_store [label="durable write"];
++  }
++
++  subgraph cluster_future_extensions {
++    label="Future extensions, not implemented now";
++    style=dashed;
++
++    network_bridge [
++      label="NetworkBridge future\ncompact facts / remote handles only"
++    ];
++    hardware_bridge [
++      label="HardwareBridge future\nDMA-backed route buffers\nnot direct /dev/shm sharing"
++    ];
++    cluster_fabric [
++      label="Hardware Cluster Fabric future lointain\nFPGA/ASIC passive observer/accelerator"
++    ];
++
++    network_bridge -> hardware_bridge [style=dashed, label="future compatibility"];
++    hardware_bridge -> cluster_fabric [style=dashed, label="future PCIe/LVDS path"];
++  }
++
++  dispatcher -> controlproxy_handler [label="handler call"];
++  lifecycle -> shm_runtime [label="materialized route generation"];
++  lifecycle -> event_bus [label="status fact"];
++  lifecycle -> context_bus [label="route/context visibility fact"];
++  shm_runtime -> network_bridge [style=dashed, label="future selected replication"];
++}
+diff --git a/doc/manifests/MANIFEST_0097_CHANGED_FILES.md b/doc/manifests/MANIFEST_0097_CHANGED_FILES.md
+new file mode 100644
+index 0000000..a021cfb
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0097_CHANGED_FILES.md
+@@ -0,0 +1,16 @@
++# Manifest 0097 — ControlProxy graph alignment
++
++Changed files:
++
++```text
++doc/architecture/CONTROLPROXY_GRAPH_ALIGNMENT_0097.md
++doc/architecture/RUNTIME_CONTROLFS_SHM_CLUSTER_FABRIC_GRAPH_0097.dot
++doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0097.md
++doc/manifests/MANIFEST_0097_CHANGED_FILES.md
++tests/rules/test_controlproxy_graph_alignment_rule.py
++PHASE0097_TEST_REPORT.md
++```
++
++0097 is documentation/rule-test alignment. It does not modify kernel-loop, queue,
++dispatcher, component-contract, ControlProxy runtime, Qdrant, LLM, OpenVINO,
++NetworkBridge, or HardwareBridge files.
+diff --git a/tests/rules/__pycache__/test_controlproxy_graph_alignment_rule.cpython-313-pytest-9.0.2.pyc b/tests/rules/__pycache__/test_controlproxy_graph_alignment_rule.cpython-313-pytest-9.0.2.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..c9af0d36ee40ec2a15e4140a30e8d805f4cb0d99
+GIT binary patch
+literal 9115
+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
+Wy^TPQ#({LT3P=BSqEk4=`|%&ke`dS@
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/rules/__pycache__/test_controlproxy_graph_alignment_rule.cpython-313.pyc b/tests/rules/__pycache__/test_controlproxy_graph_alignment_rule.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..7e5b1aa6f849e80699d8479c796e532592c274a5
+GIT binary patch
+literal 5228
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/rules/test_controlproxy_graph_alignment_rule.py b/tests/rules/test_controlproxy_graph_alignment_rule.py
+new file mode 100644
+index 0000000..cba78ac
+--- /dev/null
++++ b/tests/rules/test_controlproxy_graph_alignment_rule.py
+@@ -0,0 +1,100 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "CONTROLPROXY_GRAPH_ALIGNMENT_0097.md"
++DOT = ROOT / "doc" / "architecture" / "RUNTIME_CONTROLFS_SHM_CLUSTER_FABRIC_GRAPH_0097.dot"
++PLAN = ROOT / "doc" / "architecture" / "CONTROLPROXY_OPERATIONAL_PLAN_0097.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0097_CHANGED_FILES.md"
++REPORT = ROOT / "PHASE0097_TEST_REPORT.md"
++
++
++def _read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_0097_graph_is_integrated_root_graph() -> None:
++    text = "\n".join(_read(path) for path in (DOC, DOT, PLAN, REPORT))
++    required = [
++        "Root graph, not an isolated phase graph",
++        "digraph runtime_controlfs_shm_cluster_fabric_graph_0097",
++        "subgraph cluster_policy_zone",
++        "subgraph cluster_controlproxy_controlfs",
++        "subgraph cluster_runtime_surfaces",
++        "subgraph cluster_future_extensions",
++        "ControlProxy / ControlFS bounded subsystem",
++        "existing event.bus",
++        "existing context.bus",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0097_policy_zone_boundary_stays_authoritative_upstream() -> None:
++    text = "\n".join(_read(path) for path in (DOC, DOT, PLAN, REPORT))
++    required = [
++        "ControlProxy enforces authorized route decisions but does not decide policy",
++        "Scheduler/policy/zone remain the authority",
++        "authorized=True",
++        "policy_decision_id",
++        "zone",
++        "Dispatcher selects and invokes the registered handler",
++        "Scheduler.run() -> Dispatcher -> ControlProxy route handler -> ControlProxy/ControlFS",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0097_scheduler_loop_remains_locked_until_explicit_design() -> None:
++    text = "\n".join(_read(path) for path in (DOC, DOT, PLAN, REPORT))
++    required = [
++        "No Scheduler.run() modification",
++        "explicit loop-extension design",
++        "PolicyEngine and zone checks stay before execution",
++        "the patch explains why the change is kernel-loop work and not ControlProxy shortcut work",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0097_operational_invariants_are_present() -> None:
++    text = "\n".join(_read(path) for path in (DOC, DOT, PLAN, REPORT))
++    required = [
++        "No CLI",
++        "No OpenRC service and no resident daemon",
++        "No watcher",
++        "No live mmap resize",
++        "g2/g3",
++        "Not /dev/shm-only",
++        "No NetworkBridge or HardwareBridge implementation",
++        "No Qdrant, LLM, or OpenVINO path",
++        "code_rule_review: done",
++        "code_rule_update_required: false",
++        "live_path_status: n/a",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0097_manifest_does_not_claim_kernel_or_runtime_changes() -> None:
++    manifest = _read(MANIFEST)
++    expected = [
++        "doc/architecture/CONTROLPROXY_GRAPH_ALIGNMENT_0097.md",
++        "doc/architecture/RUNTIME_CONTROLFS_SHM_CLUSTER_FABRIC_GRAPH_0097.dot",
++        "doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0097.md",
++        "doc/manifests/MANIFEST_0097_CHANGED_FILES.md",
++        "tests/rules/test_controlproxy_graph_alignment_rule.py",
++        "PHASE0097_TEST_REPORT.md",
++    ]
++    for path in expected:
++        assert path in manifest
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/kernel/queue.py",
++        "src/kernel/dispatcher.py",
++        "src/runtime/controlproxy_scheduler_handler.py",
++        "src/runtime/route_runtime_placement.py",
++    ]
++    for path in forbidden:
++        assert path not in manifest

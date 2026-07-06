@@ -1,0 +1,644 @@
+diff --git a/doc/architecture/INPROCESS_FRAME_RING_INTEGRATION.md b/doc/architecture/INPROCESS_FRAME_RING_INTEGRATION.md
+new file mode 100644
+index 0000000..1b9b15a
+--- /dev/null
++++ b/doc/architecture/INPROCESS_FRAME_RING_INTEGRATION.md
+@@ -0,0 +1,89 @@
++# In-process frame ring integration
++
++Status: 0078 in-process integration only.
++
++This phase integrates:
++
++```text
++0076 InProcessRingBuffer behavior
++0077 RouteMessage frame codec
++```
++
++The new frame ring stores bytes frames, not Python `RouteMessage` objects.
++
++## Goal
++
++Prove the path:
++
++```text
++RouteMessage
++-> binary RouteMessage frame
++-> in-process bounded frame ring
++-> drain
++-> decode
++-> validated RouteMessage
++```
++
++before implementing `mmap` or `/dev/shm`.
++
++## What the frame ring tracks
++
++```text
++capacity
++occupancy
++total_frame_bytes
++max_frame_bytes
++write_sequence
++read_sequence
++dropped_count
++overflow_policy
++```
++
++## Overflow policies
++
++```text
++reject
++drop_oldest
++```
++
++There is still no silent overwrite.
++
++## CLI
++
++```bash
++PYTHONPATH=src:. python tools/replay_fake_routes_to_frame_ring.py \
++  .var/baby_fork_fake_runtime \
++  --capacity 4
++```
++
++## Non-goals
++
++This phase does not add:
++
++```text
++real shared memory
++mmap
++semaphores
++eventfd
++futex
++RouteProxy daemon
++ControlFS watcher
++Scheduler wiring
++zero-copy transport
++thread/process safety
++NetworkBridge
++HardwareBridge
++cluster dispatch
++```
++
++## Future implementation path
++
++Next steps:
++
++```text
++1. add byte capacity accounting per route
++2. add fixed-size frame slot constraints
++3. prototype file-backed mmap ring in tmpfs
++4. move route directory layout to /dev/shm/autodoc
++5. add notification layer separately
++```
+diff --git a/doc/changelog/0078-inprocess-frame-ring-integration.md b/doc/changelog/0078-inprocess-frame-ring-integration.md
+new file mode 100644
+index 0000000..84c38e4
+--- /dev/null
++++ b/doc/changelog/0078-inprocess-frame-ring-integration.md
+@@ -0,0 +1,29 @@
++# 0078 - In-process frame ring integration
++
++## Added
++
++- `runtime.inprocess_frame_ring`
++- `InProcessFrameRingBuffer`
++- `InProcessFrameRouteRuntime`
++- storage of encoded `RouteMessage` frames
++- decode-on-read validation
++- frame byte stats
++- optional `max_frame_bytes`
++- CLI `tools/replay_fake_routes_to_frame_ring.py`
++- tests for frame storage, decoding, overflow and max frame size
++- rule tests locking in-process-only scope
++
++## Not added
++
++- No real shared memory.
++- No mmap.
++- No semaphores.
++- No eventfd/futex.
++- No RouteProxy daemon.
++- No ControlFS watcher.
++- No Scheduler wiring.
++- No zero-copy transport.
++- No thread/process safety.
++- No NetworkBridge.
++- No HardwareBridge.
++- No cluster dispatch.
+diff --git a/src/runtime/inprocess_frame_ring.py b/src/runtime/inprocess_frame_ring.py
+new file mode 100644
+index 0000000..449c112
+--- /dev/null
++++ b/src/runtime/inprocess_frame_ring.py
+@@ -0,0 +1,254 @@
++"""In-process frame ring integration.
++
++This module implements phase 0078.
++
++It deliberately does not:
++- create shared memory
++- use mmap
++- create semaphores
++- use eventfd
++- use futex
++- start RouteProxy
++- watch ControlFS
++- call Scheduler
++- provide zero-copy transport
++- provide thread/process safety
++- implement NetworkBridge or HardwareBridge
++
++It integrates the phase 0077 RouteMessage frame codec with an in-process
++bounded ring model. The ring stores bytes frames and decodes them back to
++validated RouteMessage payloads when read.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from typing import Any, Literal, Mapping
++
++from runtime.route_frame_codec import (
++    RouteFrame,
++    decode_route_message_frame,
++    encode_route_message_frame,
++)
++from runtime.shm_runtime_schema import RouteMessage
++
++
++OverflowPolicy = Literal["reject", "drop_oldest"]
++
++
++class FrameRingError(RuntimeError):
++    """Base error for in-process frame ring failures."""
++
++
++class FrameRingOverflowError(FrameRingError):
++    """Raised when a frame ring is full and overflow policy is reject."""
++
++
++class FrameTooLargeError(FrameRingError):
++    """Raised when a frame exceeds max_frame_bytes."""
++
++
++@dataclass(frozen=True)
++class FrameRingSlot:
++    """One encoded bytes frame slot."""
++
++    sequence: int
++    frame: bytes
++
++    @property
++    def frame_size(self) -> int:
++        return len(self.frame)
++
++    def decode(self) -> RouteFrame:
++        return decode_route_message_frame(self.frame)
++
++    def to_mapping(self) -> dict[str, Any]:
++        decoded = self.decode()
++        return {
++            "sequence": self.sequence,
++            "frame_size": self.frame_size,
++            "route_id": decoded.message.route_id,
++            "message_id": decoded.message.message_id,
++            "payload_size": decoded.header.payload_size,
++            "payload_sha256": decoded.header.payload_sha256,
++        }
++
++
++@dataclass(frozen=True)
++class FrameRingStats:
++    """Current frame ring stats."""
++
++    capacity: int
++    occupancy: int
++    total_frame_bytes: int
++    max_frame_bytes: int | None
++    write_sequence: int
++    read_sequence: int
++    dropped_count: int
++    overflow_policy: str
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "capacity": self.capacity,
++            "occupancy": self.occupancy,
++            "total_frame_bytes": self.total_frame_bytes,
++            "max_frame_bytes": self.max_frame_bytes,
++            "write_sequence": self.write_sequence,
++            "read_sequence": self.read_sequence,
++            "dropped_count": self.dropped_count,
++            "overflow_policy": self.overflow_policy,
++        }
++
++
++class InProcessFrameRingBuffer:
++    """Bounded in-process ring that stores encoded RouteMessage frames."""
++
++    def __init__(
++        self,
++        capacity: int,
++        *,
++        overflow_policy: OverflowPolicy = "reject",
++        max_frame_bytes: int | None = None,
++    ):
++        if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity < 1:
++            raise ValueError("capacity must be a positive integer")
++        if overflow_policy not in ("reject", "drop_oldest"):
++            raise ValueError("overflow_policy must be 'reject' or 'drop_oldest'")
++        if max_frame_bytes is not None and (
++            not isinstance(max_frame_bytes, int)
++            or isinstance(max_frame_bytes, bool)
++            or max_frame_bytes < 1
++        ):
++            raise ValueError("max_frame_bytes must be a positive integer or None")
++
++        self.capacity = capacity
++        self.overflow_policy: OverflowPolicy = overflow_policy
++        self.max_frame_bytes = max_frame_bytes
++        self._slots: list[FrameRingSlot] = []
++        self._next_sequence = 0
++        self._read_sequence = 0
++        self._dropped_count = 0
++
++    def write_message(self, message: RouteMessage | Mapping[str, Any]) -> FrameRingSlot:
++        """Encode and write a RouteMessage as a bytes frame."""
++
++        return self.write_frame(encode_route_message_frame(message))
++
++    def write_frame(self, frame: bytes | bytearray | memoryview) -> FrameRingSlot:
++        """Validate and write an existing encoded frame."""
++
++        raw = bytes(frame)
++        if self.max_frame_bytes is not None and len(raw) > self.max_frame_bytes:
++            raise FrameTooLargeError(
++                f"frame has {len(raw)} bytes, max_frame_bytes is {self.max_frame_bytes}"
++            )
++
++        # Validate before modifying the ring.
++        decode_route_message_frame(raw)
++
++        if len(self._slots) >= self.capacity:
++            if self.overflow_policy == "reject":
++                raise FrameRingOverflowError("frame ring is full")
++            dropped = self._slots.pop(0)
++            self._dropped_count += 1
++            self._read_sequence = max(self._read_sequence, dropped.sequence + 1)
++
++        slot = FrameRingSlot(sequence=self._next_sequence, frame=raw)
++        self._slots.append(slot)
++        self._next_sequence += 1
++        return slot
++
++    def peek(self, max_items: int | None = None) -> tuple[FrameRingSlot, ...]:
++        """Read frame slots without consuming them."""
++
++        if max_items is None:
++            return tuple(self._slots)
++        if max_items < 0:
++            raise ValueError("max_items must be non-negative")
++        return tuple(self._slots[:max_items])
++
++    def drain(self, max_items: int | None = None) -> tuple[FrameRingSlot, ...]:
++        """Read and consume frame slots in FIFO order."""
++
++        if max_items is None:
++            count = len(self._slots)
++        else:
++            if max_items < 0:
++                raise ValueError("max_items must be non-negative")
++            count = min(max_items, len(self._slots))
++
++        drained = tuple(self._slots[:count])
++        del self._slots[:count]
++
++        if drained:
++            self._read_sequence = drained[-1].sequence + 1
++
++        return drained
++
++    def stats(self) -> FrameRingStats:
++        """Return current frame ring stats."""
++
++        return FrameRingStats(
++            capacity=self.capacity,
++            occupancy=len(self._slots),
++            total_frame_bytes=sum(slot.frame_size for slot in self._slots),
++            max_frame_bytes=self.max_frame_bytes,
++            write_sequence=self._next_sequence,
++            read_sequence=self._read_sequence,
++            dropped_count=self._dropped_count,
++            overflow_policy=self.overflow_policy,
++        )
++
++
++class InProcessFrameRouteRuntime:
++    """Route registry using InProcessFrameRingBuffer per route."""
++
++    def __init__(
++        self,
++        *,
++        route_capacity: int = 16,
++        overflow_policy: OverflowPolicy = "reject",
++        max_frame_bytes: int | None = None,
++    ):
++        if not isinstance(route_capacity, int) or isinstance(route_capacity, bool) or route_capacity < 1:
++            raise ValueError("route_capacity must be a positive integer")
++        self.route_capacity = route_capacity
++        self.overflow_policy: OverflowPolicy = overflow_policy
++        self.max_frame_bytes = max_frame_bytes
++        self._routes: dict[str, InProcessFrameRingBuffer] = {}
++
++    def route_ids(self) -> tuple[str, ...]:
++        return tuple(sorted(self._routes))
++
++    def ensure_route(self, route_id: str) -> InProcessFrameRingBuffer:
++        if "/" in route_id or "\\" in route_id or ".." in route_id or not route_id:
++            raise ValueError("route_id must be a logical route id, not a path")
++        if route_id not in self._routes:
++            self._routes[route_id] = InProcessFrameRingBuffer(
++                self.route_capacity,
++                overflow_policy=self.overflow_policy,
++                max_frame_bytes=self.max_frame_bytes,
++            )
++        return self._routes[route_id]
++
++    def send_message(self, message: RouteMessage | Mapping[str, Any]) -> FrameRingSlot:
++        """Encode and write a RouteMessage into the matching route frame ring."""
++
++        frame = encode_route_message_frame(message)
++        decoded = decode_route_message_frame(frame)
++        return self.ensure_route(decoded.message.route_id).write_frame(frame)
++
++    def send_frame(self, frame: bytes | bytearray | memoryview) -> FrameRingSlot:
++        """Write an already encoded RouteMessage frame into the matching route frame ring."""
++
++        decoded = decode_route_message_frame(frame)
++        return self.ensure_route(decoded.message.route_id).write_frame(frame)
++
++    def drain_route(self, route_id: str, max_items: int | None = None) -> tuple[FrameRingSlot, ...]:
++        return self.ensure_route(route_id).drain(max_items=max_items)
++
++    def stats(self) -> dict[str, dict[str, Any]]:
++        return {
++            route_id: self._routes[route_id].stats().to_mapping()
++            for route_id in self.route_ids()
++        }
+diff --git a/tests/rules/test_inprocess_frame_ring_integration_rule.py b/tests/rules/test_inprocess_frame_ring_integration_rule.py
+new file mode 100644
+index 0000000..6b2490a
+--- /dev/null
++++ b/tests/rules/test_inprocess_frame_ring_integration_rule.py
+@@ -0,0 +1,66 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "INPROCESS_FRAME_RING_INTEGRATION.md"
++MODULE = ROOT / "src" / "runtime" / "inprocess_frame_ring.py"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing file: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_inprocess_frame_ring_doc_locks_integration_only_scope() -> None:
++    text = _read(DOC)
++
++    required_phrases = [
++        "Status: 0078 in-process integration only.",
++        "RouteMessage",
++        "binary RouteMessage frame",
++        "in-process bounded frame ring",
++        "validated RouteMessage",
++        "total_frame_bytes",
++        "max_frame_bytes",
++        "reject",
++        "drop_oldest",
++        "no silent overwrite",
++        "real shared memory",
++        "mmap",
++        "semaphores",
++        "eventfd",
++        "futex",
++        "RouteProxy daemon",
++        "ControlFS watcher",
++        "Scheduler wiring",
++        "zero-copy transport",
++        "thread/process safety",
++        "NetworkBridge",
++        "HardwareBridge",
++        "cluster dispatch",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_inprocess_frame_ring_module_is_not_ipc() -> None:
++    text = _read(MODULE)
++
++    required_phrases = [
++        "It integrates the phase 0077 RouteMessage frame codec",
++        "create shared memory",
++        "use mmap",
++        "create semaphores",
++        "use eventfd",
++        "use futex",
++        "start RouteProxy",
++        "watch ControlFS",
++        "call Scheduler",
++        "provide zero-copy transport",
++        "provide thread/process safety",
++        "implement NetworkBridge or HardwareBridge",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
+diff --git a/tests/test_inprocess_frame_ring.py b/tests/test_inprocess_frame_ring.py
+new file mode 100644
+index 0000000..a7eb427
+--- /dev/null
++++ b/tests/test_inprocess_frame_ring.py
+@@ -0,0 +1,99 @@
++import pytest
++
++from runtime.inprocess_frame_ring import (
++    FrameRingOverflowError,
++    FrameTooLargeError,
++    InProcessFrameRingBuffer,
++    InProcessFrameRouteRuntime,
++)
++from runtime.route_frame_codec import encode_route_message_frame
++from runtime.shm_runtime_schema import ROUTE_MESSAGE_SCHEMA
++
++
++def _route_message(message_id: str = "msg-001", route_id: str = "baby_fork.variant_stub") -> dict:
++    return {
++        "schema": ROUTE_MESSAGE_SCHEMA,
++        "route_id": route_id,
++        "message_id": message_id,
++        "kind": "event",
++        "source": "variant_generator_stub",
++        "target": "scheduler",
++        "occurred_at": "2026-07-04T20:00:00Z",
++        "payload_schema": "missipy.baby_fork.variants_generated.v1",
++        "payload": {
++            "context_id": "ctx-baby-fork-001",
++            "variant_count": 2,
++            "variant_ids": ["variant-1", "variant-2"],
++        },
++    }
++
++
++def test_frame_ring_stores_encoded_frames_and_decodes_on_drain() -> None:
++    ring = InProcessFrameRingBuffer(capacity=2)
++
++    ring.write_message(_route_message("msg-001"))
++    ring.write_message(_route_message("msg-002"))
++
++    drained = ring.drain()
++
++    assert [slot.sequence for slot in drained] == [0, 1]
++    assert [slot.decode().message.message_id for slot in drained] == ["msg-001", "msg-002"]
++    assert all(slot.frame_size > 0 for slot in drained)
++    assert ring.stats().occupancy == 0
++    assert ring.stats().write_sequence == 2
++    assert ring.stats().read_sequence == 2
++
++
++def test_frame_ring_rejects_overflow() -> None:
++    ring = InProcessFrameRingBuffer(capacity=1)
++
++    ring.write_message(_route_message("msg-001"))
++
++    with pytest.raises(FrameRingOverflowError):
++        ring.write_message(_route_message("msg-002"))
++
++    assert ring.stats().dropped_count == 0
++
++
++def test_frame_ring_drop_oldest_is_explicit() -> None:
++    ring = InProcessFrameRingBuffer(capacity=2, overflow_policy="drop_oldest")
++
++    ring.write_message(_route_message("msg-001"))
++    ring.write_message(_route_message("msg-002"))
++    ring.write_message(_route_message("msg-003"))
++
++    drained = ring.drain()
++
++    assert [slot.decode().message.message_id for slot in drained] == ["msg-002", "msg-003"]
++    assert ring.stats().dropped_count == 1
++
++
++def test_frame_ring_enforces_max_frame_bytes() -> None:
++    ring = InProcessFrameRingBuffer(capacity=1, max_frame_bytes=8)
++
++    with pytest.raises(FrameTooLargeError):
++        ring.write_message(_route_message("msg-001"))
++
++
++def test_frame_route_runtime_sends_to_route_specific_frame_rings() -> None:
++    runtime = InProcessFrameRouteRuntime(route_capacity=2)
++
++    runtime.send_message(_route_message("msg-001", "baby_fork.retrieval"))
++    runtime.send_message(_route_message("msg-002", "baby_fork.variant_stub"))
++
++    assert runtime.route_ids() == ("baby_fork.retrieval", "baby_fork.variant_stub")
++    assert runtime.stats()["baby_fork.retrieval"]["occupancy"] == 1
++    assert runtime.stats()["baby_fork.variant_stub"]["occupancy"] == 1
++
++    drained = runtime.drain_route("baby_fork.variant_stub")
++    assert drained[0].decode().message.message_id == "msg-002"
++
++
++def test_frame_route_runtime_accepts_preencoded_frame() -> None:
++    runtime = InProcessFrameRouteRuntime(route_capacity=1)
++    frame = encode_route_message_frame(_route_message("msg-001", "baby_fork.context_gate"))
++
++    slot = runtime.send_frame(frame)
++
++    assert slot.decode().message.route_id == "baby_fork.context_gate"
++    assert runtime.stats()["baby_fork.context_gate"]["total_frame_bytes"] == len(frame)
+diff --git a/tools/replay_fake_routes_to_frame_ring.py b/tools/replay_fake_routes_to_frame_ring.py
+new file mode 100644
+index 0000000..f372ba4
+--- /dev/null
++++ b/tools/replay_fake_routes_to_frame_ring.py
+@@ -0,0 +1,71 @@
++#!/usr/bin/env python3
++"""Replay fake route messages into in-process frame rings.
++
++Usage:
++
++    PYTHONPATH=src:. python tools/replay_fake_routes_to_frame_ring.py \
++      .var/baby_fork_fake_runtime \
++      --capacity 4
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++
++from runtime.fake_route_transport import FakeLocalRouteTransport
++from runtime.inprocess_frame_ring import (
++    FrameRingOverflowError,
++    FrameTooLargeError,
++    InProcessFrameRouteRuntime,
++)
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Replay fake routes into in-process frame rings.")
++    parser.add_argument("fake_runtime_root", type=Path)
++    parser.add_argument("--capacity", type=int, default=4)
++    parser.add_argument("--overflow-policy", choices=("reject", "drop_oldest"), default="reject")
++    parser.add_argument("--max-frame-bytes", type=int)
++    args = parser.parse_args(argv)
++
++    fake = FakeLocalRouteTransport(args.fake_runtime_root)
++    runtime = InProcessFrameRouteRuntime(
++        route_capacity=args.capacity,
++        overflow_policy=args.overflow_policy,
++        max_frame_bytes=args.max_frame_bytes,
++    )
++
++    sent = 0
++    frames = []
++    errors: list[dict[str, str]] = []
++
++    for route_id in fake.route_ids():
++        for message in fake.receive(route_id):
++            try:
++                slot = runtime.send_message(message)
++                decoded = slot.decode()
++                sent += 1
++                frames.append({
++                    "sequence": slot.sequence,
++                    "route_id": decoded.message.route_id,
++                    "message_id": decoded.message.message_id,
++                    "frame_size": slot.frame_size,
++                    "payload_sha256": decoded.header.payload_sha256,
++                })
++            except (FrameRingOverflowError, FrameTooLargeError) as exc:
++                errors.append({"route_id": route_id, "error": str(exc)})
++
++    print(json.dumps({
++        "sent": sent,
++        "errors": errors,
++        "frames": frames,
++        "stats": runtime.stats(),
++    }, indent=2, sort_keys=True))
++
++    return 1 if errors else 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

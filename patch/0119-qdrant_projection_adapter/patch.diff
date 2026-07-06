@@ -1,0 +1,990 @@
+diff --git a/PHASE0119_TEST_REPORT.md b/PHASE0119_TEST_REPORT.md
+new file mode 100644
+index 0000000..b5a48f3
+--- /dev/null
++++ b/PHASE0119_TEST_REPORT.md
+@@ -0,0 +1,21 @@
++# Phase 0119 test report
++
++Patch: `0119-qdrant_projection_adapter`
++
++Expected validation:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/runtime/test_qdrant_projection_adapter.py
++PYTHONPATH=src:. pytest -q tests/rules/test_qdrant_projection_adapter_0119_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++Local focused validation on reconstructed 0118 base:
++
++```text
++compileall: OK
++runtime 0119: OK
++rules 0119: OK
++```
+diff --git a/doc/CHANGELOG_0119_QDRANT_PROJECTION_ADAPTER.md b/doc/CHANGELOG_0119_QDRANT_PROJECTION_ADAPTER.md
+new file mode 100644
+index 0000000..c4d7a1f
+--- /dev/null
++++ b/doc/CHANGELOG_0119_QDRANT_PROJECTION_ADAPTER.md
+@@ -0,0 +1,11 @@
++# 0119 — Qdrant projection adapter
++
++Added a Qdrant projection boundary after OpenVINO embeddings:
++
++- immutable local Qdrant target and bounded projection policy;
++- deterministic Qdrant-ready points carrying `sql_context_ref`;
++- projection batches and injected executor protocol;
++- lightweight recall-hit contracts returning SQL refs for re-hydration;
++- tests and rule guardrails preventing kernel/runtime/backend drift.
++
++No Scheduler, Queue, Dispatcher, PolicyEngine, EventBus, RouteRuntimeManager, qdrant-client, PostgreSQL, OpenVINO, or LLM runtime coupling was added.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0119.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0119.md
+new file mode 100644
+index 0000000..0e8203c
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0119.md
+@@ -0,0 +1,16 @@
++# ControlProxy operational plan — 0119 update
++
++0119 keeps ControlProxy and route runtime unchanged.
++
++Operational focus moves to vector projection:
++
++```text
++OpenVINOEmbeddingAdapter
++-> QdrantProjectionAdapter
++-> Qdrant-ready points carrying sql_context_ref
++-> SQL re-hydration later
++```
++
++ControlProxy remains data-plane infrastructure. It is not the authority for context, policy, SQL state, embeddings, Qdrant projection, or specialist output.
++
++The Qdrant projection adapter is a specialist/projection boundary. It does not modify Scheduler, Dispatcher, PolicyEngine, EventBus, PriorityQueue, or RouteRuntimeManager.
+diff --git a/doc/architecture/QDRANT_PROJECTION_ADAPTER_0119.md b/doc/architecture/QDRANT_PROJECTION_ADAPTER_0119.md
+new file mode 100644
+index 0000000..488afe4
+--- /dev/null
++++ b/doc/architecture/QDRANT_PROJECTION_ADAPTER_0119.md
+@@ -0,0 +1,68 @@
++# 0119 — Qdrant projection adapter boundary
++
++QdrantProjectionAdapter projects embedding vectors into Qdrant-ready points.
++
++This phase adds the projection boundary after OpenVINO embeddings:
++
++```text
++SQLContextStore
++-> SQLContextHydrator
++-> OpenVINOEmbeddingAdapter
++-> embedding vectors
++-> QdrantProjectionAdapter
++-> Qdrant-ready points
++-> Qdrant recall hits
++-> SQLContextHydrator re-hydrates refs
++-> InferenceContextDraft
++```
++
++SQLContextStore is durable context authority. Qdrant is vector projection and retrieval, not context authority. Qdrant payload carries sql_context_ref for SQL re-hydration.
++
++The adapter does not open a Qdrant connection. It receives an injected executor. The real local Qdrant client remains a later external adapter; this module only builds deterministic point IDs, vectors, and lightweight payloads.
++
++No qdrant-client/PostgreSQL/OpenVINO/LLM runtime import in QdrantProjectionAdapter.
++
++Scheduler orchestrates context exploration jobs; it does not build variants itself.
++
++MVTC remains future, not runtime in 0119.
++
++## Local installation status
++
++```text
++PostgreSQL 18 data_directory = /srv/autodoc/postgres/data
++active PostgreSQL lives on fast_pool
++data_pool receives ZFS snapshots and backups
++Qdrant 1.18.2 lives on /srv/autodoc/qdrant
++Qdrant storage = /srv/autodoc/qdrant/storage
++Qdrant snapshots = /srv/autodoc/qdrant/snapshots
++Qdrant logs are qdrant:logs
++OpenVINO 2026.2.1 sees CPU and GPU
++```
++
++## Payload rule
++
++Every projected point carries:
++
++```text
++sql_context_ref
++source_ref
++embedding_ref
++role
++embedding_backend_ref
++qdrant_backend_ref
++```
++
++A Qdrant hit is never treated as content. It is only a candidate reference that must be hydrated from SQL before a specialist or LLM sees it.
++
++## Rule review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: 0119 confines vector projection to an injected Qdrant boundary and introduces no kernel dependency.
++live_path_status: transition
++live_path_uses_real_backend: false
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: true
++```
+diff --git a/doc/docs/architecture/runtime/112_qdrant_projection_adapter.dot b/doc/docs/architecture/runtime/112_qdrant_projection_adapter.dot
+new file mode 100644
+index 0000000..95914d7
+--- /dev/null
++++ b/doc/docs/architecture/runtime/112_qdrant_projection_adapter.dot
+@@ -0,0 +1,30 @@
++digraph qdrant_projection_adapter_0119 {
++    rankdir=LR;
++    node [shape=box];
++
++    SourceCandidate [label="SourceCandidate / GitHub artifact"];
++    SQLStore [label="SQLContextStore\nSQL authority on fast_pool"];
++    Hydrator [label="SQLContextHydrator"];
++    OpenVINO [label="OpenVINOEmbeddingAdapter"];
++    Vectors [label="Embedding vectors"];
++    Adapter [label="QdrantProjectionAdapter\nbounded points + injected executor"];
++    Points [label="Qdrant-ready points\npayload has sql_context_ref"];
++    Runtime [label="external Qdrant client adapter later\nno import in 0119"];
++    Hits [label="Qdrant recall hits\nrefs only"];
++    Rehydrate [label="SQLContextHydrator re-hydrates refs"];
++    Draft [label="InferenceContextDraft"];
++    Scheduler [label="Scheduler orchestrates jobs\ndoes not build variants"];
++
++    SourceCandidate -> SQLStore;
++    SQLStore -> Hydrator;
++    Hydrator -> OpenVINO;
++    OpenVINO -> Vectors;
++    Vectors -> Adapter;
++    Adapter -> Points;
++    Adapter -> Runtime [style=dashed, label="executor membrane"];
++    Runtime -> Hits [style=dashed];
++    Hits -> Rehydrate [label="sql_context_ref"];
++    Rehydrate -> SQLStore;
++    Rehydrate -> Draft;
++    Scheduler -> Adapter [style=dashed, label="job carries refs only"];
++}
+diff --git a/doc/manifests/MANIFEST_0119_CHANGED_FILES.md b/doc/manifests/MANIFEST_0119_CHANGED_FILES.md
+new file mode 100644
+index 0000000..9aefde2
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0119_CHANGED_FILES.md
+@@ -0,0 +1,17 @@
++# Manifest — 0119 Qdrant projection adapter
++
++Changed files:
++
++```text
++src/inference/qdrant_projection_adapter.py
++tests/runtime/test_qdrant_projection_adapter.py
++tests/rules/test_qdrant_projection_adapter_0119_rule.py
++doc/architecture/QDRANT_PROJECTION_ADAPTER_0119.md
++doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0119.md
++doc/docs/architecture/runtime/112_qdrant_projection_adapter.dot
++doc/CHANGELOG_0119_QDRANT_PROJECTION_ADAPTER.md
++doc/manifests/MANIFEST_0119_CHANGED_FILES.md
++PHASE0119_TEST_REPORT.md
++```
++
++No kernel, dispatcher, queue, policy, route-runtime manager, or event-bus file is modified by this patch.
+diff --git a/src/inference/qdrant_projection_adapter.py b/src/inference/qdrant_projection_adapter.py
+new file mode 100644
+index 0000000..373a12a
+--- /dev/null
++++ b/src/inference/qdrant_projection_adapter.py
+@@ -0,0 +1,496 @@
++"""Qdrant projection adapter boundary for OpenVINO embedding vectors.
++
++0119 turns validated embedding vectors into Qdrant-ready projection points while
++preserving SQLContextStore as the durable context authority.  The adapter does
++not import qdrant-client, PostgreSQL drivers, OpenVINO, HTTP clients, sockets,
++or kernel components.  It prepares deterministic point payloads carrying
++``sql_context_ref`` so later retrieval can always re-hydrate from SQL.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++import hashlib
++import math
++import re
++from typing import Protocol, Sequence
++
++from inference.openvino_embedding_adapter import OpenVINOEmbeddingBatch, OpenVINOEmbeddingVector
++
++_TARGET_SCHEMA = "missipy.qdrant_projection.target.v1"
++_POINT_SCHEMA = "missipy.qdrant_projection.point.v1"
++_BATCH_SCHEMA = "missipy.qdrant_projection.batch.v1"
++_WRITE_SCHEMA = "missipy.qdrant_projection.write.v1"
++_HIT_SCHEMA = "missipy.qdrant_projection.hit.v1"
++_RECALL_SCHEMA = "missipy.qdrant_projection.recall.v1"
++_ALLOWED_DISTANCES = frozenset({"Cosine", "Dot", "Euclid"})
++_ALLOWED_ROLES = frozenset({"passage", "query"})
++_TYPED_REF_RE = re.compile(r"^[a-z][a-z0-9-]*:[^\s].*$")
++_SQL_REF_RE = re.compile(r"^sql:[^\s].*$")
++
++
++class QdrantProjectionExecutor(Protocol):
++    """Injected execution membrane for a real or fake Qdrant backend."""
++
++    def upsert_points(
++        self,
++        points: Sequence[QdrantProjectionPoint],
++        *,
++        target: QdrantProjectionTarget,
++        policy: QdrantProjectionPolicy,
++    ) -> QdrantProjectionWriteResult: ...
++
++    def search_vector(
++        self,
++        vector: Sequence[float],
++        *,
++        target: QdrantProjectionTarget,
++        policy: QdrantProjectionPolicy,
++        query: QdrantRecallQuery,
++    ) -> QdrantRecallResult: ...
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantProjectionTarget:
++    """Data-only local Qdrant projection target.
++
++    The target documents the local service installed on Gentoo/OpenRC.  It is not
++    a client and it does not open network connections.
++    """
++
++    collection_name: str = "autodoc_context_embeddings"
++    endpoint_ref: str = "qdrant:local:6333"
++    vector_dimension: int = 384
++    distance: str = "Cosine"
++    storage_path: str = "/srv/autodoc/qdrant/storage"
++    snapshots_path: str = "/srv/autodoc/qdrant/snapshots"
++
++    def __post_init__(self) -> None:
++        _require_non_empty("collection_name", self.collection_name)
++        _require_typed_ref("endpoint_ref", self.endpoint_ref)
++        if self.vector_dimension <= 0:
++            raise ValueError("vector_dimension must be > 0")
++        if self.distance not in _ALLOWED_DISTANCES:
++            raise ValueError("distance must be Cosine, Dot, or Euclid")
++        _require_non_empty("storage_path", self.storage_path)
++        _require_non_empty("snapshots_path", self.snapshots_path)
++
++    @property
++    def backend_ref(self) -> str:
++        return f"qdrant:collection:{self.collection_name}"
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _TARGET_SCHEMA,
++            "collection_name": self.collection_name,
++            "endpoint_ref": self.endpoint_ref,
++            "backend_ref": self.backend_ref,
++            "vector_dimension": self.vector_dimension,
++            "distance": self.distance,
++            "storage_path": self.storage_path,
++            "snapshots_path": self.snapshots_path,
++            "runtime_import": "external adapter only; no qdrant-client import here",
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantProjectionPolicy:
++    """Bounded deterministic projection policy."""
++
++    max_points: int = 128
++    max_recall_hits: int = 32
++    require_sql_context_ref: bool = True
++    require_normalized_vectors: bool = True
++    normalization_tolerance: float = 1e-4
++
++    def __post_init__(self) -> None:
++        if self.max_points <= 0:
++            raise ValueError("max_points must be > 0")
++        if self.max_recall_hits <= 0:
++            raise ValueError("max_recall_hits must be > 0")
++        if self.normalization_tolerance <= 0:
++            raise ValueError("normalization_tolerance must be > 0")
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantProjectionPoint:
++    """Qdrant-ready point with SQL authority ref in lightweight payload."""
++
++    point_id: str
++    embedding_ref: str
++    source_ref: str
++    sql_context_ref: str
++    vector: tuple[float, ...]
++    payload: tuple[tuple[str, str], ...] = field(default_factory=tuple)
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("point_id", self.point_id)
++        _require_typed_ref("embedding_ref", self.embedding_ref)
++        _require_typed_ref("source_ref", self.source_ref)
++        _require_sql_ref("sql_context_ref", self.sql_context_ref)
++        if not self.vector:
++            raise ValueError("vector must not be empty")
++        object.__setattr__(self, "vector", tuple(float(value) for value in self.vector))
++        object.__setattr__(self, "payload", _normalize_payload(self.payload))
++
++    @property
++    def dimension(self) -> int:
++        return len(self.vector)
++
++    @property
++    def l2_norm(self) -> float:
++        return math.sqrt(sum(value * value for value in self.vector))
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _POINT_SCHEMA,
++            "point_id": self.point_id,
++            "embedding_ref": self.embedding_ref,
++            "source_ref": self.source_ref,
++            "sql_context_ref": self.sql_context_ref,
++            "dimension": self.dimension,
++            "l2_norm": self.l2_norm,
++            "payload": dict(self.payload),
++            "vector": list(self.vector),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantProjectionBatch:
++    """Serializable set of points ready for an injected Qdrant executor."""
++
++    target: QdrantProjectionTarget
++    points: tuple[QdrantProjectionPoint, ...]
++    capped: bool = False
++
++    def __post_init__(self) -> None:
++        object.__setattr__(self, "points", tuple(self.points))
++        for point in self.points:
++            if point.dimension != self.target.vector_dimension:
++                raise ValueError("point dimension must match target vector_dimension")
++
++    @property
++    def point_count(self) -> int:
++        return len(self.points)
++
++    @property
++    def point_ids(self) -> tuple[str, ...]:
++        return tuple(point.point_id for point in self.points)
++
++    @property
++    def sql_context_refs(self) -> tuple[str, ...]:
++        return tuple(point.sql_context_ref for point in self.points)
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _BATCH_SCHEMA,
++            "target": self.target.to_mapping(),
++            "point_count": self.point_count,
++            "point_ids": list(self.point_ids),
++            "sql_context_refs": list(self.sql_context_refs),
++            "capped": self.capped,
++            "points": [point.to_mapping() for point in self.points],
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantProjectionWriteResult:
++    """Result returned by an injected projection executor."""
++
++    target: QdrantProjectionTarget
++    point_ids: tuple[str, ...]
++    acknowledged: bool = True
++
++    def __post_init__(self) -> None:
++        object.__setattr__(self, "point_ids", _normalize_typed_refs(self.point_ids))
++
++    @property
++    def point_count(self) -> int:
++        return len(self.point_ids)
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _WRITE_SCHEMA,
++            "target": self.target.to_mapping(),
++            "point_count": self.point_count,
++            "point_ids": list(self.point_ids),
++            "acknowledged": self.acknowledged,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantRecallQuery:
++    """Bounded recall query metadata for an injected Qdrant search executor."""
++
++    query_ref: str
++    limit: int = 16
++    role: str = "query"
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("query_ref", self.query_ref)
++        if self.limit <= 0:
++            raise ValueError("limit must be > 0")
++        if self.role not in _ALLOWED_ROLES:
++            raise ValueError("role must be passage or query")
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantRecallHit:
++    """Lightweight recall hit that must be re-hydrated from SQL."""
++
++    point_id: str
++    sql_context_ref: str
++    score: float
++    source_ref: str = ""
++    payload: tuple[tuple[str, str], ...] = field(default_factory=tuple)
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("point_id", self.point_id)
++        _require_sql_ref("sql_context_ref", self.sql_context_ref)
++        if self.source_ref:
++            _require_typed_ref("source_ref", self.source_ref)
++        if not 0.0 <= float(self.score) <= 1.0:
++            raise ValueError("score must be between 0 and 1")
++        object.__setattr__(self, "score", float(self.score))
++        object.__setattr__(self, "payload", _normalize_payload(self.payload))
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _HIT_SCHEMA,
++            "point_id": self.point_id,
++            "sql_context_ref": self.sql_context_ref,
++            "score": self.score,
++            "source_ref": self.source_ref,
++            "payload": dict(self.payload),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantRecallResult:
++    """Recall result carrying only refs; SQL remains authority for content."""
++
++    target: QdrantProjectionTarget
++    query: QdrantRecallQuery
++    hits: tuple[QdrantRecallHit, ...]
++    capped: bool = False
++
++    def __post_init__(self) -> None:
++        object.__setattr__(self, "hits", tuple(self.hits))
++
++    @property
++    def hit_count(self) -> int:
++        return len(self.hits)
++
++    @property
++    def sql_context_refs(self) -> tuple[str, ...]:
++        return unique_sql_context_refs_from_recall(self)
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _RECALL_SCHEMA,
++            "target": self.target.to_mapping(),
++            "query_ref": self.query.query_ref,
++            "hit_count": self.hit_count,
++            "sql_context_refs": list(self.sql_context_refs),
++            "capped": self.capped,
++            "hits": [hit.to_mapping() for hit in self.hits],
++        }
++
++
++class QdrantProjectionAdapter:
++    """Build and upsert Qdrant projection points via an injected executor."""
++
++    def __init__(
++        self,
++        executor: QdrantProjectionExecutor,
++        target: QdrantProjectionTarget | None = None,
++        policy: QdrantProjectionPolicy | None = None,
++    ) -> None:
++        self._executor = executor
++        self._target = target or QdrantProjectionTarget()
++        self._policy = policy or QdrantProjectionPolicy()
++
++    @property
++    def target(self) -> QdrantProjectionTarget:
++        return self._target
++
++    @property
++    def policy(self) -> QdrantProjectionPolicy:
++        return self._policy
++
++    def build_projection_batch(self, embedding_batch: OpenVINOEmbeddingBatch) -> QdrantProjectionBatch:
++        return build_qdrant_projection_batch(embedding_batch, self._target, self._policy)
++
++    def upsert_embedding_batch(self, embedding_batch: OpenVINOEmbeddingBatch) -> QdrantProjectionWriteResult:
++        batch = self.build_projection_batch(embedding_batch)
++        return self._executor.upsert_points(batch.points, target=self._target, policy=self._policy)
++
++    def recall_by_vector(self, vector: Sequence[float], query: QdrantRecallQuery) -> QdrantRecallResult:
++        return self._executor.search_vector(vector, target=self._target, policy=self._policy, query=query)
++
++
++def build_qdrant_projection_batch(
++    embedding_batch: OpenVINOEmbeddingBatch,
++    target: QdrantProjectionTarget | None = None,
++    policy: QdrantProjectionPolicy | None = None,
++) -> QdrantProjectionBatch:
++    """Build a bounded Qdrant projection batch from validated embeddings."""
++
++    effective_target = target or QdrantProjectionTarget(vector_dimension=embedding_batch.target.dimension)
++    effective_policy = policy or QdrantProjectionPolicy()
++    points: list[QdrantProjectionPoint] = []
++    capped = embedding_batch.capped
++    for embedding in embedding_batch.vectors:
++        if len(points) >= effective_policy.max_points:
++            capped = True
++            break
++        points.append(build_qdrant_projection_point(embedding, effective_target, effective_policy))
++    return QdrantProjectionBatch(target=effective_target, points=tuple(points), capped=capped)
++
++
++def build_qdrant_projection_point(
++    embedding: OpenVINOEmbeddingVector,
++    target: QdrantProjectionTarget | None = None,
++    policy: QdrantProjectionPolicy | None = None,
++) -> QdrantProjectionPoint:
++    """Build one deterministic Qdrant-ready point from an embedding vector."""
++
++    effective_target = target or QdrantProjectionTarget(vector_dimension=embedding.dimension)
++    effective_policy = policy or QdrantProjectionPolicy()
++    if embedding.dimension != effective_target.vector_dimension:
++        raise ValueError("embedding dimension must match target vector_dimension")
++    if effective_policy.require_normalized_vectors and not math.isclose(
++        embedding.l2_norm,
++        1.0,
++        rel_tol=effective_policy.normalization_tolerance,
++        abs_tol=effective_policy.normalization_tolerance,
++    ):
++        raise ValueError("embedding vector must be normalized before Qdrant projection")
++    sql_context_ref = _sql_context_ref_from_embedding(embedding)
++    if effective_policy.require_sql_context_ref and sql_context_ref is None:
++        raise ValueError("embedding metadata must include sql context_ref")
++    if sql_context_ref is None:
++        sql_context_ref = "sql:unknown"
++    payload = _projection_payload(embedding, sql_context_ref, effective_target)
++    return QdrantProjectionPoint(
++        point_id=_point_id_for_embedding(embedding, effective_target),
++        embedding_ref=embedding.embedding_ref,
++        source_ref=embedding.source_ref,
++        sql_context_ref=sql_context_ref,
++        vector=embedding.vector,
++        payload=payload,
++    )
++
++
++def unique_sql_context_refs_from_recall(
++    recall: QdrantRecallResult,
++    *,
++    max_refs: int | None = None,
++) -> tuple[str, ...]:
++    """Return de-duplicated SQL refs in recall order for SQL re-hydration."""
++
++    if max_refs is not None and max_refs <= 0:
++        raise ValueError("max_refs must be > 0")
++    refs: list[str] = []
++    seen: set[str] = set()
++    for hit in recall.hits:
++        if hit.sql_context_ref in seen:
++            continue
++        seen.add(hit.sql_context_ref)
++        refs.append(hit.sql_context_ref)
++        if max_refs is not None and len(refs) >= max_refs:
++            break
++    return tuple(refs)
++
++
++def local_qdrant_projection_target(
++    *,
++    collection_name: str = "autodoc_context_embeddings",
++    vector_dimension: int = 384,
++) -> QdrantProjectionTarget:
++    """Return the documented local Qdrant projection target."""
++
++    return QdrantProjectionTarget(collection_name=collection_name, vector_dimension=vector_dimension)
++
++
++def _projection_payload(
++    embedding: OpenVINOEmbeddingVector,
++    sql_context_ref: str,
++    target: QdrantProjectionTarget,
++) -> tuple[tuple[str, str], ...]:
++    payload = {
++        "sql_context_ref": sql_context_ref,
++        "source_ref": embedding.source_ref,
++        "embedding_ref": embedding.embedding_ref,
++        "role": embedding.role,
++        "embedding_backend_ref": embedding.backend_ref,
++        "qdrant_backend_ref": target.backend_ref,
++    }
++    for key, value in embedding.metadata:
++        payload.setdefault(key, value)
++    return tuple(sorted((key, value) for key, value in payload.items()))
++
++
++def _sql_context_ref_from_embedding(embedding: OpenVINOEmbeddingVector) -> str | None:
++    metadata = dict(embedding.metadata)
++    context_ref = metadata.get("context_ref")
++    if context_ref:
++        _require_sql_ref("context_ref", context_ref)
++        return context_ref
++    marker = "ctx-fragment:"
++    if embedding.source_ref.startswith(marker):
++        candidate = embedding.source_ref[len(marker) :]
++        if _SQL_REF_RE.match(candidate):
++            return candidate
++    return None
++
++
++def _point_id_for_embedding(embedding: OpenVINOEmbeddingVector, target: QdrantProjectionTarget) -> str:
++    digest = hashlib.sha256()
++    digest.update(target.collection_name.encode("utf-8"))
++    digest.update(b"\0")
++    digest.update(embedding.embedding_ref.encode("utf-8"))
++    digest.update(b"\0")
++    digest.update(embedding.source_ref.encode("utf-8"))
++    return f"qdrant-point:{digest.hexdigest()[:16]}"
++
++
++def _normalize_payload(values: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
++    normalized: list[tuple[str, str]] = []
++    seen: set[str] = set()
++    for key, value in values:
++        _require_non_empty("payload key", key)
++        _require_non_empty("payload value", value)
++        if key in seen:
++            raise ValueError("payload keys must be unique")
++        seen.add(key)
++        normalized.append((key, value))
++    return tuple(sorted(normalized))
++
++
++def _normalize_typed_refs(values: tuple[str, ...]) -> tuple[str, ...]:
++    normalized: list[str] = []
++    seen: set[str] = set()
++    for value in values:
++        _require_typed_ref("ref", value)
++        if value not in seen:
++            seen.add(value)
++            normalized.append(value)
++    return tuple(normalized)
++
++
++def _require_sql_ref(name: str, value: str) -> None:
++    _require_non_empty(name, value)
++    if not _SQL_REF_RE.match(value):
++        raise ValueError(f"{name} must be a sql:* reference")
++
++
++def _require_typed_ref(name: str, value: str) -> None:
++    _require_non_empty(name, value)
++    if not _TYPED_REF_RE.match(value):
++        raise ValueError(f"{name} must be a typed reference")
++
++
++def _require_non_empty(name: str, value: str) -> None:
++    if not value or not value.strip():
++        raise ValueError(f"{name} must not be empty")
+diff --git a/tests/rules/test_qdrant_projection_adapter_0119_rule.py b/tests/rules/test_qdrant_projection_adapter_0119_rule.py
+new file mode 100644
+index 0000000..07193c5
+--- /dev/null
++++ b/tests/rules/test_qdrant_projection_adapter_0119_rule.py
+@@ -0,0 +1,95 @@
++from __future__ import annotations
++
++import ast
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "inference" / "qdrant_projection_adapter.py"
++DOC = ROOT / "doc" / "architecture" / "QDRANT_PROJECTION_ADAPTER_0119.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0119_CHANGED_FILES.md"
++DOT = ROOT / "doc" / "docs" / "architecture" / "runtime" / "112_qdrant_projection_adapter.dot"
++
++
++def test_0119_documents_qdrant_projection_boundary() -> None:
++    text = DOC.read_text(encoding="utf-8")
++    required = [
++        "QdrantProjectionAdapter projects embedding vectors into Qdrant-ready points",
++        "SQLContextStore is durable context authority",
++        "Qdrant is vector projection and retrieval, not context authority",
++        "Qdrant payload carries sql_context_ref for SQL re-hydration",
++        "No qdrant-client/PostgreSQL/OpenVINO/LLM runtime import in QdrantProjectionAdapter",
++        "Scheduler orchestrates context exploration jobs; it does not build variants itself",
++        "MVTC remains future, not runtime in 0119",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0119_manifest_does_not_touch_kernel_or_runtime_authority() -> None:
++    text = MANIFEST.read_text(encoding="utf-8")
++    required = [
++        "src/inference/qdrant_projection_adapter.py",
++        "tests/runtime/test_qdrant_projection_adapter.py",
++        "tests/rules/test_qdrant_projection_adapter_0119_rule.py",
++        "doc/architecture/QDRANT_PROJECTION_ADAPTER_0119.md",
++        "doc/docs/architecture/runtime/112_qdrant_projection_adapter.dot",
++    ]
++    for phrase in required:
++        assert phrase in text
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/kernel/dispatcher.py",
++        "src/kernel/queue.py",
++        "src/policy/engine.py",
++        "src/runtime/route_runtime_manager.py",
++        "src/observability/event_bus.py",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++
++
++def test_0119_module_has_no_unapproved_backend_runtime_imports() -> None:
++    tree = ast.parse(MODULE.read_text(encoding="utf-8"))
++    imports: set[str] = set()
++    for node in ast.walk(tree):
++        if isinstance(node, ast.Import):
++            imports.update(alias.name.split(".", 1)[0] for alias in node.names)
++        elif isinstance(node, ast.ImportFrom) and node.module:
++            imports.add(node.module.split(".", 1)[0])
++    forbidden = {
++        "openvino",
++        "qdrant",
++        "psycopg",
++        "sqlite3",
++        "requests",
++        "httpx",
++        "socket",
++        "subprocess",
++        "src.kernel",
++        "src.runtime",
++        "src.policy",
++    }
++    assert sorted(imports & forbidden) == []
++
++
++def test_0119_module_does_not_create_events_or_scheduler_commands() -> None:
++    text = MODULE.read_text(encoding="utf-8")
++    forbidden = ["EventType(", "Scheduler(", "Dispatcher(", "PolicyEngine(", "PriorityQueue("]
++    for phrase in forbidden:
++        assert phrase not in text
++
++
++def test_0119_graph_shows_qdrant_projection_then_sql_rehydration() -> None:
++    text = DOT.read_text(encoding="utf-8")
++    required = [
++        "OpenVINOEmbeddingAdapter",
++        "Embedding vectors",
++        "QdrantProjectionAdapter",
++        "Qdrant-ready points",
++        "Qdrant recall hits",
++        "sql_context_ref",
++        "SQLContextHydrator re-hydrates refs",
++        "InferenceContextDraft",
++    ]
++    for phrase in required:
++        assert phrase in text
+diff --git a/tests/runtime/test_qdrant_projection_adapter.py b/tests/runtime/test_qdrant_projection_adapter.py
+new file mode 100644
+index 0000000..eebbc84
+--- /dev/null
++++ b/tests/runtime/test_qdrant_projection_adapter.py
+@@ -0,0 +1,182 @@
++from __future__ import annotations
++
++from typing import Sequence
++
++import pytest
++
++from src.inference.openvino_embedding_adapter import (
++    OpenVINOEmbeddingBatch,
++    OpenVINOEmbeddingRuntimeTarget,
++    OpenVINOEmbeddingVector,
++)
++from src.inference.qdrant_projection_adapter import (
++    QdrantProjectionAdapter,
++    QdrantProjectionExecutor,
++    QdrantProjectionPolicy,
++    QdrantProjectionTarget,
++    QdrantProjectionWriteResult,
++    QdrantRecallHit,
++    QdrantRecallQuery,
++    QdrantRecallResult,
++    build_qdrant_projection_batch,
++    build_qdrant_projection_point,
++    local_qdrant_projection_target,
++    unique_sql_context_refs_from_recall,
++)
++
++
++class FakeQdrantExecutor(QdrantProjectionExecutor):
++    def __init__(self) -> None:
++        self.upserted: tuple[str, ...] = ()
++
++    def upsert_points(
++        self,
++        points: Sequence,
++        *,
++        target: QdrantProjectionTarget,
++        policy: QdrantProjectionPolicy,
++    ) -> QdrantProjectionWriteResult:
++        assert target.collection_name == "autodoc_context_embeddings"
++        assert policy.max_points == 4
++        self.upserted = tuple(point.point_id for point in points)
++        return QdrantProjectionWriteResult(target=target, point_ids=self.upserted)
++
++    def search_vector(
++        self,
++        vector: Sequence[float],
++        *,
++        target: QdrantProjectionTarget,
++        policy: QdrantProjectionPolicy,
++        query: QdrantRecallQuery,
++    ) -> QdrantRecallResult:
++        assert tuple(vector) == (1.0, 0.0, 0.0)
++        assert query.query_ref == "embedding:query:001"
++        return QdrantRecallResult(
++            target=target,
++            query=query,
++            hits=(
++                QdrantRecallHit(point_id="qdrant-point:001", sql_context_ref="sql:chunk:001", score=0.99),
++                QdrantRecallHit(point_id="qdrant-point:002", sql_context_ref="sql:fact:001", score=0.80),
++            ),
++        )
++
++
++def _embedding_batch() -> OpenVINOEmbeddingBatch:
++    return OpenVINOEmbeddingBatch(
++        target=OpenVINOEmbeddingRuntimeTarget(dimension=3),
++        vectors=(
++            OpenVINOEmbeddingVector(
++                embedding_ref="embedding:passage:001",
++                source_ref="ctx-fragment:sql:chunk:001",
++                vector=(1.0, 0.0, 0.0),
++                backend_ref="openvino:model:test",
++                metadata=(
++                    ("context_ref", "sql:chunk:001"),
++                    ("kind", "chunk"),
++                    ("relation", "child"),
++                ),
++            ),
++            OpenVINOEmbeddingVector(
++                embedding_ref="embedding:passage:002",
++                source_ref="ctx-fragment:sql:fact:001",
++                vector=(0.0, 1.0, 0.0),
++                backend_ref="openvino:model:test",
++                metadata=(("context_ref", "sql:fact:001"), ("kind", "fact")),
++            ),
++        ),
++    )
++
++
++def test_projection_point_preserves_sql_ref_in_payload() -> None:
++    point = build_qdrant_projection_point(
++        _embedding_batch().vectors[0],
++        QdrantProjectionTarget(vector_dimension=3),
++    )
++
++    assert point.point_id.startswith("qdrant-point:")
++    assert point.sql_context_ref == "sql:chunk:001"
++    assert point.dimension == 3
++    assert dict(point.payload)["sql_context_ref"] == "sql:chunk:001"
++    assert dict(point.payload)["qdrant_backend_ref"] == "qdrant:collection:autodoc_context_embeddings"
++
++
++def test_projection_batch_is_bounded_and_serializable() -> None:
++    batch = build_qdrant_projection_batch(
++        _embedding_batch(),
++        QdrantProjectionTarget(vector_dimension=3),
++        QdrantProjectionPolicy(max_points=1),
++    )
++
++    assert batch.capped is True
++    assert batch.point_count == 1
++    assert batch.sql_context_refs == ("sql:chunk:001",)
++    assert batch.to_mapping()["target"]["storage_path"] == "/srv/autodoc/qdrant/storage"
++
++
++def test_projection_adapter_uses_injected_executor_without_importing_qdrant_client() -> None:
++    executor = FakeQdrantExecutor()
++    adapter = QdrantProjectionAdapter(
++        executor,
++        target=QdrantProjectionTarget(vector_dimension=3),
++        policy=QdrantProjectionPolicy(max_points=4),
++    )
++
++    result = adapter.upsert_embedding_batch(_embedding_batch())
++
++    assert result.acknowledged is True
++    assert result.point_count == 2
++    assert executor.upserted == result.point_ids
++
++
++def test_recall_result_returns_unique_sql_refs_for_rehydration() -> None:
++    target = QdrantProjectionTarget(vector_dimension=3)
++    query = QdrantRecallQuery(query_ref="embedding:query:001", limit=3)
++    result = QdrantRecallResult(
++        target=target,
++        query=query,
++        hits=(
++            QdrantRecallHit(point_id="qdrant-point:001", sql_context_ref="sql:chunk:001", score=0.99),
++            QdrantRecallHit(point_id="qdrant-point:002", sql_context_ref="sql:chunk:001", score=0.90),
++            QdrantRecallHit(point_id="qdrant-point:003", sql_context_ref="sql:fact:001", score=0.75),
++        ),
++    )
++
++    assert unique_sql_context_refs_from_recall(result) == ("sql:chunk:001", "sql:fact:001")
++    assert unique_sql_context_refs_from_recall(result, max_refs=1) == ("sql:chunk:001",)
++    assert result.to_mapping()["sql_context_refs"] == ["sql:chunk:001", "sql:fact:001"]
++
++
++def test_projection_rejects_wrong_dimension_and_missing_sql_ref() -> None:
++    target = QdrantProjectionTarget(vector_dimension=4)
++    with pytest.raises(ValueError, match="dimension"):
++        build_qdrant_projection_point(_embedding_batch().vectors[0], target)
++
++    missing = OpenVINOEmbeddingVector(
++        embedding_ref="embedding:passage:missing",
++        source_ref="ctx-fragment:doc:missing",
++        vector=(1.0, 0.0, 0.0),
++        backend_ref="openvino:model:test",
++    )
++    with pytest.raises(ValueError, match="sql context_ref"):
++        build_qdrant_projection_point(missing, QdrantProjectionTarget(vector_dimension=3))
++
++
++def test_adapter_recall_delegates_to_injected_executor() -> None:
++    adapter = QdrantProjectionAdapter(
++        FakeQdrantExecutor(),
++        target=QdrantProjectionTarget(vector_dimension=3),
++        policy=QdrantProjectionPolicy(max_points=4),
++    )
++
++    result = adapter.recall_by_vector((1.0, 0.0, 0.0), QdrantRecallQuery(query_ref="embedding:query:001"))
++
++    assert result.sql_context_refs == ("sql:chunk:001", "sql:fact:001")
++
++
++def test_local_target_documents_user_qdrant_installation() -> None:
++    target = local_qdrant_projection_target(vector_dimension=384)
++
++    assert target.endpoint_ref == "qdrant:local:6333"
++    assert target.storage_path == "/srv/autodoc/qdrant/storage"
++    assert target.snapshots_path == "/srv/autodoc/qdrant/snapshots"
++    assert target.vector_dimension == 384

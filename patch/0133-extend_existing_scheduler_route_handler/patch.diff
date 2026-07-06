@@ -1,0 +1,566 @@
+diff --git a/PHASE0133_TEST_REPORT.md b/PHASE0133_TEST_REPORT.md
+new file mode 100644
+index 0000000..be37784
+--- /dev/null
++++ b/PHASE0133_TEST_REPORT.md
+@@ -0,0 +1,27 @@
++# PHASE0133_TEST_REPORT
++
++```text
++phase: 0133-extend_existing_scheduler_route_handler
++code_rule_review: done
++code_rule_update_required: true
++code_rule_reason: 0132 audit required anti-duplication; 0133 adds a code_rule supplement and extends an existing handler instead of creating a new worker/runtime module.
++live_path_status: transition
++live_path_uses_real_backend: false
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++```
++
++Validation performed in patch build:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/runtime/test_scheduler_route_handler_minimal.py tests/rules/test_scheduler_route_handler_existing_integration_0133_rule.py
++# 12 passed
++PYTHONPATH=src:. pytest -q tests/runtime tests/rules
++# 35 passed
++PYTHONPATH=src:. pytest -q
++# 35 passed
++```
++
++0133 extends the existing Scheduler route handler path and adds readback helpers.  It does not introduce a new fake worker, new runtime module, OpenVINO path, Qdrant path, EventBus runtime client, or Scheduler loop mutation.
+diff --git a/doc/CHANGELOG_0133_SCHEDULER_ROUTE_HANDLER_EXISTING_INTEGRATION.md b/doc/CHANGELOG_0133_SCHEDULER_ROUTE_HANDLER_EXISTING_INTEGRATION.md
+new file mode 100644
+index 0000000..f0476b1
+--- /dev/null
++++ b/doc/CHANGELOG_0133_SCHEDULER_ROUTE_HANDLER_EXISTING_INTEGRATION.md
+@@ -0,0 +1,13 @@
++# Changelog 0133 — Scheduler route handler existing integration
++
++Changed existing handler surface instead of creating a new runtime/worker module.
++
++Added to `src/runtime/scheduler_route_handler_minimal.py`:
++
++- `SchedulerRouteHandlerReadbackResult`
++- `ExistingRouteHandlerIntegrationDecision`
++- `read_scheduler_route_handler_result_frames()`
++- `handle_scheduler_route_command_with_readback()`
++- `describe_existing_scheduler_route_handler_integration()`
++
++Added rule/doc/test coverage for the anti-duplication decision.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0133.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0133.md
+new file mode 100644
+index 0000000..a29040e
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0133.md
+@@ -0,0 +1,14 @@
++# 0133 operational note — extend existing handler
++
++0133 follows the 0132 anti-duplication rule.  It extends the existing Scheduler route handler and reuses the existing RouteProxyRuntime.
++
++```text
++Scheduler/Dispatcher caller
++-> SchedulerRouteHandlerCommand
++-> existing scheduler_route_handler_minimal.py
++-> existing RouteProxyRuntime
++-> route frame write
++-> route frame readback
++```
++
++ControlProxy/RouteProxy remains data-plane infrastructure.  The handler remains an executor bridge, not an orchestrator.  Scheduler remains orchestration authority.
+diff --git a/doc/architecture/SCHEDULER_ROUTE_HANDLER_EXISTING_INTEGRATION_0133.md b/doc/architecture/SCHEDULER_ROUTE_HANDLER_EXISTING_INTEGRATION_0133.md
+new file mode 100644
+index 0000000..e4de4b4
+--- /dev/null
++++ b/doc/architecture/SCHEDULER_ROUTE_HANDLER_EXISTING_INTEGRATION_0133.md
+@@ -0,0 +1,51 @@
++# 0133 — Existing scheduler route handler integration
++
++0133 extends existing scheduler_route_handler_minimal.py.
++
++This phase is deliberately not a new runtime, not a new worker, and not a fake specialist.  The 0132 audit decision is `reuse_or_extend_existing`, so 0133 modifies the existing Scheduler route handler surface and reuses RouteProxyRuntime.
++
++## Locked decision
++
++- 0133 extends existing scheduler_route_handler_minimal.py.
++- Do not create fake_specialist_worker_minimal.py in 0133.
++- Do not create a new route handler or runtime wheel when audited surfaces exist.
++- Scheduler remains the orchestrator.
++- RouteProxyRuntime remains the IO executor.
++- Scheduler.run() is not modified.
++- EventBus receives observation-ready facts only.
++- OpenVINO and Qdrant remain out of this handler patch.
++- 0132 audit decision: reuse_or_extend_existing.
++
++## Reused surfaces
++
++The integration decision records these existing surfaces as reusable/extendable:
++
++```text
++src/runtime/scheduler_route_handler_minimal.py
++src/runtime/route_proxy_runtime_minimal.py
++src/runtime/controlproxy_scheduler_handler.py
++src/runtime/controlproxy_route_runtime_handler.py
++src/runtime/route_dev_shm_runtime.py
++src/runtime/route_runtime_manager.py
++src/runtime/scheduler_route_adapter.py
++src/runtime/scheduler_route_handshake.py
++```
++
++The patch adds readback helpers to the existing handler so a caller can prove that a Scheduler-dispatched frame was written through RouteProxyRuntime and can be read back from the same runtime state.
++
++## Why this matters
++
++The next prototype step needs a path that is real enough to support worker/specialist consumption, but adding another fake worker would duplicate existing runtime surfaces.  0133 therefore strengthens the existing handler instead of creating a parallel wheel.
++
++## Boundary
++
++```text
++Scheduler-owned command data
++-> existing scheduler_route_handler_minimal.py
++-> existing RouteProxyRuntime
++-> /dev/shm or explicit test root
++-> readback frames for later consumers
++-> observation-ready facts
++```
++
++No OpenVINO, Qdrant, PostgreSQL, GitHub client, EventBus runtime client, daemon, watcher, or Scheduler loop mutation is introduced.
+diff --git a/doc/code-rules/0133_extend_existing_runtime_rule.md b/doc/code-rules/0133_extend_existing_runtime_rule.md
+new file mode 100644
+index 0000000..1a65080
+--- /dev/null
++++ b/doc/code-rules/0133_extend_existing_runtime_rule.md
+@@ -0,0 +1,17 @@
++# 0133 code_rule supplement — extend existing runtime surfaces
++
++Before creating a new runtime, handler, worker, or adapter module, check the 0132 integration audit and the repository surfaces it lists.
++
++For 0133:
++
++- Do not create a new route handler or runtime wheel when audited surfaces exist.
++- Do not create fake_specialist_worker_minimal.py in 0133.
++- Extend `src/runtime/scheduler_route_handler_minimal.py` for this route handler step.
++- Reuse `src/runtime/route_proxy_runtime_minimal.py` for frame IO.
++- Scheduler remains the orchestrator.
++- RouteProxyRuntime remains the IO executor.
++- Scheduler.run() is not modified.
++- EventBus receives observation-ready facts only.
++- OpenVINO and Qdrant remain out of this handler patch.
++
++Any future exception must document the missing capability and why reuse/extension cannot work.
+diff --git a/doc/docs/architecture/runtime/133_scheduler_route_handler_existing_integration.dot b/doc/docs/architecture/runtime/133_scheduler_route_handler_existing_integration.dot
+new file mode 100644
+index 0000000..ef580c4
+--- /dev/null
++++ b/doc/docs/architecture/runtime/133_scheduler_route_handler_existing_integration.dot
+@@ -0,0 +1,17 @@
++digraph scheduler_route_handler_existing_integration_0133 {
++  rankdir=LR;
++  node [shape=box];
++
++  scheduler [label="Scheduler/Dispatcher caller\norchestrator path"];
++  handler [label="existing scheduler_route_handler_minimal.py\nextended"];
++  runtime [label="existing RouteProxyRuntime\nIO executor"];
++  shm [label="/dev/shm or explicit test root\nroute frames"];
++  readback [label="readback helper\nfor later consumers"];
++  bus [label="observation-ready facts\nnot payload commands"];
++
++  scheduler -> handler [label="SchedulerRouteHandlerCommand"];
++  handler -> runtime [label="writer permit + frame write"];
++  runtime -> shm;
++  shm -> readback [label="read frame"];
++  runtime -> bus;
++}
+diff --git a/doc/manifests/MANIFEST_0133_CHANGED_FILES.md b/doc/manifests/MANIFEST_0133_CHANGED_FILES.md
+new file mode 100644
+index 0000000..ec6fd97
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0133_CHANGED_FILES.md
+@@ -0,0 +1,14 @@
++# Manifest 0133 — changed files
++
++- src/runtime/scheduler_route_handler_minimal.py
++- tests/runtime/test_scheduler_route_handler_minimal.py
++- tests/rules/test_scheduler_route_handler_existing_integration_0133_rule.py
++- doc/architecture/SCHEDULER_ROUTE_HANDLER_EXISTING_INTEGRATION_0133.md
++- doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0133.md
++- doc/code-rules/0133_extend_existing_runtime_rule.md
++- doc/docs/architecture/runtime/133_scheduler_route_handler_existing_integration.dot
++- doc/CHANGELOG_0133_SCHEDULER_ROUTE_HANDLER_EXISTING_INTEGRATION.md
++- doc/manifests/MANIFEST_0133_CHANGED_FILES.md
++- PHASE0133_TEST_REPORT.md
++
++Boundary note: 0133 modifies/extents an existing route handler surface and does not add a new runtime backend client or kernel-loop edit.
+diff --git a/src/runtime/scheduler_route_handler_minimal.py b/src/runtime/scheduler_route_handler_minimal.py
+index d0e62db..a1a2107 100644
+--- a/src/runtime/scheduler_route_handler_minimal.py
++++ b/src/runtime/scheduler_route_handler_minimal.py
+@@ -19,8 +19,10 @@ from runtime.route_proxy_runtime_minimal import (
+     RouteProxyRuntimeError,
+     RouteProxyRuntimePolicy,
+     RouteProxyRuntimeState,
++    RouteProxyRuntimeFrame,
+     list_observation_facts,
+     prepare_route_proxy_runtime,
++    read_route_frame,
+     request_writer_permit,
+     write_route_frame,
+ )
+@@ -28,6 +30,8 @@ from runtime.route_proxy_runtime_minimal import (
+ _HANDLER_COMMAND_SCHEMA = "missipy.scheduler.route_handler_command.v1"
+ _HANDLER_FRAME_SCHEMA = "missipy.scheduler.route_frame_request.v1"
+ _HANDLER_RESULT_SCHEMA = "missipy.scheduler.route_handler_result.v1"
++_HANDLER_READBACK_RESULT_SCHEMA = "missipy.scheduler.route_handler_readback_result.v1"
++_HANDLER_INTEGRATION_DECISION_SCHEMA = "missipy.scheduler.route_handler_integration_decision.v1"
+ 
+ _TYPED_REF_RE = re.compile(r"^[a-z][a-z0-9-]*:[^\s].*$")
+ _ALLOWED_COMMAND_PREFIXES = ("scheduler-command:", "command:")
+@@ -175,6 +179,67 @@ class SchedulerRouteHandlerResult:
+         }
+ 
+ 
++
++@dataclass(frozen=True, slots=True)
++class SchedulerRouteHandlerReadbackResult:
++    """Result wrapper that proves the existing handler wrote readable route frames."""
++
++    handler_result: SchedulerRouteHandlerResult
++    readback_frames: tuple[RouteProxyRuntimeFrame, ...]
++
++    def __post_init__(self) -> None:
++        object.__setattr__(self, "readback_frames", tuple(self.readback_frames))
++        if len(self.readback_frames) != len(self.handler_result.written_route_refs):
++            raise RouteProxyRuntimeError("readback_frames must match written_route_refs")
++        for frame, route_ref in zip(self.readback_frames, self.handler_result.written_route_refs, strict=True):
++            if frame.route_ref != route_ref:
++                raise RouteProxyRuntimeError("readback frame route_ref must match handler result")
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _HANDLER_READBACK_RESULT_SCHEMA,
++            "handler_result": self.handler_result.to_mapping(),
++            "readback_frames": [frame.to_mapping() for frame in self.readback_frames],
++            "readback_count": len(self.readback_frames),
++            "extends_existing_scheduler_route_handler": True,
++            "creates_parallel_runtime": False,
++            "scheduler_is_orchestrator": True,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class ExistingRouteHandlerIntegrationDecision:
++    """Documented decision to extend existing route handler/runtime surfaces."""
++
++    decision_ref: str
++    extended_surface_path: str
++    reused_runtime_paths: tuple[str, ...]
++    audit_source_refs: tuple[str, ...]
++    reason: str
++    creates_parallel_runtime: bool = False
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("decision_ref", self.decision_ref, required_prefixes=("integration-decision:",))
++        _require_non_empty("extended_surface_path", self.extended_surface_path)
++        object.__setattr__(self, "reused_runtime_paths", _normalize_path_refs("reused_runtime_paths", self.reused_runtime_paths))
++        object.__setattr__(self, "audit_source_refs", _normalize_path_refs("audit_source_refs", self.audit_source_refs))
++        _require_non_empty("reason", self.reason)
++        if self.creates_parallel_runtime:
++            raise RouteProxyRuntimeError("0133 must extend existing route handler/runtime surfaces, not create a parallel runtime")
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _HANDLER_INTEGRATION_DECISION_SCHEMA,
++            "decision_ref": self.decision_ref,
++            "extended_surface_path": self.extended_surface_path,
++            "reused_runtime_paths": list(self.reused_runtime_paths),
++            "audit_source_refs": list(self.audit_source_refs),
++            "reason": self.reason,
++            "creates_parallel_runtime": self.creates_parallel_runtime,
++            "decision": "extend_existing",
++            "scheduler_run_modified": False,
++        }
++
+ def handle_scheduler_route_command(
+     command: SchedulerRouteHandlerCommand,
+     *,
+@@ -214,6 +279,58 @@ def handle_scheduler_route_command(
+     )
+ 
+ 
++
++def read_scheduler_route_handler_result_frames(
++    runtime_state: RouteProxyRuntimeState,
++    result: SchedulerRouteHandlerResult,
++) -> tuple[RouteProxyRuntimeFrame, ...]:
++    """Read frames written by the existing handler through RouteProxyRuntime."""
++
++    frames: list[RouteProxyRuntimeFrame] = []
++    for route_ref in result.written_route_refs:
++        frames.append(read_route_frame(runtime_state, route_ref))
++    return tuple(frames)
++
++
++def handle_scheduler_route_command_with_readback(
++    command: SchedulerRouteHandlerCommand,
++    *,
++    runtime_state: RouteProxyRuntimeState | None = None,
++) -> SchedulerRouteHandlerReadbackResult:
++    """Execute the existing handler and immediately read back written frames."""
++
++    state = runtime_state or prepare_route_proxy_runtime(command.runtime_policy)
++    result = handle_scheduler_route_command(command, runtime_state=state)
++    return SchedulerRouteHandlerReadbackResult(
++        handler_result=result,
++        readback_frames=read_scheduler_route_handler_result_frames(state, result),
++    )
++
++
++def describe_existing_scheduler_route_handler_integration() -> ExistingRouteHandlerIntegrationDecision:
++    """Return the 0133 anti-duplication decision for route handler integration."""
++
++    return ExistingRouteHandlerIntegrationDecision(
++        decision_ref="integration-decision:0133-extend-existing-scheduler-route-handler",
++        extended_surface_path="src/runtime/scheduler_route_handler_minimal.py",
++        reused_runtime_paths=(
++            "src/runtime/scheduler_route_handler_minimal.py",
++            "src/runtime/route_proxy_runtime_minimal.py",
++            "src/runtime/controlproxy_scheduler_handler.py",
++            "src/runtime/controlproxy_route_runtime_handler.py",
++            "src/runtime/route_dev_shm_runtime.py",
++            "src/runtime/route_runtime_manager.py",
++            "src/runtime/scheduler_route_adapter.py",
++            "src/runtime/scheduler_route_handshake.py",
++        ),
++        audit_source_refs=(
++            "doc/architecture/EXISTING_RUNTIME_INTEGRATION_AUDIT_0132.md",
++            "doc/code-rules/0132_no_reinvent_runtime_rule.md",
++            "tools/audit_existing_runtime_integration.py",
++        ),
++        reason="0132 audit found existing route handler/runtime surfaces; 0133 extends the existing handler instead of creating a new worker/runtime module.",
++    )
++
+ def build_single_frame_route_command(
+     *,
+     command_ref: str,
+@@ -290,6 +407,17 @@ def _normalize_refs(
+     return refs
+ 
+ 
++def _normalize_path_refs(name: str, values: tuple[str, ...]) -> tuple[str, ...]:
++    refs = tuple(dict.fromkeys(values))
++    if not refs:
++        raise RouteProxyRuntimeError(f"{name} must not be empty")
++    for ref in refs:
++        _require_non_empty(name, ref)
++        if ref.startswith("/") or ".." in ref.split("/"):
++            raise RouteProxyRuntimeError(f"{name} must contain repository-relative safe paths")
++    return refs
++
++
+ def _normalize_metadata(values: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
+     normalized: list[tuple[str, str]] = []
+     for key, value in values:
+diff --git a/tests/rules/test_scheduler_route_handler_existing_integration_0133_rule.py b/tests/rules/test_scheduler_route_handler_existing_integration_0133_rule.py
+new file mode 100644
+index 0000000..438a384
+--- /dev/null
++++ b/tests/rules/test_scheduler_route_handler_existing_integration_0133_rule.py
+@@ -0,0 +1,116 @@
++from __future__ import annotations
++
++import ast
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "runtime" / "scheduler_route_handler_minimal.py"
++DOC = ROOT / "doc" / "architecture" / "SCHEDULER_ROUTE_HANDLER_EXISTING_INTEGRATION_0133.md"
++RULE = ROOT / "doc" / "code-rules" / "0133_extend_existing_runtime_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0133_CHANGED_FILES.md"
++
++
++def test_0133_docs_lock_extend_existing_route_handler_decision() -> None:
++    text = DOC.read_text(encoding="utf-8")
++    rule = RULE.read_text(encoding="utf-8")
++    required = [
++        "0133 extends existing scheduler_route_handler_minimal.py",
++        "Do not create fake_specialist_worker_minimal.py in 0133",
++        "Do not create a new route handler or runtime wheel when audited surfaces exist",
++        "Scheduler remains the orchestrator",
++        "RouteProxyRuntime remains the IO executor",
++        "Scheduler.run() is not modified",
++        "EventBus receives observation-ready facts only",
++        "OpenVINO and Qdrant remain out of this handler patch",
++        "0132 audit decision: reuse_or_extend_existing",
++    ]
++    for phrase in required:
++        assert phrase in text or phrase in rule
++
++
++def test_0133_manifest_modifies_existing_handler_not_new_runtime_module() -> None:
++    text = MANIFEST.read_text(encoding="utf-8")
++    required = [
++        "src/runtime/scheduler_route_handler_minimal.py",
++        "tests/runtime/test_scheduler_route_handler_minimal.py",
++        "tests/rules/test_scheduler_route_handler_existing_integration_0133_rule.py",
++        "doc/architecture/SCHEDULER_ROUTE_HANDLER_EXISTING_INTEGRATION_0133.md",
++        "doc/code-rules/0133_extend_existing_runtime_rule.md",
++    ]
++    for phrase in required:
++        assert phrase in text
++    forbidden = [
++        "src/runtime/fake_specialist_worker_minimal.py",
++        "src/runtime/scheduler_route_handler_existing_integration.py",
++        "src/runtime/new_scheduler_route_handler.py",
++        "src/kernel/scheduler.py",
++        "src/kernel/dispatcher.py",
++        "src/kernel/queue.py",
++        "src/policy/engine.py",
++        "src/observability/event_bus.py",
++        "requests",
++        "httpx",
++        "openvino.runtime",
++        "qdrant_client",
++        "psycopg",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++
++
++def test_0133_handler_module_has_no_unapproved_imports() -> None:
++    tree = ast.parse(MODULE.read_text(encoding="utf-8"))
++    imports: set[str] = set()
++    for node in ast.walk(tree):
++        if isinstance(node, ast.Import):
++            imports.update(alias.name.split(".", 1)[0] for alias in node.names)
++        elif isinstance(node, ast.ImportFrom) and node.module:
++            imports.add(node.module.split(".", 1)[0])
++    forbidden = {
++        "requests",
++        "httpx",
++        "socket",
++        "subprocess",
++        "openvino",
++        "qdrant",
++        "qdrant_client",
++        "psycopg",
++        "sqlite3",
++        "graphviz",
++        "networkx",
++        "vispy",
++        "src",
++    }
++    assert sorted(imports & forbidden) == []
++
++
++def test_0133_module_locks_existing_integration_not_parallel_runtime() -> None:
++    text = MODULE.read_text(encoding="utf-8")
++    forbidden = [
++        "Scheduler(",
++        "Scheduler.run(",
++        "Dispatcher(",
++        "PolicyEngine(",
++        "PriorityQueue(",
++        "EventType(",
++        "LocalServerOrchestrator",
++        "FakeSpecialistWorker",
++        "fake_specialist_worker_minimal",
++        "qdrant_client",
++        "openvino.runtime",
++        "requests.",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++    required = [
++        "ExistingRouteHandlerIntegrationDecision",
++        "describe_existing_scheduler_route_handler_integration",
++        "extends_existing_scheduler_route_handler",
++        '"creates_parallel_runtime": False',
++        '"decision": "extend_existing"',
++        '"scheduler_run_modified": False',
++        "src/runtime/scheduler_route_handler_minimal.py",
++        "src/runtime/route_proxy_runtime_minimal.py",
++    ]
++    for phrase in required:
++        assert phrase in text
+diff --git a/tests/runtime/test_scheduler_route_handler_minimal.py b/tests/runtime/test_scheduler_route_handler_minimal.py
+index 462d661..9d2bf38 100644
+--- a/tests/runtime/test_scheduler_route_handler_minimal.py
++++ b/tests/runtime/test_scheduler_route_handler_minimal.py
+@@ -14,7 +14,10 @@ from runtime.scheduler_route_handler_minimal import (
+     SchedulerRouteFrameRequest,
+     SchedulerRouteHandlerCommand,
+     build_single_frame_route_command,
++    describe_existing_scheduler_route_handler_integration,
+     handle_scheduler_route_command,
++    handle_scheduler_route_command_with_readback,
++    read_scheduler_route_handler_result_frames,
+ )
+ 
+ 
+@@ -151,3 +154,64 @@ def test_request_rejects_unknown_frame_kind() -> None:
+             frame_kind="unknown",
+             payload={},
+         )
++
++
++
++def test_0133_handler_readback_extends_existing_handler_surface(tmp_path: Path) -> None:
++    policy = make_policy(tmp_path / "routes")
++    command = build_single_frame_route_command(
++        command_ref="scheduler-command:dispatch-demand-readback",
++        route_ref="route:deliberation/cycle-4/round-1/demand-thermal",
++        owner_ref="scheduler-command:dispatch-demand-readback",
++        context_ref="cycle-state:cycle-4",
++        context_generation=1,
++        priority=700,
++        frame_kind="specialist_demand",
++        payload={"specialist_ref": "specialist:thermal", "request": "analyse"},
++        runtime_policy=policy,
++    )
++
++    readback = handle_scheduler_route_command_with_readback(command)
++    mapping = readback.to_mapping()
++
++    assert mapping["extends_existing_scheduler_route_handler"] is True
++    assert mapping["creates_parallel_runtime"] is False
++    assert mapping["scheduler_is_orchestrator"] is True
++    assert mapping["readback_count"] == 1
++    assert readback.readback_frames[0].payload["specialist_ref"] == "specialist:thermal"
++
++
++def test_0133_can_read_result_frames_from_existing_runtime_state(tmp_path: Path) -> None:
++    policy = make_policy(tmp_path / "routes")
++    state = prepare_route_proxy_runtime(policy)
++    command = build_single_frame_route_command(
++        command_ref="scheduler-command:dispatch-demand-readback-2",
++        route_ref="route:deliberation/cycle-5/round-1/demand-safety",
++        owner_ref="scheduler-command:dispatch-demand-readback-2",
++        context_ref="cycle-state:cycle-5",
++        context_generation=2,
++        priority=650,
++        frame_kind="specialist_demand",
++        payload={"specialist_ref": "specialist:safety"},
++        runtime_policy=policy,
++    )
++
++    result = handle_scheduler_route_command(command, runtime_state=state)
++    frames = read_scheduler_route_handler_result_frames(state, result)
++
++    assert len(frames) == 1
++    assert frames[0].route_ref == result.written_route_refs[0]
++    assert frames[0].payload["frame_kind"] == "specialist_demand"
++
++
++def test_0133_integration_decision_reuses_existing_surfaces() -> None:
++    decision = describe_existing_scheduler_route_handler_integration()
++    mapping = decision.to_mapping()
++
++    assert mapping["decision"] == "extend_existing"
++    assert mapping["creates_parallel_runtime"] is False
++    assert mapping["scheduler_run_modified"] is False
++    assert mapping["extended_surface_path"] == "src/runtime/scheduler_route_handler_minimal.py"
++    assert "src/runtime/route_proxy_runtime_minimal.py" in mapping["reused_runtime_paths"]
++    assert "src/runtime/controlproxy_scheduler_handler.py" in mapping["reused_runtime_paths"]
++    assert "tools/audit_existing_runtime_integration.py" in mapping["audit_source_refs"]

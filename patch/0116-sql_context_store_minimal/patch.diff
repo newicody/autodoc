@@ -1,0 +1,923 @@
+diff --git a/PHASE0116_TEST_REPORT.md b/PHASE0116_TEST_REPORT.md
+new file mode 100644
+index 0000000..f23d175
+--- /dev/null
++++ b/PHASE0116_TEST_REPORT.md
+@@ -0,0 +1,21 @@
++# Phase 0116 test report
++
++Patch: `0116-sql_context_store_minimal`
++
++Expected validation:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/runtime/test_sql_context_store_minimal.py
++PYTHONPATH=src:. pytest -q tests/rules/test_sql_context_store_0116_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++Local focused validation on reconstructed 0113/0114-r2/0115 base:
++
++```text
++compileall: OK
++runtime 0116: OK
++rules 0116: OK
++```
+diff --git a/doc/CHANGELOG_0116_SQL_CONTEXT_STORE_MINIMAL.md b/doc/CHANGELOG_0116_SQL_CONTEXT_STORE_MINIMAL.md
+new file mode 100644
+index 0000000..52ea53e
+--- /dev/null
++++ b/doc/CHANGELOG_0116_SQL_CONTEXT_STORE_MINIMAL.md
+@@ -0,0 +1,11 @@
++# 0116 — SQLContextStore minimal
++
++Added a minimal SQL context-store boundary:
++
++- immutable `SqlContextRecord` contracts identified by `sql:*` refs;
++- DB-API `DbApiSqlContextStore` for injected connections;
++- stdlib `SQLiteSqlContextStore` for deterministic tests;
++- documented PostgreSQL target for the local Gentoo/OpenRC installation;
++- tests and rule guardrails preventing kernel/runtime/backend drift.
++
++No Scheduler, Queue, Dispatcher, PolicyEngine, EventBus, RouteRuntimeManager, Qdrant, OpenVINO, or LLM runtime coupling was added.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0116.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0116.md
+new file mode 100644
+index 0000000..2591353
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0116.md
+@@ -0,0 +1,29 @@
++# ControlProxy operational plan — 0116 update
++
++0116 does not extend ControlProxy and does not add a route-runtime service.
++
++The operational axis is now the context data substrate:
++
++```text
++SQLContextStore = durable authority
++Qdrant = projection
++OpenVINO = embedding adapter
++LLM = specialist boundary
++RouteRuntimeManager = data-plane infrastructure only
++EventBus = observation only
++```
++
++Local machine status captured for the next steps:
++
++```text
++PostgreSQL 18 service: postgresql-18
++PostgreSQL data_directory: /srv/autodoc/postgres/data
++PostgreSQL active storage: fast_pool
++Backups/snapshots: data_pool
++Qdrant binary: /usr/local/bin/qdrant
++Qdrant storage: /srv/autodoc/qdrant/storage
++Qdrant logs: /var/log/qdrant.log and /var/log/qdrant.err owned qdrant:logs
++OpenVINO: 2026.2.1, CPU and GPU visible
++```
++
++Next patches should hydrate context from SQL first, then add OpenVINO and Qdrant adapters behind explicit specialist boundaries.
+diff --git a/doc/architecture/SQL_CONTEXT_STORE_0116.md b/doc/architecture/SQL_CONTEXT_STORE_0116.md
+new file mode 100644
+index 0000000..1e6bbc9
+--- /dev/null
++++ b/doc/architecture/SQL_CONTEXT_STORE_0116.md
+@@ -0,0 +1,80 @@
++# 0116 — SQLContextStore minimal
++
++0116 introduces the first durable SQL context-store boundary.
++
++SQLContextStore is durable context authority.
++
++The local installation target is now explicit:
++
++```text
++active PostgreSQL lives on fast_pool
++PostgreSQL data_directory = /srv/autodoc/postgres/data
++data_pool receives ZFS snapshots and backups
++Qdrant 1.18.2 lives on /srv/autodoc/qdrant as projection only
++OpenVINO 2026.2.1 is available in the Python AI environment with CPU and GPU devices
++```
++
++This patch does not make Scheduler, Dispatcher, PolicyEngine, EventBus, RouteRuntimeManager, or ControlProxy import a database driver.
++
++No PostgreSQL/Qdrant/OpenVINO/LLM runtime import in Scheduler.
++
++## Boundary
++
++`src/context/sql_context_store.py` provides:
++
++- `SqlContextRecord`: immutable durable context record identified by `sql:*` refs.
++- `DbApiSqlContextStore`: tiny DB-API boundary over an injected connection.
++- `SQLiteSqlContextStore`: stdlib SQLite backend for tests and local dry runs.
++- `PostgresSqlContextStoreTarget`: documented local production target, with driver import kept external.
++
++The PostgreSQL production connection will be injected by a later adapter.  0116 deliberately does not import `psycopg`, does not open network sockets, and does not create a daemon.
++
++## Authority vs projection
++
++Qdrant is vector projection and retrieval, not context authority.
++
++OpenVINO produces local embeddings behind an adapter.
++
++LLM/specialist code consumes hydrated context later; it does not own the durable context source.
++
++The durable path remains:
++
++```text
++SourceCandidate / GitHub artifact / local artifact
++-> SQLContextStore
++-> context refs
++-> OpenVINO adapter can embed hydrated text
++-> Qdrant projection can store/search vectors by sql_id
++-> SQLContextStore re-hydrates recalled IDs
++-> InferenceContext
++-> specialist / LLM boundary
++```
++
++Scheduler orchestrates context exploration jobs; it does not build variants itself.
++
++## ZFS layout
++
++```text
++fast_pool/autodoc/postgres  -> /srv/autodoc/postgres/data
++fast_pool/autodoc/qdrant    -> /srv/autodoc/qdrant
++data_pool/...               -> ZFS snapshots, dumps, archives, rollback material
++```
++
++The store records stable refs and small textual/metadata payloads.  Large blobs, model files, route buffers, and vector indexes stay outside the SQL record body and are referenced explicitly.
++
++## Compatibility with the context plan
++
++0116 prepares the durable substrate for the 0114-r2/0115 flow:
++
++```text
++ContextVariationObjective
++-> ContextExplorationPlanner
++-> SQL hydrate by sql:* refs
++-> OpenVINO embed behind adapter
++-> Qdrant recall by sql_id
++-> SQL re-hydrate
++-> specialist note
++-> InferenceContextDraft
++```
++
++MVTC remains future exploration machinery, not runtime in 0116.
+diff --git a/doc/docs/architecture/runtime/109_sql_context_store_minimal.dot b/doc/docs/architecture/runtime/109_sql_context_store_minimal.dot
+new file mode 100644
+index 0000000..0bcfd6e
+--- /dev/null
++++ b/doc/docs/architecture/runtime/109_sql_context_store_minimal.dot
+@@ -0,0 +1,28 @@
++digraph sql_context_store_minimal_0116 {
++  rankdir=LR;
++  node [shape=box];
++
++  SourceCandidate [label="SourceCandidate / artifact"];
++  GitHubArtifact [label="GitHub Project artifact"];
++  SQLContextStore [label="SQLContextStore\ndurable authority"];
++  FastPool [label="fast_pool active PostgreSQL\n/srv/autodoc/postgres/data"];
++  DataPool [label="data_pool ZFS snapshots\nbackups / dumps / archives"];
++  OpenVINO [label="OpenVINO adapter\nembeddings only"];
++  Qdrant [label="Qdrant projection\nvector search by sql_id"];
++  Hydration [label="SQL re-hydrate recalled IDs"];
++  InferenceContext [label="InferenceContext / draft"];
++  Specialist [label="specialist / LLM boundary"];
++  Scheduler [label="Scheduler orchestrates jobs\ndoes not build variants"];
++
++  SourceCandidate -> SQLContextStore;
++  GitHubArtifact -> SQLContextStore;
++  SQLContextStore -> FastPool;
++  FastPool -> DataPool [label="zfs snapshot/send"];
++  SQLContextStore -> OpenVINO [label="hydrated text refs"];
++  OpenVINO -> Qdrant [label="vectors + sql_id"];
++  Qdrant -> Hydration [label="candidate ids"];
++  Hydration -> SQLContextStore;
++  Hydration -> InferenceContext;
++  InferenceContext -> Specialist;
++  Scheduler -> SQLContextStore [style=dashed, label="job carries refs only"];
++}
+diff --git a/doc/manifests/MANIFEST_0116_CHANGED_FILES.md b/doc/manifests/MANIFEST_0116_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0c8658a
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0116_CHANGED_FILES.md
+@@ -0,0 +1,25 @@
++# 0116 changed files
++
++Patch id: `0116-sql_context_store_minimal`
++
++## Added
++
++- `src/context/sql_context_store.py`
++- `tests/runtime/test_sql_context_store_minimal.py`
++- `tests/rules/test_sql_context_store_0116_rule.py`
++- `doc/architecture/SQL_CONTEXT_STORE_0116.md`
++- `doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0116.md`
++- `doc/docs/architecture/runtime/109_sql_context_store_minimal.dot`
++- `doc/CHANGELOG_0116_SQL_CONTEXT_STORE_MINIMAL.md`
++- `doc/manifests/MANIFEST_0116_CHANGED_FILES.md`
++- `PHASE0116_TEST_REPORT.md`
++
++## Not changed
++
++- Scheduler loop
++- PriorityQueue
++- Dispatcher
++- PolicyEngine
++- EventBus
++- RouteRuntimeManager
++- ControlProxy runtime code
+diff --git a/src/context/sql_context_store.py b/src/context/sql_context_store.py
+new file mode 100644
+index 0000000..b31bb2e
+--- /dev/null
++++ b/src/context/sql_context_store.py
+@@ -0,0 +1,452 @@
++"""Minimal SQL context store boundary.
++
++0116 introduces SQLContextStore as the durable context authority boundary.  The
++module owns only a tiny DB-API persistence contract: it can initialize a schema,
++upsert reference-only context records, and read them back deterministically.  It
++is not a Scheduler component and it does not import Qdrant, OpenVINO, GitHub,
++LLM runtimes, sockets, or PostgreSQL drivers.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++import hashlib
++import json
++import sqlite3
++from pathlib import Path
++import re
++from typing import Protocol, Sequence
++
++_SCHEMA_VERSION = "missipy.sql_context_store.v1"
++_ALLOWED_PARAMSTYLES = frozenset({"qmark", "format"})
++_ALLOWED_KINDS = frozenset(
++    {
++        "source",
++        "document",
++        "chunk",
++        "fact",
++        "artifact",
++        "objective",
++        "axis",
++        "trajectory",
++        "inference_context",
++        "specialist_output",
++        "feedback",
++        "github_artifact",
++    }
++)
++_TYPED_REF_RE = re.compile(r"^[a-z][a-z0-9-]*:[^\s].*$")
++
++
++class _Cursor(Protocol):
++    def execute(self, sql: str, parameters: Sequence[object] = ()) -> object: ...
++
++    def fetchone(self) -> Sequence[object] | None: ...
++
++    def fetchall(self) -> Sequence[Sequence[object]]: ...
++
++    def close(self) -> object: ...
++
++
++class _Connection(Protocol):
++    def cursor(self) -> _Cursor: ...
++
++    def commit(self) -> object: ...
++
++    def close(self) -> object: ...
++
++
++@dataclass(frozen=True, slots=True)
++class SqlContextStorePolicy:
++    """Execution policy for an injected DB-API SQL context store."""
++
++    paramstyle: str = "qmark"
++    auto_commit: bool = True
++
++    def __post_init__(self) -> None:
++        if self.paramstyle not in _ALLOWED_PARAMSTYLES:
++            raise ValueError("paramstyle must be qmark or format")
++
++
++@dataclass(frozen=True, slots=True)
++class SqlContextRecord:
++    """Small durable context record stored by typed reference.
++
++    Heavy payloads stay outside Scheduler events.  The SQL store persists text,
++    metadata, and parent references so later Qdrant/OpenVINO/specialist adapters
++    can project or hydrate without becoming the source of authority.
++    """
++
++    context_ref: str
++    kind: str
++    title: str
++    body: str
++    parent_ref: str | None = None
++    metadata: tuple[tuple[str, str], ...] = field(default_factory=tuple)
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("context_ref", self.context_ref, required_prefix="sql:")
++        if self.kind not in _ALLOWED_KINDS:
++            raise ValueError("kind must be an allowed SQL context kind")
++        _require_non_empty("title", self.title)
++        _require_non_empty("body", self.body)
++        if self.parent_ref is not None:
++            _require_typed_ref("parent_ref", self.parent_ref)
++        object.__setattr__(self, "metadata", _normalize_metadata(self.metadata))
++
++    def to_mapping(self) -> dict[str, object | None]:
++        return {
++            "schema": _SCHEMA_VERSION,
++            "context_ref": self.context_ref,
++            "kind": self.kind,
++            "title": self.title,
++            "body": self.body,
++            "parent_ref": self.parent_ref,
++            "metadata": dict(self.metadata),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class SqlContextQuery:
++    """Deterministic query for context records."""
++
++    kind: str | None = None
++    parent_ref: str | None = None
++    limit: int = 100
++
++    def __post_init__(self) -> None:
++        if self.kind is not None and self.kind not in _ALLOWED_KINDS:
++            raise ValueError("kind must be an allowed SQL context kind")
++        if self.parent_ref is not None:
++            _require_typed_ref("parent_ref", self.parent_ref)
++        if self.limit <= 0:
++            raise ValueError("limit must be > 0")
++
++
++@dataclass(frozen=True, slots=True)
++class SqlContextStoreWriteResult:
++    """Stable result for a SQL context upsert."""
++
++    record: SqlContextRecord
++    inserted: bool
++    replaced: bool
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": "missipy.sql_context_store.write.v1",
++            "context_ref": self.record.context_ref,
++            "inserted": self.inserted,
++            "replaced": self.replaced,
++            "record": self.record.to_mapping(),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class SqlContextStoreSnapshot:
++    """Serializable snapshot of records returned by the SQL store boundary."""
++
++    records: tuple[SqlContextRecord, ...]
++
++    def __post_init__(self) -> None:
++        object.__setattr__(self, "records", tuple(self.records))
++
++    @property
++    def record_count(self) -> int:
++        return len(self.records)
++
++    @property
++    def context_refs(self) -> tuple[str, ...]:
++        return tuple(record.context_ref for record in self.records)
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": "missipy.sql_context_store.snapshot.v1",
++            "record_count": self.record_count,
++            "context_refs": list(self.context_refs),
++            "records": [record.to_mapping() for record in self.records],
++        }
++
++
++class DbApiSqlContextStore:
++    """Minimal DB-API SQLContextStore over an injected connection.
++
++    SQLite tests use qmark parameters.  A production caller may inject a
++    PostgreSQL DB-API connection with format parameters from outside this module;
++    no PostgreSQL package is imported here.
++    """
++
++    def __init__(
++        self,
++        connection: _Connection,
++        policy: SqlContextStorePolicy | None = None,
++    ) -> None:
++        self._connection = connection
++        self._policy = policy or SqlContextStorePolicy()
++
++    @property
++    def policy(self) -> SqlContextStorePolicy:
++        return self._policy
++
++    def initialize_schema(self) -> None:
++        self._execute(
++            """
++            CREATE TABLE IF NOT EXISTS sql_context_records (
++                context_ref TEXT PRIMARY KEY,
++                schema_version TEXT NOT NULL,
++                kind TEXT NOT NULL,
++                title TEXT NOT NULL,
++                body TEXT NOT NULL,
++                parent_ref TEXT,
++                metadata_json TEXT NOT NULL
++            )
++            """,
++        )
++        self._execute(
++            "CREATE INDEX IF NOT EXISTS idx_sql_context_records_kind "
++            "ON sql_context_records(kind)"
++        )
++        self._execute(
++            "CREATE INDEX IF NOT EXISTS idx_sql_context_records_parent "
++            "ON sql_context_records(parent_ref)"
++        )
++        self._commit_if_needed()
++
++    def upsert_record(self, record: SqlContextRecord) -> SqlContextStoreWriteResult:
++        existing = self.get_record(record.context_ref)
++        p = self._placeholder
++        self._execute(
++            """
++            INSERT INTO sql_context_records (
++                context_ref,
++                schema_version,
++                kind,
++                title,
++                body,
++                parent_ref,
++                metadata_json
++            ) VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p})
++            ON CONFLICT(context_ref) DO UPDATE SET
++                schema_version = excluded.schema_version,
++                kind = excluded.kind,
++                title = excluded.title,
++                body = excluded.body,
++                parent_ref = excluded.parent_ref,
++                metadata_json = excluded.metadata_json
++            """.format(p=p),
++            (
++                record.context_ref,
++                _SCHEMA_VERSION,
++                record.kind,
++                record.title,
++                record.body,
++                record.parent_ref,
++                _metadata_json(record.metadata),
++            ),
++        )
++        self._commit_if_needed()
++        return SqlContextStoreWriteResult(
++            record=record,
++            inserted=existing is None,
++            replaced=existing is not None,
++        )
++
++    def get_record(self, context_ref: str) -> SqlContextRecord | None:
++        _require_typed_ref("context_ref", context_ref, required_prefix="sql:")
++        p = self._placeholder
++        row = self._fetchone(
++            """
++            SELECT context_ref, kind, title, body, parent_ref, metadata_json
++            FROM sql_context_records
++            WHERE context_ref = {p}
++            """.format(p=p),
++            (context_ref,),
++        )
++        if row is None:
++            return None
++        return _record_from_row(row)
++
++    def list_records(self, query: SqlContextQuery | None = None) -> SqlContextStoreSnapshot:
++        effective = query or SqlContextQuery()
++        clauses: list[str] = []
++        params: list[object] = []
++        p = self._placeholder
++        if effective.kind is not None:
++            clauses.append(f"kind = {p}")
++            params.append(effective.kind)
++        if effective.parent_ref is not None:
++            clauses.append(f"parent_ref = {p}")
++            params.append(effective.parent_ref)
++        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
++        params.append(effective.limit)
++        rows = self._fetchall(
++            """
++            SELECT context_ref, kind, title, body, parent_ref, metadata_json
++            FROM sql_context_records{where}
++            ORDER BY context_ref
++            LIMIT {p}
++            """.format(where=where, p=p),
++            tuple(params),
++        )
++        return SqlContextStoreSnapshot(records=tuple(_record_from_row(row) for row in rows))
++
++    def close(self) -> None:
++        self._connection.close()
++
++    @property
++    def _placeholder(self) -> str:
++        return "?" if self._policy.paramstyle == "qmark" else "%s"
++
++    def _execute(self, sql: str, parameters: Sequence[object] = ()) -> None:
++        cursor = self._connection.cursor()
++        try:
++            cursor.execute(sql, parameters)
++        finally:
++            cursor.close()
++
++    def _fetchone(self, sql: str, parameters: Sequence[object]) -> Sequence[object] | None:
++        cursor = self._connection.cursor()
++        try:
++            cursor.execute(sql, parameters)
++            return cursor.fetchone()
++        finally:
++            cursor.close()
++
++    def _fetchall(self, sql: str, parameters: Sequence[object]) -> Sequence[Sequence[object]]:
++        cursor = self._connection.cursor()
++        try:
++            cursor.execute(sql, parameters)
++            return cursor.fetchall()
++        finally:
++            cursor.close()
++
++    def _commit_if_needed(self) -> None:
++        if self._policy.auto_commit:
++            self._connection.commit()
++
++
++class SQLiteSqlContextStore(DbApiSqlContextStore):
++    """SQLite convenience store for tests and local dry runs."""
++
++    def __init__(self, path: str | Path = ":memory:") -> None:
++        self.path = path
++        connection = sqlite3.connect(str(path))
++        super().__init__(connection, SqlContextStorePolicy(paramstyle="qmark"))
++
++
++@dataclass(frozen=True, slots=True)
++class PostgresSqlContextStoreTarget:
++    """Documented production target for injected PostgreSQL connections."""
++
++    dsn: str = "dbname=autodoc user=autodoc host=127.0.0.1 port=5432"
++    data_directory: str = "/srv/autodoc/postgres/data"
++    active_pool: str = "fast_pool"
++    backup_pool: str = "data_pool"
++
++    def __post_init__(self) -> None:
++        _require_non_empty("dsn", self.dsn)
++        _require_non_empty("data_directory", self.data_directory)
++        _require_non_empty("active_pool", self.active_pool)
++        _require_non_empty("backup_pool", self.backup_pool)
++
++    def to_mapping(self) -> dict[str, str]:
++        return {
++            "dsn": self.dsn,
++            "data_directory": self.data_directory,
++            "active_pool": self.active_pool,
++            "backup_pool": self.backup_pool,
++            "driver_import": "external",
++        }
++
++
++def build_sql_context_ref(kind: str, identity: str, *, prefix: str = "sql") -> str:
++    """Build a deterministic typed SQL context reference."""
++
++    if kind not in _ALLOWED_KINDS:
++        raise ValueError("kind must be an allowed SQL context kind")
++    _require_non_empty("identity", identity)
++    _require_non_empty("prefix", prefix)
++    digest = hashlib.sha256()
++    digest.update(kind.encode("utf-8"))
++    digest.update(b"\0")
++    digest.update(identity.strip().encode("utf-8"))
++    return f"{prefix}:{kind}:{digest.hexdigest()[:16]}"
++
++
++def build_sql_context_record(
++    *,
++    kind: str,
++    identity: str,
++    title: str,
++    body: str,
++    parent_ref: str | None = None,
++    metadata: tuple[tuple[str, str], ...] = (),
++) -> SqlContextRecord:
++    """Build a stable SqlContextRecord from local inputs."""
++
++    return SqlContextRecord(
++        context_ref=build_sql_context_ref(kind, identity),
++        kind=kind,
++        title=title,
++        body=body,
++        parent_ref=parent_ref,
++        metadata=metadata,
++    )
++
++
++def allowed_sql_context_kinds() -> tuple[str, ...]:
++    return tuple(sorted(_ALLOWED_KINDS))
++
++
++def _record_from_row(row: Sequence[object]) -> SqlContextRecord:
++    context_ref, kind, title, body, parent_ref, metadata_json = row
++    return SqlContextRecord(
++        context_ref=_as_str(context_ref, "context_ref"),
++        kind=_as_str(kind, "kind"),
++        title=_as_str(title, "title"),
++        body=_as_str(body, "body"),
++        parent_ref=None if parent_ref is None else _as_str(parent_ref, "parent_ref"),
++        metadata=_metadata_from_json(_as_str(metadata_json, "metadata_json")),
++    )
++
++
++def _metadata_json(metadata: tuple[tuple[str, str], ...]) -> str:
++    return json.dumps(dict(metadata), ensure_ascii=False, sort_keys=True)
++
++
++def _metadata_from_json(payload: str) -> tuple[tuple[str, str], ...]:
++    raw = json.loads(payload)
++    if not isinstance(raw, dict):
++        raise ValueError("metadata_json must decode to an object")
++    return _normalize_metadata(tuple((str(key), str(value)) for key, value in raw.items()))
++
++
++def _normalize_metadata(values: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
++    normalized: list[tuple[str, str]] = []
++    seen: set[str] = set()
++    for key, value in values:
++        _require_non_empty("metadata key", key)
++        _require_non_empty("metadata value", value)
++        if key in seen:
++            raise ValueError("metadata keys must be unique")
++        seen.add(key)
++        normalized.append((key, value))
++    return tuple(sorted(normalized))
++
++
++def _require_typed_ref(name: str, value: str, *, required_prefix: str | None = None) -> None:
++    _require_non_empty(name, value)
++    if required_prefix is not None and not value.startswith(required_prefix):
++        raise ValueError(f"{name} must start with {required_prefix}")
++    if not _TYPED_REF_RE.match(value):
++        raise ValueError(f"{name} must be a typed reference")
++
++
++def _require_non_empty(name: str, value: str) -> None:
++    if not value or not value.strip():
++        raise ValueError(f"{name} must not be empty")
++
++
++def _as_str(value: object, name: str) -> str:
++    if not isinstance(value, str):
++        raise ValueError(f"{name} must be a string")
++    return value
+diff --git a/tests/rules/test_sql_context_store_0116_rule.py b/tests/rules/test_sql_context_store_0116_rule.py
+new file mode 100644
+index 0000000..09380ab
+--- /dev/null
++++ b/tests/rules/test_sql_context_store_0116_rule.py
+@@ -0,0 +1,86 @@
++from __future__ import annotations
++
++import ast
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "context" / "sql_context_store.py"
++DOC = ROOT / "doc" / "architecture" / "SQL_CONTEXT_STORE_0116.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0116_CHANGED_FILES.md"
++DOT = ROOT / "doc" / "docs" / "architecture" / "runtime" / "109_sql_context_store_minimal.dot"
++
++
++def test_0116_documents_sql_authority_and_local_install_layout() -> None:
++    text = DOC.read_text(encoding="utf-8")
++    required = [
++        "SQLContextStore is durable context authority",
++        "active PostgreSQL lives on fast_pool",
++        "data_pool receives ZFS snapshots and backups",
++        "Qdrant is vector projection and retrieval, not context authority",
++        "OpenVINO produces local embeddings behind an adapter",
++        "Scheduler orchestrates context exploration jobs; it does not build variants itself",
++        "No PostgreSQL/Qdrant/OpenVINO/LLM runtime import in Scheduler",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0116_manifest_does_not_touch_kernel_or_route_runtime() -> None:
++    text = MANIFEST.read_text(encoding="utf-8")
++    required = [
++        "src/context/sql_context_store.py",
++        "tests/runtime/test_sql_context_store_minimal.py",
++        "tests/rules/test_sql_context_store_0116_rule.py",
++        "doc/architecture/SQL_CONTEXT_STORE_0116.md",
++        "doc/docs/architecture/runtime/109_sql_context_store_minimal.dot",
++    ]
++    for phrase in required:
++        assert phrase in text
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/kernel/dispatcher.py",
++        "src/kernel/queue.py",
++        "src/policy/engine.py",
++        "src/runtime/route_runtime_manager.py",
++        "src/observability/event_bus.py",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++
++
++def test_0116_module_uses_only_stdlib_and_no_backend_runtime_imports() -> None:
++    tree = ast.parse(MODULE.read_text(encoding="utf-8"))
++    imports: set[str] = set()
++    for node in ast.walk(tree):
++        if isinstance(node, ast.Import):
++            imports.update(alias.name.split(".", 1)[0] for alias in node.names)
++        elif isinstance(node, ast.ImportFrom) and node.module:
++            imports.add(node.module.split(".", 1)[0])
++    forbidden = {
++        "openvino",
++        "qdrant",
++        "psycopg",
++        "requests",
++        "httpx",
++        "socket",
++        "subprocess",
++        "src.kernel",
++        "src.runtime",
++        "src.policy",
++    }
++    assert sorted(imports & forbidden) == []
++
++
++def test_0116_graph_shows_sql_authority_not_projection() -> None:
++    text = DOT.read_text(encoding="utf-8")
++    required = [
++        "SourceCandidate",
++        "SQLContextStore",
++        "fast_pool active PostgreSQL",
++        "data_pool ZFS snapshots",
++        "Qdrant projection",
++        "OpenVINO adapter",
++        "InferenceContext",
++    ]
++    for phrase in required:
++        assert phrase in text
+diff --git a/tests/runtime/test_sql_context_store_minimal.py b/tests/runtime/test_sql_context_store_minimal.py
+new file mode 100644
+index 0000000..d95f1c5
+--- /dev/null
++++ b/tests/runtime/test_sql_context_store_minimal.py
+@@ -0,0 +1,137 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++import pytest
++
++from src.context.sql_context_store import (
++    PostgresSqlContextStoreTarget,
++    SQLiteSqlContextStore,
++    SqlContextQuery,
++    SqlContextRecord,
++    allowed_sql_context_kinds,
++    build_sql_context_record,
++    build_sql_context_ref,
++)
++
++
++def test_sql_context_store_upserts_and_reads_from_sqlite_memory() -> None:
++    store = SQLiteSqlContextStore()
++    store.initialize_schema()
++    record = build_sql_context_record(
++        kind="document",
++        identity="github:artifact:fork-001",
++        title="Baby fork artifact",
++        body="Initial artifact imported from project workflow.",
++        parent_ref="github:project:item-001",
++        metadata=(("origin", "github"), ("phase", "0116")),
++    )
++
++    first = store.upsert_record(record)
++    second = store.upsert_record(record)
++    fetched = store.get_record(record.context_ref)
++
++    assert first.inserted is True
++    assert first.replaced is False
++    assert second.inserted is False
++    assert second.replaced is True
++    assert fetched == record
++    assert fetched is not None
++    assert fetched.to_mapping()["metadata"] == {"origin": "github", "phase": "0116"}
++
++
++def test_sql_context_store_lists_by_kind_and_parent_ref() -> None:
++    store = SQLiteSqlContextStore()
++    store.initialize_schema()
++    parent = "sql:document:parent"
++    chunk = SqlContextRecord(
++        context_ref="sql:chunk:001",
++        kind="chunk",
++        title="Chunk 1",
++        body="Hydratable text chunk.",
++        parent_ref=parent,
++    )
++    fact = SqlContextRecord(
++        context_ref="sql:fact:001",
++        kind="fact",
++        title="Fact 1",
++        body="Durable fact.",
++        parent_ref=parent,
++    )
++    store.upsert_record(chunk)
++    store.upsert_record(fact)
++
++    chunks = store.list_records(SqlContextQuery(kind="chunk"))
++    children = store.list_records(SqlContextQuery(parent_ref=parent))
++
++    assert chunks.context_refs == ("sql:chunk:001",)
++    assert children.record_count == 2
++    assert children.context_refs == ("sql:chunk:001", "sql:fact:001")
++    assert children.to_mapping()["record_count"] == 2
++
++
++def test_sql_context_store_file_path_persists_records(tmp_path: Path) -> None:
++    db_path = tmp_path / "autodoc-context.sqlite"
++    record = build_sql_context_record(
++        kind="objective",
++        identity="plan-0116",
++        title="Context objective",
++        body="SQL authority should persist objective context.",
++    )
++    first_store = SQLiteSqlContextStore(db_path)
++    first_store.initialize_schema()
++    first_store.upsert_record(record)
++    first_store.close()
++
++    second_store = SQLiteSqlContextStore(db_path)
++    second_store.initialize_schema()
++
++    assert second_store.get_record(record.context_ref) == record
++
++
++def test_sql_context_refs_are_deterministic_and_typed() -> None:
++    one = build_sql_context_ref("artifact", "github:artifact:abc")
++    two = build_sql_context_ref("artifact", "github:artifact:abc")
++    other = build_sql_context_ref("artifact", "github:artifact:def")
++
++    assert one == two
++    assert one.startswith("sql:artifact:")
++    assert one != other
++
++
++def test_sql_context_record_rejects_embedded_or_untyped_refs() -> None:
++    with pytest.raises(ValueError, match="context_ref must start with sql:"):
++        SqlContextRecord(
++            context_ref="ctx:not-authority",
++            kind="document",
++            title="Bad",
++            body="Bad",
++        )
++
++    with pytest.raises(ValueError, match="parent_ref must be a typed reference"):
++        SqlContextRecord(
++            context_ref="sql:document:ok",
++            kind="document",
++            title="Bad parent",
++            body="Bad parent",
++            parent_ref="not typed",
++        )
++
++
++def test_postgres_target_documents_local_fast_pool_configuration() -> None:
++    target = PostgresSqlContextStoreTarget()
++
++    assert target.data_directory == "/srv/autodoc/postgres/data"
++    assert target.active_pool == "fast_pool"
++    assert target.backup_pool == "data_pool"
++    assert target.to_mapping()["driver_import"] == "external"
++
++
++def test_allowed_sql_context_kinds_include_context_variation_entities() -> None:
++    kinds = allowed_sql_context_kinds()
++
++    assert "objective" in kinds
++    assert "axis" in kinds
++    assert "trajectory" in kinds
++    assert "inference_context" in kinds
++    assert "github_artifact" in kinds

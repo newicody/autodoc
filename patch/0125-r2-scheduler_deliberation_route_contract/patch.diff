@@ -1,0 +1,1041 @@
+diff --git a/PHASE0125_R2_TEST_REPORT.md b/PHASE0125_R2_TEST_REPORT.md
+new file mode 100644
+index 0000000..2c2962e
+--- /dev/null
++++ b/PHASE0125_R2_TEST_REPORT.md
+@@ -0,0 +1,17 @@
++# Phase 0125-r2 test report
++
++Validation performed on reconstructed base through 0124.
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests
++PYTHONPATH=src:. pytest -q tests/runtime/test_scheduler_deliberation_route_contract.py
++PYTHONPATH=src:. pytest -q tests/rules/test_scheduler_deliberation_route_contract_0125_r2_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++Results:
++
++- Targeted runtime/rule tests: 10 passed.
++- tests/rules: 54 passed.
++- Full pytest: 126 passed.
+diff --git a/doc/CHANGELOG_0125_R2_SCHEDULER_DELIBERATION_ROUTE_CONTRACT.md b/doc/CHANGELOG_0125_R2_SCHEDULER_DELIBERATION_ROUTE_CONTRACT.md
+new file mode 100644
+index 0000000..2614bce
+--- /dev/null
++++ b/doc/CHANGELOG_0125_R2_SCHEDULER_DELIBERATION_ROUTE_CONTRACT.md
+@@ -0,0 +1,8 @@
++# 0125-r2 changelog
++
++- Add Scheduler deliberation route contracts.
++- Replace the rejected local server orchestrator with Scheduler-owned orchestration contracts.
++- Define /dev/shm route refs for multitask local exchange and future grid extension.
++- Define bus-ready observation facts for statistics and passive VisPy supervision.
++- Lock E5/OpenVINO as embedding only behind adapter, not decision maker.
++- Keep GitHub as artifact exchange only.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0125_R2.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0125_R2.md
+new file mode 100644
+index 0000000..3169adc
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0125_R2.md
+@@ -0,0 +1,15 @@
++# 0125-r2 operational plan
++
++0125-r2 locks the deliberation path around Scheduler orchestration and /dev/shm route exchange.
++
++Next implementation steps:
++
++1. Keep `DeliberationCycleCommand` as a command contract only.
++2. Add a thin handler later that consumes this command through the Dispatcher.
++3. Let the handler write `SpecialistDemandFrame` payloads to route refs under `/dev/shm/autodoc/routes`.
++4. Specialists read demand frames and write opinion frames.
++5. EventBus records observation facts and statistics only.
++6. SQLContextStore persists durable cycle state.
++7. GitHub remains artifact exchange only.
++
++No daemon, watcher, GitHub client, Qdrant client, OpenVINO runtime, PostgreSQL driver, or LLM SDK is added in this patch.
+diff --git a/doc/architecture/SCHEDULER_DELIBERATION_ROUTE_CONTRACT_0125_R2.md b/doc/architecture/SCHEDULER_DELIBERATION_ROUTE_CONTRACT_0125_R2.md
+new file mode 100644
+index 0000000..e22b3e0
+--- /dev/null
++++ b/doc/architecture/SCHEDULER_DELIBERATION_ROUTE_CONTRACT_0125_R2.md
+@@ -0,0 +1,53 @@
++# 0125-r2 — Scheduler deliberation route contract
++
++Scheduler is the deliberation orchestrator. No parallel local server orchestrator is introduced.
++
++0125-r2 replaces the rejected local-orchestrator direction with a contract that can be scheduled through the existing kernel path later:
++
++```text
++DeliberationCycleCommand
++-> Scheduler.emit()
++-> PolicyEngine.decide()
++-> PriorityQueue
++-> Scheduler.run()
++-> Dispatcher
++-> Handler
++-> /dev/shm route frames
++-> specialist workers
++-> EventBus observation facts
++-> SQL durable state
++```
++
++Do not modify Scheduler.run() in 0125-r2. The patch only defines immutable contracts and deterministic builders.
++
++## Boundaries
++
++GitHub exchanges artifacts only: artifact in and final artifact out. Internal specialist navettes, search statistics, route frames, and VisPy supervision material do not belong in GitHub.
++
++/dev/shm route frames are a multitask data-plane interface for local workers and a future grid. They are useful now for fast local multitask exchange and later for extending the architecture across a grid. /dev/shm is not durable authority.
++
++EventBus observes facts, statistics, and paths, not payload commands. The bus can record `scheduler.dispatched_round`, `route.frame_written`, `specialist.explored_axis`, and `server.refined_demand`; the heavy frames stay on route refs.
++
++SQLContextStore is durable context authority. Durable decisions, accepted context changes, and final synthesis state must be persisted there.
++
++Qdrant is vector projection and retrieval, not context authority. It returns refs that must be rehydrated from SQL.
++
++E5/OpenVINO is embedding only behind adapter, not decision maker. E5 produces vectors from `query:` and `passage:` text, but does not validate, synthesize, or orchestrate.
++
++Specialist proposals are receivable as analysis signals before final validation. A proposal can trigger another specialist, another model, a context patch proposal, or a rejection explanation without being accepted as the final answer.
++
++## Route frame examples
++
++```text
++route:deliberation/cycle-42/round-0001/demand-thermal
++route:deliberation/cycle-42/round-0001/opinion-thermal
++```
++
++Concrete payloads live under:
++
++```text
++/dev/shm/autodoc/routes/deliberation/cycle-42/round-0001/demand-thermal.frame
++/dev/shm/autodoc/routes/deliberation/cycle-42/round-0001/opinion-thermal.frame
++```
++
++The Scheduler carries refs and commands. The specialists read and write route frames. EventBus only observes. SQL persists.
+diff --git a/doc/docs/architecture/runtime/125_scheduler_deliberation_route_contract.dot b/doc/docs/architecture/runtime/125_scheduler_deliberation_route_contract.dot
+new file mode 100644
+index 0000000..90a0861
+--- /dev/null
++++ b/doc/docs/architecture/runtime/125_scheduler_deliberation_route_contract.dot
+@@ -0,0 +1,24 @@
++digraph scheduler_deliberation_route_contract_0125_r2 {
++  rankdir=LR;
++  github [label="GitHub artifact exchange\nartifact in / final out"];
++  scheduler [label="Scheduler\norchestrator"];
++  handler [label="Handler\nthin executor"];
++  route [label="/dev/shm route frames\nmultitask data-plane"];
++  specialists [label="Specialists\nworkers/adapters"];
++  bus [label="EventBus\nobservation/statistics"];
++  sql [label="SQLContextStore\ndurable authority"];
++  e5 [label="E5/OpenVINO\nembedding only"];
++  qdrant [label="Qdrant\nprojection/retrieval"];
++
++  github -> scheduler [label="artifact ref"];
++  scheduler -> handler [label="commands"];
++  handler -> route [label="demand refs"];
++  route -> specialists [label="frames"];
++  specialists -> route [label="opinion frames"];
++  specialists -> bus [label="facts only"];
++  specialists -> e5 [label="query/passages"];
++  e5 -> qdrant [label="vectors"];
++  qdrant -> sql [label="sql refs rehydrate"];
++  handler -> sql [label="durable state"];
++  sql -> github [label="final artifact later"];
++}
+diff --git a/doc/manifests/MANIFEST_0125_R2_CHANGED_FILES.md b/doc/manifests/MANIFEST_0125_R2_CHANGED_FILES.md
+new file mode 100644
+index 0000000..bae2846
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0125_R2_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# 0125-r2 changed files
++
++- src/context/scheduler_deliberation_route_contract.py
++- tests/runtime/test_scheduler_deliberation_route_contract.py
++- tests/rules/test_scheduler_deliberation_route_contract_0125_r2_rule.py
++- doc/architecture/SCHEDULER_DELIBERATION_ROUTE_CONTRACT_0125_R2.md
++- doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0125_R2.md
++- doc/docs/architecture/runtime/125_scheduler_deliberation_route_contract.dot
++- doc/CHANGELOG_0125_R2_SCHEDULER_DELIBERATION_ROUTE_CONTRACT.md
++- doc/manifests/MANIFEST_0125_R2_CHANGED_FILES.md
++- PHASE0125_R2_TEST_REPORT.md
++
++No kernel, scheduler, dispatcher, queue, policy, event bus, route runtime manager, GitHub client, network client, OpenVINO runtime, Qdrant client, PostgreSQL driver, LLM SDK, service, daemon, watcher, or VisPy renderer is modified.
+diff --git a/src/context/scheduler_deliberation_route_contract.py b/src/context/scheduler_deliberation_route_contract.py
+new file mode 100644
+index 0000000..eca5898
+--- /dev/null
++++ b/src/context/scheduler_deliberation_route_contract.py
+@@ -0,0 +1,622 @@
++"""Scheduler deliberation route contracts.
++
++0125-r2 locks the deliberation loop around the real kernel authority:
++Scheduler is the deliberation orchestrator.  There is no parallel local
++orchestrator.  GitHub exchanges artifacts only.  /dev/shm route frames are a
++multitask data-plane interface for local workers and a future grid; they are
++not context authority.  EventBus observes facts, statistics, and paths, not
++payload commands.  E5/OpenVINO is embedding only behind adapter, not decision
++maker.  SQLContextStore is durable context authority.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++import hashlib
++import re
++
++from context.server_oriented_deliberation_cycle import ServerOrientation, SpecialistPreliminaryOpinion
++
++_CYCLE_COMMAND_SCHEMA = "missipy.scheduler.deliberation_cycle_command.v1"
++_ROUND_COMMAND_SCHEMA = "missipy.scheduler.deliberation_round_command.v1"
++_DISPATCH_COMMAND_SCHEMA = "missipy.scheduler.specialist_dispatch_command.v1"
++_ROUTE_REF_SCHEMA = "missipy.route.deliberation_route_ref.v1"
++_DEMAND_FRAME_SCHEMA = "missipy.route.specialist_demand_frame.v1"
++_OPINION_FRAME_SCHEMA = "missipy.route.specialist_opinion_frame.v1"
++_ROUTE_EXCHANGE_SCHEMA = "missipy.route.deliberation_exchange.v1"
++_OBSERVATION_FACT_SCHEMA = "missipy.bus.deliberation_observation_fact.v1"
++_SCHEDULER_BRIDGE_SCHEMA = "missipy.scheduler.deliberation_bridge.v1"
++
++_TYPED_REF_RE = re.compile(r"^[a-z][a-z0-9-]*:[^\s].*$")
++_ALLOWED_ARTIFACT_PREFIXES = ("artifact:", "github:")
++_ALLOWED_SQL_PREFIXES = ("sql:",)
++_ALLOWED_CONTEXT_PREFIXES = ("sql:", "ctx:", "ctx-result:", "ctx-fragment:", "qdrant:", "artifact:")
++_ALLOWED_SPECIALIST_PREFIXES = ("specialist:", "llm:")
++_ALLOWED_ROUTE_PREFIXES = ("route:",)
++_ALLOWED_BUS_PREFIXES = ("bus:", "specialist-path:", "scheduler-trace:")
++_ALLOWED_EMBEDDING_PREFIXES = ("openvino:", "e5:", "embedding-model:")
++_ALLOWED_COLLECTION_PREFIXES = ("qdrant:", "collection:")
++_ALLOWED_COMMAND_PREFIXES = ("command:", "scheduler-command:")
++_ALLOWED_STATE_PREFIXES = ("sql:", "ctx:", "cycle-state:")
++_ALLOWED_ROUND_STATUS = ("planned", "dispatched", "collecting", "recompiling", "completed", "blocked")
++_ALLOWED_FACT_KINDS = (
++    "scheduler.dispatched_round",
++    "scheduler.dispatched_specialist",
++    "route.frame_written",
++    "route.frame_consumed",
++    "specialist.started",
++    "specialist.explored_axis",
++    "specialist.requested_context",
++    "specialist.proposed_alternative",
++    "specialist.requested_peer_review",
++    "server.recompiled_opinions",
++    "server.refined_demand",
++    "cycle.round_completed",
++)
++_ALLOWED_FRAME_KINDS = ("specialist_demand", "specialist_opinion")
++_ALLOWED_DEPTHS = ("shallow", "standard", "deep", "audit")
++
++
++@dataclass(frozen=True, slots=True)
++class DeliberationCycleCommand:
++    """Command that asks the Scheduler to orchestrate a deliberation cycle."""
++
++    command_ref: str
++    artifact_ref: str
++    orientation_ref: str
++    sql_cycle_state_ref: str
++    route_cycle_root_ref: str
++    priority: int = 100
++    context_refs: tuple[str, ...] = ()
++    metadata: tuple[tuple[str, str], ...] = field(default_factory=tuple)
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("command_ref", self.command_ref, required_prefixes=_ALLOWED_COMMAND_PREFIXES)
++        _require_typed_ref("artifact_ref", self.artifact_ref, required_prefixes=_ALLOWED_ARTIFACT_PREFIXES)
++        _require_typed_ref("orientation_ref", self.orientation_ref, required_prefixes=("orientation:",))
++        _require_typed_ref("sql_cycle_state_ref", self.sql_cycle_state_ref, required_prefixes=_ALLOWED_STATE_PREFIXES)
++        _require_typed_ref("route_cycle_root_ref", self.route_cycle_root_ref, required_prefixes=_ALLOWED_ROUTE_PREFIXES)
++        if not 0 <= self.priority <= 10_000:
++            raise ValueError("priority must be between 0 and 10000")
++        object.__setattr__(self, "context_refs", _normalize_refs("context_refs", self.context_refs, allow_empty=True, required_prefixes=_ALLOWED_CONTEXT_PREFIXES))
++        object.__setattr__(self, "metadata", _normalize_metadata(self.metadata))
++
++    @classmethod
++    def from_orientation(
++        cls,
++        orientation: ServerOrientation,
++        *,
++        command_ref: str | None = None,
++        route_cycle_root_ref: str | None = None,
++        priority: int = 100,
++    ) -> "DeliberationCycleCommand":
++        seed = f"{orientation.orientation_ref}|{orientation.artifact_ref}|{orientation.sql_context_ref}"
++        stable = _stable_suffix(seed)
++        return cls(
++            command_ref=command_ref or f"scheduler-command:deliberation-cycle-{stable}",
++            artifact_ref=orientation.artifact_ref,
++            orientation_ref=orientation.orientation_ref,
++            sql_cycle_state_ref=f"cycle-state:{stable}",
++            route_cycle_root_ref=route_cycle_root_ref or f"route:deliberation/{stable}",
++            priority=priority,
++            context_refs=(orientation.sql_context_ref, *orientation.context_refs),
++            metadata=(("scheduler_role", "orchestrator"), ("github_role", "artifact_exchange_only")),
++        )
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _CYCLE_COMMAND_SCHEMA,
++            "command_ref": self.command_ref,
++            "artifact_ref": self.artifact_ref,
++            "orientation_ref": self.orientation_ref,
++            "sql_cycle_state_ref": self.sql_cycle_state_ref,
++            "route_cycle_root_ref": self.route_cycle_root_ref,
++            "priority": self.priority,
++            "context_refs": list(self.context_refs),
++            "metadata": dict(self.metadata),
++            "scheduler_orchestrates": True,
++            "parallel_local_orchestrator": False,
++            "github_exchange_role": "artifact exchange only",
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class DeliberationRouteRef:
++    """Typed reference to a /dev/shm route frame or route directory."""
++
++    route_ref: str
++    dev_shm_path: str
++    frame_kind: str
++    cycle_id: str
++    round_id: str | None = None
++    specialist_ref: str | None = None
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("route_ref", self.route_ref, required_prefixes=_ALLOWED_ROUTE_PREFIXES)
++        if not self.dev_shm_path.startswith("/dev/shm/autodoc/routes/"):
++            raise ValueError("dev_shm_path must start with /dev/shm/autodoc/routes/")
++        if ".." in self.dev_shm_path:
++            raise ValueError("dev_shm_path must not contain '..'")
++        if self.frame_kind not in _ALLOWED_FRAME_KINDS and self.frame_kind != "cycle_root":
++            raise ValueError("frame_kind must be specialist_demand, specialist_opinion, or cycle_root")
++        _require_slug("cycle_id", self.cycle_id)
++        if self.round_id is not None:
++            _require_slug("round_id", self.round_id)
++        if self.specialist_ref is not None:
++            _require_typed_ref("specialist_ref", self.specialist_ref, required_prefixes=_ALLOWED_SPECIALIST_PREFIXES)
++
++    def to_mapping(self) -> dict[str, object | None]:
++        return {
++            "schema": _ROUTE_REF_SCHEMA,
++            "route_ref": self.route_ref,
++            "dev_shm_path": self.dev_shm_path,
++            "frame_kind": self.frame_kind,
++            "cycle_id": self.cycle_id,
++            "round_id": self.round_id,
++            "specialist_ref": self.specialist_ref,
++            "data_plane": "dev_shm_multitask_interface",
++            "durable_authority": False,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class DeliberationRoundCommand:
++    """Scheduler command for one deliberation round."""
++
++    command_ref: str
++    cycle_command_ref: str
++    orientation_ref: str
++    round_id: str
++    route_round_ref: str
++    sql_cycle_state_ref: str
++    expected_specialist_refs: tuple[str, ...]
++    status: str = "planned"
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("command_ref", self.command_ref, required_prefixes=_ALLOWED_COMMAND_PREFIXES)
++        _require_typed_ref("cycle_command_ref", self.cycle_command_ref, required_prefixes=_ALLOWED_COMMAND_PREFIXES)
++        _require_typed_ref("orientation_ref", self.orientation_ref, required_prefixes=("orientation:",))
++        _require_slug("round_id", self.round_id)
++        _require_typed_ref("route_round_ref", self.route_round_ref, required_prefixes=_ALLOWED_ROUTE_PREFIXES)
++        _require_typed_ref("sql_cycle_state_ref", self.sql_cycle_state_ref, required_prefixes=_ALLOWED_STATE_PREFIXES)
++        object.__setattr__(
++            self,
++            "expected_specialist_refs",
++            _normalize_refs("expected_specialist_refs", self.expected_specialist_refs, required_prefixes=_ALLOWED_SPECIALIST_PREFIXES),
++        )
++        if self.status not in _ALLOWED_ROUND_STATUS:
++            raise ValueError("status must be one of: " + ", ".join(_ALLOWED_ROUND_STATUS))
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _ROUND_COMMAND_SCHEMA,
++            "command_ref": self.command_ref,
++            "cycle_command_ref": self.cycle_command_ref,
++            "orientation_ref": self.orientation_ref,
++            "round_id": self.round_id,
++            "route_round_ref": self.route_round_ref,
++            "sql_cycle_state_ref": self.sql_cycle_state_ref,
++            "expected_specialist_refs": list(self.expected_specialist_refs),
++            "status": self.status,
++            "handled_by_scheduler_chain": True,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class SpecialistDispatchCommand:
++    """Scheduler command that dispatches one specialist to one route demand frame."""
++
++    command_ref: str
++    round_command_ref: str
++    specialist_ref: str
++    demand_route_ref: str
++    expected_opinion_route_ref: str
++    bus_topic_ref: str
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("command_ref", self.command_ref, required_prefixes=_ALLOWED_COMMAND_PREFIXES)
++        _require_typed_ref("round_command_ref", self.round_command_ref, required_prefixes=_ALLOWED_COMMAND_PREFIXES)
++        _require_typed_ref("specialist_ref", self.specialist_ref, required_prefixes=_ALLOWED_SPECIALIST_PREFIXES)
++        _require_typed_ref("demand_route_ref", self.demand_route_ref, required_prefixes=_ALLOWED_ROUTE_PREFIXES)
++        _require_typed_ref("expected_opinion_route_ref", self.expected_opinion_route_ref, required_prefixes=_ALLOWED_ROUTE_PREFIXES)
++        _require_typed_ref("bus_topic_ref", self.bus_topic_ref, required_prefixes=_ALLOWED_BUS_PREFIXES)
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _DISPATCH_COMMAND_SCHEMA,
++            "command_ref": self.command_ref,
++            "round_command_ref": self.round_command_ref,
++            "specialist_ref": self.specialist_ref,
++            "demand_route_ref": self.demand_route_ref,
++            "expected_opinion_route_ref": self.expected_opinion_route_ref,
++            "bus_topic_ref": self.bus_topic_ref,
++            "scheduler_orchestrates_dispatch": True,
++            "payload_in_event_bus": False,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class SpecialistDemandFrame:
++    """Frame written to /dev/shm for a specialist worker."""
++
++    frame_ref: str
++    route_ref: str
++    cycle_command_ref: str
++    round_command_ref: str
++    specialist_ref: str
++    request_text: str
++    context_refs: tuple[str, ...]
++    embedding_model_ref: str = "openvino:e5-small"
++    qdrant_collection_ref: str = "qdrant:autodoc-context"
++    expected_output: str = "preliminary_opinion"
++    depth: str = "standard"
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("frame_ref", self.frame_ref, required_prefixes=("route-frame:",))
++        _require_typed_ref("route_ref", self.route_ref, required_prefixes=_ALLOWED_ROUTE_PREFIXES)
++        _require_typed_ref("cycle_command_ref", self.cycle_command_ref, required_prefixes=_ALLOWED_COMMAND_PREFIXES)
++        _require_typed_ref("round_command_ref", self.round_command_ref, required_prefixes=_ALLOWED_COMMAND_PREFIXES)
++        _require_typed_ref("specialist_ref", self.specialist_ref, required_prefixes=_ALLOWED_SPECIALIST_PREFIXES)
++        _require_non_empty("request_text", self.request_text)
++        object.__setattr__(self, "context_refs", _normalize_refs("context_refs", self.context_refs, required_prefixes=_ALLOWED_CONTEXT_PREFIXES))
++        _require_typed_ref("embedding_model_ref", self.embedding_model_ref, required_prefixes=_ALLOWED_EMBEDDING_PREFIXES)
++        _require_typed_ref("qdrant_collection_ref", self.qdrant_collection_ref, required_prefixes=_ALLOWED_COLLECTION_PREFIXES)
++        _require_non_empty("expected_output", self.expected_output)
++        if self.depth not in _ALLOWED_DEPTHS:
++            raise ValueError("depth must be shallow, standard, deep, or audit")
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _DEMAND_FRAME_SCHEMA,
++            "frame_type": "specialist_demand",
++            "frame_ref": self.frame_ref,
++            "route_ref": self.route_ref,
++            "cycle_command_ref": self.cycle_command_ref,
++            "round_command_ref": self.round_command_ref,
++            "specialist_ref": self.specialist_ref,
++            "request_text": self.request_text,
++            "context_refs": list(self.context_refs),
++            "embedding_model_ref": self.embedding_model_ref,
++            "qdrant_collection_ref": self.qdrant_collection_ref,
++            "expected_output": self.expected_output,
++            "depth": self.depth,
++            "e5_role": "embedding only",
++            "decision_maker": False,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class SpecialistOpinionFrame:
++    """Frame written by a specialist worker after reading a demand frame."""
++
++    frame_ref: str
++    route_ref: str
++    demand_frame_ref: str
++    specialist_ref: str
++    opinion_ref: str
++    stance: str
++    summary: str
++    context_delta_refs: tuple[str, ...] = ()
++    observation_fact_refs: tuple[str, ...] = ()
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("frame_ref", self.frame_ref, required_prefixes=("route-frame:",))
++        _require_typed_ref("route_ref", self.route_ref, required_prefixes=_ALLOWED_ROUTE_PREFIXES)
++        _require_typed_ref("demand_frame_ref", self.demand_frame_ref, required_prefixes=("route-frame:",))
++        _require_typed_ref("specialist_ref", self.specialist_ref, required_prefixes=_ALLOWED_SPECIALIST_PREFIXES)
++        _require_typed_ref("opinion_ref", self.opinion_ref, required_prefixes=("specialist-opinion:",))
++        _require_non_empty("stance", self.stance)
++        _require_non_empty("summary", self.summary)
++        object.__setattr__(self, "context_delta_refs", _normalize_refs("context_delta_refs", self.context_delta_refs, allow_empty=True, required_prefixes=("ctx:", "ctx-result:", "sql:")))
++        object.__setattr__(self, "observation_fact_refs", _normalize_refs("observation_fact_refs", self.observation_fact_refs, allow_empty=True, required_prefixes=_ALLOWED_BUS_PREFIXES))
++
++    @classmethod
++    def from_preliminary_opinion(
++        cls,
++        opinion: SpecialistPreliminaryOpinion,
++        *,
++        demand_frame_ref: str,
++        route_ref: str,
++        frame_ref: str | None = None,
++    ) -> "SpecialistOpinionFrame":
++        suffix = _stable_suffix(f"{opinion.opinion_ref}|{route_ref}|{demand_frame_ref}")
++        return cls(
++            frame_ref=frame_ref or f"route-frame:opinion-{suffix}",
++            route_ref=route_ref,
++            demand_frame_ref=demand_frame_ref,
++            specialist_ref=opinion.specialist_ref,
++            opinion_ref=opinion.opinion_ref,
++            stance=opinion.stance,
++            summary=opinion.summary,
++            context_delta_refs=opinion.context_delta_refs,
++            observation_fact_refs=opinion.bus_observation_refs,
++        )
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _OPINION_FRAME_SCHEMA,
++            "frame_type": "specialist_opinion",
++            "frame_ref": self.frame_ref,
++            "route_ref": self.route_ref,
++            "demand_frame_ref": self.demand_frame_ref,
++            "specialist_ref": self.specialist_ref,
++            "opinion_ref": self.opinion_ref,
++            "stance": self.stance,
++            "summary": self.summary,
++            "context_delta_refs": list(self.context_delta_refs),
++            "observation_fact_refs": list(self.observation_fact_refs),
++            "validated_as_final_solution": False,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class DeliberationRouteExchange:
++    """Set of route refs that connect one round to specialists."""
++
++    exchange_ref: str
++    round_command_ref: str
++    demand_routes: tuple[DeliberationRouteRef, ...]
++    opinion_routes: tuple[DeliberationRouteRef, ...]
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("exchange_ref", self.exchange_ref, required_prefixes=("route-exchange:",))
++        _require_typed_ref("round_command_ref", self.round_command_ref, required_prefixes=_ALLOWED_COMMAND_PREFIXES)
++        if not self.demand_routes:
++            raise ValueError("demand_routes must not be empty")
++        if not self.opinion_routes:
++            raise ValueError("opinion_routes must not be empty")
++        object.__setattr__(self, "demand_routes", tuple(self.demand_routes))
++        object.__setattr__(self, "opinion_routes", tuple(self.opinion_routes))
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _ROUTE_EXCHANGE_SCHEMA,
++            "exchange_ref": self.exchange_ref,
++            "round_command_ref": self.round_command_ref,
++            "demand_routes": [route.to_mapping() for route in self.demand_routes],
++            "opinion_routes": [route.to_mapping() for route in self.opinion_routes],
++            "dev_shm_role": "multitask data-plane interface",
++            "future_grid_extension": True,
++            "durable_authority": "SQLContextStore",
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class DeliberationObservationFact:
++    """Bus-ready observation fact derived from scheduler/route/specialist activity."""
++
++    fact_ref: str
++    kind: str
++    cycle_ref: str
++    route_ref: str | None = None
++    specialist_ref: str | None = None
++    count: int = 1
++    metadata: tuple[tuple[str, str], ...] = field(default_factory=tuple)
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("fact_ref", self.fact_ref, required_prefixes=_ALLOWED_BUS_PREFIXES)
++        if self.kind not in _ALLOWED_FACT_KINDS:
++            raise ValueError("kind must be one of: " + ", ".join(_ALLOWED_FACT_KINDS))
++        _require_typed_ref("cycle_ref", self.cycle_ref, required_prefixes=_ALLOWED_COMMAND_PREFIXES + _ALLOWED_STATE_PREFIXES)
++        if self.route_ref is not None:
++            _require_typed_ref("route_ref", self.route_ref, required_prefixes=_ALLOWED_ROUTE_PREFIXES)
++        if self.specialist_ref is not None:
++            _require_typed_ref("specialist_ref", self.specialist_ref, required_prefixes=_ALLOWED_SPECIALIST_PREFIXES)
++        if self.count < 0:
++            raise ValueError("count must be >= 0")
++        object.__setattr__(self, "metadata", _normalize_metadata(self.metadata))
++
++    def to_mapping(self) -> dict[str, object | None]:
++        return {
++            "schema": _OBSERVATION_FACT_SCHEMA,
++            "fact_ref": self.fact_ref,
++            "kind": self.kind,
++            "cycle_ref": self.cycle_ref,
++            "route_ref": self.route_ref,
++            "specialist_ref": self.specialist_ref,
++            "count": self.count,
++            "metadata": dict(self.metadata),
++            "event_bus_role": "observation_only",
++            "command": False,
++            "payload_ref_only": True,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class SchedulerDeliberationRouteBridge:
++    """Immutable bridge packet used by handlers to connect Scheduler and routes."""
++
++    bridge_ref: str
++    cycle_command: DeliberationCycleCommand
++    round_command: DeliberationRoundCommand
++    dispatch_commands: tuple[SpecialistDispatchCommand, ...]
++    route_exchange: DeliberationRouteExchange
++    observation_facts: tuple[DeliberationObservationFact, ...]
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("bridge_ref", self.bridge_ref, required_prefixes=("scheduler-bridge:",))
++        if not self.dispatch_commands:
++            raise ValueError("dispatch_commands must not be empty")
++        object.__setattr__(self, "dispatch_commands", tuple(self.dispatch_commands))
++        object.__setattr__(self, "observation_facts", tuple(self.observation_facts))
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _SCHEDULER_BRIDGE_SCHEMA,
++            "bridge_ref": self.bridge_ref,
++            "cycle_command": self.cycle_command.to_mapping(),
++            "round_command": self.round_command.to_mapping(),
++            "dispatch_commands": [command.to_mapping() for command in self.dispatch_commands],
++            "route_exchange": self.route_exchange.to_mapping(),
++            "observation_facts": [fact.to_mapping() for fact in self.observation_facts],
++            "scheduler_is_orchestrator": True,
++            "dev_shm_is_multitask_interface": True,
++            "event_bus_observation_only": True,
++            "github_artifact_exchange_only": True,
++            "e5_embedding_only": True,
++        }
++
++
++def build_scheduler_deliberation_route_bridge(
++    orientation: ServerOrientation,
++    *,
++    round_id: str = "round-0001",
++    request_template: str = "Produce a preliminary opinion for the server deliberation round.",
++) -> SchedulerDeliberationRouteBridge:
++    """Build a deterministic bridge packet without touching the live Scheduler."""
++
++    cycle_command = DeliberationCycleCommand.from_orientation(orientation)
++    stable = _stable_suffix(f"{cycle_command.command_ref}|{round_id}")
++    route_round_ref = f"route:deliberation/{stable}/{round_id}"
++    round_command = DeliberationRoundCommand(
++        command_ref=f"scheduler-command:deliberation-round-{stable}",
++        cycle_command_ref=cycle_command.command_ref,
++        orientation_ref=orientation.orientation_ref,
++        round_id=round_id,
++        route_round_ref=route_round_ref,
++        sql_cycle_state_ref=cycle_command.sql_cycle_state_ref,
++        expected_specialist_refs=orientation.requested_specialist_refs,
++    )
++    demand_routes: list[DeliberationRouteRef] = []
++    opinion_routes: list[DeliberationRouteRef] = []
++    dispatch_commands: list[SpecialistDispatchCommand] = []
++    facts: list[DeliberationObservationFact] = [
++        DeliberationObservationFact(
++            fact_ref=f"scheduler-trace:round-dispatched-{stable}",
++            kind="scheduler.dispatched_round",
++            cycle_ref=cycle_command.command_ref,
++            route_ref=route_round_ref,
++        )
++    ]
++    for index, specialist_ref in enumerate(orientation.requested_specialist_refs, start=1):
++        specialist_slug = _ref_slug(specialist_ref)
++        demand_route_ref = f"route:deliberation/{stable}/{round_id}/demand-{specialist_slug}"
++        opinion_route_ref = f"route:deliberation/{stable}/{round_id}/opinion-{specialist_slug}"
++        demand_routes.append(
++            DeliberationRouteRef(
++                route_ref=demand_route_ref,
++                dev_shm_path=f"/dev/shm/autodoc/routes/deliberation/{stable}/{round_id}/demand-{specialist_slug}.frame",
++                frame_kind="specialist_demand",
++                cycle_id=stable,
++                round_id=round_id,
++                specialist_ref=specialist_ref,
++            )
++        )
++        opinion_routes.append(
++            DeliberationRouteRef(
++                route_ref=opinion_route_ref,
++                dev_shm_path=f"/dev/shm/autodoc/routes/deliberation/{stable}/{round_id}/opinion-{specialist_slug}.frame",
++                frame_kind="specialist_opinion",
++                cycle_id=stable,
++                round_id=round_id,
++                specialist_ref=specialist_ref,
++            )
++        )
++        dispatch_commands.append(
++            SpecialistDispatchCommand(
++                command_ref=f"scheduler-command:specialist-dispatch-{stable}-{index:02d}",
++                round_command_ref=round_command.command_ref,
++                specialist_ref=specialist_ref,
++                demand_route_ref=demand_route_ref,
++                expected_opinion_route_ref=opinion_route_ref,
++                bus_topic_ref=f"bus:deliberation/{stable}/{round_id}/{specialist_slug}",
++            )
++        )
++        facts.append(
++            DeliberationObservationFact(
++                fact_ref=f"scheduler-trace:specialist-dispatched-{stable}-{index:02d}",
++                kind="scheduler.dispatched_specialist",
++                cycle_ref=cycle_command.command_ref,
++                route_ref=demand_route_ref,
++                specialist_ref=specialist_ref,
++                metadata=(("request_template", request_template),),
++            )
++        )
++    exchange = DeliberationRouteExchange(
++        exchange_ref=f"route-exchange:deliberation-{stable}-{round_id}",
++        round_command_ref=round_command.command_ref,
++        demand_routes=tuple(demand_routes),
++        opinion_routes=tuple(opinion_routes),
++    )
++    return SchedulerDeliberationRouteBridge(
++        bridge_ref=f"scheduler-bridge:deliberation-{stable}-{round_id}",
++        cycle_command=cycle_command,
++        round_command=round_command,
++        dispatch_commands=tuple(dispatch_commands),
++        route_exchange=exchange,
++        observation_facts=tuple(facts),
++    )
++
++
++def build_specialist_demand_frames(
++    bridge: SchedulerDeliberationRouteBridge,
++    *,
++    request_text_by_specialist: dict[str, str] | None = None,
++) -> tuple[SpecialistDemandFrame, ...]:
++    """Create /dev/shm demand frame payloads from a bridge packet."""
++
++    texts = request_text_by_specialist or {}
++    frames: list[SpecialistDemandFrame] = []
++    for command in bridge.dispatch_commands:
++        text = texts.get(command.specialist_ref, "Produce a preliminary opinion for this deliberation round.")
++        frames.append(
++            SpecialistDemandFrame(
++                frame_ref=f"route-frame:demand-{_stable_suffix(command.demand_route_ref)}",
++                route_ref=command.demand_route_ref,
++                cycle_command_ref=bridge.cycle_command.command_ref,
++                round_command_ref=bridge.round_command.command_ref,
++                specialist_ref=command.specialist_ref,
++                request_text=text,
++                context_refs=bridge.cycle_command.context_refs,
++            )
++        )
++    return tuple(frames)
++
++
++def _require_typed_ref(name: str, value: str, *, required_prefixes: tuple[str, ...] | None = None) -> None:
++    if not isinstance(value, str) or not _TYPED_REF_RE.match(value):
++        raise ValueError(f"{name} must be a typed ref")
++    if required_prefixes is not None and not value.startswith(required_prefixes):
++        raise ValueError(f"{name} must start with one of: {', '.join(required_prefixes)}")
++
++
++def _require_non_empty(name: str, value: str) -> None:
++    if not isinstance(value, str) or not value.strip():
++        raise ValueError(f"{name} must not be empty")
++
++
++def _require_slug(name: str, value: str) -> None:
++    if not isinstance(value, str) or not re.match(r"^[a-z0-9][a-z0-9_.-]*$", value):
++        raise ValueError(f"{name} must be a stable slug")
++
++
++def _normalize_refs(
++    name: str,
++    values: tuple[str, ...],
++    *,
++    allow_empty: bool = False,
++    required_prefixes: tuple[str, ...] | None = None,
++) -> tuple[str, ...]:
++    refs = tuple(dict.fromkeys(values))
++    if not refs and not allow_empty:
++        raise ValueError(f"{name} must not be empty")
++    for ref in refs:
++        _require_typed_ref(name, ref, required_prefixes=required_prefixes)
++    return refs
++
++
++def _normalize_metadata(values: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
++    normalized: list[tuple[str, str]] = []
++    for key, value in values:
++        _require_non_empty("metadata key", key)
++        _require_non_empty("metadata value", value)
++        normalized.append((key.strip(), value.strip()))
++    return tuple(normalized)
++
++
++def _stable_suffix(seed: str) -> str:
++    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
++
++
++def _ref_slug(ref: str) -> str:
++    return re.sub(r"[^a-z0-9_.-]+", "-", ref.split(":", 1)[1].lower()).strip("-") or "specialist"
+diff --git a/tests/rules/test_scheduler_deliberation_route_contract_0125_r2_rule.py b/tests/rules/test_scheduler_deliberation_route_contract_0125_r2_rule.py
+new file mode 100644
+index 0000000..8abbda1
+--- /dev/null
++++ b/tests/rules/test_scheduler_deliberation_route_contract_0125_r2_rule.py
+@@ -0,0 +1,108 @@
++from __future__ import annotations
++
++import ast
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "context" / "scheduler_deliberation_route_contract.py"
++DOC = ROOT / "doc" / "architecture" / "SCHEDULER_DELIBERATION_ROUTE_CONTRACT_0125_R2.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0125_R2_CHANGED_FILES.md"
++
++
++def test_0125_r2_documents_scheduler_dev_shm_bus_and_embedding_boundaries() -> None:
++    text = DOC.read_text(encoding="utf-8")
++    required = [
++        "Scheduler is the deliberation orchestrator",
++        "No parallel local server orchestrator is introduced",
++        "/dev/shm route frames are a multitask data-plane interface for local workers and a future grid",
++        "EventBus observes facts, statistics, and paths, not payload commands",
++        "GitHub exchanges artifacts only: artifact in and final artifact out",
++        "E5/OpenVINO is embedding only behind adapter, not decision maker",
++        "SQLContextStore is durable context authority",
++        "Qdrant is vector projection and retrieval, not context authority",
++        "Specialist proposals are receivable as analysis signals before final validation",
++        "Do not modify Scheduler.run() in 0125-r2",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0125_r2_manifest_does_not_touch_kernel_or_add_runtime_clients() -> None:
++    text = MANIFEST.read_text(encoding="utf-8")
++    required = [
++        "src/context/scheduler_deliberation_route_contract.py",
++        "tests/runtime/test_scheduler_deliberation_route_contract.py",
++        "tests/rules/test_scheduler_deliberation_route_contract_0125_r2_rule.py",
++        "doc/architecture/SCHEDULER_DELIBERATION_ROUTE_CONTRACT_0125_R2.md",
++    ]
++    for phrase in required:
++        assert phrase in text
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/kernel/dispatcher.py",
++        "src/kernel/queue.py",
++        "src/policy/engine.py",
++        "src/observability/event_bus.py",
++        "src/runtime/route_runtime_manager.py",
++        "src/context/server_deliberation_orchestrator.py",
++        "requests",
++        "socket",
++        "vispy",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++
++
++def test_0125_r2_module_has_no_unapproved_runtime_imports() -> None:
++    tree = ast.parse(MODULE.read_text(encoding="utf-8"))
++    imports: set[str] = set()
++    for node in ast.walk(tree):
++        if isinstance(node, ast.Import):
++            imports.update(alias.name.split(".", 1)[0] for alias in node.names)
++        elif isinstance(node, ast.ImportFrom) and node.module:
++            imports.add(node.module.split(".", 1)[0])
++    forbidden = {
++        "requests",
++        "httpx",
++        "socket",
++        "subprocess",
++        "openvino",
++        "qdrant",
++        "psycopg",
++        "sqlite3",
++        "graphviz",
++        "networkx",
++        "vispy",
++        "src",
++    }
++    assert sorted(imports & forbidden) == []
++
++
++def test_0125_r2_module_locks_no_parallel_orchestrator_and_no_runtime_scheduler_call() -> None:
++    text = MODULE.read_text(encoding="utf-8")
++    forbidden = [
++        "LocalServerOrchestrator",
++        "server_deliberation_orchestrator",
++        "Scheduler(",
++        "Scheduler.run(",
++        "Dispatcher(",
++        "PolicyEngine(",
++        "PriorityQueue(",
++        "EventType(",
++        "GitHubPublicationReview",
++        "requests.",
++        "socket.",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++    required = [
++        "Scheduler is the deliberation orchestrator.",
++        "/dev/shm route frames are a",
++        "E5/OpenVINO is embedding only behind adapter, not decision",
++        '"scheduler_is_orchestrator": True',
++        '"dev_shm_is_multitask_interface": True',
++        '"event_bus_observation_only": True',
++        '"e5_embedding_only": True',
++    ]
++    for phrase in required:
++        assert phrase in text
+diff --git a/tests/runtime/test_scheduler_deliberation_route_contract.py b/tests/runtime/test_scheduler_deliberation_route_contract.py
+new file mode 100644
+index 0000000..9b0031a
+--- /dev/null
++++ b/tests/runtime/test_scheduler_deliberation_route_contract.py
+@@ -0,0 +1,127 @@
++from __future__ import annotations
++
++import pytest
++
++from context.scheduler_deliberation_route_contract import (
++    DeliberationCycleCommand,
++    DeliberationObservationFact,
++    DeliberationRouteRef,
++    SpecialistDemandFrame,
++    SpecialistOpinionFrame,
++    build_scheduler_deliberation_route_bridge,
++    build_specialist_demand_frames,
++)
++from context.server_oriented_deliberation_cycle import ServerOrientation, SpecialistPreliminaryOpinion
++
++
++def make_orientation() -> ServerOrientation:
++    return ServerOrientation(
++        orientation_ref="orientation:spoon-thermal",
++        artifact_ref="github:project-item-123",
++        source_ref="artifact:github-123",
++        sql_context_ref="sql:context/spoon",
++        title="Cuillère bébé",
++        intent="Explorer les matériaux et les risques thermiques.",
++        requested_specialist_refs=("specialist:material", "specialist:thermal"),
++        requested_document_kinds=("preliminary-opinion",),
++        context_refs=("ctx:brief/spoon", "qdrant:collection/autodoc"),
++    )
++
++
++def test_cycle_command_from_orientation_keeps_scheduler_as_orchestrator() -> None:
++    command = DeliberationCycleCommand.from_orientation(make_orientation())
++    mapping = command.to_mapping()
++    assert mapping["scheduler_orchestrates"] is True
++    assert mapping["parallel_local_orchestrator"] is False
++    assert mapping["github_exchange_role"] == "artifact exchange only"
++    assert command.route_cycle_root_ref.startswith("route:deliberation/")
++    assert "sql:context/spoon" in command.context_refs
++
++
++def test_route_ref_requires_dev_shm_autodoc_route_root() -> None:
++    good = DeliberationRouteRef(
++        route_ref="route:deliberation/cycle/round/demand",
++        dev_shm_path="/dev/shm/autodoc/routes/deliberation/cycle/round/demand.frame",
++        frame_kind="specialist_demand",
++        cycle_id="cycle",
++        round_id="round-0001",
++        specialist_ref="specialist:thermal",
++    )
++    assert good.to_mapping()["data_plane"] == "dev_shm_multitask_interface"
++    with pytest.raises(ValueError, match="/dev/shm/autodoc/routes/"):
++        DeliberationRouteRef(
++            route_ref="route:bad",
++            dev_shm_path="/tmp/bad.frame",
++            frame_kind="specialist_demand",
++            cycle_id="cycle",
++        )
++
++
++def test_build_scheduler_bridge_creates_dispatch_commands_and_bus_ready_facts() -> None:
++    bridge = build_scheduler_deliberation_route_bridge(make_orientation())
++    mapping = bridge.to_mapping()
++    assert mapping["scheduler_is_orchestrator"] is True
++    assert mapping["dev_shm_is_multitask_interface"] is True
++    assert mapping["event_bus_observation_only"] is True
++    assert mapping["github_artifact_exchange_only"] is True
++    assert mapping["e5_embedding_only"] is True
++    assert len(bridge.dispatch_commands) == 2
++    assert len(bridge.route_exchange.demand_routes) == 2
++    assert len(bridge.route_exchange.opinion_routes) == 2
++    assert {fact.kind for fact in bridge.observation_facts} == {
++        "scheduler.dispatched_round",
++        "scheduler.dispatched_specialist",
++    }
++
++
++def test_demand_frames_use_e5_embedding_hints_without_decision_authority() -> None:
++    bridge = build_scheduler_deliberation_route_bridge(make_orientation())
++    frames = build_specialist_demand_frames(
++        bridge,
++        request_text_by_specialist={"specialist:thermal": "Analyse thermique préliminaire."},
++    )
++    thermal = [frame for frame in frames if frame.specialist_ref == "specialist:thermal"][0]
++    mapping = thermal.to_mapping()
++    assert mapping["embedding_model_ref"] == "openvino:e5-small"
++    assert mapping["qdrant_collection_ref"] == "qdrant:autodoc-context"
++    assert mapping["e5_role"] == "embedding only"
++    assert mapping["decision_maker"] is False
++    assert "sql:context/spoon" in thermal.context_refs
++
++
++def test_opinion_frame_from_preliminary_opinion_is_not_final_validation() -> None:
++    opinion = SpecialistPreliminaryOpinion(
++        opinion_ref="specialist-opinion:thermal-1",
++        orientation_ref="orientation:spoon-thermal",
++        specialist_ref="specialist:thermal",
++        stance="analysis_signal",
++        summary="La proposition est recevable comme signal mais nécessite revue thermique.",
++        recommendation="Demander une seconde passe matériau.",
++        evidence_refs=("sql:context/spoon",),
++        context_delta_refs=("ctx-result:thermal-delta",),
++        bus_observation_refs=("bus:thermal/explored-axis",),
++        confidence=0.62,
++    )
++    frame = SpecialistOpinionFrame.from_preliminary_opinion(
++        opinion,
++        demand_frame_ref="route-frame:demand-thermal",
++        route_ref="route:deliberation/cycle/round/opinion-thermal",
++    )
++    mapping = frame.to_mapping()
++    assert mapping["validated_as_final_solution"] is False
++    assert mapping["observation_fact_refs"] == ["bus:thermal/explored-axis"]
++
++
++def test_observation_facts_are_commands_never_payload_transport() -> None:
++    fact = DeliberationObservationFact(
++        fact_ref="scheduler-trace:route-written",
++        kind="route.frame_written",
++        cycle_ref="scheduler-command:cycle",
++        route_ref="route:deliberation/cycle/round/demand",
++        specialist_ref="specialist:material",
++        count=3,
++    )
++    mapping = fact.to_mapping()
++    assert mapping["event_bus_role"] == "observation_only"
++    assert mapping["command"] is False
++    assert mapping["payload_ref_only"] is True

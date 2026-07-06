@@ -1,0 +1,540 @@
+diff --git a/PHASE0137_TEST_REPORT.md b/PHASE0137_TEST_REPORT.md
+new file mode 100644
+index 0000000..ed2793e
+--- /dev/null
++++ b/PHASE0137_TEST_REPORT.md
+@@ -0,0 +1,23 @@
++# PHASE0137_TEST_REPORT
++
++```text
++phase: 0137-local_vector_indexing_test_readiness
++code_rule_review: done
++code_rule_update_required: true
++code_rule_reason: add a smoke-test readiness rule before adding a local runner so existing wheels are reused first.
++live_path_status: readiness
++live_path_uses_real_backend: false
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++```
++
++Validation performed in patch build:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/tools/test_local_vector_indexing_smoke_readiness_0137.py tests/rules/test_local_vector_indexing_smoke_readiness_0137_rule.py
++# 9 passed
++```
++
++0137 is a readiness gate. It does not run OpenVINO, Qdrant, SQL, Scheduler, EventBus, or `/dev/shm`.
+diff --git a/doc/CHANGELOG_0137_LOCAL_VECTOR_INDEXING_TEST_READINESS.md b/doc/CHANGELOG_0137_LOCAL_VECTOR_INDEXING_TEST_READINESS.md
+new file mode 100644
+index 0000000..6aec1ac
+--- /dev/null
++++ b/doc/CHANGELOG_0137_LOCAL_VECTOR_INDEXING_TEST_READINESS.md
+@@ -0,0 +1,17 @@
++# Changelog 0137 — local vector-indexing test readiness
++
++Added a read-only readiness tool before the first local vector-indexing smoke test.
++
++Added:
++
++- `tools/plan_local_vector_indexing_smoke.py`
++- `tests/tools/test_local_vector_indexing_smoke_readiness_0137.py`
++- `tests/rules/test_local_vector_indexing_smoke_readiness_0137_rule.py`
++- `doc/architecture/LOCAL_VECTOR_INDEXING_TEST_READINESS_0137.md`
++- `doc/code-rules/0137_local_vector_indexing_test_readiness_rule.md`
++- `doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0137.md`
++- `doc/docs/architecture/runtime/137_local_vector_indexing_test_readiness.dot`
++- `doc/manifests/MANIFEST_0137_CHANGED_FILES.md`
++- `PHASE0137_TEST_REPORT.md`
++
++No runtime, adapter, scheduler, daemon, backend launch, or network client was added.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0137.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0137.md
+new file mode 100644
+index 0000000..4a17e16
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0137.md
+@@ -0,0 +1,16 @@
++# 0137 — ControlProxy operational plan update
++
++0137 does not add ControlProxy runtime behavior. It adds a readiness gate before the first local vector-indexing smoke test.
++
++The next live path must reuse:
++
++```text
++Scheduler route handler
++RouteProxyRuntime
++VectorIndexingJobPlan
++OpenVINO/E5 membrane
++Qdrant projection adapter
++SQLContextStore
++```
++
++The readiness tool is read-only and does not touch `/dev/shm`, OpenVINO, Qdrant, SQL, Scheduler, or EventBus.
+diff --git a/doc/architecture/LOCAL_VECTOR_INDEXING_TEST_READINESS_0137.md b/doc/architecture/LOCAL_VECTOR_INDEXING_TEST_READINESS_0137.md
+new file mode 100644
+index 0000000..f31684a
+--- /dev/null
++++ b/doc/architecture/LOCAL_VECTOR_INDEXING_TEST_READINESS_0137.md
+@@ -0,0 +1,47 @@
++# 0137 — Local vector-indexing test readiness
++
++0137 is a readiness gate, not a runtime implementation.
++
++The goal is to prepare the first local vector-indexing smoke test without creating a parallel wheel.  The test must reuse the existing Scheduler route handler, RouteProxy runtime, OpenVINO/E5 embedding membrane, Qdrant projection adapter, vector collection registry, and SQL context store.
++
++## Steps before the first real local test
++
++1. stabilize 0136-r1 before running the first local vector-indexing smoke test.
++2. run `tools/plan_local_vector_indexing_smoke.py . --format markdown`.
++3. confirm every expected existing surface is present.
++4. run OpenVINO/E5 through the existing inference membrane.
++5. run Qdrant through the existing projection adapter.
++6. run a dry local vector-indexing path from text to embedding result to projection acknowledgement.
++7. then wire Scheduler to enqueue the existing VectorIndexingJobPlan.
++
++## Boundary lock
++
++- Scheduler remains the orchestrator.
++- SQLContextStore remains durable authority.
++- RouteProxyRuntime remains data-plane runtime for local frame exchange.
++- OpenVINO imports remain behind the existing OpenVINO runtime boundary.
++- Qdrant remains a projection and recall adapter, not authority.
++- Do not create VectorOpenVINOEmbeddingAdapter.
++- Do not create VectorQdrantProjectionAdapter.
++- Do not create a local vector indexing orchestrator.
++
++## Readiness command
++
++```bash
++python tools/plan_local_vector_indexing_smoke.py . --format markdown
++```
++
++The command is read-only. It returns exit code `0` when expected existing surfaces are present and `2` when at least one surface is missing.
++
++## Phase status
++
++```text
++code_rule_review: done
++code_rule_update_required: true
++code_rule_reason: add a smoke-test readiness rule before adding a local runner so existing wheels are reused first.
++live_path_status: readiness
++live_path_uses_real_backend: false
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++```
+diff --git a/doc/code-rules/0137_local_vector_indexing_test_readiness_rule.md b/doc/code-rules/0137_local_vector_indexing_test_readiness_rule.md
+new file mode 100644
+index 0000000..6c16e5c
+--- /dev/null
++++ b/doc/code-rules/0137_local_vector_indexing_test_readiness_rule.md
+@@ -0,0 +1,27 @@
++# Code rule addendum — 0137 local vector-indexing test readiness
++
++Before adding a local vector-indexing runner, run tools/plan_local_vector_indexing_smoke.py and document the result.
++
++The smoke path must reuse existing RouteProxyRuntime, Scheduler route handler, OpenVINO/E5 membrane, Qdrant projection adapter, and SQLContextStore.
++
++Do not create a new scheduler, runtime, OpenVINO adapter, Qdrant adapter, or orchestrator for the smoke test.
++
++Allowed 0137 scope:
++
++```text
++read-only inventory tool
++documentation
++tests
++rules
++```
++
++Forbidden 0137 scope:
++
++```text
++new runtime daemon
++new adapter
++new scheduler
++new orchestrator
++backend process launch
++network client
++```
+diff --git a/doc/docs/architecture/runtime/137_local_vector_indexing_test_readiness.dot b/doc/docs/architecture/runtime/137_local_vector_indexing_test_readiness.dot
+new file mode 100644
+index 0000000..09a5278
+--- /dev/null
++++ b/doc/docs/architecture/runtime/137_local_vector_indexing_test_readiness.dot
+@@ -0,0 +1,26 @@
++digraph local_vector_indexing_test_readiness_0137 {
++  rankdir=LR;
++  node [shape=box];
++
++  readiness [label="0137 readiness gate\nread-only inventory"];
++  scheduler [label="existing Scheduler route handler"];
++  routeproxy [label="existing RouteProxyRuntime"];
++  vectorplan [label="existing VectorIndexingJobPlan"];
++  openvino [label="existing OpenVINO/E5 membrane"];
++  qdrant [label="existing Qdrant projection adapter"];
++  sql [label="existing SQLContextStore"];
++  smoke [label="next smoke test"];
++
++  readiness -> scheduler;
++  readiness -> routeproxy;
++  readiness -> vectorplan;
++  readiness -> openvino;
++  readiness -> qdrant;
++  readiness -> sql;
++  scheduler -> smoke;
++  routeproxy -> smoke;
++  vectorplan -> smoke;
++  openvino -> smoke;
++  qdrant -> smoke;
++  sql -> smoke;
++}
+diff --git a/doc/manifests/MANIFEST_0137_CHANGED_FILES.md b/doc/manifests/MANIFEST_0137_CHANGED_FILES.md
+new file mode 100644
+index 0000000..177680c
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0137_CHANGED_FILES.md
+@@ -0,0 +1,14 @@
++# Manifest 0137 — changed files
++
++- tools/plan_local_vector_indexing_smoke.py
++- tests/tools/test_local_vector_indexing_smoke_readiness_0137.py
++- tests/rules/test_local_vector_indexing_smoke_readiness_0137_rule.py
++- doc/architecture/LOCAL_VECTOR_INDEXING_TEST_READINESS_0137.md
++- doc/code-rules/0137_local_vector_indexing_test_readiness_rule.md
++- doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0137.md
++- doc/docs/architecture/runtime/137_local_vector_indexing_test_readiness.dot
++- doc/CHANGELOG_0137_LOCAL_VECTOR_INDEXING_TEST_READINESS.md
++- doc/manifests/MANIFEST_0137_CHANGED_FILES.md
++- PHASE0137_TEST_REPORT.md
++
++Boundary note: 0137 adds only a read-only readiness gate plus docs/tests/rules.
+diff --git a/tests/rules/test_local_vector_indexing_smoke_readiness_0137_rule.py b/tests/rules/test_local_vector_indexing_smoke_readiness_0137_rule.py
+new file mode 100644
+index 0000000..f0f83e3
+--- /dev/null
++++ b/tests/rules/test_local_vector_indexing_smoke_readiness_0137_rule.py
+@@ -0,0 +1,86 @@
++from __future__ import annotations
++
++import ast
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "plan_local_vector_indexing_smoke.py"
++DOC = ROOT / "doc" / "architecture" / "LOCAL_VECTOR_INDEXING_TEST_READINESS_0137.md"
++CODE_RULE = ROOT / "doc" / "code-rules" / "0137_local_vector_indexing_test_readiness_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0137_CHANGED_FILES.md"
++
++
++def test_0137_documents_steps_before_first_real_test() -> None:
++    text = DOC.read_text(encoding="utf-8")
++    required = [
++        "0137 is a readiness gate, not a runtime implementation",
++        "stabilize 0136-r1 before running the first local vector-indexing smoke test",
++        "run OpenVINO/E5 through the existing inference membrane",
++        "run Qdrant through the existing projection adapter",
++        "then wire Scheduler to enqueue the existing VectorIndexingJobPlan",
++        "Do not create VectorOpenVINOEmbeddingAdapter",
++        "Do not create VectorQdrantProjectionAdapter",
++        "Scheduler remains the orchestrator",
++        "SQLContextStore remains durable authority",
++        "code_rule_review: done",
++        "code_rule_update_required: true",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0137_code_rule_requires_readiness_inventory_before_runner() -> None:
++    text = CODE_RULE.read_text(encoding="utf-8")
++    required = [
++        "Before adding a local vector-indexing runner",
++        "run tools/plan_local_vector_indexing_smoke.py",
++        "reuse existing RouteProxyRuntime, Scheduler route handler, OpenVINO/E5 membrane, Qdrant projection adapter, and SQLContextStore",
++        "Do not create a new scheduler, runtime, OpenVINO adapter, Qdrant adapter, or orchestrator for the smoke test",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0137_tool_has_no_runtime_or_backend_imports() -> None:
++    tree = ast.parse(TOOL.read_text(encoding="utf-8"))
++    imports: set[str] = set()
++    for node in ast.walk(tree):
++        if isinstance(node, ast.Import):
++            imports.update(alias.name.split(".", 1)[0] for alias in node.names)
++        elif isinstance(node, ast.ImportFrom) and node.module:
++            imports.add(node.module.split(".", 1)[0])
++    forbidden = {
++        "openvino",
++        "qdrant",
++        "qdrant_client",
++        "psycopg",
++        "sqlite3",
++        "socket",
++        "subprocess",
++        "requests",
++        "httpx",
++        "src",
++    }
++    assert sorted(imports & forbidden) == []
++
++
++def test_0137_manifest_only_adds_tool_docs_and_tests() -> None:
++    text = MANIFEST.read_text(encoding="utf-8")
++    required = [
++        "tools/plan_local_vector_indexing_smoke.py",
++        "tests/tools/test_local_vector_indexing_smoke_readiness_0137.py",
++        "tests/rules/test_local_vector_indexing_smoke_readiness_0137_rule.py",
++        "doc/architecture/LOCAL_VECTOR_INDEXING_TEST_READINESS_0137.md",
++        "doc/code-rules/0137_local_vector_indexing_test_readiness_rule.md",
++    ]
++    for phrase in required:
++        assert phrase in text
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/runtime/scheduler_route_handler_minimal.py",
++        "src/runtime/route_proxy_runtime_minimal.py",
++        "src/inference/openvino_embedding_adapter.py",
++        "src/inference/qdrant_projection_adapter.py",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
+diff --git a/tests/tools/test_local_vector_indexing_smoke_readiness_0137.py b/tests/tools/test_local_vector_indexing_smoke_readiness_0137.py
+new file mode 100644
+index 0000000..9024e9d
+--- /dev/null
++++ b/tests/tools/test_local_vector_indexing_smoke_readiness_0137.py
+@@ -0,0 +1,69 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++from tools.plan_local_vector_indexing_smoke import (
++    EXPECTED_SURFACES,
++    build_local_vector_indexing_smoke_readiness,
++    main,
++)
++
++
++def _make_surface_files(root: Path) -> None:
++    for _, path, _ in EXPECTED_SURFACES:
++        target = root / path
++        target.parent.mkdir(parents=True, exist_ok=True)
++        target.write_text("# existing surface\n", encoding="utf-8")
++
++
++def test_readiness_report_detects_all_existing_surfaces(tmp_path: Path) -> None:
++    _make_surface_files(tmp_path)
++
++    report = build_local_vector_indexing_smoke_readiness(tmp_path)
++
++    assert report.ready_for_local_smoke is True
++    assert report.missing_paths == ()
++    mapping = report.to_mapping()
++    assert mapping["decision"] == "reuse_existing_surfaces_before_runtime_extension"
++    assert mapping["scheduler_remains_orchestrator"] is True
++    assert mapping["openvino_import_boundary"] == "src/inference/openvino_runtime.py"
++    assert mapping["qdrant_projection_boundary"] == "src/inference/qdrant_projection_adapter.py"
++
++
++def test_readiness_report_lists_missing_paths_without_creating_files(tmp_path: Path) -> None:
++    report = build_local_vector_indexing_smoke_readiness(tmp_path)
++
++    assert report.ready_for_local_smoke is False
++    assert set(report.missing_paths) == {path for _, path, _ in EXPECTED_SURFACES}
++    assert not (tmp_path / "src").exists()
++
++
++def test_readiness_markdown_presents_steps_before_first_real_test(tmp_path: Path) -> None:
++    _make_surface_files(tmp_path)
++    report = build_local_vector_indexing_smoke_readiness(tmp_path)
++
++    markdown = report.to_markdown()
++
++    assert "Local vector indexing smoke readiness" in markdown
++    assert "Next steps before the first real test" in markdown
++    assert "run OpenVINO/E5 smoke through the existing inference membrane only" in markdown
++    assert "run Qdrant projection smoke through the existing Qdrant adapter only" in markdown
++    assert "VectorOpenVINOEmbeddingAdapter" in markdown
++
++
++def test_cli_returns_zero_when_surfaces_are_present(tmp_path: Path, capsys) -> None:
++    _make_surface_files(tmp_path)
++
++    exit_code = main([str(tmp_path), "--format", "json"])
++
++    assert exit_code == 0
++    output = capsys.readouterr().out
++    assert '"ready_for_local_smoke": true' in output
++
++
++def test_cli_returns_two_when_surfaces_are_missing(tmp_path: Path, capsys) -> None:
++    exit_code = main([str(tmp_path), "--format", "markdown"])
++
++    assert exit_code == 2
++    output = capsys.readouterr().out
++    assert "ready_for_local_smoke: `false`" in output
+diff --git a/tools/plan_local_vector_indexing_smoke.py b/tools/plan_local_vector_indexing_smoke.py
+new file mode 100644
+index 0000000..96907db
+--- /dev/null
++++ b/tools/plan_local_vector_indexing_smoke.py
+@@ -0,0 +1,155 @@
++"""Read-only readiness plan for the local vector-indexing smoke test.
++
++0137 intentionally does not create a runtime, adapter, daemon, or scheduler path.
++It inventories existing surfaces so the first real smoke test can reuse the
++current RouteProxy/Scheduler/OpenVINO/Qdrant/SQL components instead of creating
++parallel wheels.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++import argparse
++import json
++from pathlib import Path
++from typing import Iterable, Sequence
++
++EXPECTED_SURFACES: tuple[tuple[str, str, str], ...] = (
++    ("route_proxy_runtime", "src/runtime/route_proxy_runtime_minimal.py", "0130 RouteProxy runtime root/frame IO"),
++    ("scheduler_route_handler", "src/runtime/scheduler_route_handler_minimal.py", "0131/0133 existing scheduler route handler"),
++    ("vector_indexing_plan", "src/context/vector_indexing_job_plan.py", "0128 vector indexing job contracts"),
++    ("vector_collection_registry", "src/context/vector_collection_registry.py", "0127 existing vector collection registry"),
++    ("openvino_embedding_membrane", "src/inference/openvino_embedding_adapter.py", "existing OpenVINO/E5 embedding membrane"),
++    ("openvino_runtime_boundary", "src/inference/openvino_runtime.py", "single real OpenVINO import boundary"),
++    ("qdrant_projection_adapter", "src/inference/qdrant_projection_adapter.py", "existing Qdrant projection adapter"),
++    ("sql_context_store", "src/context/sql_context_store.py", "durable context authority"),
++)
++
++NEXT_STEPS: tuple[str, ...] = (
++    "stabilize 0136-r1 so Qdrant registry assertions match the real repository",
++    "run this readiness inventory and verify all expected existing surfaces are found",
++    "run OpenVINO/E5 smoke through the existing inference membrane only",
++    "run Qdrant projection smoke through the existing Qdrant adapter only",
++    "run local vector indexing smoke from text to embedding result to projection ack",
++    "then wire Scheduler handler to enqueue the already-defined vector indexing job plan",
++)
++
++FORBIDDEN_NEW_WHEELS: tuple[str, ...] = (
++    "VectorOpenVINOEmbeddingAdapter",
++    "VectorQdrantProjectionAdapter",
++    "LocalVectorIndexingOrchestrator",
++    "SchedulerOpenVINORunner",
++    "RouteProxyQdrantWorker",
++)
++
++
++@dataclass(frozen=True, slots=True)
++class SurfaceReadiness:
++    """One existing surface required before the local smoke test."""
++
++    key: str
++    path: str
++    reason: str
++    exists: bool
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "key": self.key,
++            "path": self.path,
++            "reason": self.reason,
++            "exists": self.exists,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class LocalVectorIndexingSmokeReadiness:
++    """Read-only smoke-test readiness report."""
++
++    repository_root: str
++    surfaces: tuple[SurfaceReadiness, ...]
++    next_steps: tuple[str, ...]
++    forbidden_new_wheels: tuple[str, ...]
++
++    @property
++    def ready_for_local_smoke(self) -> bool:
++        return all(surface.exists for surface in self.surfaces)
++
++    @property
++    def missing_paths(self) -> tuple[str, ...]:
++        return tuple(surface.path for surface in self.surfaces if not surface.exists)
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": "missipy.local_vector_indexing_smoke_readiness.v1",
++            "repository_root": self.repository_root,
++            "ready_for_local_smoke": self.ready_for_local_smoke,
++            "missing_paths": list(self.missing_paths),
++            "surfaces": [surface.to_mapping() for surface in self.surfaces],
++            "next_steps": list(self.next_steps),
++            "forbidden_new_wheels": list(self.forbidden_new_wheels),
++            "decision": "reuse_existing_surfaces_before_runtime_extension",
++            "scheduler_remains_orchestrator": True,
++            "openvino_import_boundary": "src/inference/openvino_runtime.py",
++            "qdrant_projection_boundary": "src/inference/qdrant_projection_adapter.py",
++            "sql_durable_authority": "src/context/sql_context_store.py",
++        }
++
++    def to_markdown(self) -> str:
++        lines = [
++            "# Local vector indexing smoke readiness",
++            "",
++            f"repository_root: `{self.repository_root}`",
++            f"ready_for_local_smoke: `{str(self.ready_for_local_smoke).lower()}`",
++            "",
++            "## Existing surfaces",
++            "",
++            "| key | status | path | reason |",
++            "| --- | --- | --- | --- |",
++        ]
++        for surface in self.surfaces:
++            status = "present" if surface.exists else "missing"
++            lines.append(f"| {surface.key} | {status} | `{surface.path}` | {surface.reason} |")
++        lines.extend(["", "## Next steps before the first real test", ""])
++        for index, step in enumerate(self.next_steps, start=1):
++            lines.append(f"{index}. {step}")
++        lines.extend(["", "## Forbidden new wheels", ""])
++        for wheel in self.forbidden_new_wheels:
++            lines.append(f"- {wheel}")
++        return "\n".join(lines) + "\n"
++
++
++def build_local_vector_indexing_smoke_readiness(repository_root: Path) -> LocalVectorIndexingSmokeReadiness:
++    root = repository_root.resolve()
++    surfaces = tuple(
++        SurfaceReadiness(
++            key=key,
++            path=path,
++            reason=reason,
++            exists=(root / path).is_file(),
++        )
++        for key, path, reason in EXPECTED_SURFACES
++    )
++    return LocalVectorIndexingSmokeReadiness(
++        repository_root=str(root),
++        surfaces=surfaces,
++        next_steps=NEXT_STEPS,
++        forbidden_new_wheels=FORBIDDEN_NEW_WHEELS,
++    )
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Plan the local vector-indexing smoke test without creating new runtime wheels.")
++    parser.add_argument("repository_root", nargs="?", default=".", help="Repository root to inspect")
++    parser.add_argument("--format", choices=("markdown", "json"), default="markdown")
++    args = parser.parse_args(argv)
++
++    report = build_local_vector_indexing_smoke_readiness(Path(args.repository_root))
++    if args.format == "json":
++        print(json.dumps(report.to_mapping(), indent=2, sort_keys=True))
++    else:
++        print(report.to_markdown(), end="")
++    return 0 if report.ready_for_local_smoke else 2
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())

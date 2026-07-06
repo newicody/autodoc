@@ -1,0 +1,705 @@
+diff --git a/PHASE0110_TEST_REPORT.md b/PHASE0110_TEST_REPORT.md
+new file mode 100644
+index 0000000..6e46fc1
+--- /dev/null
++++ b/PHASE0110_TEST_REPORT.md
+@@ -0,0 +1,51 @@
++# Phase 0110 test report — Specialist kernel boundary
++
++## Scope
++
++0110 adds a typed specialist-to-kernel boundary.
++
++## Validation commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/runtime/test_specialist_kernel_boundary.py
++PYTHONPATH=src:. pytest -q tests/rules/test_specialist_kernel_boundary_0110_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Local patch-build validation
++
++```text
++git apply --check: OK
++py_compile new Python files: OK
++pytest targeted 0110: passed
++```
++
++## code_rule.md review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: 0110 follows the durable capability path and does not add a new exception.
++live_path_status: transition
++live_path_uses_real_backend: n/a
++external_dependencies_added: false
++```
++
++## Guardrails
++
++```text
++No CLI
++No OpenRC service and no resident daemon
++No watcher
++No Scheduler.run() modification
++No Dispatcher, PriorityQueue, PolicyEngine or EventBus modification
++No EventBus creation
++No ControlProxyBus
++No RouteBus
++No VisualizationBus
++Route mmap/eventfd = data plane, not EventBus
++Specialist branch owns business logic
++No direct Specialist -> RouteRuntimeManager call
++```
+diff --git a/doc/CHANGELOG_0110_SPECIALIST_KERNEL_BOUNDARY.md b/doc/CHANGELOG_0110_SPECIALIST_KERNEL_BOUNDARY.md
+new file mode 100644
+index 0000000..b338e8d
+--- /dev/null
++++ b/doc/CHANGELOG_0110_SPECIALIST_KERNEL_BOUNDARY.md
+@@ -0,0 +1,7 @@
++# Changelog — 0110 Specialist kernel boundary
++
++- Added `src/runtime/specialist_kernel_boundary.py`.
++- Added runtime tests for the typed specialist command boundary.
++- Added rule tests locking the specialist-to-kernel path.
++- Added architecture docs and a root-attached `.dot` graph.
++- No Scheduler, Dispatcher, PriorityQueue, PolicyEngine or EventBus code is modified.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0110.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0110.md
+new file mode 100644
+index 0000000..fe55b1c
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0110.md
+@@ -0,0 +1,60 @@
++# ControlProxy operational plan — 0110
++
++0110 introduces the specialist-side command boundary without changing runtime wiring.
++
++## Decision
++
++```text
++Specialist branch owns business logic.
++ControlProxy / RouteRuntimeManager owns route runtime work.
++They meet only through the kernel path.
++```
++
++## Current locked path
++
++```text
++SpecialistKernelCommand -> Scheduler.emit()
++-> PolicyEngine.decide()
++-> PriorityQueue
++-> Scheduler.run()
++-> Dispatcher
++-> Handler
++-> RouteRuntimeManager when route runtime work is required
++```
++
++## Scope of 0110
++
++```text
++Add a typed specialist command envelope.
++Add a boundary plan proving the next boundary is Scheduler.emit().
++Keep route runtime effects behind Handler -> RouteRuntimeManager.
++Document and test that there is No direct Specialist -> RouteRuntimeManager call.
++```
++
++## Out of scope
++
++```text
++No CLI
++No OpenRC service and no resident daemon
++No watcher
++No Scheduler.run() modification
++No Dispatcher, PriorityQueue, PolicyEngine or EventBus modification
++No new EventType
++No EventBus creation
++No ControlProxyBus
++No RouteBus
++No VisualizationBus
++No direct runtime effect from the specialist
++Route mmap/eventfd = data plane, not EventBus
++EventBus = observation only
++PolicyEngine = minimal admission before queue
++Dispatcher = EventType -> Handler only
++```
++
++## Next steps
++
++```text
++0111: add a Scheduler-facing Event adapter for SpecialistKernelCommand only if an existing EventType boundary is selected explicitly.
++0112: add a small specialist walking-skeleton scenario after the EventType/handler boundary is chosen.
++0113: only then consider deprecating old ControlProxy compatibility wrappers.
++```
+diff --git a/doc/architecture/SPECIALIST_KERNEL_BOUNDARY_0110.md b/doc/architecture/SPECIALIST_KERNEL_BOUNDARY_0110.md
+new file mode 100644
+index 0000000..098406e
+--- /dev/null
++++ b/doc/architecture/SPECIALIST_KERNEL_BOUNDARY_0110.md
+@@ -0,0 +1,77 @@
++# 0110 — Specialist kernel boundary
++
++0110 locks the specialist integration direction after the ControlProxy simplification.
++
++The specialist branch owns business logic, reasoning and transformation. It does not own the Scheduler, EventBus, RouteRuntimeManager, ControlFS or mmap/eventfd data plane.
++
++## Locked path
++
++```text
++SpecialistKernelCommand -> Scheduler.emit()
++-> PolicyEngine.decide()
++-> PriorityQueue
++-> Scheduler.run()
++-> Dispatcher
++-> Handler
++```
++
++When a specialist command eventually needs a route runtime effect, the path continues:
++
++```text
++Handler -> RouteRuntimeManager
++-> ControlFS + Route mmap/eventfd data plane
++```
++
++No direct Specialist -> RouteRuntimeManager call is allowed.
++
++## Responsibilities
++
++```text
++Specialist branch owns business logic.
++Scheduler = loop + time + queue + priority.
++PolicyEngine = minimal admission before queue.
++PriorityQueue = deterministic execution order.
++Dispatcher = EventType -> Handler only.
++Handler = thin adapter.
++RouteRuntimeManager owns route runtime work.
++EventBus = observation only.
++Route mmap/eventfd = data plane, not EventBus.
++```
++
++## Forbidden directions
++
++```text
++No direct Specialist -> RouteRuntimeManager call
++No direct Specialist -> ControlFS call
++No direct Specialist -> mmap/eventfd data plane call
++No EventBus creation
++No ControlProxyBus
++No RouteBus
++No VisualizationBus
++No scheduler-like ControlProxy coordinator
++No Scheduler.run() modification
++```
++
++## Why this is not another coordinator
++
++`SpecialistKernelCommand` is not an Event, not a Scheduler and not a runtime manager. It is a stable command envelope a future adapter may wrap into an Event before calling `Scheduler.emit()`.
++
++This keeps churn in the specialist leaf while the stable boundary remains the kernel path.
++
++## Relation to RouteRuntimeManager
++
++`RouteRuntimeManager` remains below the Handler boundary. The specialist can request a route-related capability, but the route runtime effect is performed only after admission, queuing, dispatch and handler adaptation.
++
++## Report against `code_rule.md`
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: 0110 applies the existing durable-capability path and adds no new programming exception.
++live_path_status: transition
++live_path_uses_real_backend: n/a
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++external_dependencies_added: false
++```
+diff --git a/doc/docs/architecture/runtime/100_specialist_kernel_boundary.dot b/doc/docs/architecture/runtime/100_specialist_kernel_boundary.dot
+new file mode 100644
+index 0000000..bef4c14
+--- /dev/null
++++ b/doc/docs/architecture/runtime/100_specialist_kernel_boundary.dot
+@@ -0,0 +1,37 @@
++digraph SpecialistKernelBoundary0110 {
++  graph [
++    label="0110 Specialist kernel boundary\nROOT_GRAPH: doc/docs/architecture/00_global.dot",
++    labelloc="t",
++    fontsize=20
++  ];
++  node [shape=box, style="rounded"];
++  edge [fontsize=10];
++
++  Specialist [label="Specialist branch\nowns business logic"];
++  Command [label="SpecialistKernelCommand\ntyped intent, no runtime effect"];
++  SchedulerEmit [label="Scheduler.emit()\nentry to kernel path"];
++  PolicyEngine [label="PolicyEngine.decide()\nminimal admission before queue"];
++  PriorityQueue [label="PriorityQueue\ndeterministic execution order"];
++  SchedulerRun [label="Scheduler.run()\nloop + time + queue + priority"];
++  Dispatcher [label="Dispatcher\nEventType -> Handler only"];
++  Handler [label="Handler\nthin adapter"];
++  RouteRuntimeManager [label="RouteRuntimeManager\nroute runtime work"];
++  ControlFS [label="ControlFS\ngeneration state + lifecycle"];
++  DataPlane [label="Route mmap/eventfd data plane\nnot EventBus"];
++  EventBus [label="EventBus\nobservation only"];
++
++  Specialist -> Command [label="produces"];
++  Command -> SchedulerEmit [label="SpecialistKernelCommand -> Scheduler.emit()"];
++  SchedulerEmit -> PolicyEngine;
++  PolicyEngine -> PriorityQueue;
++  PriorityQueue -> SchedulerRun;
++  SchedulerRun -> Dispatcher;
++  Dispatcher -> Handler;
++  Handler -> RouteRuntimeManager [label="Handler -> RouteRuntimeManager"];
++  RouteRuntimeManager -> ControlFS;
++  RouteRuntimeManager -> DataPlane;
++  Dispatcher -> EventBus [style=dashed, label="observable copy"];
++
++  Specialist -> RouteRuntimeManager [style=dashed, color="red", label="No direct Specialist -> RouteRuntimeManager call"];
++  Specialist -> EventBus [style=dashed, color="red", label="no command path"];
++}
+diff --git a/doc/manifests/MANIFEST_0110_CHANGED_FILES.md b/doc/manifests/MANIFEST_0110_CHANGED_FILES.md
+new file mode 100644
+index 0000000..4259a2f
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0110_CHANGED_FILES.md
+@@ -0,0 +1,15 @@
++# Manifest 0110 — Specialist kernel boundary
++
++```text
++src/runtime/specialist_kernel_boundary.py
++tests/runtime/test_specialist_kernel_boundary.py
++tests/rules/test_specialist_kernel_boundary_0110_rule.py
++doc/architecture/SPECIALIST_KERNEL_BOUNDARY_0110.md
++doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0110.md
++doc/docs/architecture/runtime/100_specialist_kernel_boundary.dot
++doc/CHANGELOG_0110_SPECIALIST_KERNEL_BOUNDARY.md
++doc/manifests/MANIFEST_0110_CHANGED_FILES.md
++PHASE0110_TEST_REPORT.md
++```
++
++0110 is additive. It does not modify kernel, dispatcher, queue, policy or EventBus code.
+diff --git a/src/runtime/specialist_kernel_boundary.py b/src/runtime/specialist_kernel_boundary.py
+new file mode 100644
+index 0000000..39d0eb9
+--- /dev/null
++++ b/src/runtime/specialist_kernel_boundary.py
+@@ -0,0 +1,233 @@
++"""Typed specialist-to-kernel boundary for durable capabilities.
++
++Phase 0110 locks how the specialist branch connects to the simplified
++micro-kernel path without becoming a second Scheduler and without calling the
++route runtime directly.
++
++The specialist branch owns business logic, reasoning and transformation.  It
++produces a typed command envelope.  The effect still enters the kernel path:
++
++SpecialistKernelCommand -> Scheduler.emit() -> PolicyEngine.decide()
++-> PriorityQueue -> Scheduler.run() -> Dispatcher -> Handler
++
++If the command eventually needs route runtime work, the Handler is the only
++thin adapter allowed to call RouteRuntimeManager.  There is no direct
++Specialist -> RouteRuntimeManager call.
++
++Invariants:
++
++- No CLI.
++- No OpenRC service and no resident daemon.
++- No watcher.
++- No Scheduler.run() modification.
++- No Dispatcher, PriorityQueue, PolicyEngine or EventBus modification.
++- Dispatcher = EventType -> Handler only.
++- PolicyEngine = minimal admission before queue.
++- PriorityQueue = deterministic execution order.
++- Specialist branch owns business logic.
++- Handler -> RouteRuntimeManager.
++- RouteRuntimeManager owns route runtime work.
++- EventBus = observation only.
++- Route mmap/eventfd = data plane, not EventBus.
++- No ControlProxyBus.
++- No RouteBus.
++- No VisualizationBus.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Mapping
++from dataclasses import dataclass, field
++from types import MappingProxyType
++from typing import Any, Literal
++
++SPECIALIST_KERNEL_COMMAND_SCHEMA = "missipy.specialist.kernel_command.v1"
++SPECIALIST_KERNEL_BOUNDARY_PLAN_SCHEMA = "missipy.specialist.kernel_boundary_plan.v1"
++
++SpecialistKernelCommandKind = Literal[
++    "route_runtime_prepare",
++    "context_request",
++    "inference_request",
++    "specialist_result",
++]
++
++_ALLOWED_COMMAND_KINDS: frozenset[str] = frozenset(
++    {
++        "route_runtime_prepare",
++        "context_request",
++        "inference_request",
++        "specialist_result",
++    }
++)
++
++_KERNEL_PATH: tuple[str, ...] = (
++    "SpecialistKernelCommand -> Scheduler.emit()",
++    "PolicyEngine.decide()",
++    "PriorityQueue",
++    "Scheduler.run()",
++    "Dispatcher",
++    "Handler",
++)
++
++_FORBIDDEN_DIRECT_BOUNDARIES: tuple[str, ...] = (
++    "Specialist -> RouteRuntimeManager",
++    "Specialist -> ControlFS",
++    "Specialist -> mmap/eventfd data plane",
++    "Specialist -> EventBus command path",
++    "ControlProxyBus",
++    "RouteBus",
++    "VisualizationBus",
++)
++
++
++class SpecialistKernelBoundaryError(ValueError):
++    """Raised when a specialist boundary object is incoherent."""
++
++
++@dataclass(frozen=True, slots=True)
++class SpecialistKernelCommand:
++    """Typed command produced by a specialist branch.
++
++    The command is not an Event and does not execute anything by itself.  A
++    separate adapter may wrap it in an Event and call Scheduler.emit().  This
++    keeps the specialist on the durable kernel path without giving it direct
++    ownership of Scheduler, Dispatcher, EventBus or RouteRuntimeManager.
++    """
++
++    schema: str
++    specialist_id: str
++    command_kind: SpecialistKernelCommandKind
++    intent: str
++    payload: Mapping[str, Any] = field(default_factory=dict)
++    route_id: str | None = None
++    zone: str | None = None
++
++    def __post_init__(self) -> None:
++        if self.schema != SPECIALIST_KERNEL_COMMAND_SCHEMA:
++            raise SpecialistKernelBoundaryError("unsupported specialist kernel command schema")
++        if not self.specialist_id:
++            raise SpecialistKernelBoundaryError("specialist_id is required")
++        if self.command_kind not in _ALLOWED_COMMAND_KINDS:
++            raise SpecialistKernelBoundaryError(f"unsupported specialist command kind: {self.command_kind}")
++        if not self.intent:
++            raise SpecialistKernelBoundaryError("intent is required")
++        if self.command_kind == "route_runtime_prepare":
++            if not self.route_id:
++                raise SpecialistKernelBoundaryError("route_id is required for route_runtime_prepare")
++            if not self.zone:
++                raise SpecialistKernelBoundaryError("zone is required for route_runtime_prepare")
++        object.__setattr__(self, "payload", MappingProxyType(dict(self.payload)))
++
++    def to_mapping(self) -> dict[str, Any]:
++        """Return a stable JSON-like projection for tests, reports and replay."""
++
++        return {
++            "schema": self.schema,
++            "specialist_id": self.specialist_id,
++            "command_kind": self.command_kind,
++            "intent": self.intent,
++            "route_id": self.route_id,
++            "zone": self.zone,
++            "payload": dict(self.payload),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class SpecialistKernelBoundaryPlan:
++    """Stable projection describing how a specialist command must travel."""
++
++    schema: str
++    command: SpecialistKernelCommand
++    kernel_path: tuple[str, ...]
++    next_boundary: str
++    runtime_boundary: str | None
++    forbidden_direct_boundaries: tuple[str, ...]
++    status: str
++
++    def __post_init__(self) -> None:
++        if self.schema != SPECIALIST_KERNEL_BOUNDARY_PLAN_SCHEMA:
++            raise SpecialistKernelBoundaryError("unsupported specialist kernel boundary plan schema")
++        if not self.kernel_path:
++            raise SpecialistKernelBoundaryError("kernel_path must not be empty")
++        if self.next_boundary != "Scheduler.emit()":
++            raise SpecialistKernelBoundaryError("next_boundary must be Scheduler.emit()")
++        if self.command.command_kind == "route_runtime_prepare":
++            if self.runtime_boundary != "Handler -> RouteRuntimeManager":
++                raise SpecialistKernelBoundaryError(
++                    "route runtime commands must converge through Handler -> RouteRuntimeManager"
++                )
++        if not self.forbidden_direct_boundaries:
++            raise SpecialistKernelBoundaryError("forbidden_direct_boundaries must not be empty")
++        if self.status != "kernel_path_required":
++            raise SpecialistKernelBoundaryError("status must be kernel_path_required")
++
++    def to_mapping(self) -> dict[str, Any]:
++        """Return a deterministic mapping for observation and tests."""
++
++        return {
++            "schema": self.schema,
++            "command": self.command.to_mapping(),
++            "kernel_path": list(self.kernel_path),
++            "next_boundary": self.next_boundary,
++            "runtime_boundary": self.runtime_boundary,
++            "forbidden_direct_boundaries": list(self.forbidden_direct_boundaries),
++            "status": self.status,
++        }
++
++
++def build_specialist_kernel_boundary_plan(
++    command: SpecialistKernelCommand,
++) -> SpecialistKernelBoundaryPlan:
++    """Build the required kernel-path plan for one specialist command.
++
++    This function is deliberately pure.  It does not create an Event, emit to
++    Scheduler, publish on EventBus, touch ControlFS or call RouteRuntimeManager.
++    """
++
++    runtime_boundary = (
++        "Handler -> RouteRuntimeManager"
++        if command.command_kind == "route_runtime_prepare"
++        else None
++    )
++    return SpecialistKernelBoundaryPlan(
++        schema=SPECIALIST_KERNEL_BOUNDARY_PLAN_SCHEMA,
++        command=command,
++        kernel_path=_KERNEL_PATH,
++        next_boundary="Scheduler.emit()",
++        runtime_boundary=runtime_boundary,
++        forbidden_direct_boundaries=_FORBIDDEN_DIRECT_BOUNDARIES,
++        status="kernel_path_required",
++    )
++
++
++def specialist_route_runtime_prepare_command(
++    *,
++    specialist_id: str,
++    route_id: str,
++    zone: str,
++    intent: str,
++    payload: Mapping[str, Any] | None = None,
++) -> SpecialistKernelCommand:
++    """Create a route-runtime command without bypassing the kernel path."""
++
++    return SpecialistKernelCommand(
++        schema=SPECIALIST_KERNEL_COMMAND_SCHEMA,
++        specialist_id=specialist_id,
++        command_kind="route_runtime_prepare",
++        intent=intent,
++        route_id=route_id,
++        zone=zone,
++        payload={} if payload is None else payload,
++    )
++
++
++__all__ = (
++    "SPECIALIST_KERNEL_BOUNDARY_PLAN_SCHEMA",
++    "SPECIALIST_KERNEL_COMMAND_SCHEMA",
++    "SpecialistKernelBoundaryError",
++    "SpecialistKernelBoundaryPlan",
++    "SpecialistKernelCommand",
++    "SpecialistKernelCommandKind",
++    "build_specialist_kernel_boundary_plan",
++    "specialist_route_runtime_prepare_command",
++)
+diff --git a/tests/rules/test_specialist_kernel_boundary_0110_rule.py b/tests/rules/test_specialist_kernel_boundary_0110_rule.py
+new file mode 100644
+index 0000000..9d01d7f
+--- /dev/null
++++ b/tests/rules/test_specialist_kernel_boundary_0110_rule.py
+@@ -0,0 +1,81 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "runtime" / "specialist_kernel_boundary.py"
++DOC = ROOT / "doc" / "architecture" / "SPECIALIST_KERNEL_BOUNDARY_0110.md"
++PLAN = ROOT / "doc" / "architecture" / "CONTROLPROXY_OPERATIONAL_PLAN_0110.md"
++DOT = ROOT / "doc" / "docs" / "architecture" / "runtime" / "100_specialist_kernel_boundary.dot"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0110_CHANGED_FILES.md"
++
++
++def _read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_0110_specialist_boundary_locks_kernel_path() -> None:
++    text = _read(MODULE) + "\n" + _read(DOC) + "\n" + _read(PLAN) + "\n" + _read(DOT)
++    required = [
++        "Specialist branch owns business logic",
++        "SpecialistKernelCommand -> Scheduler.emit()",
++        "PolicyEngine.decide()",
++        "PriorityQueue",
++        "Scheduler.run()",
++        "Dispatcher",
++        "Handler",
++        "Handler -> RouteRuntimeManager",
++        "RouteRuntimeManager owns route runtime work",
++        "No direct Specialist -> RouteRuntimeManager call",
++        "No Scheduler.run() modification",
++        "Dispatcher = EventType -> Handler only",
++        "PolicyEngine = minimal admission before queue",
++        "EventBus = observation only",
++        "Route mmap/eventfd = data plane, not EventBus",
++        "No ControlProxyBus",
++        "No RouteBus",
++        "No VisualizationBus",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0110_specialist_boundary_does_not_modify_kernel_files() -> None:
++    manifest = _read(MANIFEST)
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/kernel/dispatcher.py",
++        "src/kernel/queue.py",
++        "src/kernel/event_bus.py",
++        "src/policy/engine.py",
++    ]
++    for path in forbidden:
++        assert path not in manifest
++
++
++def test_0110_specialist_boundary_is_not_a_bus_or_scheduler() -> None:
++    text = _read(MODULE)
++    forbidden = [
++        "class ControlProxyBus",
++        "class RouteBus",
++        "class VisualizationBus",
++        "class Scheduler",
++        "def run(",
++        "def dispatch(",
++        "EventBus(",
++        "RouteRuntimeManager(",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++
++
++def test_0110_code_rule_report_is_present() -> None:
++    text = _read(DOC)
++    required = [
++        "code_rule_review: done",
++        "code_rule_update_required: false",
++        "live_path_status: transition",
++        "external_dependencies_added: false",
++    ]
++    for phrase in required:
++        assert phrase in text
+diff --git a/tests/runtime/test_specialist_kernel_boundary.py b/tests/runtime/test_specialist_kernel_boundary.py
+new file mode 100644
+index 0000000..4db6be2
+--- /dev/null
++++ b/tests/runtime/test_specialist_kernel_boundary.py
+@@ -0,0 +1,90 @@
++from __future__ import annotations
++
++import pytest
++
++from runtime.specialist_kernel_boundary import (
++    SPECIALIST_KERNEL_COMMAND_SCHEMA,
++    SpecialistKernelBoundaryError,
++    SpecialistKernelCommand,
++    build_specialist_kernel_boundary_plan,
++    specialist_route_runtime_prepare_command,
++)
++
++
++def test_specialist_route_runtime_command_requires_kernel_path() -> None:
++    command = specialist_route_runtime_prepare_command(
++        specialist_id="planner.alpha",
++        route_id="route-a",
++        zone="zone-a",
++        intent="prepare route for specialist output",
++        payload={"slots": 8, "slot_size": 64},
++    )
++
++    plan = build_specialist_kernel_boundary_plan(command)
++    mapping = plan.to_mapping()
++
++    assert mapping["next_boundary"] == "Scheduler.emit()"
++    assert mapping["runtime_boundary"] == "Handler -> RouteRuntimeManager"
++    assert mapping["status"] == "kernel_path_required"
++    assert mapping["kernel_path"] == [
++        "SpecialistKernelCommand -> Scheduler.emit()",
++        "PolicyEngine.decide()",
++        "PriorityQueue",
++        "Scheduler.run()",
++        "Dispatcher",
++        "Handler",
++    ]
++    assert "Specialist -> RouteRuntimeManager" in mapping["forbidden_direct_boundaries"]
++    assert "ControlProxyBus" in mapping["forbidden_direct_boundaries"]
++
++
++def test_route_runtime_prepare_requires_route_and_zone() -> None:
++    with pytest.raises(SpecialistKernelBoundaryError, match="route_id is required"):
++        SpecialistKernelCommand(
++            schema=SPECIALIST_KERNEL_COMMAND_SCHEMA,
++            specialist_id="planner.alpha",
++            command_kind="route_runtime_prepare",
++            intent="prepare route",
++            zone="zone-a",
++        )
++
++    with pytest.raises(SpecialistKernelBoundaryError, match="zone is required"):
++        SpecialistKernelCommand(
++            schema=SPECIALIST_KERNEL_COMMAND_SCHEMA,
++            specialist_id="planner.alpha",
++            command_kind="route_runtime_prepare",
++            intent="prepare route",
++            route_id="route-a",
++        )
++
++
++def test_non_route_specialist_command_has_no_runtime_boundary() -> None:
++    command = SpecialistKernelCommand(
++        schema=SPECIALIST_KERNEL_COMMAND_SCHEMA,
++        specialist_id="reasoner.alpha",
++        command_kind="specialist_result",
++        intent="publish specialist result intent",
++        payload={"result_id": "r1"},
++    )
++
++    plan = build_specialist_kernel_boundary_plan(command)
++
++    assert plan.runtime_boundary is None
++    assert plan.next_boundary == "Scheduler.emit()"
++    assert plan.to_mapping()["command"]["payload"] == {"result_id": "r1"}
++
++
++def test_command_payload_is_immutable_projection() -> None:
++    payload = {"slots": 4}
++    command = specialist_route_runtime_prepare_command(
++        specialist_id="planner.alpha",
++        route_id="route-a",
++        zone="zone-a",
++        intent="prepare route",
++        payload=payload,
++    )
++    payload["slots"] = 99
++
++    assert dict(command.payload) == {"slots": 4}
++    with pytest.raises(TypeError):
++        command.payload["slots"] = 100  # type: ignore[index]

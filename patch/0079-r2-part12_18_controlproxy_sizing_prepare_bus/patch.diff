@@ -1,0 +1,2101 @@
+diff --git a/doc/architecture/ARCHITECTURE_INDEX_0079_R2.md b/doc/architecture/ARCHITECTURE_INDEX_0079_R2.md
+new file mode 100644
+index 0000000..07f4f6c
+--- /dev/null
++++ b/doc/architecture/ARCHITECTURE_INDEX_0079_R2.md
+@@ -0,0 +1,56 @@
++# Architecture index - 0079-r2
++
++## Foundation
++
++```text
++0063 ControlFS manifest schema validator
++0064 RouteProxy dry-run reconciler
++0065 SHM runtime message schemas
++0066 baby-fork runtime projection
++0067 projection compatibility correction
++0068 fake local route transport
++0069 fake runtime recorder ingestion
++```
++
++## ControlFS / route boundary
++
++```text
++0071 ControlFS desired manifests for baby-fork
++0072 RouteProxy dry-run plan for baby-fork
++0073 SHM ring buffer boundary design
++0074 baby-fork runtime flow CLI
++0075 fake runtime replace semantics
++```
++
++## Ring / frame layer
++
++```text
++0076 in-process ring buffer model
++0077 RouteMessage frame codec
++0078 in-process frame ring integration
++```
++
++## ControlProxy protocol layer
++
++```text
++0079-r2 ControlProxy sizing + prepare handshake + bus visibility
++```
++
++## Locked architecture
++
++```text
++EventBus carries facts.
++Recorder persists facts.
++ContextBus carries compact state.
++ControlProxy = ControlFS + RouteProxy.
++ControlProxy prepares/materializes routes.
++Scheduler authorizes and leases route usage.
++Workers send full frames only after route ready.
++ControlProxy state is visible on bus for VisPy.
++```
++
++## Next
++
++```text
++0080 file-backed fixed-slot mmap route prototype
++```
+diff --git a/doc/architecture/CONTROLPROXY_SIZING_PREPARE_PROTOCOL.md b/doc/architecture/CONTROLPROXY_SIZING_PREPARE_PROTOCOL.md
+new file mode 100644
+index 0000000..785a9de
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_SIZING_PREPARE_PROTOCOL.md
+@@ -0,0 +1,176 @@
++# ControlProxy sizing and prepare protocol
++
++Status: 0079-r2, replacing rejected 0079 and folding in the useful part of 0080.
++
++## Vocabulary
++
++```text
++ControlProxy = ControlFS declarative surface + RouteProxy materializer
++```
++
++ControlFS and RouteProxy are treated as one runtime control unit.
++
++## Locked route flow
++
++```text
++Producer / Worker
++  -> Scheduler:
++     short prepare frame with required_frame_bytes
++
++Scheduler
++  -> validates policy/security
++  -> intends desired route state
++
++ControlProxy
++  -> applies zone table
++  -> chooses slot_size / slot_count / max_frame_bytes / notify
++  -> prepares/reuses/requests route generation
++  -> publishes ready/denied state to event.bus and context.bus
++
++Scheduler
++  -> sees route ready
++  -> returns route lease / route_handle
++
++Producer
++  -> sends full RouteMessage frame to prepared route
++```
++
++## Why this replaces old 0079
++
++The old 0079 split ControlFS sizing from the proxy too much.
++
++The corrected model is:
++
++```text
++route sizing
++route preparation
++route state publication
++ControlFS desired state
++RouteProxy materialization plan
++```
++
++as one ControlProxy protocol.
++
++## Request schema
++
++```text
++missipy.controlproxy.route_prepare_request.v1
++```
++
++Minimal fields:
++
++```text
++request_id
++route_id
++task_id
++zone
++scope
++producer
++consumer
++required_frame_bytes
++message_schema
++payload_kind
++ttl_seconds
++requested_by
++requested_at
++```
++
++The prepare request is a short pre-frame. It does not carry the full payload.
++
++## Status schema
++
++```text
++missipy.controlproxy.route_prepare_status.v1
++```
++
++Actions:
++
++```text
++reuse_active
++create_route_generation
++create_next_generation
++deny
++```
++
++## Bus visibility
++
++ControlProxy publishes facts to:
++
++```text
++event.bus
++context.bus
++```
++
++Topics:
++
++```text
++controlproxy.route.ready
++controlproxy.route.denied
++controlproxy.route.state
++```
++
++This makes route preparation visible to:
++
++```text
++Recorder
++Cell Lens
++VisPy
++browser view
++future admin UI
++```
++
++Bus messages are facts, not commands.
++
++## Timing budgets
++
++Per-zone policy can bound:
++
++```text
++max_prepare_ms
++drain_timeout_ms
++lease_switch_timeout_ms
++max_slot_size
++max_ring_bytes
++default_slot_count
++```
++
++If budget is exceeded, the route is denied or deferred. The system must not
++resize a live mmap ring.
++
++## Semaphore role
++
++The semaphore does not create SHM and does not size slots.
++
++It only signals:
++
++```text
++items available
++free slots available
++```
++
++Slot sizing belongs to ControlProxy route preparation.
++
++## Non-goals
++
++This phase does not add:
++
++```text
++real shared memory
++mmap implementation
++live mmap resize
++semaphores
++eventfd
++futex
++ControlProxy daemon
++ControlFS watcher
++Scheduler wiring
++VisPy renderer
++NetworkBridge
++HardwareBridge
++cluster dispatch
++```
++
++## Next phase
++
++The next phase can implement a file-backed fixed-slot mmap route that consumes
++the ControlProxy decision.
+diff --git a/doc/architecture/REPOSITORY_ARCHITECTURE_AUDIT_0079_R2.md b/doc/architecture/REPOSITORY_ARCHITECTURE_AUDIT_0079_R2.md
+new file mode 100644
+index 0000000..7601d0a
+--- /dev/null
++++ b/doc/architecture/REPOSITORY_ARCHITECTURE_AUDIT_0079_R2.md
+@@ -0,0 +1,66 @@
++# Repository architecture audit - 0079-r2
++
++Scope: repository reconstructed from applied patches `0063-r2` through `0078`.
++
++This audit replaces the rejected old `0079`.
++
++## Current executable runtime pieces
++
++```text
++src/runtime/controlfs_manifest.py
++src/runtime/routeproxy_reconciler.py
++src/runtime/shm_runtime_schema.py
++src/runtime/fake_route_transport.py
++src/runtime/fake_runtime_recorder.py
++src/runtime/inprocess_ring_buffer.py
++src/runtime/route_frame_codec.py
++src/runtime/inprocess_frame_ring.py
++```
++
++## Current context pieces
++
++```text
++src/context/baby_fork_runtime_projection.py
++src/context/baby_fork_controlfs.py
++src/context/baby_fork_runtime_flow.py
++```
++
++## Gap closed by 0079-r2
++
++```text
++ControlProxy unit vocabulary.
++Route prepare request/status protocol.
++Route sizing as part of ControlProxy, not separate ControlFS-only logic.
++Bus projection for ControlProxy state.
++Visibility for VisPy/Cell Lens via event.bus/context.bus.
++Timing-budget contract for route preparation.
++Documentation of requested -> ready -> leased -> active flow.
++Repository architecture audit/index before mmap.
++```
++
++## Still open after 0079-r2
++
++```text
++file-backed fixed-slot mmap route
++materialized active route directories
++route generation lease handoff
++semaphore/eventfd notification
++real ControlProxy watcher/daemon
++Scheduler integration
++VisPy renderer adapter
++Recorder category rules for ControlProxy events
++NetworkBridge
++HardwareBridge
++cluster dispatch
++```
++
++## Required order
++
++```text
++0079-r2 ControlProxy sizing + prepare + bus
++0080 file-backed fixed-slot mmap route
++0081 materialize active route status from mmap route
++0082 notification layer
++0083 Scheduler lease handshake
++0084 VisPy adapter
++```
+diff --git a/doc/changelog/0079-r2-controlproxy-sizing-prepare-bus.md b/doc/changelog/0079-r2-controlproxy-sizing-prepare-bus.md
+new file mode 100644
+index 0000000..aaec478
+--- /dev/null
++++ b/doc/changelog/0079-r2-controlproxy-sizing-prepare-bus.md
+@@ -0,0 +1,40 @@
++# 0079-r2 - ControlProxy sizing, prepare handshake and bus visibility
++
++## Replaces
++
++- Rejected old `0079`.
++- Useful protocol part of old `0080`.
++
++## Added
++
++- `ControlProxy = ControlFS + RouteProxy` vocabulary.
++- Optional route manifest sizing fields:
++  - `transport`
++  - `slot_size`
++  - `slot_count`
++  - `max_frame_bytes`
++  - `overflow_policy`
++  - `notify`
++  - `sizing_source`
++  - `observed_frame_bytes`
++- `runtime.controlproxy_prepare`
++- `missipy.controlproxy.route_prepare_request.v1`
++- `missipy.controlproxy.route_prepare_status.v1`
++- Zone policy table.
++- Bus projection to:
++  - `event.bus`
++  - `context.bus`
++- CLI:
++  - `tools/write_baby_fork_controlproxy_sized.py`
++  - `tools/prepare_fake_routes_controlproxy.py`
++- Architecture audit and index.
++
++## Not added
++
++- No mmap implementation.
++- No live mmap resize.
++- No semaphore/eventfd/futex implementation.
++- No ControlProxy daemon.
++- No ControlFS watcher.
++- No Scheduler wiring.
++- No VisPy renderer.
+diff --git a/src/context/baby_fork_controlfs.py b/src/context/baby_fork_controlfs.py
+index 9683a7c..69f9d50 100644
+--- a/src/context/baby_fork_controlfs.py
++++ b/src/context/baby_fork_controlfs.py
+@@ -1,19 +1,26 @@
+-"""Baby-fork ControlFS desired route manifests.
++"""Baby-fork ControlProxy desired route manifests.
+ 
+-This module implements phases 0071 and 0072 for the baby-fork smoke path.
++This module implements 0079-r2 for the baby-fork smoke path.
++
++Architecture vocabulary:
++
++    ControlProxy = ControlFS declarative surface + RouteProxy materializer.
+ 
+ It deliberately does not:
+ - create shared memory
+ - create semaphores
+-- start RouteProxy
++- implement mmap
++- resize a live mmap ring
+ - start Scheduler
+ - decide security
+ - write active/routes
+ - mutate revoked/routes
+ - implement NetworkBridge or HardwareBridge
+ 
+-It only writes desired route manifests for the known baby-fork routes and can
+-run the existing RouteProxy dry-run reconciler against that ControlFS root.
++It writes desired route manifests for known baby-fork routes and can run the
++existing dry-run reconciler against that ControlFS root.
++
++0079-r2 adds sizing hints measured from encoded RouteMessage frames.
+ """
+ 
+ from __future__ import annotations
+@@ -21,7 +28,7 @@ from __future__ import annotations
+ from dataclasses import dataclass
+ from pathlib import Path
+ import json
+-from typing import Any, Iterable
++from typing import Any, Mapping, Sequence
+ 
+ from context.baby_fork_runtime_projection import (
+     BABY_FORK_CONTEXT_GATE_ROUTE,
+@@ -30,11 +37,32 @@ from context.baby_fork_runtime_projection import (
+     BABY_FORK_VARIANT_ROUTE,
+ )
+ from runtime.controlfs_manifest import ROUTE_MANIFEST_SCHEMA, RouteManifest, route_manifest_path
++from runtime.route_frame_codec import encode_route_message_frame
+ from runtime.routeproxy_reconciler import RouteProxyPlan, build_routeproxy_plan
++from runtime.shm_runtime_schema import RouteMessage
+ 
+ 
+ BABY_FORK_CONTROLFS_CREATED_AT = "2026-07-04T20:00:00Z"
+ BABY_FORK_ROUTE_MESSAGE_SCHEMA = "missipy.shm.route_message.v1"
++DEFAULT_SLOT_CLASSES = (512, 1024, 2048, 4096, 8192, 16384, 32768)
++
++
++@dataclass(frozen=True)
++class RouteSizingHint:
++    """Per-route sizing hint written to ControlProxy/ControlFS desired manifest."""
++
++    route_id: str
++    observed_frame_bytes: int
++    slot_size: int
++    slot_count: int = 16
++    max_frame_bytes: int | None = None
++    transport: str = "mmap.fixed_slot"
++    overflow_policy: str = "reject"
++    notify: str = "semaphore"
++    sizing_source: str = "controlproxy.prepare"
++
++    def normalized_max_frame_bytes(self) -> int:
++        return self.max_frame_bytes if self.max_frame_bytes is not None else self.slot_size
+ 
+ 
+ @dataclass(frozen=True)
+@@ -52,30 +80,79 @@ class BabyForkRouteSpec:
+     message_schema: str = BABY_FORK_ROUTE_MESSAGE_SCHEMA
+     created_by: str = "scheduler"
+     created_at: str = BABY_FORK_CONTROLFS_CREATED_AT
++    transport: str | None = "mmap.fixed_slot"
++    slot_size: int | None = 2048
++    slot_count: int | None = 16
++    max_frame_bytes: int | None = 2048
++    overflow_policy: str | None = "reject"
++    notify: str | None = "semaphore"
++    sizing_source: str | None = "static.default"
++    observed_frame_bytes: int | None = None
+ 
+-    def to_manifest(self) -> RouteManifest:
+-        return RouteManifest.from_mapping(
+-            {
+-                "schema": ROUTE_MANIFEST_SCHEMA,
+-                "route_id": self.route_id,
+-                "task_id": self.task_id,
+-                "zone": self.zone,
+-                "scope": self.scope,
+-                "producer": self.producer,
+-                "consumer": self.consumer,
+-                "ttl_seconds": self.ttl_seconds,
+-                "mode": self.mode,
+-                "message_schema": self.message_schema,
+-                "created_by": self.created_by,
+-                "created_at": self.created_at,
+-            }
++    def with_sizing(self, hint: RouteSizingHint | None) -> "BabyForkRouteSpec":
++        if hint is None:
++            return self
++        return BabyForkRouteSpec(
++            route_id=self.route_id,
++            task_id=self.task_id,
++            zone=self.zone,
++            scope=self.scope,
++            producer=self.producer,
++            consumer=self.consumer,
++            ttl_seconds=self.ttl_seconds,
++            mode=self.mode,
++            message_schema=self.message_schema,
++            created_by=self.created_by,
++            created_at=self.created_at,
++            transport=hint.transport,
++            slot_size=hint.slot_size,
++            slot_count=hint.slot_count,
++            max_frame_bytes=hint.normalized_max_frame_bytes(),
++            overflow_policy=hint.overflow_policy,
++            notify=hint.notify,
++            sizing_source=hint.sizing_source,
++            observed_frame_bytes=hint.observed_frame_bytes,
+         )
+ 
++    def to_manifest(self) -> RouteManifest:
++        raw: dict[str, Any] = {
++            "schema": ROUTE_MANIFEST_SCHEMA,
++            "route_id": self.route_id,
++            "task_id": self.task_id,
++            "zone": self.zone,
++            "scope": self.scope,
++            "producer": self.producer,
++            "consumer": self.consumer,
++            "ttl_seconds": self.ttl_seconds,
++            "mode": self.mode,
++            "message_schema": self.message_schema,
++            "created_by": self.created_by,
++            "created_at": self.created_at,
++        }
++        for key, value in {
++            "transport": self.transport,
++            "slot_size": self.slot_size,
++            "slot_count": self.slot_count,
++            "max_frame_bytes": self.max_frame_bytes,
++            "overflow_policy": self.overflow_policy,
++            "notify": self.notify,
++            "sizing_source": self.sizing_source,
++            "observed_frame_bytes": self.observed_frame_bytes,
++        }.items():
++            if value is not None:
++                raw[key] = value
++        return RouteManifest.from_mapping(raw)
++
+ 
+-def baby_fork_route_specs(context_id: str = BABY_FORK_CONTEXT_ID) -> tuple[BabyForkRouteSpec, ...]:
++def baby_fork_route_specs(
++    context_id: str = BABY_FORK_CONTEXT_ID,
++    *,
++    sizing_hints: Mapping[str, RouteSizingHint] | None = None,
++) -> tuple[BabyForkRouteSpec, ...]:
+     """Return the locked desired routes for the baby-fork smoke project."""
+ 
+-    return (
++    hints = sizing_hints or {}
++    specs = (
+         BabyForkRouteSpec(
+             route_id=BABY_FORK_RETRIEVAL_ROUTE,
+             task_id=context_id,
+@@ -107,26 +184,70 @@ def baby_fork_route_specs(context_id: str = BABY_FORK_CONTEXT_ID) -> tuple[BabyF
+             mode="rw",
+         ),
+     )
++    return tuple(spec.with_sizing(hints.get(spec.route_id)) for spec in specs)
++
++
++def choose_slot_size(
++    observed_frame_bytes: int,
++    *,
++    headroom_bytes: int = 256,
++    slot_classes: Sequence[int] = DEFAULT_SLOT_CLASSES,
++) -> int:
++    """Pick the smallest configured slot class that can hold the observed frame."""
++
++    if not isinstance(observed_frame_bytes, int) or isinstance(observed_frame_bytes, bool) or observed_frame_bytes < 1:
++        raise ValueError("observed_frame_bytes must be a positive integer")
++    if headroom_bytes < 0:
++        raise ValueError("headroom_bytes must be non-negative")
++
++    required = observed_frame_bytes + headroom_bytes
++    for slot_size in slot_classes:
++        if required <= slot_size:
++            return slot_size
++    return max(required, slot_classes[-1])
++
++
++def build_route_sizing_hints_from_messages(
++    routes: Sequence[RouteMessage],
++    *,
++    slot_count: int = 16,
++    headroom_bytes: int = 256,
++    slot_classes: Sequence[int] = DEFAULT_SLOT_CLASSES,
++) -> dict[str, RouteSizingHint]:
++    """Measure RouteMessage frame sizes and return ControlProxy sizing hints."""
++
++    observed: dict[str, int] = {}
++    for message in routes:
++        frame_size = len(encode_route_message_frame(message))
++        observed[message.route_id] = max(observed.get(message.route_id, 0), frame_size)
++
++    return {
++        route_id: RouteSizingHint(
++            route_id=route_id,
++            observed_frame_bytes=frame_size,
++            slot_size=choose_slot_size(
++                frame_size,
++                headroom_bytes=headroom_bytes,
++                slot_classes=slot_classes,
++            ),
++            slot_count=slot_count,
++        )
++        for route_id, frame_size in observed.items()
++    }
+ 
+ 
+ def write_baby_fork_desired_manifests(
+     controlfs_root: Path | str,
+     *,
+     context_id: str = BABY_FORK_CONTEXT_ID,
++    sizing_hints: Mapping[str, RouteSizingHint] | None = None,
+ ) -> tuple[Path, ...]:
+-    """Write baby-fork desired route manifests under ControlFS.
+-
+-    Files written:
+-
+-    desired/routes/baby_fork.retrieval/manifest.json
+-    desired/routes/baby_fork.variant_stub/manifest.json
+-    desired/routes/baby_fork.context_gate/manifest.json
+-    """
++    """Write baby-fork desired route manifests under ControlProxy/ControlFS."""
+ 
+     root = Path(controlfs_root)
+     written: list[Path] = []
+ 
+-    for spec in baby_fork_route_specs(context_id=context_id):
++    for spec in baby_fork_route_specs(context_id=context_id, sizing_hints=sizing_hints):
+         manifest = spec.to_manifest()
+         path = route_manifest_path(root, manifest.route_id)
+         path.parent.mkdir(parents=True, exist_ok=True)
+@@ -145,15 +266,16 @@ def build_baby_fork_routeproxy_plan(
+     context_id: str = BABY_FORK_CONTEXT_ID,
+     include_noop: bool = False,
+     write_desired: bool = True,
++    sizing_hints: Mapping[str, RouteSizingHint] | None = None,
+ ) -> RouteProxyPlan:
+-    """Build a RouteProxy dry-run plan for baby-fork routes.
+-
+-    By default this writes desired route manifests first, then runs the
+-    existing dry-run reconciler. It does not write active routes.
+-    """
++    """Build a dry-run ControlProxy/RouteProxy plan for baby-fork routes."""
+ 
+     if write_desired:
+-        write_baby_fork_desired_manifests(controlfs_root, context_id=context_id)
++        write_baby_fork_desired_manifests(
++            controlfs_root,
++            context_id=context_id,
++            sizing_hints=sizing_hints,
++        )
+     return build_routeproxy_plan(controlfs_root, include_noop=include_noop)
+ 
+ 
+diff --git a/src/context/baby_fork_runtime_flow.py b/src/context/baby_fork_runtime_flow.py
+index 45eb070..aba2644 100644
+--- a/src/context/baby_fork_runtime_flow.py
++++ b/src/context/baby_fork_runtime_flow.py
+@@ -28,6 +28,7 @@ from typing import Any, Mapping
+ from context.baby_fork_controlfs import (
+     baby_fork_controlfs_summary,
+     build_baby_fork_routeproxy_plan,
++    build_route_sizing_hints_from_messages,
+ )
+ from context.baby_fork_runtime_projection import build_baby_fork_runtime_projection
+ from runtime.fake_route_transport import write_projection_to_fake_runtime
+@@ -109,9 +110,11 @@ def run_baby_fork_runtime_flow(
+ 
+     controlfs_summary: dict[str, Any] | None = None
+     if controlfs_root is not None:
++        sizing_hints = build_route_sizing_hints_from_messages(projection.routes)
+         plan = build_baby_fork_routeproxy_plan(
+             controlfs_root,
+             context_id=effective_context_id,
++            sizing_hints=sizing_hints,
+         )
+         controlfs_summary = baby_fork_controlfs_summary(controlfs_root, plan)
+ 
+diff --git a/src/runtime/controlfs_manifest.py b/src/runtime/controlfs_manifest.py
+index 75ce492..e6f4564 100644
+--- a/src/runtime/controlfs_manifest.py
++++ b/src/runtime/controlfs_manifest.py
+@@ -1,16 +1,22 @@
+ """ControlFS manifest parsing and validation.
+ 
+-This module implements the first executable piece of the ControlFS layer.
++This module implements the executable ControlProxy declarative surface.
+ 
+-It deliberately does not:
++Architecture vocabulary locked by 0079-r2:
++
++    ControlProxy = ControlFS declarative surface + RouteProxy materializer.
++
++This module deliberately does not:
+ - create shared memory
+ - create semaphores
+-- start a RouteProxy daemon
++- implement mmap
++- resize a live mmap ring
++- start a daemon
+ - change Scheduler behavior
+ - mutate ControlFS directories
+ 
+ It only parses and validates route manifests that describe desired routes.
+-The RouteProxy dry-run phase can later consume the validated model.
++The passive ControlProxy/RouteProxy materializer can later consume this model.
+ """
+ 
+ from __future__ import annotations
+@@ -29,8 +35,15 @@ STATUS_MANIFEST_SCHEMA = "missipy.controlfs.status_manifest.v1"
+ _ROUTE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,127}$")
+ _NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$")
+ _MODE_VALUES = {"rw", "ro", "wo", "control"}
++_TRANSPORT_VALUES = {"fake.jsonl", "inprocess.frame_ring", "mmap.fixed_slot"}
++_OVERFLOW_POLICY_VALUES = {"reject", "drop_oldest"}
++_NOTIFY_VALUES = {"none", "semaphore", "eventfd", "futex"}
+ _TTL_MIN_SECONDS = 1
+ _TTL_MAX_SECONDS = 24 * 60 * 60
++_SLOT_SIZE_MIN = 64
++_SLOT_SIZE_MAX = 16 * 1024 * 1024
++_SLOT_COUNT_MIN = 1
++_SLOT_COUNT_MAX = 1_000_000
+ 
+ 
+ class ManifestValidationError(ValueError):
+@@ -57,6 +70,19 @@ class RouteManifest:
+       "created_by": "scheduler",
+       "created_at": "2026-07-04T20:00:00Z"
+     }
++
++    Optional ControlProxy sizing fields:
++
++    {
++      "transport": "mmap.fixed_slot",
++      "slot_size": 2048,
++      "slot_count": 16,
++      "max_frame_bytes": 2048,
++      "overflow_policy": "reject",
++      "notify": "semaphore",
++      "sizing_source": "controlproxy.prepare",
++      "observed_frame_bytes": 890
++    }
+     """
+ 
+     schema: str
+@@ -71,6 +97,14 @@ class RouteManifest:
+     message_schema: str
+     created_by: str
+     created_at: str
++    transport: str | None = None
++    slot_size: int | None = None
++    slot_count: int | None = None
++    max_frame_bytes: int | None = None
++    overflow_policy: str | None = None
++    notify: str | None = None
++    sizing_source: str | None = None
++    observed_frame_bytes: int | None = None
+ 
+     @classmethod
+     def from_mapping(cls, raw: Mapping[str, Any]) -> "RouteManifest":
+@@ -109,6 +143,14 @@ class RouteManifest:
+             message_schema=_require_str(raw, "message_schema"),
+             created_by=_require_name(raw, "created_by"),
+             created_at=_require_str(raw, "created_at"),
++            transport=_optional_transport(raw, "transport"),
++            slot_size=_optional_bounded_int(raw, "slot_size", _SLOT_SIZE_MIN, _SLOT_SIZE_MAX),
++            slot_count=_optional_bounded_int(raw, "slot_count", _SLOT_COUNT_MIN, _SLOT_COUNT_MAX),
++            max_frame_bytes=_optional_bounded_int(raw, "max_frame_bytes", 1, _SLOT_SIZE_MAX),
++            overflow_policy=_optional_choice(raw, "overflow_policy", _OVERFLOW_POLICY_VALUES),
++            notify=_optional_choice(raw, "notify", _NOTIFY_VALUES),
++            sizing_source=_optional_name(raw, "sizing_source"),
++            observed_frame_bytes=_optional_bounded_int(raw, "observed_frame_bytes", 1, _SLOT_SIZE_MAX),
+         )
+ 
+         if manifest.schema != ROUTE_MANIFEST_SCHEMA:
+@@ -124,6 +166,21 @@ class RouteManifest:
+         if ".." in manifest.created_at or "/" in manifest.created_at:
+             raise ManifestValidationError("created_at must be a timestamp, not a path")
+ 
++        if manifest.max_frame_bytes is not None and manifest.slot_size is not None:
++            if manifest.max_frame_bytes > manifest.slot_size:
++                raise ManifestValidationError("max_frame_bytes must be <= slot_size")
++
++        if manifest.observed_frame_bytes is not None and manifest.max_frame_bytes is not None:
++            if manifest.observed_frame_bytes > manifest.max_frame_bytes:
++                raise ManifestValidationError("observed_frame_bytes must be <= max_frame_bytes")
++
++        if manifest.transport == "mmap.fixed_slot":
++            for field_name in ("slot_size", "slot_count", "max_frame_bytes", "overflow_policy", "notify"):
++                if getattr(manifest, field_name) is None:
++                    raise ManifestValidationError(
++                        f"{field_name} is required when transport is mmap.fixed_slot"
++                    )
++
+         return manifest
+ 
+     @classmethod
+@@ -150,7 +207,7 @@ class RouteManifest:
+     def to_mapping(self) -> dict[str, Any]:
+         """Return a deterministic JSON-serializable mapping."""
+ 
+-        return {
++        payload: dict[str, Any] = {
+             "schema": self.schema,
+             "route_id": self.route_id,
+             "task_id": self.task_id,
+@@ -165,6 +222,22 @@ class RouteManifest:
+             "created_at": self.created_at,
+         }
+ 
++        optional = {
++            "transport": self.transport,
++            "slot_size": self.slot_size,
++            "slot_count": self.slot_count,
++            "max_frame_bytes": self.max_frame_bytes,
++            "overflow_policy": self.overflow_policy,
++            "notify": self.notify,
++            "sizing_source": self.sizing_source,
++            "observed_frame_bytes": self.observed_frame_bytes,
++        }
++        for key, value in optional.items():
++            if value is not None:
++                payload[key] = value
++
++        return payload
++
+ 
+ def normalize_route_id(route_id: str) -> str:
+     """Validate and normalize a route_id.
+@@ -249,3 +322,42 @@ def _require_mode(raw: Mapping[str, Any], field: str) -> str:
+             f"{field} must be one of: " + ", ".join(sorted(_MODE_VALUES))
+         )
+     return value
++
++
++def _optional_name(raw: Mapping[str, Any], field: str) -> str | None:
++    if field not in raw or raw[field] is None:
++        return None
++    return _require_name(raw, field)
++
++
++def _optional_transport(raw: Mapping[str, Any], field: str) -> str | None:
++    if field not in raw or raw[field] is None:
++        return None
++    value = _require_name(raw, field)
++    if value not in _TRANSPORT_VALUES:
++        raise ManifestValidationError(
++            f"{field} must be one of: " + ", ".join(sorted(_TRANSPORT_VALUES))
++        )
++    return value
++
++
++def _optional_choice(raw: Mapping[str, Any], field: str, allowed: set[str]) -> str | None:
++    if field not in raw or raw[field] is None:
++        return None
++    value = _require_name(raw, field)
++    if value not in allowed:
++        raise ManifestValidationError(
++            f"{field} must be one of: " + ", ".join(sorted(allowed))
++        )
++    return value
++
++
++def _optional_bounded_int(raw: Mapping[str, Any], field: str, minimum: int, maximum: int) -> int | None:
++    if field not in raw or raw[field] is None:
++        return None
++    value = raw[field]
++    if not isinstance(value, int) or isinstance(value, bool):
++        raise ManifestValidationError(f"{field} must be an integer")
++    if value < minimum or value > maximum:
++        raise ManifestValidationError(f"{field} must be between {minimum} and {maximum}")
++    return value
+diff --git a/src/runtime/controlproxy_prepare.py b/src/runtime/controlproxy_prepare.py
+new file mode 100644
+index 0000000..e4a86b1
+--- /dev/null
++++ b/src/runtime/controlproxy_prepare.py
+@@ -0,0 +1,592 @@
++"""ControlProxy route prepare handshake and bus projection.
++
++This module implements 0079-r2.
++
++Architecture vocabulary:
++
++    ControlProxy = ControlFS declarative state + RouteProxy materializer.
++
++This module deliberately does not:
++- create shared memory
++- implement mmap
++- resize a live mmap ring
++- create semaphores
++- create eventfd/futex
++- start a daemon
++- watch ControlFS with inotify
++- mutate active routes
++- call Scheduler
++- implement VisPy
++
++It locks the protocol:
++
++    Scheduler receives a short prepare frame with required_frame_bytes.
++    Scheduler validates and writes/intends a ControlFS route request.
++    ControlProxy applies zone policy and sizing classes.
++    ControlProxy publishes ready/denied state on event.bus/context.bus.
++    Scheduler can then answer the producer, which sends the full RouteMessage.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++import json
++from pathlib import Path
++from typing import Any, Iterable, Literal, Mapping, Sequence
++
++from runtime.controlfs_manifest import RouteManifest, normalize_route_id
++from runtime.route_frame_codec import encode_route_message_frame
++from runtime.shm_runtime_schema import (
++    CONTEXT_BUS_MESSAGE_SCHEMA,
++    EVENT_BUS_MESSAGE_SCHEMA,
++    ROUTE_MESSAGE_SCHEMA,
++    ContextBusMessage,
++    EventBusMessage,
++    RouteMessage,
++)
++
++
++ROUTE_PREPARE_REQUEST_SCHEMA = "missipy.controlproxy.route_prepare_request.v1"
++ROUTE_PREPARE_STATUS_SCHEMA = "missipy.controlproxy.route_prepare_status.v1"
++ROUTE_PREPARE_EVENT_SCHEMA = "missipy.controlproxy.route_prepare_event.v1"
++ROUTE_PREPARE_CONTEXT_SCHEMA = "missipy.controlproxy.route_prepare_context.v1"
++
++DEFAULT_SLOT_CLASSES = (512, 1024, 2048, 4096, 8192, 16384, 32768, 65536)
++DEFAULT_OCCURRED_AT = "2026-07-04T20:00:00Z"
++
++PrepareAction = Literal["reuse_active", "create_route_generation", "create_next_generation", "deny"]
++PrepareStatus = Literal["ready", "denied"]
++
++
++class ControlProxyPrepareError(ValueError):
++    """Raised when a ControlProxy prepare object is invalid."""
++
++
++@dataclass(frozen=True)
++class RoutePrepareRequest:
++    """Short pre-frame sent before the full route payload."""
++
++    schema: str
++    request_id: str
++    route_id: str
++    task_id: str
++    zone: str
++    scope: str
++    producer: str
++    consumer: str
++    required_frame_bytes: int
++    message_schema: str
++    payload_kind: str
++    ttl_seconds: int
++    requested_by: str
++    requested_at: str
++
++    @classmethod
++    def from_mapping(cls, raw: Mapping[str, Any]) -> "RoutePrepareRequest":
++        required = {
++            "schema",
++            "request_id",
++            "route_id",
++            "task_id",
++            "zone",
++            "scope",
++            "producer",
++            "consumer",
++            "required_frame_bytes",
++            "message_schema",
++            "payload_kind",
++            "ttl_seconds",
++            "requested_by",
++            "requested_at",
++        }
++        missing = sorted(required.difference(raw))
++        if missing:
++            raise ControlProxyPrepareError("prepare request missing fields: " + ", ".join(missing))
++
++        schema = _require_str(raw, "schema")
++        if schema != ROUTE_PREPARE_REQUEST_SCHEMA:
++            raise ControlProxyPrepareError(f"unsupported prepare request schema: {schema!r}")
++
++        return cls(
++            schema=schema,
++            request_id=_require_id(raw, "request_id"),
++            route_id=normalize_route_id(_require_str(raw, "route_id")),
++            task_id=_require_id(raw, "task_id"),
++            zone=_require_id(raw, "zone"),
++            scope=_require_scope(raw, "scope"),
++            producer=_require_id(raw, "producer"),
++            consumer=_require_id(raw, "consumer"),
++            required_frame_bytes=_require_positive_int(raw, "required_frame_bytes"),
++            message_schema=_require_missipy_schema(raw, "message_schema"),
++            payload_kind=_require_id(raw, "payload_kind"),
++            ttl_seconds=_require_positive_int(raw, "ttl_seconds"),
++            requested_by=_require_id(raw, "requested_by"),
++            requested_at=_require_timestamp(raw, "requested_at"),
++        )
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "request_id": self.request_id,
++            "route_id": self.route_id,
++            "task_id": self.task_id,
++            "zone": self.zone,
++            "scope": self.scope,
++            "producer": self.producer,
++            "consumer": self.consumer,
++            "required_frame_bytes": self.required_frame_bytes,
++            "message_schema": self.message_schema,
++            "payload_kind": self.payload_kind,
++            "ttl_seconds": self.ttl_seconds,
++            "requested_by": self.requested_by,
++            "requested_at": self.requested_at,
++        }
++
++
++@dataclass(frozen=True)
++class ControlProxyZonePolicy:
++    """Sizing and timing policy for a zone."""
++
++    zone: str
++    max_slot_size: int = 65536
++    default_slot_count: int = 16
++    max_ring_bytes: int = 1024 * 1024
++    max_prepare_ms: int = 25
++    drain_timeout_ms: int = 100
++    lease_switch_timeout_ms: int = 10
++    notify: str = "semaphore"
++    overflow_policy: str = "reject"
++    headroom_bytes: int = 256
++
++    @classmethod
++    def from_mapping(cls, raw: Mapping[str, Any]) -> "ControlProxyZonePolicy":
++        return cls(
++            zone=_require_id(raw, "zone"),
++            max_slot_size=_optional_positive_int(raw, "max_slot_size", 65536),
++            default_slot_count=_optional_positive_int(raw, "default_slot_count", 16),
++            max_ring_bytes=_optional_positive_int(raw, "max_ring_bytes", 1024 * 1024),
++            max_prepare_ms=_optional_positive_int(raw, "max_prepare_ms", 25),
++            drain_timeout_ms=_optional_positive_int(raw, "drain_timeout_ms", 100),
++            lease_switch_timeout_ms=_optional_positive_int(raw, "lease_switch_timeout_ms", 10),
++            notify=_optional_id(raw, "notify", "semaphore"),
++            overflow_policy=_optional_id(raw, "overflow_policy", "reject"),
++            headroom_bytes=_optional_non_negative_int(raw, "headroom_bytes", 256),
++        )
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "zone": self.zone,
++            "max_slot_size": self.max_slot_size,
++            "default_slot_count": self.default_slot_count,
++            "max_ring_bytes": self.max_ring_bytes,
++            "max_prepare_ms": self.max_prepare_ms,
++            "drain_timeout_ms": self.drain_timeout_ms,
++            "lease_switch_timeout_ms": self.lease_switch_timeout_ms,
++            "notify": self.notify,
++            "overflow_policy": self.overflow_policy,
++            "headroom_bytes": self.headroom_bytes,
++        }
++
++
++@dataclass(frozen=True)
++class RoutePrepareDecision:
++    """ControlProxy decision after applying zone policy to a prepare request."""
++
++    schema: str
++    request_id: str
++    route_id: str
++    route_handle: str | None
++    task_id: str
++    zone: str
++    status: PrepareStatus
++    action: PrepareAction
++    reason: str
++    required_frame_bytes: int
++    current_generation: int | None
++    next_generation: int | None
++    current_slot_size: int | None
++    slot_size: int | None
++    slot_count: int | None
++    max_frame_bytes: int | None
++    max_ring_bytes: int
++    max_prepare_ms: int
++    drain_timeout_ms: int
++    lease_switch_timeout_ms: int
++    notify: str | None
++    overflow_policy: str | None
++    decided_at: str
++
++    def to_mapping(self) -> dict[str, Any]:
++        payload: dict[str, Any] = {
++            "schema": self.schema,
++            "request_id": self.request_id,
++            "route_id": self.route_id,
++            "task_id": self.task_id,
++            "zone": self.zone,
++            "status": self.status,
++            "action": self.action,
++            "reason": self.reason,
++            "required_frame_bytes": self.required_frame_bytes,
++            "max_ring_bytes": self.max_ring_bytes,
++            "max_prepare_ms": self.max_prepare_ms,
++            "drain_timeout_ms": self.drain_timeout_ms,
++            "lease_switch_timeout_ms": self.lease_switch_timeout_ms,
++            "decided_at": self.decided_at,
++        }
++        for key, value in {
++            "route_handle": self.route_handle,
++            "current_generation": self.current_generation,
++            "next_generation": self.next_generation,
++            "current_slot_size": self.current_slot_size,
++            "slot_size": self.slot_size,
++            "slot_count": self.slot_count,
++            "max_frame_bytes": self.max_frame_bytes,
++            "notify": self.notify,
++            "overflow_policy": self.overflow_policy,
++        }.items():
++            if value is not None:
++                payload[key] = value
++        return payload
++
++
++def default_zone_policies() -> dict[str, ControlProxyZonePolicy]:
++    """Return conservative default policies for local runtime zones."""
++
++    return {
++        "workers": ControlProxyZonePolicy(zone="workers", max_slot_size=65536, default_slot_count=16),
++        "context": ControlProxyZonePolicy(zone="context", max_slot_size=65536, default_slot_count=16),
++        "scheduler": ControlProxyZonePolicy(zone="scheduler", max_slot_size=32768, default_slot_count=16),
++        "ui": ControlProxyZonePolicy(zone="ui", max_slot_size=16384, default_slot_count=8),
++        "audit": ControlProxyZonePolicy(zone="audit", max_slot_size=32768, default_slot_count=16),
++    }
++
++
++def choose_slot_size(
++    required_frame_bytes: int,
++    *,
++    headroom_bytes: int = 256,
++    slot_classes: Sequence[int] = DEFAULT_SLOT_CLASSES,
++) -> int:
++    """Choose the smallest slot class that can carry required_frame_bytes."""
++
++    if required_frame_bytes < 1:
++        raise ControlProxyPrepareError("required_frame_bytes must be positive")
++    required = required_frame_bytes + headroom_bytes
++    for slot_size in slot_classes:
++        if required <= slot_size:
++            return slot_size
++    return required
++
++
++def route_prepare_request_from_message(
++    message: RouteMessage | Mapping[str, Any],
++    *,
++    task_id: str,
++    zone: str,
++    scope: str,
++    requested_by: str = "scheduler",
++    requested_at: str = DEFAULT_OCCURRED_AT,
++    ttl_seconds: int = 300,
++) -> RoutePrepareRequest:
++    """Build a short prepare request by measuring the encoded full message."""
++
++    parsed = message if isinstance(message, RouteMessage) else RouteMessage.from_mapping(message)
++    frame_size = len(encode_route_message_frame(parsed))
++    return RoutePrepareRequest.from_mapping(
++        {
++            "schema": ROUTE_PREPARE_REQUEST_SCHEMA,
++            "request_id": f"prep:{parsed.message_id}",
++            "route_id": parsed.route_id,
++            "task_id": task_id,
++            "zone": zone,
++            "scope": scope,
++            "producer": parsed.source,
++            "consumer": parsed.target,
++            "required_frame_bytes": frame_size,
++            "message_schema": ROUTE_MESSAGE_SCHEMA,
++            "payload_kind": parsed.kind,
++            "ttl_seconds": ttl_seconds,
++            "requested_by": requested_by,
++            "requested_at": requested_at,
++        }
++    )
++
++
++def decide_route_prepare(
++    request: RoutePrepareRequest,
++    *,
++    active_manifest: RouteManifest | None = None,
++    zone_policies: Mapping[str, ControlProxyZonePolicy] | None = None,
++    decided_at: str = DEFAULT_OCCURRED_AT,
++) -> RoutePrepareDecision:
++    """Apply zone policy and decide route readiness."""
++
++    policies = zone_policies or default_zone_policies()
++    policy = policies.get(request.zone)
++    if policy is None:
++        return _denied(request, reason=f"zone {request.zone!r} has no ControlProxy policy", decided_at=decided_at)
++
++    if request.required_frame_bytes > policy.max_slot_size:
++        return _denied(
++            request,
++            reason="required_frame_bytes exceeds zone max_slot_size",
++            policy=policy,
++            decided_at=decided_at,
++        )
++
++    slot_size = choose_slot_size(
++        request.required_frame_bytes,
++        headroom_bytes=policy.headroom_bytes,
++    )
++    if slot_size > policy.max_slot_size:
++        return _denied(
++            request,
++            reason="chosen slot_size exceeds zone max_slot_size",
++            policy=policy,
++            decided_at=decided_at,
++        )
++
++    ring_bytes = slot_size * policy.default_slot_count
++    if ring_bytes > policy.max_ring_bytes:
++        return _denied(
++            request,
++            reason="ring byte budget exceeds zone max_ring_bytes",
++            policy=policy,
++            slot_size=slot_size,
++            decided_at=decided_at,
++        )
++
++    current_generation = 1 if active_manifest is not None else None
++    current_slot_size = active_manifest.slot_size if active_manifest is not None else None
++
++    if active_manifest is not None and (active_manifest.slot_size or 0) >= request.required_frame_bytes:
++        action: PrepareAction = "reuse_active"
++        next_generation = current_generation
++        reason = "active route can carry required frame"
++    elif active_manifest is None:
++        action = "create_route_generation"
++        next_generation = 1
++        reason = "no active route exists; create first generation"
++    else:
++        action = "create_next_generation"
++        next_generation = (current_generation or 1) + 1
++        reason = "active route too small; create next route generation"
++
++    route_handle = f"{request.route_id}@g{next_generation}"
++
++    return RoutePrepareDecision(
++        schema=ROUTE_PREPARE_STATUS_SCHEMA,
++        request_id=request.request_id,
++        route_id=request.route_id,
++        route_handle=route_handle,
++        task_id=request.task_id,
++        zone=request.zone,
++        status="ready",
++        action=action,
++        reason=reason,
++        required_frame_bytes=request.required_frame_bytes,
++        current_generation=current_generation,
++        next_generation=next_generation,
++        current_slot_size=current_slot_size,
++        slot_size=slot_size,
++        slot_count=policy.default_slot_count,
++        max_frame_bytes=slot_size,
++        max_ring_bytes=policy.max_ring_bytes,
++        max_prepare_ms=policy.max_prepare_ms,
++        drain_timeout_ms=policy.drain_timeout_ms,
++        lease_switch_timeout_ms=policy.lease_switch_timeout_ms,
++        notify=policy.notify,
++        overflow_policy=policy.overflow_policy,
++        decided_at=decided_at,
++    )
++
++
++def controlproxy_decision_to_event(decision: RoutePrepareDecision) -> EventBusMessage:
++    """Project a ControlProxy decision to event.bus for Recorder and VisPy."""
++
++    topic = "controlproxy.route.ready" if decision.status == "ready" else "controlproxy.route.denied"
++    return EventBusMessage.from_mapping(
++        {
++            "schema": EVENT_BUS_MESSAGE_SCHEMA,
++            "event_id": f"evt:{decision.request_id}",
++            "topic": topic,
++            "source": "controlproxy",
++            "occurred_at": decision.decided_at,
++            "zone": "control",
++            "payload_schema": ROUTE_PREPARE_EVENT_SCHEMA,
++            "payload": decision.to_mapping(),
++        }
++    )
++
++
++def controlproxy_decision_to_context(decision: RoutePrepareDecision) -> ContextBusMessage:
++    """Project a ControlProxy decision to context.bus for live state views."""
++
++    return ContextBusMessage.from_mapping(
++        {
++            "schema": CONTEXT_BUS_MESSAGE_SCHEMA,
++            "context_id": decision.task_id,
++            "context_version": decision.next_generation or 1,
++            "topic": "controlproxy.route.state",
++            "source": "controlproxy",
++            "occurred_at": decision.decided_at,
++            "zone": "control",
++            "payload_schema": ROUTE_PREPARE_CONTEXT_SCHEMA,
++            "payload": decision.to_mapping(),
++        }
++    )
++
++
++def write_controlproxy_decisions_to_fake_bus(
++    runtime_root: Path | str,
++    decisions: Iterable[RoutePrepareDecision],
++    *,
++    append: bool = True,
++) -> dict[str, int]:
++    """Write ControlProxy state to fake event.bus/context.bus JSONL files."""
++
++    root = Path(runtime_root)
++    root.mkdir(parents=True, exist_ok=True)
++    decision_items = tuple(decisions)
++    event_items = [controlproxy_decision_to_event(decision) for decision in decision_items]
++    context_items = [controlproxy_decision_to_context(decision) for decision in decision_items]
++
++    _write_jsonl(root / "event.bus.jsonl", (item.to_mapping() for item in event_items), append=append)
++    _write_jsonl(root / "context.bus.jsonl", (item.to_mapping() for item in context_items), append=append)
++
++    return {
++        "decision_count": len(decision_items),
++        "event_count": len(event_items),
++        "context_count": len(context_items),
++    }
++
++
++def _denied(
++    request: RoutePrepareRequest,
++    *,
++    reason: str,
++    policy: ControlProxyZonePolicy | None = None,
++    slot_size: int | None = None,
++    decided_at: str,
++) -> RoutePrepareDecision:
++    max_ring_bytes = policy.max_ring_bytes if policy is not None else 0
++    max_prepare_ms = policy.max_prepare_ms if policy is not None else 1
++    drain_timeout_ms = policy.drain_timeout_ms if policy is not None else 1
++    lease_switch_timeout_ms = policy.lease_switch_timeout_ms if policy is not None else 1
++    return RoutePrepareDecision(
++        schema=ROUTE_PREPARE_STATUS_SCHEMA,
++        request_id=request.request_id,
++        route_id=request.route_id,
++        route_handle=None,
++        task_id=request.task_id,
++        zone=request.zone,
++        status="denied",
++        action="deny",
++        reason=reason,
++        required_frame_bytes=request.required_frame_bytes,
++        current_generation=None,
++        next_generation=None,
++        current_slot_size=None,
++        slot_size=slot_size,
++        slot_count=policy.default_slot_count if policy is not None else None,
++        max_frame_bytes=slot_size,
++        max_ring_bytes=max_ring_bytes,
++        max_prepare_ms=max_prepare_ms,
++        drain_timeout_ms=drain_timeout_ms,
++        lease_switch_timeout_ms=lease_switch_timeout_ms,
++        notify=policy.notify if policy is not None else None,
++        overflow_policy=policy.overflow_policy if policy is not None else None,
++        decided_at=decided_at,
++    )
++
++
++def _write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]], *, append: bool) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    mode = "a" if append and path.exists() else "w"
++    with path.open(mode, encoding="utf-8") as handle:
++        for row in rows:
++            handle.write(json.dumps(dict(row), sort_keys=True, separators=(",", ":")))
++            handle.write("\n")
++
++
++def _require_str(raw: Mapping[str, Any], field: str) -> str:
++    value = raw[field]
++    if not isinstance(value, str) or not value:
++        raise ControlProxyPrepareError(f"{field} must be a non-empty string")
++    if "/" in value or "\\" in value or ".." in value:
++        raise ControlProxyPrepareError(f"{field} must not contain path traversal")
++    return value
++
++
++def _optional_str(raw: Mapping[str, Any], field: str) -> str | None:
++    value = raw.get(field)
++    if value is None:
++        return None
++    if not isinstance(value, str):
++        raise ControlProxyPrepareError(f"{field} must be a string")
++    return value
++
++
++def _require_id(raw: Mapping[str, Any], field: str) -> str:
++    value = _require_str(raw, field)
++    if not value.replace("_", "").replace(".", "").replace(":", "").replace("-", "").isalnum():
++        raise ControlProxyPrepareError(f"{field} contains invalid characters")
++    return value
++
++
++def _optional_id(raw: Mapping[str, Any], field: str, default: str) -> str:
++    if field not in raw or raw[field] is None:
++        return default
++    return _require_id(raw, field)
++
++
++def _require_scope(raw: Mapping[str, Any], field: str) -> str:
++    value = _require_id(raw, field)
++    if "." not in value:
++        raise ControlProxyPrepareError(f"{field} should use subsystem.permission form")
++    return value
++
++
++def _require_missipy_schema(raw: Mapping[str, Any], field: str) -> str:
++    value = _require_str(raw, field)
++    if not value.startswith("missipy."):
++        raise ControlProxyPrepareError(f"{field} must start with missipy.")
++    return value
++
++
++def _require_timestamp(raw: Mapping[str, Any], field: str) -> str:
++    value = _require_str(raw, field)
++    if "T" not in value or "Z" not in value:
++        raise ControlProxyPrepareError(f"{field} must look like an UTC timestamp")
++    return value
++
++
++def _require_positive_int(raw: Mapping[str, Any], field: str) -> int:
++    value = raw[field]
++    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
++        raise ControlProxyPrepareError(f"{field} must be a positive integer")
++    return value
++
++
++def _optional_positive_int(raw: Mapping[str, Any], field: str, default: int) -> int:
++    if field not in raw or raw[field] is None:
++        return default
++    return _require_positive_int(raw, field)
++
++
++def _optional_non_negative_int(raw: Mapping[str, Any], field: str, default: int) -> int:
++    if field not in raw or raw[field] is None:
++        return default
++    value = raw[field]
++    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
++        raise ControlProxyPrepareError(f"{field} must be a non-negative integer")
++    return value
++
++
++def _optional_int(raw: Mapping[str, Any], field: str) -> int | None:
++    value = raw.get(field)
++    if value is None:
++        return None
++    if not isinstance(value, int) or isinstance(value, bool):
++        raise ControlProxyPrepareError(f"{field} must be an integer")
++    return value
+diff --git a/tests/rules/test_controlproxy_sizing_prepare_rule.py b/tests/rules/test_controlproxy_sizing_prepare_rule.py
+new file mode 100644
+index 0000000..612c886
+--- /dev/null
++++ b/tests/rules/test_controlproxy_sizing_prepare_rule.py
+@@ -0,0 +1,90 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "CONTROLPROXY_SIZING_PREPARE_PROTOCOL.md"
++AUDIT = ROOT / "doc" / "architecture" / "REPOSITORY_ARCHITECTURE_AUDIT_0079_R2.md"
++INDEX = ROOT / "doc" / "architecture" / "ARCHITECTURE_INDEX_0079_R2.md"
++MANIFEST = ROOT / "src" / "runtime" / "controlfs_manifest.py"
++PREPARE = ROOT / "src" / "runtime" / "controlproxy_prepare.py"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing file: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_controlproxy_doc_locks_unified_model_and_protocol() -> None:
++    text = _read(DOC)
++
++    required_phrases = [
++        "ControlProxy = ControlFS declarative surface + RouteProxy materializer",
++        "ControlFS and RouteProxy are treated as one runtime control unit.",
++        "short prepare frame with required_frame_bytes",
++        "publishes ready/denied state to event.bus and context.bus",
++        "route lease / route_handle",
++        "reuse_active",
++        "create_route_generation",
++        "create_next_generation",
++        "deny",
++        "The old 0079 split ControlFS sizing from the proxy too much.",
++        "Bus messages are facts, not commands.",
++        "The semaphore does not create SHM and does not size slots.",
++        "real shared memory",
++        "mmap implementation",
++        "Scheduler wiring",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_repository_audit_mentions_0079_replacement_and_remaining_mmap_gap() -> None:
++    text = _read(AUDIT)
++
++    required_phrases = [
++        "replaces the rejected old `0079`",
++        "Scope: repository reconstructed from applied patches `0063-r2` through `0078`.",
++        "ControlProxy unit vocabulary.",
++        "Route prepare request/status protocol.",
++        "Route sizing as part of ControlProxy, not separate ControlFS-only logic.",
++        "file-backed fixed-slot mmap route",
++        "0080 file-backed fixed-slot mmap route",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_architecture_index_places_next_mmap_after_0079_r2() -> None:
++    text = _read(INDEX)
++
++    assert "0079-r2 ControlProxy sizing + prepare handshake + bus visibility" in text
++    assert "0080 file-backed fixed-slot mmap route prototype" in text
++
++
++def test_manifest_and_prepare_module_lock_no_mmap_yet() -> None:
++    manifest_text = _read(MANIFEST)
++    prepare_text = _read(PREPARE)
++
++    for phrase in [
++        "ControlProxy = ControlFS declarative surface + RouteProxy materializer",
++        "transport",
++        "slot_size",
++        "slot_count",
++        "max_frame_bytes",
++        "observed_frame_bytes",
++        "mmap.fixed_slot",
++    ]:
++        assert phrase in manifest_text
++
++    for phrase in [
++        "ControlProxy = ControlFS declarative state + RouteProxy materializer",
++        "does not:",
++        "implement mmap",
++        "resize a live mmap ring",
++        "create semaphores",
++        "event.bus",
++        "context.bus",
++    ]:
++        assert phrase in prepare_text
+diff --git a/tests/test_baby_fork_runtime_flow_controlproxy_sizing.py b/tests/test_baby_fork_runtime_flow_controlproxy_sizing.py
+new file mode 100644
+index 0000000..7d2a583
+--- /dev/null
++++ b/tests/test_baby_fork_runtime_flow_controlproxy_sizing.py
+@@ -0,0 +1,52 @@
++import json
++from pathlib import Path
++
++from context.baby_fork_runtime_flow import run_baby_fork_runtime_flow
++
++
++def _report() -> dict:
++    return {
++        "retrieval": {
++            "retrieved_ids": ["baby-silicone-fork", "rounded-stainless-soft-handle"],
++            "rejected_ids": ["nasa-antenna"],
++        },
++        "variant_generator_stub": {
++            "generated_variants": [
++                {"variant_id": "variant-1"},
++                {"variant_id": "variant-2"},
++            ]
++        },
++        "final_context": {
++            "context_id": "ctx-baby-fork-001",
++            "context_version": 2,
++            "selected_variant_id": "variant-1",
++        },
++    }
++
++
++def test_runtime_flow_writes_measured_controlproxy_sizing_hints(tmp_path: Path) -> None:
++    report_path = tmp_path / "report.json"
++    report_path.write_text(json.dumps(_report()), encoding="utf-8")
++
++    summary = run_baby_fork_runtime_flow(
++        report_path,
++        tmp_path / "fake_runtime",
++        tmp_path / "fake_runtime" / "runtime_journal.jsonl",
++        controlfs_root=tmp_path / "controlfs",
++    )
++
++    assert summary.controlfs is not None
++
++    retrieval = json.loads(
++        (tmp_path / "controlfs" / "desired" / "routes" / "baby_fork.retrieval" / "manifest.json").read_text(
++            encoding="utf-8"
++        )
++    )
++
++    assert retrieval["transport"] == "mmap.fixed_slot"
++    assert retrieval["notify"] == "semaphore"
++    assert retrieval["overflow_policy"] == "reject"
++    assert retrieval["sizing_source"] == "controlproxy.prepare"
++    assert retrieval["observed_frame_bytes"] > 0
++    assert retrieval["slot_size"] >= retrieval["observed_frame_bytes"]
++    assert retrieval["max_frame_bytes"] == retrieval["slot_size"]
+diff --git a/tests/test_controlproxy_prepare_cli.py b/tests/test_controlproxy_prepare_cli.py
+new file mode 100644
+index 0000000..3197568
+--- /dev/null
++++ b/tests/test_controlproxy_prepare_cli.py
+@@ -0,0 +1,54 @@
++import json
++import subprocess
++import sys
++from pathlib import Path
++
++from runtime.fake_route_transport import FakeLocalRouteTransport, load_fake_bus_messages
++from runtime.shm_runtime_schema import ROUTE_MESSAGE_SCHEMA, ContextBusMessage, EventBusMessage
++
++
++def _route_message() -> dict:
++    return {
++        "schema": ROUTE_MESSAGE_SCHEMA,
++        "route_id": "baby_fork.variant_stub",
++        "message_id": "msg:baby_fork.variant_stub.event",
++        "kind": "event",
++        "source": "variant_generator_stub",
++        "target": "scheduler",
++        "occurred_at": "2026-07-04T20:00:00Z",
++        "payload_schema": "missipy.baby_fork.variants_generated.v1",
++        "payload": {
++            "context_id": "ctx-baby-fork-001",
++            "variant_count": 2,
++            "variant_ids": ["variant-1", "variant-2"],
++        },
++    }
++
++
++def test_prepare_fake_routes_controlproxy_cli_writes_bus_state(tmp_path: Path) -> None:
++    transport = FakeLocalRouteTransport(tmp_path)
++    transport.send(_route_message())
++
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/prepare_fake_routes_controlproxy.py",
++            str(tmp_path),
++            "--task-id",
++            "ctx-baby-fork-001",
++            "--replace-bus",
++        ],
++        check=True,
++        text=True,
++        stdout=subprocess.PIPE,
++    )
++
++    summary = json.loads(result.stdout)
++    assert summary["request_count"] == 1
++    assert summary["decision_count"] == 1
++    assert summary["decisions"][0]["status"] == "ready"
++
++    event_messages = load_fake_bus_messages(tmp_path / "event.bus.jsonl")
++    context_messages = load_fake_bus_messages(tmp_path / "context.bus.jsonl")
++    assert isinstance(event_messages[0], EventBusMessage)
++    assert isinstance(context_messages[0], ContextBusMessage)
+diff --git a/tests/test_controlproxy_sizing_prepare.py b/tests/test_controlproxy_sizing_prepare.py
+new file mode 100644
+index 0000000..ace2b53
+--- /dev/null
++++ b/tests/test_controlproxy_sizing_prepare.py
+@@ -0,0 +1,259 @@
++import json
++from pathlib import Path
++
++import pytest
++
++from context.baby_fork_controlfs import (
++    build_baby_fork_routeproxy_plan,
++    build_route_sizing_hints_from_messages,
++    choose_slot_size,
++    write_baby_fork_desired_manifests,
++)
++from context.baby_fork_runtime_projection import build_baby_fork_runtime_projection
++from runtime.controlfs_manifest import ManifestValidationError, ROUTE_MANIFEST_SCHEMA, RouteManifest
++from runtime.controlproxy_prepare import (
++    ROUTE_PREPARE_REQUEST_SCHEMA,
++    ControlProxyZonePolicy,
++    controlproxy_decision_to_context,
++    controlproxy_decision_to_event,
++    decide_route_prepare,
++    route_prepare_request_from_message,
++    write_controlproxy_decisions_to_fake_bus,
++)
++from runtime.fake_route_transport import load_fake_bus_messages
++from runtime.shm_runtime_schema import ROUTE_MESSAGE_SCHEMA, ContextBusMessage, EventBusMessage
++
++
++def _base_manifest() -> dict:
++    return {
++        "schema": ROUTE_MANIFEST_SCHEMA,
++        "route_id": "baby_fork.retrieval",
++        "task_id": "ctx-baby-fork-001",
++        "zone": "workers",
++        "scope": "context.read",
++        "producer": "scheduler",
++        "consumer": "retrieval_worker",
++        "ttl_seconds": 300,
++        "mode": "rw",
++        "message_schema": "missipy.shm.route_message.v1",
++        "created_by": "scheduler",
++        "created_at": "2026-07-04T20:00:00Z",
++    }
++
++
++def _report() -> dict:
++    return {
++        "retrieval": {
++            "retrieved_ids": ["baby-silicone-fork", "rounded-stainless-soft-handle"],
++            "rejected_ids": ["nasa-antenna"],
++        },
++        "variant_generator_stub": {
++            "generated_variants": [
++                {"variant_id": "variant-1"},
++                {"variant_id": "variant-2"},
++            ]
++        },
++        "final_context": {
++            "context_id": "ctx-baby-fork-001",
++            "context_version": 2,
++            "selected_variant_id": "variant-1",
++        },
++    }
++
++
++def _route_message(route_id: str = "baby_fork.retrieval") -> dict:
++    return {
++        "schema": ROUTE_MESSAGE_SCHEMA,
++        "route_id": route_id,
++        "message_id": "msg:baby_fork.retrieval.reply",
++        "kind": "reply",
++        "source": "retrieval_worker",
++        "target": "scheduler",
++        "occurred_at": "2026-07-04T20:00:00Z",
++        "payload_schema": "missipy.baby_fork.route_reply.v1",
++        "payload": {
++            "context_id": "ctx-baby-fork-001",
++            "retrieved_ids": ["baby-silicone-fork", "rounded-stainless-soft-handle"],
++            "rejected_ids": ["nasa-antenna"],
++        },
++    }
++
++
++def _active_manifest(slot_size: int) -> RouteManifest:
++    raw = _base_manifest()
++    raw.update(
++        {
++            "transport": "mmap.fixed_slot",
++            "slot_size": slot_size,
++            "slot_count": 16,
++            "max_frame_bytes": slot_size,
++            "overflow_policy": "reject",
++            "notify": "semaphore",
++        }
++    )
++    return RouteManifest.from_mapping(raw)
++
++
++def test_route_manifest_accepts_controlproxy_sizing_fields() -> None:
++    raw = _base_manifest()
++    raw.update(
++        {
++            "transport": "mmap.fixed_slot",
++            "slot_size": 2048,
++            "slot_count": 16,
++            "max_frame_bytes": 2048,
++            "overflow_policy": "reject",
++            "notify": "semaphore",
++            "sizing_source": "controlproxy.prepare",
++            "observed_frame_bytes": 890,
++        }
++    )
++
++    manifest = RouteManifest.from_mapping(raw)
++
++    assert manifest.transport == "mmap.fixed_slot"
++    assert manifest.slot_size == 2048
++    assert manifest.notify == "semaphore"
++    assert manifest.to_mapping()["observed_frame_bytes"] == 890
++
++
++def test_route_manifest_rejects_frame_larger_than_slot() -> None:
++    raw = _base_manifest()
++    raw.update(
++        {
++            "transport": "mmap.fixed_slot",
++            "slot_size": 1024,
++            "slot_count": 16,
++            "max_frame_bytes": 2048,
++            "overflow_policy": "reject",
++            "notify": "semaphore",
++        }
++    )
++
++    with pytest.raises(ManifestValidationError, match="max_frame_bytes"):
++        RouteManifest.from_mapping(raw)
++
++
++def test_baby_fork_sizing_hints_are_measured_from_encoded_frames() -> None:
++    projection = build_baby_fork_runtime_projection(_report())
++    hints = build_route_sizing_hints_from_messages(projection.routes)
++
++    assert set(hints) == {
++        "baby_fork.context_gate",
++        "baby_fork.retrieval",
++        "baby_fork.variant_stub",
++    }
++    assert choose_slot_size(475, headroom_bytes=256) == 1024
++    assert choose_slot_size(890, headroom_bytes=256) == 2048
++    assert all(hint.slot_size >= hint.observed_frame_bytes for hint in hints.values())
++
++
++def test_routeproxy_plan_sees_sizing_change_as_update(tmp_path: Path) -> None:
++    projection = build_baby_fork_runtime_projection(_report())
++    hints = build_route_sizing_hints_from_messages(projection.routes)
++
++    write_baby_fork_desired_manifests(
++        tmp_path,
++        context_id="ctx-baby-fork-001",
++        sizing_hints=hints,
++    )
++
++    active_manifest = json.loads(
++        (tmp_path / "desired" / "routes" / "baby_fork.retrieval" / "manifest.json").read_text(
++            encoding="utf-8"
++        )
++    )
++    active_manifest["slot_size"] = 1024
++    active_manifest["max_frame_bytes"] = 1024
++    active_manifest["sizing_source"] = "old.active"
++
++    active_path = tmp_path / "active" / "routes" / "baby_fork.retrieval" / "manifest.json"
++    active_path.parent.mkdir(parents=True)
++    active_path.write_text(json.dumps(active_manifest), encoding="utf-8")
++
++    plan = build_baby_fork_routeproxy_plan(
++        tmp_path,
++        context_id="ctx-baby-fork-001",
++        write_desired=False,
++    )
++
++    update_items = [item for item in plan.by_action("update") if item.route_id == "baby_fork.retrieval"]
++    assert len(update_items) == 1
++    assert update_items[0].desired.slot_size != update_items[0].active.slot_size
++
++
++def test_prepare_request_is_short_and_contains_required_frame_size() -> None:
++    request = route_prepare_request_from_message(
++        _route_message(),
++        task_id="ctx-baby-fork-001",
++        zone="workers",
++        scope="context.read",
++    )
++
++    assert request.schema == ROUTE_PREPARE_REQUEST_SCHEMA
++    assert request.route_id == "baby_fork.retrieval"
++    assert request.required_frame_bytes > 0
++    assert "payload" not in request.to_mapping()
++
++
++def test_controlproxy_decision_actions() -> None:
++    request = route_prepare_request_from_message(
++        _route_message(),
++        task_id="ctx-baby-fork-001",
++        zone="workers",
++        scope="context.read",
++    )
++
++    first = decide_route_prepare(request)
++    reuse = decide_route_prepare(request, active_manifest=_active_manifest(4096))
++    next_gen = decide_route_prepare(request, active_manifest=_active_manifest(64))
++
++    assert first.action == "create_route_generation"
++    assert first.route_handle == "baby_fork.retrieval@g1"
++    assert reuse.action == "reuse_active"
++    assert next_gen.action == "create_next_generation"
++    assert next_gen.route_handle == "baby_fork.retrieval@g2"
++
++
++def test_controlproxy_denies_when_zone_budget_is_too_small() -> None:
++    request = route_prepare_request_from_message(
++        _route_message(),
++        task_id="ctx-baby-fork-001",
++        zone="workers",
++        scope="context.read",
++    )
++    policies = {
++        "workers": ControlProxyZonePolicy(
++            zone="workers",
++            max_slot_size=128,
++            default_slot_count=16,
++            max_ring_bytes=4096,
++        )
++    }
++
++    decision = decide_route_prepare(request, zone_policies=policies)
++
++    assert decision.status == "denied"
++    assert decision.action == "deny"
++
++
++def test_controlproxy_decision_projects_to_event_and_context_bus(tmp_path: Path) -> None:
++    request = route_prepare_request_from_message(
++        _route_message(),
++        task_id="ctx-baby-fork-001",
++        zone="workers",
++        scope="context.read",
++    )
++    decision = decide_route_prepare(request)
++
++    event = controlproxy_decision_to_event(decision)
++    context = controlproxy_decision_to_context(decision)
++    counts = write_controlproxy_decisions_to_fake_bus(tmp_path, [decision], append=False)
++
++    assert isinstance(event, EventBusMessage)
++    assert isinstance(context, ContextBusMessage)
++    assert event.topic == "controlproxy.route.ready"
++    assert context.topic == "controlproxy.route.state"
++    assert counts == {"decision_count": 1, "event_count": 1, "context_count": 1}
++    assert isinstance(load_fake_bus_messages(tmp_path / "event.bus.jsonl")[0], EventBusMessage)
++    assert isinstance(load_fake_bus_messages(tmp_path / "context.bus.jsonl")[0], ContextBusMessage)
+diff --git a/tools/prepare_fake_routes_controlproxy.py b/tools/prepare_fake_routes_controlproxy.py
+new file mode 100644
+index 0000000..afbc4d4
+--- /dev/null
++++ b/tools/prepare_fake_routes_controlproxy.py
+@@ -0,0 +1,68 @@
++#!/usr/bin/env python3
++"""Prepare fake runtime routes through ControlProxy handshake.
++
++This is 0079-r2: it does not create mmap. It reads existing fake route
++messages, measures their encoded frame sizes, decides route readiness by zone
++policy, and writes ControlProxy state to event.bus/context.bus for Recorder,
++VisPy or any later UI lens.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++
++from runtime.controlproxy_prepare import (
++    decide_route_prepare,
++    route_prepare_request_from_message,
++    write_controlproxy_decisions_to_fake_bus,
++)
++from runtime.fake_route_transport import FakeLocalRouteTransport
++
++
++def _zone_scope(route_id: str) -> tuple[str, str]:
++    if route_id.endswith(".context_gate"):
++        return "context", "context.patch"
++    return "workers", "context.read"
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Prepare fake routes with ControlProxy handshake.")
++    parser.add_argument("fake_runtime_root")
++    parser.add_argument("--task-id", default="ctx-baby-fork-001")
++    parser.add_argument("--replace-bus", action="store_true", help="Rewrite ControlProxy bus files instead of appending.")
++    args = parser.parse_args(argv)
++
++    transport = FakeLocalRouteTransport(args.fake_runtime_root)
++    requests = []
++    decisions = []
++
++    for route_id in transport.route_ids():
++        zone, scope = _zone_scope(route_id)
++        for message in transport.receive(route_id):
++            request = route_prepare_request_from_message(
++                message,
++                task_id=args.task_id,
++                zone=zone,
++                scope=scope,
++            )
++            requests.append(request)
++            decisions.append(decide_route_prepare(request))
++
++    bus_counts = write_controlproxy_decisions_to_fake_bus(
++        args.fake_runtime_root,
++        decisions,
++        append=not args.replace_bus,
++    )
++
++    print(json.dumps({
++        "request_count": len(requests),
++        "decision_count": len(decisions),
++        "bus_counts": bus_counts,
++        "decisions": [decision.to_mapping() for decision in decisions],
++    }, indent=2, sort_keys=True))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tools/write_baby_fork_controlproxy_sized.py b/tools/write_baby_fork_controlproxy_sized.py
+new file mode 100644
+index 0000000..e9a3fc6
+--- /dev/null
++++ b/tools/write_baby_fork_controlproxy_sized.py
+@@ -0,0 +1,85 @@
++#!/usr/bin/env python3
++"""Write baby-fork ControlProxy/ControlFS desired manifests with measured sizing.
++
++Usage:
++
++    PYTHONPATH=src:. python tools/write_baby_fork_controlproxy_sized.py \
++      .var/baby_fork_smoke/baby_fork_report.json \
++      .var/baby_fork_controlfs
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import sys
++
++from context.baby_fork_controlfs import (
++    build_route_sizing_hints_from_messages,
++    write_baby_fork_desired_manifests,
++)
++from context.baby_fork_runtime_projection import build_baby_fork_runtime_projection
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Write sized baby-fork ControlProxy desired route manifests.")
++    parser.add_argument("report_path", type=Path)
++    parser.add_argument("controlfs_root", type=Path)
++    parser.add_argument("--context-id")
++    parser.add_argument("--slot-count", type=int, default=16)
++    parser.add_argument("--headroom-bytes", type=int, default=256)
++    args = parser.parse_args(argv)
++
++    try:
++        report = json.loads(args.report_path.read_text(encoding="utf-8"))
++    except OSError as exc:
++        print(f"ERROR: {exc}", file=sys.stderr)
++        return 1
++    except json.JSONDecodeError as exc:
++        print(f"INVALID JSON: {exc}", file=sys.stderr)
++        return 2
++
++    if not isinstance(report, dict):
++        print("INVALID JSON: report must be an object", file=sys.stderr)
++        return 2
++
++    projection = build_baby_fork_runtime_projection(report, report_uri=str(args.report_path))
++    sizing_hints = build_route_sizing_hints_from_messages(
++        projection.routes,
++        slot_count=args.slot_count,
++        headroom_bytes=args.headroom_bytes,
++    )
++
++    context_id = args.context_id
++    if context_id is None:
++        final_context = report.get("final_context")
++        if isinstance(final_context, dict) and final_context.get("context_id"):
++            context_id = str(final_context["context_id"])
++
++    paths = write_baby_fork_desired_manifests(
++        args.controlfs_root,
++        context_id=context_id or "baby_fork_smoke",
++        sizing_hints=sizing_hints,
++    )
++
++    print(json.dumps({
++        "written": [str(path) for path in paths],
++        "sizing_hints": {
++            route_id: {
++                "observed_frame_bytes": hint.observed_frame_bytes,
++                "slot_size": hint.slot_size,
++                "slot_count": hint.slot_count,
++                "max_frame_bytes": hint.normalized_max_frame_bytes(),
++                "transport": hint.transport,
++                "notify": hint.notify,
++                "overflow_policy": hint.overflow_policy,
++            }
++            for route_id, hint in sorted(sizing_hints.items())
++        },
++    }, indent=2, sort_keys=True))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

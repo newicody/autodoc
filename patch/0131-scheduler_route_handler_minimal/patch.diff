@@ -1,0 +1,789 @@
+diff --git a/PHASE0131_TEST_REPORT.md b/PHASE0131_TEST_REPORT.md
+new file mode 100644
+index 0000000..c9b15e9
+--- /dev/null
++++ b/PHASE0131_TEST_REPORT.md
+@@ -0,0 +1,25 @@
++# PHASE0131_TEST_REPORT
++
++```text
++phase: 0131-scheduler_route_handler_minimal
++code_rule_review: done
++code_rule_update_required: true
++code_rule_reason: first handler/executor membrane between Scheduler command data and RouteProxyRuntime IO.
++live_path_status: transition
++live_path_uses_real_backend: true
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++```
++
++Validation performed in patch build:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests
++PYTHONPATH=src:. pytest -q tests/runtime/test_scheduler_route_handler_minimal.py tests/rules/test_scheduler_route_handler_minimal_0131_rule.py
++# 9 passed
++PYTHONPATH=src:. pytest -q tests/runtime tests/rules
++# 21 passed
++```
++
++0131 remains a transition phase. It provides a handler-shaped bridge without changing Scheduler.run().
+diff --git a/doc/CHANGELOG_0131_SCHEDULER_ROUTE_HANDLER_MINIMAL.md b/doc/CHANGELOG_0131_SCHEDULER_ROUTE_HANDLER_MINIMAL.md
+new file mode 100644
+index 0000000..1df4b38
+--- /dev/null
++++ b/doc/CHANGELOG_0131_SCHEDULER_ROUTE_HANDLER_MINIMAL.md
+@@ -0,0 +1,10 @@
++# Changelog 0131 — Scheduler route handler minimal
++
++Added:
++
++- `src/runtime/scheduler_route_handler_minimal.py`
++- runtime tests for writing Scheduler-dispatched route frames through RouteProxyRuntime
++- rule tests for handler/kernel/backend boundaries
++- architecture docs and a code_rule supplement
++
++No Scheduler, Dispatcher, Queue, PolicyEngine, EventBus, OpenVINO, Qdrant, PostgreSQL, GitHub, daemon, watcher, network, or VisPy runtime is modified.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0131.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0131.md
+new file mode 100644
+index 0000000..ea479ee
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0131.md
+@@ -0,0 +1,16 @@
++# ControlProxy operational plan — 0131
++
++0131 starts the bridge between Scheduler command data and the RouteProxy `/dev/shm` runtime.
++
++```text
++Scheduler decides
++-> SchedulerRouteHandlerCommand
++-> SchedulerRouteHandler minimal executor
++-> RouteProxyRuntime writer permit
++-> atomic frame write under /dev/shm
++-> observation-ready facts
++```
++
++ControlProxy/RouteProxy remains a data-plane executor. It does not become Scheduler, PolicyEngine, EventBus, SQL authority, OpenVINO adapter, or Qdrant adapter.
++
++The next phase can add fake specialist workers that read frames written by this handler.
+diff --git a/doc/architecture/SCHEDULER_ROUTE_HANDLER_MINIMAL_0131.md b/doc/architecture/SCHEDULER_ROUTE_HANDLER_MINIMAL_0131.md
+new file mode 100644
+index 0000000..6edbe91
+--- /dev/null
++++ b/doc/architecture/SCHEDULER_ROUTE_HANDLER_MINIMAL_0131.md
+@@ -0,0 +1,58 @@
++# 0131 — Scheduler route handler minimal
++
++SchedulerRouteHandler is an executor bridge, not an orchestrator.
++
++0131 adds a minimal importable handler that consumes immutable Scheduler-owned command data and writes route frames through `RouteProxyRuntime`.  It does not modify Scheduler, Dispatcher, Queue, PolicyEngine, EventBus, OpenVINO, Qdrant, SQL, or GitHub code.
++
++## Locked boundary
++
++- Scheduler remains the orchestrator.
++- SchedulerRouteHandler is an executor bridge, not an orchestrator.
++- Do not modify Scheduler.run() in 0131.
++- RouteProxyRuntime performs the /dev/shm IO.
++- EventBus receives observation-ready facts, not payload commands.
++- SQLContextStore remains durable authority.
++- E5/OpenVINO and Qdrant are not touched by 0131.
++- GitHub remains artifact exchange only.
++- The handler may be called later by the real Scheduler/Dispatcher/Handler chain.
++
++## Flow
++
++```text
++SchedulerRouteHandlerCommand
++-> SchedulerRouteFrameRequest[]
++-> RouteProxyRuntime.request_writer_permit()
++-> RouteProxyRuntime.write_route_frame()
++-> persisted route frame
++-> observation-ready facts
++```
++
++The handler only executes route IO that the caller already decided to dispatch. It does not rank specialists, decide policy, resolve context, run embeddings, or publish to EventBus directly.
++
++## Why this step matters
++
++0130 made RouteProxyRuntime live. 0131 creates the first handler-shaped bridge that a Scheduler path can call without changing `Scheduler.run()`.
++
++This is the shortest safe path toward:
++
++```text
++Scheduler command
++-> handler
++-> /dev/shm frame
++-> fake specialist worker
++-> opinion frame
++-> collector
++```
++
++## Phase status
++
++```text
++code_rule_review: done
++code_rule_update_required: true
++code_rule_reason: 0131 adds the first handler/executor membrane between Scheduler-owned command data and RouteProxyRuntime IO.
++live_path_status: transition
++live_path_uses_real_backend: true
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++```
+diff --git a/doc/code-rules/0131_scheduler_route_handler_rule.md b/doc/code-rules/0131_scheduler_route_handler_rule.md
+new file mode 100644
+index 0000000..6356fd5
+--- /dev/null
++++ b/doc/code-rules/0131_scheduler_route_handler_rule.md
+@@ -0,0 +1,26 @@
++# code_rule supplement for Scheduler route handler membrane
++
++This supplement applies from 0131 onward.
++
++## Rule
++
++A Scheduler route handler is an executor bridge, not an orchestrator.
++
++Allowed:
++
++- consume immutable command/frame request data;
++- ask RouteProxyRuntime for a writer permit;
++- write/read route frames through runtime helpers;
++- return observation-ready facts to the caller;
++- stay importable and testable without daemon/service setup.
++
++Forbidden:
++
++- instantiate or mutate Scheduler;
++- modify `Scheduler.run()`;
++- bypass Dispatcher/Policy/Queue boundaries in live integration;
++- import OpenVINO, Qdrant, PostgreSQL clients, GitHub clients, network clients, VisPy, or EventBus runtime;
++- publish heavy payloads to EventBus;
++- make business decisions about specialists or final synthesis.
++
++code_rule supplement for Scheduler route handler membrane.
+diff --git a/doc/docs/architecture/runtime/131_scheduler_route_handler_minimal.dot b/doc/docs/architecture/runtime/131_scheduler_route_handler_minimal.dot
+new file mode 100644
+index 0000000..3ed2891
+--- /dev/null
++++ b/doc/docs/architecture/runtime/131_scheduler_route_handler_minimal.dot
+@@ -0,0 +1,19 @@
++digraph scheduler_route_handler_minimal_0131 {
++  rankdir=LR;
++  node [shape=box];
++
++  scheduler [label="Scheduler\norchestrator"];
++  command [label="SchedulerRouteHandlerCommand\nimmutable dispatch data"];
++  handler [label="SchedulerRouteHandler\nexecutor bridge"];
++  runtime [label="RouteProxyRuntime\n/dev/shm IO"];
++  frames [label="route frames\nfast data-plane"];
++  facts [label="observation-ready facts\nEventBus later"];
++  sql [label="SQLContextStore\ndurable authority later"];
++
++  scheduler -> command;
++  command -> handler;
++  handler -> runtime [label="request permit + write frame"];
++  runtime -> frames;
++  runtime -> facts;
++  frames -> sql [label="validated state later"];
++}
+diff --git a/doc/manifests/MANIFEST_0131_CHANGED_FILES.md b/doc/manifests/MANIFEST_0131_CHANGED_FILES.md
+new file mode 100644
+index 0000000..3d608c8
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0131_CHANGED_FILES.md
+@@ -0,0 +1,14 @@
++# Manifest 0131 — changed files
++
++- src/runtime/scheduler_route_handler_minimal.py
++- tests/runtime/test_scheduler_route_handler_minimal.py
++- tests/rules/test_scheduler_route_handler_minimal_0131_rule.py
++- doc/architecture/SCHEDULER_ROUTE_HANDLER_MINIMAL_0131.md
++- doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0131.md
++- doc/code-rules/0131_scheduler_route_handler_rule.md
++- doc/docs/architecture/runtime/131_scheduler_route_handler_minimal.dot
++- doc/CHANGELOG_0131_SCHEDULER_ROUTE_HANDLER_MINIMAL.md
++- doc/manifests/MANIFEST_0131_CHANGED_FILES.md
++- PHASE0131_TEST_REPORT.md
++
++Boundary note: 0131 adds a minimal handler/executor bridge only. It does not edit the kernel loop, Scheduler.run, Dispatcher, Queue, PolicyEngine, EventBus, OpenVINO, Qdrant, PostgreSQL, GitHub, daemon, watcher, or network clients.
+diff --git a/src/runtime/scheduler_route_handler_minimal.py b/src/runtime/scheduler_route_handler_minimal.py
+new file mode 100644
+index 0000000..d0e62db
+--- /dev/null
++++ b/src/runtime/scheduler_route_handler_minimal.py
+@@ -0,0 +1,299 @@
++"""Minimal Scheduler route handler.
++
++0131 is the first handler-shaped bridge between Scheduler-owned command data and
++RouteProxyRuntime frame IO.  It does not mutate the Scheduler run loop, instantiate a
++Scheduler, import Dispatcher/Policy/Queue, or create a daemon.  A caller that is
++already inside the Scheduler/Dispatcher/Handler path can pass immutable route
++frame items here; the handler asks RouteProxyRuntime for writer permits and
++writes frames under /dev/shm or an explicit test root.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++from pathlib import Path
++import re
++from typing import Any
++
++from runtime.route_proxy_runtime_minimal import (
++    RouteProxyRuntimeError,
++    RouteProxyRuntimePolicy,
++    RouteProxyRuntimeState,
++    list_observation_facts,
++    prepare_route_proxy_runtime,
++    request_writer_permit,
++    write_route_frame,
++)
++
++_HANDLER_COMMAND_SCHEMA = "missipy.scheduler.route_handler_command.v1"
++_HANDLER_FRAME_SCHEMA = "missipy.scheduler.route_frame_request.v1"
++_HANDLER_RESULT_SCHEMA = "missipy.scheduler.route_handler_result.v1"
++
++_TYPED_REF_RE = re.compile(r"^[a-z][a-z0-9-]*:[^\s].*$")
++_ALLOWED_COMMAND_PREFIXES = ("scheduler-command:", "command:")
++_ALLOWED_HANDLER_PREFIXES = ("handler:",)
++_ALLOWED_ROUTE_PREFIXES = ("route:", "route-frame:", "route-zone:", "vector-route:")
++_ALLOWED_OWNER_PREFIXES = ("specialist:", "worker:", "scheduler-command:", "proxy:")
++_ALLOWED_CONTEXT_PREFIXES = ("sql:", "ctx:", "ctx-result:", "cycle-state:")
++_ALLOWED_FRAME_KINDS = (
++    "specialist_demand",
++    "specialist_opinion",
++    "vector_embedding_request",
++    "vector_projection_request",
++    "runtime_probe",
++)
++
++
++@dataclass(frozen=True, slots=True)
++class SchedulerRouteFrameRequest:
++    """One frame request produced by a Scheduler-dispatched handler path."""
++
++    route_ref: str
++    owner_ref: str
++    context_ref: str
++    context_generation: int
++    priority: int
++    frame_kind: str
++    payload: dict[str, Any]
++    write_allowed: bool = True
++    denial_reason: str | None = None
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("route_ref", self.route_ref, required_prefixes=_ALLOWED_ROUTE_PREFIXES)
++        _require_typed_ref("owner_ref", self.owner_ref, required_prefixes=_ALLOWED_OWNER_PREFIXES)
++        _require_typed_ref("context_ref", self.context_ref, required_prefixes=_ALLOWED_CONTEXT_PREFIXES)
++        _require_positive_int("context_generation", self.context_generation, allow_zero=False)
++        _require_priority(self.priority)
++        if self.frame_kind not in _ALLOWED_FRAME_KINDS:
++            raise RouteProxyRuntimeError("frame_kind must be one of the locked handler frame kinds")
++        if not isinstance(self.payload, dict):
++            raise RouteProxyRuntimeError("payload must be a dict")
++        if self.write_allowed and self.denial_reason is not None:
++            raise RouteProxyRuntimeError("denial_reason must be None when write_allowed is true")
++        if not self.write_allowed:
++            _require_non_empty("denial_reason", self.denial_reason or "")
++
++    def enriched_payload(self) -> dict[str, Any]:
++        data = dict(self.payload)
++        data.setdefault("frame_kind", self.frame_kind)
++        data.setdefault("route_ref", self.route_ref)
++        data.setdefault("context_ref", self.context_ref)
++        data.setdefault("context_generation", self.context_generation)
++        return data
++
++    def to_mapping(self) -> dict[str, object | None]:
++        return {
++            "schema": _HANDLER_FRAME_SCHEMA,
++            "route_ref": self.route_ref,
++            "owner_ref": self.owner_ref,
++            "context_ref": self.context_ref,
++            "context_generation": self.context_generation,
++            "priority": self.priority,
++            "frame_kind": self.frame_kind,
++            "payload": self.payload,
++            "write_allowed": self.write_allowed,
++            "denial_reason": self.denial_reason,
++            "scheduler_is_orchestrator": True,
++            "route_proxy_runtime_executes_io": True,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class SchedulerRouteHandlerCommand:
++    """Immutable command payload consumed by the minimal route handler."""
++
++    command_ref: str
++    handler_ref: str
++    route_root_ref: str
++    frame_requests: tuple[SchedulerRouteFrameRequest, ...]
++    runtime_policy: RouteProxyRuntimePolicy | None = None
++    metadata: tuple[tuple[str, str], ...] = field(default_factory=tuple)
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("command_ref", self.command_ref, required_prefixes=_ALLOWED_COMMAND_PREFIXES)
++        _require_typed_ref("handler_ref", self.handler_ref, required_prefixes=_ALLOWED_HANDLER_PREFIXES)
++        _require_typed_ref("route_root_ref", self.route_root_ref, required_prefixes=_ALLOWED_ROUTE_PREFIXES)
++        if not self.frame_requests:
++            raise RouteProxyRuntimeError("frame_requests must not be empty")
++        object.__setattr__(self, "frame_requests", tuple(self.frame_requests))
++        object.__setattr__(self, "metadata", _normalize_metadata(self.metadata))
++
++    def to_mapping(self) -> dict[str, object | None]:
++        return {
++            "schema": _HANDLER_COMMAND_SCHEMA,
++            "command_ref": self.command_ref,
++            "handler_ref": self.handler_ref,
++            "route_root_ref": self.route_root_ref,
++            "frame_requests": [request.to_mapping() for request in self.frame_requests],
++            "runtime_policy": None if self.runtime_policy is None else self.runtime_policy.to_mapping(),
++            "metadata": dict(self.metadata),
++            "scheduler_is_orchestrator": True,
++            "handler_is_executor": True,
++            "scheduler_run_modified": False,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class SchedulerRouteHandlerResult:
++    """Result returned after the handler writes or denies route frame items."""
++
++    command_ref: str
++    handler_ref: str
++    runtime_root: Path
++    written_route_refs: tuple[str, ...]
++    denied_route_refs: tuple[str, ...]
++    frame_paths: tuple[Path, ...]
++    observation_facts: tuple[dict[str, Any], ...]
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("command_ref", self.command_ref, required_prefixes=_ALLOWED_COMMAND_PREFIXES)
++        _require_typed_ref("handler_ref", self.handler_ref, required_prefixes=_ALLOWED_HANDLER_PREFIXES)
++        object.__setattr__(self, "written_route_refs", _normalize_refs("written_route_refs", self.written_route_refs, allow_empty=True, required_prefixes=_ALLOWED_ROUTE_PREFIXES))
++        object.__setattr__(self, "denied_route_refs", _normalize_refs("denied_route_refs", self.denied_route_refs, allow_empty=True, required_prefixes=_ALLOWED_ROUTE_PREFIXES))
++        object.__setattr__(self, "frame_paths", tuple(self.frame_paths))
++        object.__setattr__(self, "observation_facts", tuple(self.observation_facts))
++
++    @property
++    def wrote_anything(self) -> bool:
++        return bool(self.written_route_refs)
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _HANDLER_RESULT_SCHEMA,
++            "command_ref": self.command_ref,
++            "handler_ref": self.handler_ref,
++            "runtime_root": str(self.runtime_root),
++            "written_route_refs": list(self.written_route_refs),
++            "denied_route_refs": list(self.denied_route_refs),
++            "frame_paths": [str(path) for path in self.frame_paths],
++            "observation_facts": list(self.observation_facts),
++            "wrote_anything": self.wrote_anything,
++            "scheduler_is_orchestrator": True,
++            "handler_is_executor": True,
++            "event_bus_observation_only": True,
++            "dev_shm_data_plane": True,
++        }
++
++
++def handle_scheduler_route_command(
++    command: SchedulerRouteHandlerCommand,
++    *,
++    runtime_state: RouteProxyRuntimeState | None = None,
++) -> SchedulerRouteHandlerResult:
++    """Execute one minimal Scheduler route command through RouteProxyRuntime."""
++
++    state = runtime_state or prepare_route_proxy_runtime(command.runtime_policy)
++    written: list[str] = []
++    denied: list[str] = []
++    paths: list[Path] = []
++    for request in command.frame_requests:
++        permit = request_writer_permit(
++            state,
++            route_ref=request.route_ref,
++            owner_ref=request.owner_ref,
++            context_ref=request.context_ref,
++            context_generation=request.context_generation,
++            priority=request.priority,
++            write_allowed=request.write_allowed,
++            denial_reason=request.denial_reason,
++        )
++        if not permit.write_allowed:
++            denied.append(request.route_ref)
++            continue
++        result = write_route_frame(state, permit, request.enriched_payload())
++        written.append(request.route_ref)
++        paths.append(result.frame_path)
++    return SchedulerRouteHandlerResult(
++        command_ref=command.command_ref,
++        handler_ref=command.handler_ref,
++        runtime_root=state.route_root,
++        written_route_refs=tuple(written),
++        denied_route_refs=tuple(denied),
++        frame_paths=tuple(paths),
++        observation_facts=list_observation_facts(state),
++    )
++
++
++def build_single_frame_route_command(
++    *,
++    command_ref: str,
++    route_ref: str,
++    owner_ref: str,
++    context_ref: str,
++    context_generation: int,
++    priority: int,
++    frame_kind: str,
++    payload: dict[str, Any],
++    runtime_policy: RouteProxyRuntimePolicy | None = None,
++) -> SchedulerRouteHandlerCommand:
++    """Convenience builder for tests and the first Scheduler handler wiring."""
++
++    request = SchedulerRouteFrameRequest(
++        route_ref=route_ref,
++        owner_ref=owner_ref,
++        context_ref=context_ref,
++        context_generation=context_generation,
++        priority=priority,
++        frame_kind=frame_kind,
++        payload=payload,
++    )
++    return SchedulerRouteHandlerCommand(
++        command_ref=command_ref,
++        handler_ref="handler:scheduler-route-minimal",
++        route_root_ref="route:runtime/root",
++        frame_requests=(request,),
++        runtime_policy=runtime_policy,
++        metadata=(("phase", "0131"), ("scheduler_run_modified", "false")),
++    )
++
++
++def _require_typed_ref(name: str, value: str, *, required_prefixes: tuple[str, ...] | None = None) -> None:
++    if not isinstance(value, str) or not _TYPED_REF_RE.match(value):
++        raise RouteProxyRuntimeError(f"{name} must be a typed ref")
++    if required_prefixes is not None and not value.startswith(required_prefixes):
++        raise RouteProxyRuntimeError(f"{name} must start with one of: {', '.join(required_prefixes)}")
++
++
++def _require_non_empty(name: str, value: str) -> None:
++    if not isinstance(value, str) or not value.strip():
++        raise RouteProxyRuntimeError(f"{name} must not be empty")
++
++
++def _require_positive_int(name: str, value: int, *, allow_zero: bool) -> None:
++    if not isinstance(value, int):
++        raise RouteProxyRuntimeError(f"{name} must be an integer")
++    if allow_zero:
++        if value < 0:
++            raise RouteProxyRuntimeError(f"{name} must be >= 0")
++    elif value <= 0:
++        raise RouteProxyRuntimeError(f"{name} must be > 0")
++
++
++def _require_priority(value: int) -> None:
++    _require_positive_int("priority", value, allow_zero=True)
++    if value > 10_000:
++        raise RouteProxyRuntimeError("priority must be between 0 and 10000")
++
++
++def _normalize_refs(
++    name: str,
++    values: tuple[str, ...],
++    *,
++    allow_empty: bool,
++    required_prefixes: tuple[str, ...] | None = None,
++) -> tuple[str, ...]:
++    refs = tuple(dict.fromkeys(values))
++    if not refs and not allow_empty:
++        raise RouteProxyRuntimeError(f"{name} must not be empty")
++    for ref in refs:
++        _require_typed_ref(name, ref, required_prefixes=required_prefixes)
++    return refs
++
++
++def _normalize_metadata(values: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
++    normalized: list[tuple[str, str]] = []
++    for key, value in values:
++        _require_non_empty("metadata key", key)
++        _require_non_empty("metadata value", value)
++        normalized.append((key.strip(), value.strip()))
++    return tuple(normalized)
+diff --git a/tests/rules/test_scheduler_route_handler_minimal_0131_rule.py b/tests/rules/test_scheduler_route_handler_minimal_0131_rule.py
+new file mode 100644
+index 0000000..b25968c
+--- /dev/null
++++ b/tests/rules/test_scheduler_route_handler_minimal_0131_rule.py
+@@ -0,0 +1,109 @@
++from __future__ import annotations
++
++import ast
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "runtime" / "scheduler_route_handler_minimal.py"
++DOC = ROOT / "doc" / "architecture" / "SCHEDULER_ROUTE_HANDLER_MINIMAL_0131.md"
++RULE = ROOT / "doc" / "code-rules" / "0131_scheduler_route_handler_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0131_CHANGED_FILES.md"
++
++
++def test_0131_docs_and_rule_lock_handler_boundaries() -> None:
++    text = DOC.read_text(encoding="utf-8")
++    rule = RULE.read_text(encoding="utf-8")
++    required = [
++        "SchedulerRouteHandler is an executor bridge, not an orchestrator",
++        "Scheduler remains the orchestrator",
++        "Do not modify Scheduler.run() in 0131",
++        "RouteProxyRuntime performs the /dev/shm IO",
++        "EventBus receives observation-ready facts, not payload commands",
++        "SQLContextStore remains durable authority",
++        "E5/OpenVINO and Qdrant are not touched by 0131",
++        "code_rule supplement for Scheduler route handler membrane",
++    ]
++    for phrase in required:
++        assert phrase in text or phrase in rule
++
++
++def test_0131_manifest_lists_docs_runtime_tests_and_rule_supplement() -> None:
++    text = MANIFEST.read_text(encoding="utf-8")
++    required = [
++        "src/runtime/scheduler_route_handler_minimal.py",
++        "tests/runtime/test_scheduler_route_handler_minimal.py",
++        "tests/rules/test_scheduler_route_handler_minimal_0131_rule.py",
++        "doc/architecture/SCHEDULER_ROUTE_HANDLER_MINIMAL_0131.md",
++        "doc/code-rules/0131_scheduler_route_handler_rule.md",
++    ]
++    for phrase in required:
++        assert phrase in text
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/kernel/dispatcher.py",
++        "src/kernel/queue.py",
++        "src/policy/engine.py",
++        "src/observability/event_bus.py",
++        "requests",
++        "httpx",
++        "openvino.runtime",
++        "qdrant_client",
++        "psycopg",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++
++
++def test_0131_runtime_module_has_no_unapproved_imports() -> None:
++    tree = ast.parse(MODULE.read_text(encoding="utf-8"))
++    imports: set[str] = set()
++    for node in ast.walk(tree):
++        if isinstance(node, ast.Import):
++            imports.update(alias.name.split(".", 1)[0] for alias in node.names)
++        elif isinstance(node, ast.ImportFrom) and node.module:
++            imports.add(node.module.split(".", 1)[0])
++    forbidden = {
++        "requests",
++        "httpx",
++        "socket",
++        "subprocess",
++        "openvino",
++        "qdrant",
++        "qdrant_client",
++        "psycopg",
++        "sqlite3",
++        "graphviz",
++        "networkx",
++        "vispy",
++        "src",
++    }
++    assert sorted(imports & forbidden) == []
++
++
++def test_0131_module_does_not_become_scheduler_or_policy() -> None:
++    text = MODULE.read_text(encoding="utf-8")
++    forbidden = [
++        "Scheduler(",
++        "Scheduler.run(",
++        "Dispatcher(",
++        "PolicyEngine(",
++        "PriorityQueue(",
++        "EventType(",
++        "LocalServerOrchestrator",
++        "qdrant_client",
++        "openvino.runtime",
++        "requests.",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++    required = [
++        "0131 is the first handler-shaped bridge",
++        "It does not mutate the Scheduler run loop",
++        '"scheduler_is_orchestrator": True',
++        '"handler_is_executor": True',
++        '"scheduler_run_modified": False',
++        '"event_bus_observation_only": True',
++        '"dev_shm_data_plane": True',
++    ]
++    for phrase in required:
++        assert phrase in text
+diff --git a/tests/runtime/test_scheduler_route_handler_minimal.py b/tests/runtime/test_scheduler_route_handler_minimal.py
+new file mode 100644
+index 0000000..462d661
+--- /dev/null
++++ b/tests/runtime/test_scheduler_route_handler_minimal.py
+@@ -0,0 +1,153 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++import pytest
++
++from runtime.route_proxy_runtime_minimal import (
++    RouteProxyRuntimeError,
++    RouteProxyRuntimePolicy,
++    prepare_route_proxy_runtime,
++    read_route_frame,
++)
++from runtime.scheduler_route_handler_minimal import (
++    SchedulerRouteFrameRequest,
++    SchedulerRouteHandlerCommand,
++    build_single_frame_route_command,
++    handle_scheduler_route_command,
++)
++
++
++def make_policy(root: Path) -> RouteProxyRuntimePolicy:
++    return RouteProxyRuntimePolicy(
++        route_root=root,
++        proxy_ref="proxy:route-proxy-test",
++        require_dev_shm=False,
++        allow_test_root=True,
++        namespace="autodoc-test",
++    )
++
++
++def test_single_frame_command_writes_specialist_demand_via_route_proxy_runtime(tmp_path: Path) -> None:
++    policy = make_policy(tmp_path / "routes")
++    command = build_single_frame_route_command(
++        command_ref="scheduler-command:dispatch-demand-1",
++        route_ref="route:deliberation/cycle-1/round-1/demand-thermal",
++        owner_ref="scheduler-command:dispatch-demand-1",
++        context_ref="cycle-state:cycle-1",
++        context_generation=1,
++        priority=800,
++        frame_kind="specialist_demand",
++        payload={"specialist_ref": "specialist:thermal", "request": "analyse thermique"},
++        runtime_policy=policy,
++    )
++
++    result = handle_scheduler_route_command(command)
++
++    assert result.wrote_anything is True
++    assert result.written_route_refs == ("route:deliberation/cycle-1/round-1/demand-thermal",)
++    assert result.denied_route_refs == ()
++    assert len(result.frame_paths) == 1
++    frame = read_route_frame(prepare_route_proxy_runtime(policy), result.written_route_refs[0])
++    assert frame.payload["frame_kind"] == "specialist_demand"
++    assert frame.payload["specialist_ref"] == "specialist:thermal"
++
++
++def test_handler_result_mapping_locks_scheduler_and_eventbus_boundaries(tmp_path: Path) -> None:
++    command = build_single_frame_route_command(
++        command_ref="scheduler-command:vector-request-1",
++        route_ref="route:vector-indexing/default/embedding-request",
++        owner_ref="scheduler-command:vector-request-1",
++        context_ref="cycle-state:vector-1",
++        context_generation=2,
++        priority=600,
++        frame_kind="vector_embedding_request",
++        payload={"text_for_embedding": "query: cuillere bebe"},
++        runtime_policy=make_policy(tmp_path / "routes"),
++    )
++
++    mapping = handle_scheduler_route_command(command).to_mapping()
++
++    assert mapping["scheduler_is_orchestrator"] is True
++    assert mapping["handler_is_executor"] is True
++    assert mapping["event_bus_observation_only"] is True
++    assert mapping["dev_shm_data_plane"] is True
++    assert mapping["wrote_anything"] is True
++
++
++def test_handler_can_deny_a_frame_without_writing_payload(tmp_path: Path) -> None:
++    policy = make_policy(tmp_path / "routes")
++    request = SchedulerRouteFrameRequest(
++        route_ref="route:deliberation/cycle-2/round-1/demand-material",
++        owner_ref="scheduler-command:dispatch-demand-2",
++        context_ref="cycle-state:cycle-2",
++        context_generation=5,
++        priority=100,
++        frame_kind="specialist_demand",
++        payload={"specialist_ref": "specialist:material"},
++        write_allowed=False,
++        denial_reason="context_generation_changed",
++    )
++    command = SchedulerRouteHandlerCommand(
++        command_ref="scheduler-command:dispatch-demand-2",
++        handler_ref="handler:scheduler-route-minimal",
++        route_root_ref="route:runtime/root",
++        frame_requests=(request,),
++        runtime_policy=policy,
++    )
++
++    result = handle_scheduler_route_command(command)
++
++    assert result.written_route_refs == ()
++    assert result.denied_route_refs == ("route:deliberation/cycle-2/round-1/demand-material",)
++    with pytest.raises(RouteProxyRuntimeError, match="route frame not found"):
++        read_route_frame(prepare_route_proxy_runtime(policy), request.route_ref)
++
++
++def test_command_accepts_multiple_frame_requests_in_order(tmp_path: Path) -> None:
++    policy = make_policy(tmp_path / "routes")
++    requests = (
++        SchedulerRouteFrameRequest(
++            route_ref="route:deliberation/cycle-3/round-1/demand-thermal",
++            owner_ref="scheduler-command:round-3",
++            context_ref="cycle-state:cycle-3",
++            context_generation=1,
++            priority=900,
++            frame_kind="specialist_demand",
++            payload={"specialist_ref": "specialist:thermal"},
++        ),
++        SchedulerRouteFrameRequest(
++            route_ref="route:deliberation/cycle-3/round-1/demand-safety",
++            owner_ref="scheduler-command:round-3",
++            context_ref="cycle-state:cycle-3",
++            context_generation=1,
++            priority=850,
++            frame_kind="specialist_demand",
++            payload={"specialist_ref": "specialist:safety"},
++        ),
++    )
++    command = SchedulerRouteHandlerCommand(
++        command_ref="scheduler-command:round-3",
++        handler_ref="handler:scheduler-route-minimal",
++        route_root_ref="route:runtime/root",
++        frame_requests=requests,
++        runtime_policy=policy,
++    )
++
++    result = handle_scheduler_route_command(command)
++
++    assert result.written_route_refs == tuple(request.route_ref for request in requests)
++    assert len(result.frame_paths) == 2
++
++
++def test_request_rejects_unknown_frame_kind() -> None:
++    with pytest.raises(RouteProxyRuntimeError, match="frame_kind"):
++        SchedulerRouteFrameRequest(
++            route_ref="route:bad",
++            owner_ref="scheduler-command:bad",
++            context_ref="cycle-state:bad",
++            context_generation=1,
++            priority=1,
++            frame_kind="unknown",
++            payload={},
++        )

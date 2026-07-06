@@ -1,0 +1,619 @@
+diff --git a/PHASE0112_TEST_REPORT.md b/PHASE0112_TEST_REPORT.md
+new file mode 100644
+index 0000000..3a5ef87
+--- /dev/null
++++ b/PHASE0112_TEST_REPORT.md
+@@ -0,0 +1,45 @@
++# PHASE 0112 TEST REPORT — Route bridge boundary
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: 0112 adds a bounded stdlib-only declaration layer for future NetworkBridge/HardwareBridge work without creating a new durable capability exception.
++live_path_status: transition
++external_dependencies_added: none
++```
++
++Validation commands expected in repository:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/runtime/test_route_bridge_boundary.py
++PYTHONPATH=src:. pytest -q tests/rules/test_route_bridge_boundary_0112_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++Focused validation performed while building the patch:
++
++```text
++git apply --check: OK
++py_compile added files: OK
++pytest targeted 0112 in synthetic worktree: OK
++```
++
++Boundary review:
++
++```text
++No CLI.
++No daemon.
++No OpenRC service.
++No watcher.
++No Scheduler.run() modification.
++No Dispatcher expansion.
++No PolicyEngine expansion.
++No PriorityQueue change.
++No EventBus creation.
++No sockets opened.
++No devices opened.
++Route mmap/eventfd is data plane, not EventBus.
++NetworkBridge/HardwareBridge are future adapters behind Handler -> RouteRuntimeManager.
++```
+diff --git a/doc/CHANGELOG_0112_ROUTE_BRIDGE_BOUNDARY.md b/doc/CHANGELOG_0112_ROUTE_BRIDGE_BOUNDARY.md
+new file mode 100644
+index 0000000..acc53c8
+--- /dev/null
++++ b/doc/CHANGELOG_0112_ROUTE_BRIDGE_BOUNDARY.md
+@@ -0,0 +1,7 @@
++# 0112 — Route bridge boundary
++
++- Added `src/runtime/route_bridge_boundary.py`.
++- Added runtime tests for bridge declarations and no-effect bridge plans.
++- Added rule tests locking the future NetworkBridge/HardwareBridge boundary.
++- Added architecture docs and a root-attached `.dot` graph.
++- No Scheduler, Dispatcher, PriorityQueue, PolicyEngine, EventBus or route runtime code is modified.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0112.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0112.md
+new file mode 100644
+index 0000000..95a70c2
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0112.md
+@@ -0,0 +1,64 @@
++# ControlProxy operational plan — 0112 update
++
++0112 follows the simplification locks:
++
++```text
++0101 architecture simplification lock
++0102 existing paths audit
++0103 RouteRuntimeManager
++0104 thin handler to RouteRuntimeManager
++0105 priority/admission lock
++0106 EventBus/data plane boundary lock
++0107 graph root alignment
++0108 route-runtime walking skeleton
++0109 compatibility wrappers registry
++0110 specialist/kernel boundary
++0111 explicit /dev/shm runtime root
++0112 future NetworkBridge/HardwareBridge boundary declarations
++```
++
++## 0112 role
++
++```text
++NetworkBridge/HardwareBridge are future adapters behind Handler -> RouteRuntimeManager.
++RouteBridgeBoundary records declarations only.
++It does not bypass Scheduler, PolicyEngine, PriorityQueue, Dispatcher or Handler.
++It does not calculate priority and does not decide policy/zone.
++Route mmap/eventfd remains the data plane, not EventBus.
++EventBus remains observation only.
++```
++
++## Why this is not a new subsystem
++
++0112 intentionally avoids active transport:
++
++```text
++No sockets opened
++No devices opened
++No CLI
++No OpenRC service and no resident daemon
++No watcher
++No active adapter selection
++No ControlProxyBus
++No RouteBus
++No VisualizationBus
++stdlib only
++```
++
++The bridge boundary is only a stable contract for later phases.  It prevents
++future NetworkBridge/HardwareBridge work from being attached directly to
++Scheduler, PolicyEngine, PriorityQueue, Dispatcher, EventBus or a specialist.
++
++## Next phase suggestion
++
++0113 should either:
++
++```text
++A. add an optional route bridge observation record emitted after a real route event,
++   still without active I/O; or
++B. start a fake NetworkBridge adapter that consumes an explicit in-memory test
++   transport only, if and only if the adapter remains behind Handler -> RouteRuntimeManager.
++```
++
++It must not add a daemon, watcher, OpenRC service, socket listener, device opener,
++or scheduler-like ControlProxy coordinator.
+diff --git a/doc/architecture/ROUTE_BRIDGE_BOUNDARY_0112.md b/doc/architecture/ROUTE_BRIDGE_BOUNDARY_0112.md
+new file mode 100644
+index 0000000..4e939ae
+--- /dev/null
++++ b/doc/architecture/ROUTE_BRIDGE_BOUNDARY_0112.md
+@@ -0,0 +1,61 @@
++# Route bridge boundary — 0112
++
++0112 prepares the future NetworkBridge/HardwareBridge boundary without
++implementing active I/O.
++
++## Locked decision
++
++```text
++NetworkBridge/HardwareBridge are future adapters behind Handler -> RouteRuntimeManager.
++RouteBridgeBoundary is a declaration layer only.
++It does not bypass Scheduler, PolicyEngine, PriorityQueue, Dispatcher or Handler.
++It does not calculate priority and does not decide policy/zone.
++Route mmap/eventfd remains the data plane, not EventBus.
++EventBus remains observation only.
++```
++
++## What 0112 adds
++
++```text
++RouteBridgeBoundarySpec
++RouteBridgePlan
++build_route_bridge_plan()
++route_bridge_spec_from_mapping()
++```
++
++The plan has `effect="none"` in this phase.  Even an enabled declaration does
++not open a socket, open a device, subscribe to EventBus, create a bus, launch a
++watcher, start a daemon, or select a real adapter.
++
++## Guardrails
++
++```text
++No sockets opened
++No devices opened
++No CLI
++No OpenRC service and no resident daemon
++No watcher
++No Scheduler.run() modification
++No Dispatcher expansion
++No PriorityQueue change
++No PolicyEngine expansion
++No EventBus creation
++No ControlProxyBus
++No RouteBus
++No VisualizationBus
++stdlib only
++```
++
++## Future integration
++
++A later bridge implementation may attach behind the same handler/runtime path:
++
++```text
++Scheduler -> PolicyEngine -> PriorityQueue -> Scheduler.run() -> Dispatcher -> Handler
++Handler -> RouteRuntimeManager
++RouteRuntimeManager -> RouteBridgeBoundary
++RouteBridgeBoundary -> future NetworkBridge or future HardwareBridge
++```
++
++That later implementation must still keep the bridge as an adapter to the route
++data plane, not as a second scheduler and not as a second EventBus.
+diff --git a/doc/docs/architecture/runtime/102_route_bridge_boundary.dot b/doc/docs/architecture/runtime/102_route_bridge_boundary.dot
+new file mode 100644
+index 0000000..7d1ff27
+--- /dev/null
++++ b/doc/docs/architecture/runtime/102_route_bridge_boundary.dot
+@@ -0,0 +1,27 @@
++digraph route_bridge_boundary_0112 {
++  graph [
++    label="0112 Route bridge boundary — ROOT_GRAPH: doc/docs/architecture/00_global.dot — root-attached runtime overlay",
++    labelloc="t",
++    fontsize=18
++  ];
++  rankdir=LR;
++  node [shape=box, style="rounded"];
++
++  scheduler_path [label="Scheduler -> PolicyEngine -> PriorityQueue -> Scheduler.run() -> Dispatcher -> Handler"];
++  handler [label="Handler -> RouteRuntimeManager"];
++  manager [label="RouteRuntimeManager\nControlFS + mmap/eventfd data plane"];
++  boundary [label="RouteBridgeBoundary\ndeclaration only\nno active I/O in 0112"];
++  network [label="future NetworkBridge\nnot implemented"];
++  hardware [label="future HardwareBridge\nnot implemented"];
++  eventbus [label="EventBus observation only"];
++
++  scheduler_path -> handler;
++  handler -> manager;
++  manager -> boundary [label="future bridge declaration"];
++  boundary -> network [style=dashed, label="later"];
++  boundary -> hardware [style=dashed, label="later"];
++  manager -> eventbus [style=dotted, label="facts only"];
++
++  guardrails [shape=note, label="No sockets opened\nNo devices opened\nNo ControlProxyBus / RouteBus / VisualizationBus\nNo priority or policy decision\nRoute mmap/eventfd remains data plane, not EventBus"];
++  boundary -> guardrails [style=dotted];
++}
+diff --git a/doc/manifests/MANIFEST_0112_CHANGED_FILES.md b/doc/manifests/MANIFEST_0112_CHANGED_FILES.md
+new file mode 100644
+index 0000000..586c792
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0112_CHANGED_FILES.md
+@@ -0,0 +1,15 @@
++# Manifest — 0112 route bridge boundary
++
++```text
++PHASE0112_TEST_REPORT.md
++doc/CHANGELOG_0112_ROUTE_BRIDGE_BOUNDARY.md
++doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0112.md
++doc/architecture/ROUTE_BRIDGE_BOUNDARY_0112.md
++doc/docs/architecture/runtime/102_route_bridge_boundary.dot
++doc/manifests/MANIFEST_0112_CHANGED_FILES.md
++src/runtime/route_bridge_boundary.py
++tests/runtime/test_route_bridge_boundary.py
++tests/rules/test_route_bridge_boundary_0112_rule.py
++```
++
++0112 does not change kernel-loop, dispatcher, queue, policy, EventBus, route runtime manager, or component-contract files.
+diff --git a/src/runtime/route_bridge_boundary.py b/src/runtime/route_bridge_boundary.py
+new file mode 100644
+index 0000000..8c03ffa
+--- /dev/null
++++ b/src/runtime/route_bridge_boundary.py
+@@ -0,0 +1,178 @@
++"""Future route bridge boundary descriptors for NetworkBridge/HardwareBridge.
++
++Phase 0112 introduces a bounded declaration layer for future bridge work.  It
++intentionally does not implement network I/O, hardware I/O, sockets, devices,
++daemons or services.  The bridge boundary records what a later bridge may be
++allowed to connect to the route data plane after the normal micro-kernel path
++has selected a handler.
++
++Locked intent:
++- NetworkBridge/HardwareBridge are future adapters behind Handler -> RouteRuntimeManager.
++- Bridge declarations do not bypass Scheduler, PolicyEngine, PriorityQueue,
++  Dispatcher or Handler.
++- Bridge declarations do not calculate priority and do not decide policy/zone.
++- Route mmap/eventfd remains the data plane, not EventBus.
++- EventBus remains observation only.
++- No ControlProxyBus.
++- No RouteBus.
++- No VisualizationBus.
++- No sockets opened.
++- No devices opened.
++- No CLI.
++- No OpenRC service and no resident daemon.
++- No watcher.
++- stdlib only.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++from types import MappingProxyType
++from typing import Any, Literal, Mapping
++
++ROUTE_BRIDGE_BOUNDARY_SCHEMA = "missipy.controlproxy.route_bridge_boundary.v1"
++ROUTE_BRIDGE_PLAN_SCHEMA = "missipy.controlproxy.route_bridge_plan.v1"
++
++RouteBridgeKind = Literal["network", "hardware"]
++RouteBridgePlanStatus = Literal["declared", "disabled"]
++
++
++class RouteBridgeBoundaryError(ValueError):
++    """Raised when a future route bridge declaration is incoherent."""
++
++
++@dataclass(frozen=True, slots=True)
++class RouteBridgeBoundarySpec:
++    """Declarative boundary for a future NetworkBridge or HardwareBridge.
++
++    The spec is metadata only.  It does not open a socket, does not open a
++    device, does not subscribe to EventBus, does not create a new bus and does
++    not schedule work.  A later handler may use it to choose an adapter after
++    Scheduler -> PolicyEngine -> PriorityQueue -> Scheduler.run() -> Dispatcher
++    -> Handler has already selected the route-runtime capability.
++    """
++
++    bridge_id: str
++    kind: RouteBridgeKind
++    route_id: str
++    zone: str
++    enabled: bool = False
++    metadata: Mapping[str, Any] = field(default_factory=dict)
++
++    def __post_init__(self) -> None:
++        _require_non_empty(self.bridge_id, "bridge_id")
++        if self.kind not in {"network", "hardware"}:
++            raise RouteBridgeBoundaryError("kind must be network or hardware")
++        _require_non_empty(self.route_id, "route_id")
++        _require_non_empty(self.zone, "zone")
++        if not isinstance(self.enabled, bool):
++            raise RouteBridgeBoundaryError("enabled must be a bool")
++        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": ROUTE_BRIDGE_BOUNDARY_SCHEMA,
++            "bridge_id": self.bridge_id,
++            "kind": self.kind,
++            "route_id": self.route_id,
++            "zone": self.zone,
++            "enabled": self.enabled,
++            "metadata": dict(self.metadata),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class RouteBridgePlan:
++    """Stable no-side-effect plan for a future route bridge adapter."""
++
++    schema: str
++    status: RouteBridgePlanStatus
++    spec: RouteBridgeBoundarySpec
++    effect: str
++    reason: str
++
++    def __post_init__(self) -> None:
++        if self.schema != ROUTE_BRIDGE_PLAN_SCHEMA:
++            raise RouteBridgeBoundaryError("unsupported route bridge plan schema")
++        if self.status not in {"declared", "disabled"}:
++            raise RouteBridgeBoundaryError("unsupported route bridge plan status")
++        _require_non_empty(self.effect, "effect")
++        _require_non_empty(self.reason, "reason")
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "status": self.status,
++            "spec": self.spec.to_mapping(),
++            "effect": self.effect,
++            "reason": self.reason,
++        }
++
++
++def build_route_bridge_plan(spec: RouteBridgeBoundarySpec) -> RouteBridgePlan:
++    """Return a stable plan for a future bridge without performing I/O.
++
++    A disabled declaration is the default and safest representation.  Even when
++    enabled=True is carried by the spec, 0112 still returns an explicit
++    no-runtime-effect plan because the real NetworkBridge/HardwareBridge adapter
++    is not implemented in this phase.
++    """
++
++    status: RouteBridgePlanStatus = "declared" if spec.enabled else "disabled"
++    reason = (
++        "bridge declaration accepted; real adapter is not implemented in 0112"
++        if spec.enabled
++        else "bridge declaration recorded disabled; no runtime adapter is selected"
++    )
++    return RouteBridgePlan(
++        schema=ROUTE_BRIDGE_PLAN_SCHEMA,
++        status=status,
++        spec=spec,
++        effect="none",
++        reason=reason,
++    )
++
++
++def route_bridge_spec_from_mapping(raw: Mapping[str, Any]) -> RouteBridgeBoundarySpec:
++    """Load RouteBridgeBoundarySpec from a stable mapping."""
++
++    schema = _require_str(raw, "schema")
++    if schema != ROUTE_BRIDGE_BOUNDARY_SCHEMA:
++        raise RouteBridgeBoundaryError("unsupported route bridge boundary schema")
++    metadata = raw.get("metadata", {})
++    if not isinstance(metadata, Mapping):
++        raise RouteBridgeBoundaryError("metadata must be a mapping")
++    return RouteBridgeBoundarySpec(
++        bridge_id=_require_str(raw, "bridge_id"),
++        kind=_require_kind(raw, "kind"),
++        route_id=_require_str(raw, "route_id"),
++        zone=_require_str(raw, "zone"),
++        enabled=_require_bool(raw, "enabled"),
++        metadata=dict(metadata),
++    )
++
++
++def _require_non_empty(value: str, name: str) -> None:
++    if not isinstance(value, str) or not value:
++        raise RouteBridgeBoundaryError(f"{name} is required")
++
++
++def _require_str(raw: Mapping[str, Any], key: str) -> str:
++    value = raw.get(key)
++    if not isinstance(value, str) or not value:
++        raise RouteBridgeBoundaryError(f"{key} is required")
++    return value
++
++
++def _require_bool(raw: Mapping[str, Any], key: str) -> bool:
++    value = raw.get(key)
++    if not isinstance(value, bool):
++        raise RouteBridgeBoundaryError(f"{key} must be a bool")
++    return value
++
++
++def _require_kind(raw: Mapping[str, Any], key: str) -> RouteBridgeKind:
++    value = _require_str(raw, key)
++    if value not in {"network", "hardware"}:
++        raise RouteBridgeBoundaryError("kind must be network or hardware")
++    return value  # type: ignore[return-value]
+diff --git a/tests/rules/test_route_bridge_boundary_0112_rule.py b/tests/rules/test_route_bridge_boundary_0112_rule.py
+new file mode 100644
+index 0000000..ecb80f5
+--- /dev/null
++++ b/tests/rules/test_route_bridge_boundary_0112_rule.py
+@@ -0,0 +1,84 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src/runtime/route_bridge_boundary.py"
++DOC = ROOT / "doc/architecture/ROUTE_BRIDGE_BOUNDARY_0112.md"
++PLAN = ROOT / "doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0112.md"
++DOT = ROOT / "doc/docs/architecture/runtime/102_route_bridge_boundary.dot"
++MANIFEST = ROOT / "doc/manifests/MANIFEST_0112_CHANGED_FILES.md"
++
++
++def _read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_0112_bridge_boundary_locks_no_runtime_io_intent() -> None:
++    text = _read(MODULE) + "\n" + _read(DOC) + "\n" + _read(PLAN)
++    required = [
++        "NetworkBridge/HardwareBridge are future adapters behind Handler -> RouteRuntimeManager",
++        "does not bypass Scheduler, PolicyEngine, PriorityQueue, Dispatcher or Handler",
++        "does not calculate priority and does not decide policy/zone",
++        "Route mmap/eventfd remains the data plane, not EventBus",
++        "EventBus remains observation only",
++        "No ControlProxyBus",
++        "No RouteBus",
++        "No VisualizationBus",
++        "No sockets opened",
++        "No devices opened",
++        "No CLI",
++        "No OpenRC service and no resident daemon",
++        "No watcher",
++        "stdlib only",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0112_graph_is_root_attached_not_parallel_runtime() -> None:
++    dot = _read(DOT)
++    required = [
++        "ROOT_GRAPH: doc/docs/architecture/00_global.dot",
++        "root-attached runtime overlay",
++        "Scheduler -> PolicyEngine -> PriorityQueue -> Scheduler.run() -> Dispatcher -> Handler",
++        "Handler -> RouteRuntimeManager",
++        "RouteRuntimeManager -> RouteBridgeBoundary",
++        "future NetworkBridge",
++        "future HardwareBridge",
++        "no active I/O in 0112",
++        "EventBus observation only",
++    ]
++    for phrase in required:
++        assert phrase in dot
++
++
++def test_0112_manifest_excludes_kernel_and_bus_code() -> None:
++    manifest = _read(MANIFEST)
++    assert "src/runtime/route_bridge_boundary.py" in manifest
++    assert "tests/runtime/test_route_bridge_boundary.py" in manifest
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/kernel/dispatcher.py",
++        "src/kernel/queue.py",
++        "src/kernel/event_bus.py",
++        "src/policy/engine.py",
++    ]
++    for path in forbidden:
++        assert path not in manifest
++
++
++def test_0112_rule_has_no_active_transport_claim() -> None:
++    text = _read(DOC) + "\n" + _read(PLAN)
++    forbidden = [
++        "opens sockets",
++        "opens devices",
++        "starts daemon",
++        "starts watcher",
++        "creates EventBus",
++        "ControlProxyBus",
++        "RouteBus",
++        "VisualizationBus",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text.replace("No ControlProxyBus", "").replace("No RouteBus", "").replace("No VisualizationBus", "")
+diff --git a/tests/runtime/test_route_bridge_boundary.py b/tests/runtime/test_route_bridge_boundary.py
+new file mode 100644
+index 0000000..f1519cf
+--- /dev/null
++++ b/tests/runtime/test_route_bridge_boundary.py
+@@ -0,0 +1,84 @@
++from __future__ import annotations
++
++import pytest
++
++from runtime.route_bridge_boundary import (
++    ROUTE_BRIDGE_BOUNDARY_SCHEMA,
++    RouteBridgeBoundaryError,
++    RouteBridgeBoundarySpec,
++    build_route_bridge_plan,
++    route_bridge_spec_from_mapping,
++)
++
++
++def test_route_bridge_spec_roundtrip_for_network_boundary() -> None:
++    spec = RouteBridgeBoundarySpec(
++        bridge_id="bridge-net-a",
++        kind="network",
++        route_id="route-a",
++        zone="zone-a",
++        enabled=False,
++        metadata={"target": "future-network-adapter"},
++    )
++
++    loaded = route_bridge_spec_from_mapping(spec.to_mapping())
++
++    assert loaded == spec
++    assert loaded.to_mapping()["schema"] == ROUTE_BRIDGE_BOUNDARY_SCHEMA
++
++
++def test_route_bridge_plan_has_no_runtime_effect_even_when_enabled() -> None:
++    spec = RouteBridgeBoundarySpec(
++        bridge_id="bridge-hw-a",
++        kind="hardware",
++        route_id="route-a",
++        zone="zone-a",
++        enabled=True,
++    )
++
++    plan = build_route_bridge_plan(spec)
++
++    assert plan.status == "declared"
++    assert plan.effect == "none"
++    assert "real adapter is not implemented in 0112" in plan.reason
++    assert plan.to_mapping()["spec"]["kind"] == "hardware"
++
++
++def test_disabled_route_bridge_plan_is_recorded_without_adapter_selection() -> None:
++    spec = RouteBridgeBoundarySpec(
++        bridge_id="bridge-net-disabled",
++        kind="network",
++        route_id="route-b",
++        zone="zone-b",
++    )
++
++    plan = build_route_bridge_plan(spec)
++
++    assert plan.status == "disabled"
++    assert plan.effect == "none"
++    assert "no runtime adapter is selected" in plan.reason
++
++
++@pytest.mark.parametrize("kind", ["", "storage", "eventbus"])
++def test_route_bridge_spec_rejects_unknown_kind(kind: str) -> None:
++    with pytest.raises(RouteBridgeBoundaryError, match="kind must be network or hardware"):
++        RouteBridgeBoundarySpec(
++            bridge_id="bridge-a",
++            kind=kind,  # type: ignore[arg-type]
++            route_id="route-a",
++            zone="zone-a",
++        )
++
++
++def test_route_bridge_spec_rejects_bad_schema() -> None:
++    raw = {
++        "schema": "bad",
++        "bridge_id": "bridge-a",
++        "kind": "network",
++        "route_id": "route-a",
++        "zone": "zone-a",
++        "enabled": False,
++    }
++
++    with pytest.raises(RouteBridgeBoundaryError, match="unsupported route bridge boundary schema"):
++        route_bridge_spec_from_mapping(raw)

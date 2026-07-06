@@ -1,0 +1,1506 @@
+diff --git a/PHASE0114_R2_TEST_REPORT.md b/PHASE0114_R2_TEST_REPORT.md
+new file mode 100644
+index 0000000..4997881
+--- /dev/null
++++ b/PHASE0114_R2_TEST_REPORT.md
+@@ -0,0 +1,23 @@
++# PHASE0114_R2_TEST_REPORT
++
++```text
++phase: 0114-r2-context_variation_core_contract
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: pure context contracts; no backend runtime import; no kernel loop modification.
++live_path_status: transition
++live_path_uses_real_backend: n/a
++context_contract_version: missipy.context.v1
++context_contract_changed: true
++search_commands_bounded: true
++```
++
++Expected validation:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/runtime/test_context_variation_core_contract.py
++PYTHONPATH=src:. pytest -q tests/rules/test_context_variation_core_contract_0114_r2_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
+diff --git a/doc/CHANGELOG_0114_R2_CONTEXT_VARIATION_CORE_CONTRACT.md b/doc/CHANGELOG_0114_R2_CONTEXT_VARIATION_CORE_CONTRACT.md
+new file mode 100644
+index 0000000..df1b8d8
+--- /dev/null
++++ b/doc/CHANGELOG_0114_R2_CONTEXT_VARIATION_CORE_CONTRACT.md
+@@ -0,0 +1,10 @@
++# Changelog — 0114-r2 context variation core contract
++
++- Replaces the rejected linear 0114 direction with a trajectory-based context
++  variation contract.
++- Adds reference-only dataclasses for objectives, axes, trajectories,
++  candidates, exploration results, reduction plans, and inference drafts.
++- Keeps MVTC as future architecture without implementing it in this phase.
++- Keeps SQL/Qdrant/OpenVINO/LLM behind future adapters.
++- Does not touch Scheduler, Dispatcher, PriorityQueue, PolicyEngine, EventBus,
++  ControlProxy, or RouteRuntimeManager.
+diff --git a/doc/architecture/CONTEXT_VARIATION_CORE_CONTRACT_0114_R2.md b/doc/architecture/CONTEXT_VARIATION_CORE_CONTRACT_0114_R2.md
+new file mode 100644
+index 0000000..48e353e
+--- /dev/null
++++ b/doc/architecture/CONTEXT_VARIATION_CORE_CONTRACT_0114_R2.md
+@@ -0,0 +1,90 @@
++# 0114-r2 — Context variation core contract
++
++This phase replaces the rejected linear 0114 contract with a context-centered
++contract. The goal is not to implement MVTC now and not to remove MVTC from the
++architecture. MVTC remains future, not runtime in 0114-r2.
++
++context variability is the project center.
++
++## Locked interpretation
++
++The project goal is to produce useful solutions quickly by varying context,
++calling targeted specialists, reducing context, and producing an inference
++packet. The Scheduler is useful only if it can carry these bounded exploration
++jobs without becoming the context engine itself.
++
++```text
++ContextVariationObjective
++-> ContextVariationAxis[]
++-> ContextExplorationPlan
++-> ContextVariantCandidate[]
++-> ContextTrajectory
++-> ContextExplorationResult[]
++-> InferenceContextDraft
++-> later specialist / LLM call
++```
++
++Scheduler orchestrates context exploration jobs; it does not build variants itself.
++
++## SQL / Qdrant / OpenVINO / LLM roles
++
++SQLContextStore is durable context authority. It stores documents, facts,
++artifacts, decisions, source candidates, route facts, GitHub artifacts, and
++stable IDs.
++
++Qdrant is vector projection and retrieval, not context authority. It returns
++candidate IDs or refs; SQL hydrates real content.
++
++OpenVINO produces local embeddings or light inference behind an adapter. It is a
++worker/tool for context variation, not a dependency of the Scheduler.
++
++LLM consumes InferenceContextDraft or InferenceContext through specialist boundary. It does not own the context and does not directly command ControlProxy,
++EventBus, SQL, Qdrant, OpenVINO, GitHub, or the Scheduler.
++
++## Why trajectories instead of a linear pipeline
++
++A single linear pipeline was too rigid:
++
++```text
++request -> specs -> results -> reduction
++```
++
++The project needs context trajectories:
++
++```text
++baby-fork GitHub artifact
++-> objective
++-> axes: safety, material, fabrication, ergonomics, history
++-> trajectories over SQL facts, Qdrant recall, OpenVINO embeddings, specialist notes
++-> exploration results
++-> inference context draft
++```
++
++Each trajectory is reference-only. Heavy payloads are represented as `sql:*`,
++`ctx:*`, `artifact:*`, `github:*`, `route:*`, `doc:*`, `event:*`, or specialist
++refs. The data plane remains for heavy payloads; the Scheduler sees bounded
++jobs and references.
++
++## Guardrails
++
++- No MVTC runtime in 0114-r2.
++- No Qdrant/OpenVINO/LLM/SQL runtime import.
++- No new EventType.
++- No Scheduler.run() modification.
++- No Dispatcher / PriorityQueue / PolicyEngine / EventBus modification.
++- No CLI, daemon, watcher, or service.
++- No ControlProxy scheduler-like coordinator.
++- Route mmap/eventfd remains data plane, not EventBus.
++
++## Code rule review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: this phase adds pure context contracts only; it follows the existing rule that backends remain behind declared adapters and that the Scheduler sees commands/events/results/context, not concrete backends.
++live_path_status: transition
++live_path_uses_real_backend: n/a
++context_contract_version: missipy.context.v1
++context_contract_changed: true
++search_commands_bounded: true
++```
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0114_R2.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0114_R2.md
+new file mode 100644
+index 0000000..102476b
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0114_R2.md
+@@ -0,0 +1,21 @@
++# ControlProxy operational plan — 0114-r2 note
++
++0114-r2 recenters the roadmap on context variability.
++
++ControlProxy / RouteRuntimeManager remain secondary data-plane infrastructure.
++They are not the center of context variation, not a Scheduler replacement, and
++not the owner of SQL, Qdrant, OpenVINO, LLM, or GitHub project logic.
++
++Next implementation order:
++
++```text
++0115 ContextExplorationPlanner minimal
++0116 SQLContextStore minimal
++0117 ContextCollector / ContextHydrator real path
++0118 OpenVINO embedding adapter for context refs
++0119 Qdrant projection/retrieval for context refs
++0120 Specialist / LLM boundary for InferenceContextDraft
++0121 GitHub baby-fork end-to-end scenario
++```
++
++MVTC remains future, not runtime in 0114-r2.
+diff --git a/doc/docs/architecture/runtime/107_context_variation_core_contract.dot b/doc/docs/architecture/runtime/107_context_variation_core_contract.dot
+new file mode 100644
+index 0000000..dce3ae6
+--- /dev/null
++++ b/doc/docs/architecture/runtime/107_context_variation_core_contract.dot
+@@ -0,0 +1,42 @@
++digraph context_variation_core_contract_0114_r2 {
++  graph [
++    label="0114-r2 Context variation core contract — ROOT_GRAPH: doc/docs/architecture/00_global.dot — root-attached context overlay",
++    labelloc="t",
++    fontsize=20
++  ];
++  rankdir=LR;
++  node [shape=box, style="rounded"];
++
++  // ContextVariationObjective -> ContextExplorationPlan -> ContextVariantCandidate -> ContextTrajectory -> ContextExplorationResult -> InferenceContextDraft
++  objective [label="ContextVariationObjective\nuser/project objective"];
++  axes [label="ContextVariationAxis[]\nways to vary context"];
++  plan [label="ContextExplorationPlan\nbounded, reference-only"];
++  candidate [label="ContextVariantCandidate\nvariant candidate"];
++  trajectory [label="ContextTrajectory\ncontext path, not linear pipeline"];
++  result [label="ContextExplorationResult\nrefs + observations"];
++  draft [label="InferenceContextDraft\npacket for specialist boundary"];
++
++  scheduler [label="Scheduler\norchestrates jobs only\ndoes not build variants"];
++  handler [label="Handler / specialist boundary\nexecutes context jobs"];
++
++  sql [label="SQLContextStore\nSQLContextStore is durable context authority"];
++  openvino [label="OpenVINO adapter\nOpenVINO produces local embeddings or light inference behind an adapter"];
++  qdrant [label="Qdrant projection\nQdrant is vector projection and retrieval, not context authority"];
++  llm [label="LLM / specialist\nLLM consumes InferenceContextDraft or InferenceContext through specialist boundary"];
++  future [label="MVTC remains future, not runtime in 0114-r2"];
++
++  objective -> axes;
++  axes -> plan;
++  scheduler -> handler [label="dispatch bounded context job"];
++  handler -> plan;
++  plan -> candidate;
++  candidate -> trajectory;
++  trajectory -> sql [label="hydrate refs"];
++  trajectory -> openvino [label="embed/score refs"];
++  openvino -> qdrant [label="vector projection / recall"];
++  qdrant -> sql [label="return IDs, hydrate in SQL"];
++  trajectory -> result;
++  result -> draft;
++  draft -> llm;
++  draft -> future [style=dashed];
++}
+diff --git a/doc/manifests/MANIFEST_0114_R2_CHANGED_FILES.md b/doc/manifests/MANIFEST_0114_R2_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1021885
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0114_R2_CHANGED_FILES.md
+@@ -0,0 +1,16 @@
++# Manifest 0114-r2 changed files
++
++```text
++src/context/context_variation_core.py
++tests/runtime/test_context_variation_core_contract.py
++tests/rules/test_context_variation_core_contract_0114_r2_rule.py
++doc/architecture/CONTEXT_VARIATION_CORE_CONTRACT_0114_R2.md
++doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0114_R2.md
++doc/docs/architecture/runtime/107_context_variation_core_contract.dot
++doc/CHANGELOG_0114_R2_CONTEXT_VARIATION_CORE_CONTRACT.md
++doc/manifests/MANIFEST_0114_R2_CHANGED_FILES.md
++PHASE0114_R2_TEST_REPORT.md
++```
++
++0114-r2 does not change the kernel loop, dispatcher, queue, policy engine,
++event bus, route runtime manager, or ControlProxy runtime code.
+diff --git a/src/context/__pycache__/context_variation_core.cpython-313.pyc b/src/context/__pycache__/context_variation_core.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..bca2ba384d9987f9e32d4520edf29c924d9dd090
+GIT binary patch
+literal 25074
+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
+AbpQYW
+
+literal 0
+HcmV?d00001
+
+diff --git a/src/context/context_variation_core.py b/src/context/context_variation_core.py
+new file mode 100644
+index 0000000..8a41b1a
+--- /dev/null
++++ b/src/context/context_variation_core.py
+@@ -0,0 +1,506 @@
++"""Context variability core contracts.
++
++Phase 0114-r2 recenters the project on context variability.  The objects in
++this module are intentionally pure contracts: they describe bounded context
++exploration trajectories that the Scheduler can carry toward handlers without
++learning backend or route-runtime details.
++
++context variability is the project center.
++Scheduler orchestrates context exploration jobs; it does not build variants itself.
++MVTC remains future, not runtime in 0114-r2.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++import re
++from typing import Any
++
++_ALLOWED_COST_HINTS = frozenset({"tiny", "small", "medium", "large"})
++_REF_PREFIXES = (
++    "sql:",
++    "ctx:",
++    "artifact:",
++    "github:",
++    "route:",
++    "doc:",
++    "event:",
++    "specialist:",
++    "qdrant:",
++    "ctx-result:",
++)
++
++
++@dataclass(frozen=True, slots=True)
++class ContextExplorationBudget:
++    """Bounded budget for context exploration.
++
++    This is a boundary guard: it prevents unbounded variation jobs without
++    selecting the exploration strategy.  Strategy belongs to handlers and
++    specialists, not to Scheduler.run().
++    """
++
++    max_variants: int
++    max_depth: int
++    max_specialist_calls: int
++    max_retrievals: int
++    max_wall_time_s: float
++
++    def __post_init__(self) -> None:
++        _require_positive_int("max_variants", self.max_variants)
++        _require_positive_int("max_depth", self.max_depth)
++        _require_positive_int("max_specialist_calls", self.max_specialist_calls)
++        _require_positive_int("max_retrievals", self.max_retrievals)
++        if self.max_wall_time_s <= 0:
++            raise ValueError("max_wall_time_s must be > 0")
++
++    def to_mapping(self) -> dict[str, int | float]:
++        return {
++            "max_variants": self.max_variants,
++            "max_depth": self.max_depth,
++            "max_specialist_calls": self.max_specialist_calls,
++            "max_retrievals": self.max_retrievals,
++            "max_wall_time_s": self.max_wall_time_s,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class ContextVariationObjective:
++    """User-facing objective that starts a context exploration."""
++
++    objective_id: str
++    title: str
++    statement: str
++    source_ref: str | None = None
++    parent_context_ref: str | None = None
++
++    def __post_init__(self) -> None:
++        _require_non_empty("objective_id", self.objective_id)
++        _require_non_empty("title", self.title)
++        _require_non_empty("statement", self.statement)
++        _require_ref_or_none("source_ref", self.source_ref)
++        _require_ref_or_none("parent_context_ref", self.parent_context_ref)
++
++    def to_mapping(self) -> dict[str, str | None]:
++        return {
++            "objective_id": self.objective_id,
++            "title": self.title,
++            "statement": self.statement,
++            "source_ref": self.source_ref,
++            "parent_context_ref": self.parent_context_ref,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class ContextVariationAxis:
++    """One axis along which the context can vary."""
++
++    axis_id: str
++    label: str
++    question: str
++    tags: tuple[str, ...] = ()
++
++    def __post_init__(self) -> None:
++        _require_non_empty("axis_id", self.axis_id)
++        _require_non_empty("label", self.label)
++        _require_non_empty("question", self.question)
++        object.__setattr__(self, "tags", _as_non_empty_tuple("tags", self.tags, allow_empty=True))
++
++    def to_mapping(self) -> dict[str, str | list[str]]:
++        return {
++            "axis_id": self.axis_id,
++            "label": self.label,
++            "question": self.question,
++            "tags": list(self.tags),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class ContextTrajectoryStep:
++    """A reference-only step in a context trajectory."""
++
++    step_id: str
++    capability_hint: str
++    input_refs: tuple[str, ...] = ()
++    expected_output_ref_kind: str = "ctx"
++    note: str = ""
++
++    def __post_init__(self) -> None:
++        _require_non_empty("step_id", self.step_id)
++        _require_non_empty("capability_hint", self.capability_hint)
++        object.__setattr__(self, "input_refs", _validate_refs("input_refs", self.input_refs, allow_empty=True))
++        _require_non_empty("expected_output_ref_kind", self.expected_output_ref_kind)
++
++    def to_mapping(self) -> dict[str, str | list[str]]:
++        return {
++            "step_id": self.step_id,
++            "capability_hint": self.capability_hint,
++            "input_refs": list(self.input_refs),
++            "expected_output_ref_kind": self.expected_output_ref_kind,
++            "note": self.note,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class ContextTrajectory:
++    """A bounded path for exploring one or more context axes."""
++
++    trajectory_id: str
++    axis_ids: tuple[str, ...]
++    steps: tuple[ContextTrajectoryStep, ...]
++    rationale: str
++
++    def __post_init__(self) -> None:
++        _require_non_empty("trajectory_id", self.trajectory_id)
++        object.__setattr__(self, "axis_ids", _as_non_empty_tuple("axis_ids", self.axis_ids))
++        if not self.steps:
++            raise ValueError("steps must not be empty")
++        _require_non_empty("rationale", self.rationale)
++
++    def to_mapping(self) -> dict[str, str | list[str] | list[dict[str, str | list[str]]]]:
++        return {
++            "trajectory_id": self.trajectory_id,
++            "axis_ids": list(self.axis_ids),
++            "steps": [step.to_mapping() for step in self.steps],
++            "rationale": self.rationale,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class ContextVariantCandidate:
++    """Candidate context variant produced from an objective and trajectory."""
++
++    variant_id: str
++    objective_id: str
++    trajectory: ContextTrajectory
++    context_refs: tuple[str, ...] = ()
++    payload_refs: tuple[str, ...] = ()
++    specialist_refs: tuple[str, ...] = ()
++    cost_hint: str = "small"
++    metadata: tuple[tuple[str, str], ...] = field(default_factory=tuple)
++
++    def __post_init__(self) -> None:
++        _require_non_empty("variant_id", self.variant_id)
++        _require_non_empty("objective_id", self.objective_id)
++        object.__setattr__(self, "context_refs", _validate_refs("context_refs", self.context_refs, allow_empty=True))
++        object.__setattr__(self, "payload_refs", _validate_refs("payload_refs", self.payload_refs, allow_empty=True))
++        object.__setattr__(self, "specialist_refs", _validate_refs("specialist_refs", self.specialist_refs, allow_empty=True))
++        if self.cost_hint not in _ALLOWED_COST_HINTS:
++            raise ValueError("cost_hint must be one of tiny, small, medium, large")
++        object.__setattr__(self, "metadata", _normalize_metadata(self.metadata))
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "variant_id": self.variant_id,
++            "objective_id": self.objective_id,
++            "trajectory": self.trajectory.to_mapping(),
++            "context_refs": list(self.context_refs),
++            "payload_refs": list(self.payload_refs),
++            "specialist_refs": list(self.specialist_refs),
++            "cost_hint": self.cost_hint,
++            "metadata": dict(self.metadata),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class ContextExplorationPlan:
++    """A bounded plan of context trajectories for handlers to execute."""
++
++    plan_id: str
++    objective: ContextVariationObjective
++    axes: tuple[ContextVariationAxis, ...]
++    candidates: tuple[ContextVariantCandidate, ...]
++    budget: ContextExplorationBudget
++
++    def __post_init__(self) -> None:
++        _require_non_empty("plan_id", self.plan_id)
++        if not self.axes:
++            raise ValueError("axes must not be empty")
++        if not self.candidates:
++            raise ValueError("candidates must not be empty")
++        if len(self.candidates) > self.budget.max_variants:
++            raise ValueError("candidates exceed budget.max_variants")
++        axis_ids = {axis.axis_id for axis in self.axes}
++        for candidate in self.candidates:
++            missing = set(candidate.trajectory.axis_ids) - axis_ids
++            if missing:
++                raise ValueError("candidate trajectory references unknown axis")
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "plan_id": self.plan_id,
++            "objective": self.objective.to_mapping(),
++            "axes": [axis.to_mapping() for axis in self.axes],
++            "candidates": [candidate.to_mapping() for candidate in self.candidates],
++            "budget": self.budget.to_mapping(),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class ContextExplorationResult:
++    """Result of executing one candidate trajectory."""
++
++    result_id: str
++    plan_id: str
++    variant_id: str
++    produced_context_refs: tuple[str, ...]
++    observations: tuple[str, ...] = ()
++    score_hint: float | None = None
++
++    def __post_init__(self) -> None:
++        _require_non_empty("result_id", self.result_id)
++        _require_non_empty("plan_id", self.plan_id)
++        _require_non_empty("variant_id", self.variant_id)
++        object.__setattr__(self, "produced_context_refs", _validate_refs("produced_context_refs", self.produced_context_refs))
++        object.__setattr__(self, "observations", _as_non_empty_tuple("observations", self.observations, allow_empty=True))
++        if self.score_hint is not None and not 0.0 <= self.score_hint <= 1.0:
++            raise ValueError("score_hint must be between 0.0 and 1.0")
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "result_id": self.result_id,
++            "plan_id": self.plan_id,
++            "variant_id": self.variant_id,
++            "produced_context_refs": list(self.produced_context_refs),
++            "observations": list(self.observations),
++            "score_hint": self.score_hint,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class ContextReductionPlan:
++    """Reference-only reduction request that can produce an inference draft."""
++
++    reduction_id: str
++    plan_id: str
++    result_refs: tuple[str, ...]
++    target_kind: str = "inference_context_draft"
++
++    def __post_init__(self) -> None:
++        _require_non_empty("reduction_id", self.reduction_id)
++        _require_non_empty("plan_id", self.plan_id)
++        object.__setattr__(self, "result_refs", _validate_refs("result_refs", self.result_refs))
++        _require_non_empty("target_kind", self.target_kind)
++
++    def to_mapping(self) -> dict[str, str | list[str]]:
++        return {
++            "reduction_id": self.reduction_id,
++            "plan_id": self.plan_id,
++            "result_refs": list(self.result_refs),
++            "target_kind": self.target_kind,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class InferenceContextDraft:
++    """Draft context packet built from selected exploration results."""
++
++    draft_id: str
++    plan_id: str
++    selected_variant_ids: tuple[str, ...]
++    context_refs: tuple[str, ...]
++    rationale: str
++
++    def __post_init__(self) -> None:
++        _require_non_empty("draft_id", self.draft_id)
++        _require_non_empty("plan_id", self.plan_id)
++        object.__setattr__(self, "selected_variant_ids", _as_non_empty_tuple("selected_variant_ids", self.selected_variant_ids))
++        object.__setattr__(self, "context_refs", _validate_refs("context_refs", self.context_refs))
++        _require_non_empty("rationale", self.rationale)
++
++    def to_mapping(self) -> dict[str, str | list[str]]:
++        return {
++            "draft_id": self.draft_id,
++            "plan_id": self.plan_id,
++            "selected_variant_ids": list(self.selected_variant_ids),
++            "context_refs": list(self.context_refs),
++            "rationale": self.rationale,
++        }
++
++
++def build_axis_trajectory_candidate(
++    *,
++    plan_id: str,
++    objective: ContextVariationObjective,
++    axis: ContextVariationAxis,
++    ordinal: int,
++    base_context_refs: tuple[str, ...] = (),
++    payload_refs: tuple[str, ...] = (),
++    specialist_refs: tuple[str, ...] = (),
++    cost_hint: str = "small",
++) -> ContextVariantCandidate:
++    """Build a deterministic candidate for one context axis.
++
++    The candidate remains reference-only.  Heavy documents, vectors, model
++    outputs, or route payloads must stay behind refs handled by later adapters.
++    """
++
++    _require_non_empty("plan_id", plan_id)
++    _require_positive_int("ordinal", ordinal)
++    slug = _slug(axis.axis_id)
++    step = ContextTrajectoryStep(
++        step_id=f"step-{ordinal:02d}-{slug}",
++        capability_hint="context.axis.explore",
++        input_refs=tuple(ref for ref in (objective.source_ref, objective.parent_context_ref) if ref is not None)
++        + tuple(base_context_refs)
++        + tuple(payload_refs),
++        expected_output_ref_kind="ctx",
++        note=f"Explore axis {axis.axis_id} without embedding a heavy payload in the Scheduler event.",
++    )
++    trajectory = ContextTrajectory(
++        trajectory_id=f"traj-{ordinal:02d}-{slug}",
++        axis_ids=(axis.axis_id,),
++        steps=(step,),
++        rationale=f"Vary context around axis {axis.label}.",
++    )
++    return ContextVariantCandidate(
++        variant_id=f"{plan_id}:variant:{ordinal:02d}:{slug}",
++        objective_id=objective.objective_id,
++        trajectory=trajectory,
++        context_refs=base_context_refs,
++        payload_refs=payload_refs,
++        specialist_refs=specialist_refs,
++        cost_hint=cost_hint,
++        metadata=(("axis", axis.axis_id),),
++    )
++
++
++def build_context_exploration_plan(
++    *,
++    plan_id: str,
++    objective: ContextVariationObjective,
++    axes: tuple[ContextVariationAxis, ...],
++    budget: ContextExplorationBudget,
++    base_context_refs: tuple[str, ...] = (),
++    payload_refs: tuple[str, ...] = (),
++    specialist_refs: tuple[str, ...] = (),
++    cost_hint: str = "small",
++) -> ContextExplorationPlan:
++    """Build a bounded deterministic exploration plan from axes."""
++
++    if not axes:
++        raise ValueError("axes must not be empty")
++    selected_axes = axes[: budget.max_variants]
++    candidates = tuple(
++        build_axis_trajectory_candidate(
++            plan_id=plan_id,
++            objective=objective,
++            axis=axis,
++            ordinal=index,
++            base_context_refs=base_context_refs,
++            payload_refs=payload_refs,
++            specialist_refs=specialist_refs,
++            cost_hint=cost_hint,
++        )
++        for index, axis in enumerate(selected_axes, start=1)
++    )
++    return ContextExplorationPlan(
++        plan_id=plan_id,
++        objective=objective,
++        axes=axes,
++        candidates=candidates,
++        budget=budget,
++    )
++
++
++def build_context_reduction_plan(
++    *,
++    reduction_id: str,
++    plan: ContextExplorationPlan,
++    results: tuple[ContextExplorationResult, ...],
++) -> ContextReductionPlan:
++    """Build a reference-only reduction plan from exploration results."""
++
++    if not results:
++        raise ValueError("results must not be empty")
++    known_variants = {candidate.variant_id for candidate in plan.candidates}
++    for result in results:
++        if result.plan_id != plan.plan_id:
++            raise ValueError("result plan_id does not match plan")
++        if result.variant_id not in known_variants:
++            raise ValueError("result variant_id is not part of plan")
++    return ContextReductionPlan(
++        reduction_id=reduction_id,
++        plan_id=plan.plan_id,
++        result_refs=tuple(f"ctx-result:{result.result_id}" for result in results),
++    )
++
++
++def build_inference_context_draft(
++    *,
++    draft_id: str,
++    plan: ContextExplorationPlan,
++    results: tuple[ContextExplorationResult, ...],
++    rationale: str,
++) -> InferenceContextDraft:
++    """Build an inference context draft from selected exploration results."""
++
++    if not results:
++        raise ValueError("results must not be empty")
++    selected_variant_ids: list[str] = []
++    context_refs: list[str] = []
++    for result in results:
++        if result.plan_id != plan.plan_id:
++            raise ValueError("result plan_id does not match plan")
++        selected_variant_ids.append(result.variant_id)
++        context_refs.extend(result.produced_context_refs)
++    return InferenceContextDraft(
++        draft_id=draft_id,
++        plan_id=plan.plan_id,
++        selected_variant_ids=tuple(selected_variant_ids),
++        context_refs=tuple(dict.fromkeys(context_refs)),
++        rationale=rationale,
++    )
++
++
++def _require_non_empty(name: str, value: str) -> None:
++    if not value or not value.strip():
++        raise ValueError(f"{name} must not be empty")
++
++
++def _require_positive_int(name: str, value: int) -> None:
++    if value <= 0:
++        raise ValueError(f"{name} must be > 0")
++
++
++def _require_ref_or_none(name: str, value: str | None) -> None:
++    if value is None:
++        return
++    _validate_ref(name, value)
++
++
++def _validate_refs(name: str, values: tuple[str, ...], *, allow_empty: bool = False) -> tuple[str, ...]:
++    if not values and not allow_empty:
++        raise ValueError(f"{name} must not be empty")
++    refs = _as_non_empty_tuple(name, values, allow_empty=allow_empty)
++    for value in refs:
++        _validate_ref(name, value)
++    return refs
++
++
++def _validate_ref(name: str, value: str) -> None:
++    _require_non_empty(name, value)
++    if not value.startswith(_REF_PREFIXES):
++        raise ValueError(f"{name} must be a typed reference, not an embedded payload")
++
++
++def _as_non_empty_tuple(name: str, values: tuple[str, ...], *, allow_empty: bool = False) -> tuple[str, ...]:
++    normalized = tuple(values)
++    if not normalized and not allow_empty:
++        raise ValueError(f"{name} must not be empty")
++    for value in normalized:
++        _require_non_empty(name, value)
++    return normalized
++
++
++def _normalize_metadata(values: tuple[tuple[str, str], ...]) -> tuple[tuple[str, str], ...]:
++    normalized: list[tuple[str, str]] = []
++    for key, value in values:
++        _require_non_empty("metadata key", key)
++        _require_non_empty("metadata value", value)
++        normalized.append((key, value))
++    return tuple(sorted(normalized))
++
++
++def _slug(value: str) -> str:
++    return re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-") or "axis"
+diff --git a/tests/rules/__pycache__/test_context_variation_core_contract_0114_r2_rule.cpython-313-pytest-9.0.2.pyc b/tests/rules/__pycache__/test_context_variation_core_contract_0114_r2_rule.cpython-313-pytest-9.0.2.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..751c0e8289ff900cb73025edc8ae273bf328bfee
+GIT binary patch
+literal 8747
+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
+F{{YE?gE9aB
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/rules/__pycache__/test_context_variation_core_contract_0114_r2_rule.cpython-313.pyc b/tests/rules/__pycache__/test_context_variation_core_contract_0114_r2_rule.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..b75b431bd823e6e35117884a7c11bcf98465e06c
+GIT binary patch
+literal 3378
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/rules/test_context_variation_core_contract_0114_r2_rule.py b/tests/rules/test_context_variation_core_contract_0114_r2_rule.py
+new file mode 100644
+index 0000000..f19e3a9
+--- /dev/null
++++ b/tests/rules/test_context_variation_core_contract_0114_r2_rule.py
+@@ -0,0 +1,78 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src/context/context_variation_core.py"
++DOC = ROOT / "doc/architecture/CONTEXT_VARIATION_CORE_CONTRACT_0114_R2.md"
++DOT = ROOT / "doc/docs/architecture/runtime/107_context_variation_core_contract.dot"
++MANIFEST = ROOT / "doc/manifests/MANIFEST_0114_R2_CHANGED_FILES.md"
++
++
++def _read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_0114_r2_locks_context_variability_center() -> None:
++    text = _read(MODULE) + "\n" + _read(DOC)
++    required = [
++        "context variability is the project center",
++        "ContextVariationObjective",
++        "ContextVariationAxis",
++        "ContextTrajectory",
++        "ContextVariantCandidate",
++        "ContextExplorationPlan",
++        "InferenceContextDraft",
++        "MVTC remains future, not runtime in 0114-r2",
++        "Scheduler orchestrates context exploration jobs; it does not build variants itself",
++        "SQLContextStore is durable context authority",
++        "Qdrant is vector projection and retrieval, not context authority",
++        "OpenVINO produces local embeddings or light inference behind an adapter",
++        "LLM consumes InferenceContextDraft or InferenceContext through specialist boundary",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0114_r2_forbids_backend_imports_and_kernel_edits() -> None:
++    text = _read(MODULE)
++    forbidden = [
++        "import sqlite3",
++        "import qdrant",
++        "from qdrant",
++        "openvino",
++        "OpenVINO",
++        "import requests",
++        "import httpx",
++        "import socket",
++        "EventType(",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++
++
++def test_0114_r2_graph_is_context_centered() -> None:
++    dot = _read(DOT)
++    required = [
++        "ROOT_GRAPH: doc/docs/architecture/00_global.dot",
++        "root-attached context overlay",
++        "ContextVariationObjective -> ContextExplorationPlan -> ContextVariantCandidate -> ContextTrajectory -> ContextExplorationResult -> InferenceContextDraft",
++        "SQLContextStore is durable context authority",
++        "Qdrant is vector projection and retrieval, not context authority",
++        "OpenVINO produces local embeddings or light inference behind an adapter",
++        "LLM consumes InferenceContextDraft or InferenceContext through specialist boundary",
++        "MVTC remains future, not runtime in 0114-r2",
++    ]
++    for phrase in required:
++        assert phrase in dot
++
++
++def test_0114_r2_manifest_does_not_touch_kernel_loop() -> None:
++    manifest = _read(MANIFEST)
++    assert "src/context/context_variation_core.py" in manifest
++    assert "tests/runtime/test_context_variation_core_contract.py" in manifest
++    assert "src/kernel/scheduler.py" not in manifest
++    assert "src/kernel/dispatcher.py" not in manifest
++    assert "src/kernel/queue.py" not in manifest
++    assert "src/policy/engine.py" not in manifest
++    assert "src/kernel/event_bus.py" not in manifest
+diff --git a/tests/runtime/__pycache__/test_context_variation_core_contract.cpython-313-pytest-9.0.2.pyc b/tests/runtime/__pycache__/test_context_variation_core_contract.cpython-313-pytest-9.0.2.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..cf0aa22b4ffecf187a888562d7b6e0f7b5649b0a
+GIT binary patch
+literal 12990
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/runtime/__pycache__/test_context_variation_core_contract.cpython-313.pyc b/tests/runtime/__pycache__/test_context_variation_core_contract.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..c1e4315537c2c661e3c7857642e087f7681d8b64
+GIT binary patch
+literal 5760
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/runtime/test_context_variation_core_contract.py b/tests/runtime/test_context_variation_core_contract.py
+new file mode 100644
+index 0000000..9d1e516
+--- /dev/null
++++ b/tests/runtime/test_context_variation_core_contract.py
+@@ -0,0 +1,178 @@
++from __future__ import annotations
++
++import pytest
++
++from src.context.context_variation_core import (
++    ContextExplorationBudget,
++    ContextExplorationResult,
++    ContextVariationAxis,
++    ContextVariationObjective,
++    build_context_exploration_plan,
++    build_context_reduction_plan,
++    build_inference_context_draft,
++)
++
++
++def test_context_exploration_budget_is_bounded() -> None:
++    with pytest.raises(ValueError, match="max_variants must be > 0"):
++        ContextExplorationBudget(
++            max_variants=0,
++            max_depth=1,
++            max_specialist_calls=1,
++            max_retrievals=1,
++            max_wall_time_s=1.0,
++        )
++
++
++def test_context_exploration_plan_builds_reference_only_variants() -> None:
++    objective = ContextVariationObjective(
++        objective_id="obj-baby-fork",
++        title="Baby fork project",
++        statement="Explore a safer fork for a baby project item.",
++        source_ref="github:artifact:copilot-first-pass",
++        parent_context_ref="ctx:project:fork",
++    )
++    axes = (
++        ContextVariationAxis(
++            axis_id="safety",
++            label="Safety",
++            question="Which context helps evaluate child safety constraints?",
++            tags=("child", "norms"),
++        ),
++        ContextVariationAxis(
++            axis_id="material",
++            label="Material",
++            question="Which material context should be recalled?",
++            tags=("food", "fabrication"),
++        ),
++    )
++    budget = ContextExplorationBudget(
++        max_variants=1,
++        max_depth=2,
++        max_specialist_calls=4,
++        max_retrievals=8,
++        max_wall_time_s=20.0,
++    )
++
++    plan = build_context_exploration_plan(
++        plan_id="plan-001",
++        objective=objective,
++        axes=axes,
++        budget=budget,
++        base_context_refs=("sql:fact:project-constraint",),
++        payload_refs=("artifact:github:baby-fork",),
++        specialist_refs=("specialist:safety",),
++    )
++
++    assert len(plan.candidates) == 1
++    candidate = plan.candidates[0]
++    assert candidate.variant_id == "plan-001:variant:01:safety"
++    assert candidate.context_refs == ("sql:fact:project-constraint",)
++    assert candidate.payload_refs == ("artifact:github:baby-fork",)
++    assert candidate.specialist_refs == ("specialist:safety",)
++    assert candidate.trajectory.steps[0].capability_hint == "context.axis.explore"
++    assert "artifact:github:baby-fork" in candidate.trajectory.steps[0].input_refs
++
++
++def test_context_variation_refs_reject_embedded_payloads() -> None:
++    objective = ContextVariationObjective(
++        objective_id="obj",
++        title="Objective",
++        statement="Statement",
++    )
++    axis = ContextVariationAxis(axis_id="axis", label="Axis", question="Question")
++    budget = ContextExplorationBudget(
++        max_variants=1,
++        max_depth=1,
++        max_specialist_calls=1,
++        max_retrievals=1,
++        max_wall_time_s=1.0,
++    )
++
++    with pytest.raises(ValueError, match="typed reference"):
++        build_context_exploration_plan(
++            plan_id="plan",
++            objective=objective,
++            axes=(axis,),
++            budget=budget,
++            payload_refs=("the heavy payload itself",),
++        )
++
++
++def test_context_reduction_plan_keeps_results_as_refs() -> None:
++    objective = ContextVariationObjective(
++        objective_id="obj",
++        title="Objective",
++        statement="Statement",
++        source_ref="github:item:1",
++    )
++    axis = ContextVariationAxis(axis_id="axis", label="Axis", question="Question")
++    budget = ContextExplorationBudget(
++        max_variants=1,
++        max_depth=1,
++        max_specialist_calls=1,
++        max_retrievals=1,
++        max_wall_time_s=1.0,
++    )
++    plan = build_context_exploration_plan(
++        plan_id="plan",
++        objective=objective,
++        axes=(axis,),
++        budget=budget,
++    )
++    result = ContextExplorationResult(
++        result_id="result-1",
++        plan_id="plan",
++        variant_id=plan.candidates[0].variant_id,
++        produced_context_refs=("ctx:variant:axis",),
++        observations=("safety constraints recalled",),
++        score_hint=0.7,
++    )
++
++    reduction = build_context_reduction_plan(
++        reduction_id="reduce-1",
++        plan=plan,
++        results=(result,),
++    )
++
++    assert reduction.result_refs == ("ctx-result:result-1",)
++    assert reduction.target_kind == "inference_context_draft"
++
++
++def test_inference_context_draft_deduplicates_context_refs() -> None:
++    objective = ContextVariationObjective(
++        objective_id="obj",
++        title="Objective",
++        statement="Statement",
++    )
++    axis = ContextVariationAxis(axis_id="axis", label="Axis", question="Question")
++    budget = ContextExplorationBudget(
++        max_variants=1,
++        max_depth=1,
++        max_specialist_calls=1,
++        max_retrievals=1,
++        max_wall_time_s=1.0,
++    )
++    plan = build_context_exploration_plan(
++        plan_id="plan",
++        objective=objective,
++        axes=(axis,),
++        budget=budget,
++    )
++    result = ContextExplorationResult(
++        result_id="result-1",
++        plan_id="plan",
++        variant_id=plan.candidates[0].variant_id,
++        produced_context_refs=("ctx:a", "ctx:b", "ctx:a"),
++    )
++
++    draft = build_inference_context_draft(
++        draft_id="draft-1",
++        plan=plan,
++        results=(result,),
++        rationale="Keep the safety and material facts for the next specialist call.",
++    )
++
++    assert draft.context_refs == ("ctx:a", "ctx:b")
++    assert draft.selected_variant_ids == (plan.candidates[0].variant_id,)
++    assert draft.to_mapping()["draft_id"] == "draft-1"

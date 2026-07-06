@@ -1,0 +1,874 @@
+diff --git a/PHASE0098_TEST_REPORT.md b/PHASE0098_TEST_REPORT.md
+new file mode 100644
+index 0000000..67d25e0
+--- /dev/null
++++ b/PHASE0098_TEST_REPORT.md
+@@ -0,0 +1,52 @@
++# Phase 0098 test report — ControlProxy dispatch filtering envelope
++
++## Scope
++
++0098 adds an importable RouteDispatchFilterEnvelope and updates architecture docs
++and DOT graph wording so ControlProxy is described as policy/zone dispatch
++filtering, not a security objective.
++
++## Commands expected
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/runtime/test_route_dispatch_filter_envelope.py
++PYTHONPATH=src:. pytest -q tests/rules/test_route_dispatch_filter_envelope_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: terminology and route dispatch-filter envelope aligned with existing Scheduler/Policy/Dispatcher/Handler rule; no new kernel programming technique is introduced.
++live_path_status: transition
++live_path_uses_real_backend: n/a
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++```
++
++## Boundaries
++
++- No CLI.
++- No OpenRC service and no resident daemon.
++- No watcher.
++- No Scheduler.run() modification.
++- No PriorityQueue, Dispatcher, or Component tick contract modification.
++- ControlProxy does not decide security policy.
++- Scheduler/policy/zone remain the authority.
++- The security-shaped envelope is used for policy/zone dispatch filtering.
++- Existing event.bus/context.bus remain observation surfaces, not commands.
++- No live mmap resize.
++- Not /dev/shm-only.
++- No NetworkBridge or HardwareBridge implementation.
++- No Qdrant, LLM, or OpenVINO path.
+diff --git a/doc/architecture/CONTROLPROXY_DISPATCH_FILTERING_0098.md b/doc/architecture/CONTROLPROXY_DISPATCH_FILTERING_0098.md
+new file mode 100644
+index 0000000..2feff4d
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_DISPATCH_FILTERING_0098.md
+@@ -0,0 +1,154 @@
++# 0098 — ControlProxy dispatch filtering envelope
++
++Status: operational architecture and importable envelope.
++
++0098 adjusts the wording introduced around ControlProxy, ControlFS, Scheduler
++policy, and zones. The route proxy path uses a security-shaped envelope, but its
++operational purpose in this part of the Scheduler is dispatch filtering.
++
++```text
++policy/zone dispatch filtering
++not a security objective
++```
++
++## Correct interpretation
++
++The Scheduler side still owns the policy and zone decision:
++
++```text
++Scheduler/policy/zone remain the authority.
++```
++
++ControlProxy does not decide security policy. It reads an already-decided
++Scheduler envelope and uses it to filter route dispatch, select the coherent
++route-control path, and prevent malformed work from entering ControlFS.
++
++So the meaning is:
++
++```text
++Scheduler/policy/zone decide authority.
++ControlProxy/ControlFS apply policy/zone dispatch filtering.
++Dispatcher remains required between Scheduler.run() and ControlProxy.
++```
++
++This is not a contradiction with the security-shaped vocabulary. The envelope
++contains `authorized=True`, `policy_decision_id`, `zone`, and `route_id`, but
++ControlProxy treats those fields as dispatch-filtering metadata. It may reject a
++malformed or non-authorized envelope, but this remains a boundary filter, not a new security decision.
++
++## Importable capability
++
++0098 adds `RouteDispatchFilterEnvelope` and `RouteDispatchFilterDecision`.
++
++```text
++payload from Scheduler-facing request
++-> evaluate_route_dispatch_filter(payload)
++-> accepted/rejected dispatch-filter decision
++-> RouteDispatchFilterEnvelope(route_id, zone, policy_decision_id, authorized)
++```
++
++The envelope is intentionally small:
++
++```text
++route_id
++zone
++policy_decision_id
++authorized
++source
++metadata
++```
++
++It has no I/O, no Scheduler dependency, no EventBus dependency, no ControlFS
++write, and no backend dependency. It is a typed filter envelope that can later be
++called by the ControlProxy handler before materialization.
++
++## Graph integration rule
++
++The graph remains integrated in the root Runtime ControlFS / SHM / Cluster
++Fabric graph. The ControlProxy/ControlFS cluster should show dispatch filtering
++inside the bounded subsystem, not as an isolated security box.
++
++```text
++Root graph, not an isolated phase graph.
++```
++
++The intended structure is:
++
++```text
++SecurityFS / policy / zones
++-> Scheduler / PolicyEngine
++-> PriorityQueue / Scheduler.run()
++-> Dispatcher
++-> ControlProxy route handler
++-> RouteDispatchFilterEnvelope
++-> ControlProxy/ControlFS route-control block
++-> locked generation materializer
++-> runtime placement
++-> g2/g3 route generations
++```
++
++## Scheduler.run() status
++
++The lock remains in force:
++
++```text
++No Scheduler.run() modification.
++```
++
++There is no need to loosen that constraint for 0098. The current Dispatcher -> Handler path is still sufficient. The loop can be reopened later only for an
++explicit kernel-loop design, not to shortcut ControlProxy integration.
++
++## Relation to previous phases
++
++0098 clarifies the general architecture after:
++
++```text
++0088 concrete Scheduler handler boundary
++0089 write -> notify -> selector/drain
++0090 RouteMessage journal
++0091-r2 route_id -> current_generation table
++0092 candidate -> active -> draining -> closed cleanup
++0093-r2 existing event.bus/context.bus adapter
++0094 route generation file lock
++0095 locked materializer
++0096 explicit file|/dev/shm runtime placement
++0097 integrated root graph and ControlProxy/ControlFS boundary
++```
++
++Nothing in 0098 changes event.bus/context.bus. They remain existing observation
++surfaces, not commands and not newly created buses.
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: terminology and route dispatch-filter envelope aligned with existing Scheduler/Policy/Dispatcher/Handler rule; no new kernel programming technique is introduced.
++live_path_status: transition
++live_path_uses_real_backend: n/a
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++```
++
++## Boundaries kept
++
++- No CLI.
++- No OpenRC service and no resident daemon.
++- No watcher.
++- No Scheduler.run() modification.
++- No PriorityQueue, Dispatcher, or Component tick contract modification.
++- ControlProxy does not decide security policy.
++- Scheduler/policy/zone remain the authority.
++- The security-shaped envelope is used for policy/zone dispatch filtering.
++- EventBus/context bus are existing observation surfaces, not commands.
++- No live mmap resize; g2/g3 generations remain the update path.
++- Not /dev/shm-only.
++- No NetworkBridge or HardwareBridge implementation.
++- No Qdrant, LLM, or OpenVINO path.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0098.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0098.md
+new file mode 100644
+index 0000000..2ebe03f
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0098.md
+@@ -0,0 +1,84 @@
++# ControlProxy operational plan update — 0098
++
++0098 updates the ControlProxy vocabulary after the graph review and the
++clarification that the Scheduler-side security-shaped envelope is mainly used
++for dispatch filtering.
++
++## Terminology update
++
++Preferred wording:
++
++```text
++policy/zone dispatch filtering
++```
++
++Avoid presenting the ControlProxy path as if it were the security authority. It
++is not.
++
++```text
++ControlProxy does not decide security policy.
++Scheduler/policy/zone remain the authority.
++```
++
++The envelope contains security-shaped metadata, but the operational use is route
++selection, filtering, and coherent dispatch into ControlFS.
++
++## Current trunk after 0098
++
++```text
++0088 Scheduler handler boundary
++0089 producer write -> notify -> selector/drain
++0090 RouteMessage journal
++0091-r2 generation table: route_id -> current_generation
++0092 candidate -> active -> draining -> closed cleanup
++0093-r2 existing bus visualization adapter
++0094 route generation file lock
++0095 locked materializer
++0096 explicit runtime placement: file root or real /dev/shm root
++0097 integrated root graph + ControlProxy/ControlFS/zone alignment
++0098 RouteDispatchFilterEnvelope for policy/zone dispatch filtering
++```
++
++## Next priorities
++
++1. **0099 — wire dispatch filter envelope into ControlProxy Scheduler handler**
++   The handler should call `require_route_dispatch_filter_envelope()` before the
++   concrete route adapter. This must remain a boundary filter and must not make
++   ControlProxy a policy decision engine.
++
++2. **0100 — placement-aware route reply**
++   Expose selected runtime placement in the Scheduler-facing route reply without
++   modifying `Scheduler.run()`.
++
++3. **0101 — file-backed to /dev/shm generation migration test**
++   Validate `g1` file-backed and `g2` `/dev/shm`-backed without live resize.
++
++4. **Only later — kernel loop change decision**
++   Reopen `Scheduler.run()` only if Dispatcher + Handler cannot express the
++   concrete behavior without hiding state.
++
++## ControlProxy module shape
++
++ControlProxy/ControlFS should still converge toward one bounded code subsystem
++made of small classes/modules:
++
++```text
++ControlProxyFacade
++  ControlFSStore
++  RouteRequestAdapter
++  RouteDispatchFilterEnvelope
++  RouteGenerationTable
++  RouteGenerationLock
++  RouteGenerationMaterializer
++  RouteRuntimePlacement
++  RouteLifecycle
++  RouteBusProjection
++```
++
++Dispatcher remains required. It is the kernel dispatch boundary; ControlProxy is
++one handler target behind that boundary.
++
++## Dispatcher boundary reminder
++
++Dispatcher is the kernel dispatch boundary. ControlProxy is the selected route
++handler target behind that boundary.
+diff --git a/doc/architecture/RUNTIME_CONTROLFS_SHM_CLUSTER_FABRIC_GRAPH_0098.dot b/doc/architecture/RUNTIME_CONTROLFS_SHM_CLUSTER_FABRIC_GRAPH_0098.dot
+new file mode 100644
+index 0000000..ba0009f
+--- /dev/null
++++ b/doc/architecture/RUNTIME_CONTROLFS_SHM_CLUSTER_FABRIC_GRAPH_0098.dot
+@@ -0,0 +1,134 @@
++digraph runtime_controlfs_shm_cluster_fabric_graph_0098 {
++  rankdir=LR;
++  graph [
++    label="Runtime ControlFS / SHM / ControlProxy / Cluster Fabric graph — 0098 dispatch filtering semantics",
++    labelloc=t
++  ];
++  node [shape=box];
++
++  subgraph cluster_policy_zone {
++    label="Scheduler policy / zones as dispatch authority";
++    style=rounded;
++
++    securityfs [
++      label="SecurityFS\nsubsystem policy inputs\nzones / scopes"
++    ];
++    policy_engine [
++      label="PolicyEngine\nproduces zone decision\npolicy_decision_id"
++    ];
++    scheduler [
++      label="Scheduler\ndispatch authority\nNo Scheduler.run() modification"
++    ];
++    priority_queue [
++      label="PriorityQueue\ndeterministic ordering"
++    ];
++    dispatcher [
++      label="Dispatcher\nselects handler boundary"
++    ];
++
++    securityfs -> policy_engine [label="policy inputs"];
++    policy_engine -> scheduler [label="authorized=True + zone + policy_decision_id"];
++    scheduler -> priority_queue [label="enqueue approved work"];
++    priority_queue -> scheduler [label="Scheduler.run() drains ready work"];
++    scheduler -> dispatcher [label="dispatch"];
++  }
++
++  subgraph cluster_controlproxy_controlfs {
++    label="ControlProxy / ControlFS bounded subsystem: policy/zone dispatch filtering";
++    style=rounded;
++
++    controlproxy_handler [
++      label="ControlProxy route handler\ncalled by Dispatcher"
++    ];
++    dispatch_filter_envelope [
++      label="RouteDispatchFilterEnvelope\nroute_id + zone + policy_decision_id\nauthorized=True\npolicy/zone dispatch filtering\nnot a security objective"
++    ];
++    controlfs_surface [
++      shape=folder,
++      label="ControlFS surface\nactive/routes, leases, revoked, status"
++    ];
++    generation_table [
++      shape=cylinder,
++      label="generation_state.json\nroute_id -> current_generation\nincremented only when materialized"
++    ];
++    generation_lock [
++      label="route generation lock\ninter-process file lock"
++    ];
++    runtime_placement [
++      label="runtime placement policy\nfile | /dev/shm\nNot /dev/shm-only"
++    ];
++    locked_materializer [
++      label="locked generation materializer\nload -> verify -> materialize -> persist"
++    ];
++    lifecycle [
++      label="lifecycle\ncandidate -> active -> draining -> closed"
++    ];
++
++    controlproxy_handler -> dispatch_filter_envelope [label="read already-decided envelope"];
++    dispatch_filter_envelope -> controlfs_surface [label="filter dispatch into route-control state"];
++    controlfs_surface -> generation_lock [label="per route lock"];
++    generation_lock -> generation_table [label="load/verify/persist"];
++    generation_table -> runtime_placement [label="next g2/g3 generation"];
++    runtime_placement -> locked_materializer [label="resolved runtime root"];
++    locked_materializer -> lifecycle [label="candidate state"];
++  }
++
++  subgraph cluster_runtime_surfaces {
++    label="Existing runtime surfaces";
++    style=rounded;
++
++    shm_runtime [
++      shape=folder,
++      label="SHM/file runtime root\nroutes/<route_id>@gN/ring.bin\nNo live mmap resize"
++    ];
++    workers [
++      label="Workers / experts\nuse materialized routes only"
++    ];
++    event_bus [
++      shape=folder,
++      label="existing event.bus\nfacts, not commands"
++    ];
++    context_bus [
++      shape=folder,
++      label="existing context.bus\ncompact context facts"
++    ];
++    recorder [
++      label="Recorder\njournal writer"
++    ];
++    zfs_store [
++      shape=cylinder,
++      label="ZFS Store\njournal / replay / snapshots"
++    ];
++
++    shm_runtime -> workers [label="route access"];
++    workers -> event_bus [label="facts"];
++    workers -> context_bus [label="context facts"];
++    event_bus -> recorder [label="drain facts"];
++    context_bus -> recorder [label="drain context facts"];
++    recorder -> zfs_store [label="durable write"];
++  }
++
++  subgraph cluster_future_extensions {
++    label="Future extensions, not implemented now";
++    style=dashed;
++
++    network_bridge [
++      label="NetworkBridge future\ncompact facts / remote handles only"
++    ];
++    hardware_bridge [
++      label="HardwareBridge future\nDMA-backed route buffers\nnot direct /dev/shm sharing"
++    ];
++    cluster_fabric [
++      label="Hardware Cluster Fabric future lointain\nFPGA/ASIC passive observer/accelerator"
++    ];
++
++    network_bridge -> hardware_bridge [style=dashed, label="future compatibility"];
++    hardware_bridge -> cluster_fabric [style=dashed, label="future PCIe/LVDS path"];
++  }
++
++  dispatcher -> controlproxy_handler [label="handler call"];
++  lifecycle -> shm_runtime [label="materialized route generation"];
++  lifecycle -> event_bus [label="status fact"];
++  lifecycle -> context_bus [label="route/context visibility fact"];
++  shm_runtime -> network_bridge [style=dashed, label="future selected replication"];
++}
+diff --git a/doc/manifests/MANIFEST_0098_CHANGED_FILES.md b/doc/manifests/MANIFEST_0098_CHANGED_FILES.md
+new file mode 100644
+index 0000000..cbf961e
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0098_CHANGED_FILES.md
+@@ -0,0 +1,18 @@
++# Manifest 0098 — ControlProxy dispatch filtering envelope
++
++Changed files:
++
++```text
++src/runtime/route_dispatch_filter_envelope.py
++tests/runtime/test_route_dispatch_filter_envelope.py
++tests/rules/test_route_dispatch_filter_envelope_rule.py
++doc/architecture/CONTROLPROXY_DISPATCH_FILTERING_0098.md
++doc/architecture/RUNTIME_CONTROLFS_SHM_CLUSTER_FABRIC_GRAPH_0098.dot
++doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0098.md
++doc/manifests/MANIFEST_0098_CHANGED_FILES.md
++PHASE0098_TEST_REPORT.md
++```
++
++0098 adds a route dispatch-filter envelope and updates architecture documents and
++DOT graph structure. It does not change Scheduler, PriorityQueue, Dispatcher, or
++Component contract files.
+diff --git a/src/runtime/route_dispatch_filter_envelope.py b/src/runtime/route_dispatch_filter_envelope.py
+new file mode 100644
+index 0000000..9a19360
+--- /dev/null
++++ b/src/runtime/route_dispatch_filter_envelope.py
+@@ -0,0 +1,146 @@
++from __future__ import annotations
++
++from collections.abc import Mapping
++from dataclasses import dataclass, field
++from types import MappingProxyType
++from typing import Any
++
++
++_FIELD_NAMES: tuple[str, ...] = ("route_id", "zone", "policy_decision_id", "authorized")
++
++
++@dataclass(frozen=True, slots=True)
++class RouteDispatchFilterEnvelope:
++    """Scheduler-issued route envelope used for policy/zone dispatch filtering.
++
++    The envelope is deliberately not a security authority. Scheduler/policy/zone
++    remain the authority. ControlProxy uses this immutable envelope to filter and
++    route already-decided work toward the correct handler/materialization path.
++    """
++
++    route_id: str
++    zone: str
++    policy_decision_id: str
++    authorized: bool
++    source: str | None = None
++    metadata: Mapping[str, Any] = field(default_factory=dict)
++
++    def __post_init__(self) -> None:
++        if not self.route_id:
++            raise ValueError("route_id is required")
++        if not self.zone:
++            raise ValueError("zone is required")
++        if not self.policy_decision_id:
++            raise ValueError("policy_decision_id is required")
++        if self.authorized is not True:
++            raise ValueError("authorized=True is required")
++        object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
++
++    def to_mapping(self) -> dict[str, Any]:
++        """Return a stable JSON-ready projection for logs, docs, and tests."""
++
++        return {
++            "route_id": self.route_id,
++            "zone": self.zone,
++            "policy_decision_id": self.policy_decision_id,
++            "authorized": self.authorized,
++            "source": self.source,
++            "metadata": dict(self.metadata),
++            "purpose": "policy/zone dispatch filtering, not a security objective",
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class RouteDispatchFilterDecision:
++    """Result of reading an already-authorized route request envelope."""
++
++    accepted: bool
++    reason: str
++    envelope: RouteDispatchFilterEnvelope | None = None
++    missing_fields: tuple[str, ...] = ()
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "accepted": self.accepted,
++            "reason": self.reason,
++            "missing_fields": list(self.missing_fields),
++            "envelope": None if self.envelope is None else self.envelope.to_mapping(),
++        }
++
++
++def _read_field(payload: object, field_name: str) -> Any:
++    if isinstance(payload, Mapping):
++        return payload.get(field_name)
++    return getattr(payload, field_name, None)
++
++
++def _read_metadata(payload: object) -> Mapping[str, Any]:
++    metadata = _read_field(payload, "metadata")
++    if isinstance(metadata, Mapping):
++        return metadata
++    return {}
++
++
++def _read_source(payload: object) -> str | None:
++    source = _read_field(payload, "source")
++    if isinstance(source, str) and source:
++        return source
++    return None
++
++
++def evaluate_route_dispatch_filter(payload: object) -> RouteDispatchFilterDecision:
++    """Evaluate a Scheduler-facing route payload for dispatch filtering.
++
++    This function checks the presence of the Scheduler/policy/zone envelope. It
++    does not decide policy and it does not grant authority. A rejected decision
++    only means that ControlProxy cannot route this payload coherently.
++    """
++
++    missing = tuple(name for name in _FIELD_NAMES if _read_field(payload, name) in (None, ""))
++    if missing:
++        return RouteDispatchFilterDecision(
++            accepted=False,
++            reason="missing dispatch filter envelope fields",
++            missing_fields=missing,
++        )
++
++    authorized = _read_field(payload, "authorized")
++    if authorized is not True:
++        return RouteDispatchFilterDecision(
++            accepted=False,
++            reason="authorized flag is not true",
++            missing_fields=(),
++        )
++
++    envelope = RouteDispatchFilterEnvelope(
++        route_id=str(_read_field(payload, "route_id")),
++        zone=str(_read_field(payload, "zone")),
++        policy_decision_id=str(_read_field(payload, "policy_decision_id")),
++        authorized=True,
++        source=_read_source(payload),
++        metadata=_read_metadata(payload),
++    )
++    return RouteDispatchFilterDecision(
++        accepted=True,
++        reason="accepted for policy/zone dispatch filtering",
++        envelope=envelope,
++    )
++
++
++def require_route_dispatch_filter_envelope(payload: object) -> RouteDispatchFilterEnvelope:
++    """Return the dispatch-filter envelope or raise a deterministic error."""
++
++    decision = evaluate_route_dispatch_filter(payload)
++    if decision.envelope is not None:
++        return decision.envelope
++    missing = ", ".join(decision.missing_fields)
++    suffix = f": {missing}" if missing else ""
++    raise ValueError(f"route dispatch filter rejected payload: {decision.reason}{suffix}")
++
++
++__all__ = (
++    "RouteDispatchFilterDecision",
++    "RouteDispatchFilterEnvelope",
++    "evaluate_route_dispatch_filter",
++    "require_route_dispatch_filter_envelope",
++)
+diff --git a/tests/rules/test_route_dispatch_filter_envelope_rule.py b/tests/rules/test_route_dispatch_filter_envelope_rule.py
+new file mode 100644
+index 0000000..07f67e8
+--- /dev/null
++++ b/tests/rules/test_route_dispatch_filter_envelope_rule.py
+@@ -0,0 +1,126 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "runtime" / "route_dispatch_filter_envelope.py"
++DOC = ROOT / "doc" / "architecture" / "CONTROLPROXY_DISPATCH_FILTERING_0098.md"
++DOT = ROOT / "doc" / "architecture" / "RUNTIME_CONTROLFS_SHM_CLUSTER_FABRIC_GRAPH_0098.dot"
++PLAN = ROOT / "doc" / "architecture" / "CONTROLPROXY_OPERATIONAL_PLAN_0098.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0098_CHANGED_FILES.md"
++REPORT = ROOT / "PHASE0098_TEST_REPORT.md"
++
++
++def _read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_0098_names_dispatch_filtering_instead_of_security_goal() -> None:
++    text = "\n".join(_read(path) for path in (MODULE, DOC, DOT, PLAN, REPORT))
++    required = [
++        "policy/zone dispatch filtering",
++        "not a security objective",
++        "ControlProxy does not decide security policy",
++        "Scheduler/policy/zone remain the authority",
++        "security-shaped envelope",
++        "boundary filter, not a new security decision",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0098_graph_remains_integrated_root_graph() -> None:
++    text = "\n".join(_read(path) for path in (DOC, DOT, PLAN, REPORT))
++    required = [
++        "Root graph, not an isolated phase graph",
++        "digraph runtime_controlfs_shm_cluster_fabric_graph_0098",
++        "subgraph cluster_policy_zone",
++        "subgraph cluster_controlproxy_controlfs",
++        "subgraph cluster_runtime_surfaces",
++        "subgraph cluster_future_extensions",
++        "RouteDispatchFilterEnvelope",
++        "existing event.bus",
++        "existing context.bus",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0098_scheduler_loop_and_dispatcher_boundary_stay_locked() -> None:
++    text = "\n".join(_read(path) for path in (DOC, DOT, PLAN, REPORT))
++    required = [
++        "No Scheduler.run() modification",
++        "Dispatcher remains required",
++        "Dispatcher -> Handler path is still sufficient",
++        "Scheduler.run() and ControlProxy",
++        "Dispatcher is the kernel dispatch boundary",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0098_module_is_importable_envelope_not_io_or_bus() -> None:
++    source = _read(MODULE)
++    required = [
++        "class RouteDispatchFilterEnvelope",
++        "class RouteDispatchFilterDecision",
++        "def evaluate_route_dispatch_filter",
++        "def require_route_dispatch_filter_envelope",
++        "authorized=True is required",
++    ]
++    for phrase in required:
++        assert phrase in source
++    forbidden = [
++        "argparse",
++        "subprocess",
++        "Thread",
++        "EventBus(",
++        "ContextBus(",
++        "Scheduler.run",
++        "import qdrant",
++        "openvino",
++    ]
++    for phrase in forbidden:
++        assert phrase not in source
++
++
++def test_0098_operational_invariants_are_present() -> None:
++    text = "\n".join(_read(path) for path in (DOC, DOT, PLAN, REPORT))
++    required = [
++        "No CLI",
++        "No OpenRC service and no resident daemon",
++        "No watcher",
++        "No live mmap resize",
++        "g2/g3",
++        "Not /dev/shm-only",
++        "No NetworkBridge or HardwareBridge implementation",
++        "No Qdrant, LLM, or OpenVINO path",
++        "code_rule_review: done",
++        "code_rule_update_required: false",
++        "live_path_status: transition",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0098_manifest_keeps_kernel_files_out() -> None:
++    manifest = _read(MANIFEST)
++    expected = [
++        "src/runtime/route_dispatch_filter_envelope.py",
++        "tests/runtime/test_route_dispatch_filter_envelope.py",
++        "tests/rules/test_route_dispatch_filter_envelope_rule.py",
++        "doc/architecture/CONTROLPROXY_DISPATCH_FILTERING_0098.md",
++        "doc/architecture/RUNTIME_CONTROLFS_SHM_CLUSTER_FABRIC_GRAPH_0098.dot",
++        "doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0098.md",
++        "doc/manifests/MANIFEST_0098_CHANGED_FILES.md",
++        "PHASE0098_TEST_REPORT.md",
++    ]
++    for path in expected:
++        assert path in manifest
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/kernel/queue.py",
++        "src/kernel/dispatcher.py",
++    ]
++    for path in forbidden:
++        assert path not in manifest
+diff --git a/tests/runtime/test_route_dispatch_filter_envelope.py b/tests/runtime/test_route_dispatch_filter_envelope.py
+new file mode 100644
+index 0000000..ce19793
+--- /dev/null
++++ b/tests/runtime/test_route_dispatch_filter_envelope.py
+@@ -0,0 +1,112 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from types import MappingProxyType
++
++import pytest
++
++from runtime.route_dispatch_filter_envelope import (
++    RouteDispatchFilterEnvelope,
++    evaluate_route_dispatch_filter,
++    require_route_dispatch_filter_envelope,
++)
++
++
++@dataclass(frozen=True, slots=True)
++class RequestObject:
++    route_id: str
++    zone: str
++    policy_decision_id: str
++    authorized: bool
++    source: str = "pytest.scheduler"
++    metadata: MappingProxyType[str, object] = MappingProxyType({})
++
++
++def test_evaluate_route_dispatch_filter_accepts_mapping_payload() -> None:
++    decision = evaluate_route_dispatch_filter(
++        {
++            "route_id": "route-a",
++            "zone": "zone-control",
++            "policy_decision_id": "policy-1",
++            "authorized": True,
++            "source": "scheduler",
++            "metadata": {"priority": "hot"},
++        }
++    )
++
++    assert decision.accepted is True
++    assert decision.reason == "accepted for policy/zone dispatch filtering"
++    assert decision.envelope is not None
++    assert decision.envelope.route_id == "route-a"
++    assert decision.envelope.zone == "zone-control"
++    assert decision.envelope.policy_decision_id == "policy-1"
++    assert decision.envelope.to_mapping()["purpose"] == "policy/zone dispatch filtering, not a security objective"
++
++
++def test_evaluate_route_dispatch_filter_accepts_object_payload() -> None:
++    request = RequestObject(
++        route_id="route-b",
++        zone="zone-producer",
++        policy_decision_id="policy-2",
++        authorized=True,
++        metadata=MappingProxyType({"producer": "p1"}),
++    )
++
++    envelope = require_route_dispatch_filter_envelope(request)
++
++    assert envelope.route_id == "route-b"
++    assert envelope.zone == "zone-producer"
++    assert envelope.source == "pytest.scheduler"
++    assert envelope.metadata == {"producer": "p1"}
++
++
++def test_evaluate_route_dispatch_filter_rejects_missing_zone() -> None:
++    decision = evaluate_route_dispatch_filter(
++        {
++            "route_id": "route-c",
++            "policy_decision_id": "policy-3",
++            "authorized": True,
++        }
++    )
++
++    assert decision.accepted is False
++    assert decision.envelope is None
++    assert decision.reason == "missing dispatch filter envelope fields"
++    assert decision.missing_fields == ("zone",)
++
++
++def test_evaluate_route_dispatch_filter_rejects_unauthorized_without_deciding_policy() -> None:
++    decision = evaluate_route_dispatch_filter(
++        {
++            "route_id": "route-d",
++            "zone": "zone-control",
++            "policy_decision_id": "policy-4",
++            "authorized": False,
++        }
++    )
++
++    assert decision.accepted is False
++    assert decision.reason == "authorized flag is not true"
++    assert decision.to_mapping()["envelope"] is None
++
++
++def test_require_route_dispatch_filter_envelope_raises_stable_error() -> None:
++    with pytest.raises(ValueError, match="route dispatch filter rejected payload"):
++        require_route_dispatch_filter_envelope({"route_id": "route-e"})
++
++
++def test_route_dispatch_filter_envelope_copies_metadata() -> None:
++    metadata = {"mutable": []}
++    envelope = RouteDispatchFilterEnvelope(
++        route_id="route-f",
++        zone="zone-control",
++        policy_decision_id="policy-5",
++        authorized=True,
++        metadata=metadata,
++    )
++
++    metadata["new"] = "outside"
++
++    assert "new" not in envelope.metadata
++    with pytest.raises(TypeError):
++        envelope.metadata["blocked"] = True  # type: ignore[index]

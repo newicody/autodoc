@@ -1,0 +1,513 @@
+diff --git a/PHASE0094_TEST_REPORT.md b/PHASE0094_TEST_REPORT.md
+new file mode 100644
+index 0000000..f93facb
+--- /dev/null
++++ b/PHASE0094_TEST_REPORT.md
+@@ -0,0 +1,44 @@
++# Phase 0094 test report
++
++Scope: ControlProxy route generation inter-process lock.
++
++## Commands to run
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/runtime/test_route_generation_lock.py
++PYTHONPATH=src:. pytest -q tests/rules/test_route_generation_lock_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Local patch-generation validation
++
++```text
++git apply --check: passed in patch worktree
++python -m py_compile new files: passed
++pytest targeted 0094 in minimal worktree: passed
++```
++
++Full repository pytest must be run by apply_patch_queue.py in the developer
++checkout.
++
++## code_rule alignment
++
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: 0094 adds a small importable inter-process lock around the
++ControlProxy generation table. It preserves Scheduler authority, does not add a
++CLI, daemon, watcher, service, network path, backend, Qdrant, LLM or OpenVINO
++integration, and does not resize a live mmap route.
++live_path_status: green
++live_path_uses_real_backend: false
++context_contract_version: n/a
++context_contract_changed: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
+diff --git a/doc/architecture/ROUTE_GENERATION_LOCK_0094.md b/doc/architecture/ROUTE_GENERATION_LOCK_0094.md
+new file mode 100644
+index 0000000..ffcfd74
+--- /dev/null
++++ b/doc/architecture/ROUTE_GENERATION_LOCK_0094.md
+@@ -0,0 +1,68 @@
++# Route generation lock — 0094
++
++Status: implementation patch.
++
++0094 adds a small inter-process lock for the ControlProxy generation table.
++The target is the generation allocation critical section introduced by 0091-r2:
++
++```text
++route_id -> current_generation
++```
++
++The lock path is a ControlFS sidecar:
++
++```text
++active/routes/<route_id>/generation.lock
++```
++
++The lock exists so that two local ControlProxy actors cannot allocate the same
++`g2/g3` route generation concurrently. The counter still increments in the
++caller, and it should increment only when a new route generation is
++materialized. The lock itself never allocates a generation and never resizes a
++route.
++
++## Operational path
++
++```text
++with acquire_route_generation_lock(controlfs_root, route_id):
++    load active/routes/<route_id>/generation_state.json
++    verify next_generation
++    create routes/<route_id>@gN/ring.bin
++    persist generation_state.json
++```
++
++0094 intentionally does not modify the 0091-r2 materializer yet. It provides the
++importable primitive that the next integration patch can wrap around
++materialize_route_generation_candidate(). This keeps the patch small and avoids
++changing Scheduler, Dispatcher, queue or component contracts.
++
++## Implementation
++
++The implementation uses `fcntl.flock` from the Python standard library. It is a
++local inter-process lock for the developer/runtime host. It is not a distributed
++cluster lock and it is not a NetworkBridge or HardwareBridge primitive.
++
++The lock file is deliberately file-backed ControlFS coordination. It is not
++/dev/shm-only; a future runtime root may point ControlFS or route storage to
++/dev/shm without changing the lock contract.
++
++## Boundaries
++
++- No CLI.
++- No OpenRC service and no resident daemon.
++- No watcher or inotify loop.
++- No Scheduler.run() modification.
++- No PriorityQueue, Dispatcher or Component tick contract modification.
++- No live mmap resize.
++- No route generation allocation by the lock itself.
++- ControlProxy does not decide security.
++- Scheduler/policy/zone remain the authority.
++- standard library only.
++
++## code_rule alignment
++
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: 0094 adds an importable local inter-process lock at the
++ControlProxy/ControlFS IO boundary. It does not add a CLI, daemon, watcher,
++network path, backend, Scheduler modification, Qdrant, LLM, or OpenVINO path.
+diff --git a/doc/manifests/MANIFEST_0094_CHANGED_FILES.md b/doc/manifests/MANIFEST_0094_CHANGED_FILES.md
+new file mode 100644
+index 0000000..cc66994
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0094_CHANGED_FILES.md
+@@ -0,0 +1,14 @@
++# Manifest 0094 changed files
++
++```text
++src/runtime/route_generation_lock.py
++tests/runtime/test_route_generation_lock.py
++tests/rules/test_route_generation_lock_rule.py
++doc/architecture/ROUTE_GENERATION_LOCK_0094.md
++doc/manifests/MANIFEST_0094_CHANGED_FILES.md
++PHASE0094_TEST_REPORT.md
++```
++
++0094 adds an importable local route generation lock and tests. It keeps kernel
++loop files, operator tools, network bridges, hardware bridges, model runtimes,
++search infrastructure, and persistent vector stores unchanged.
+diff --git a/src/runtime/route_generation_lock.py b/src/runtime/route_generation_lock.py
+new file mode 100644
+index 0000000..86b6a08
+--- /dev/null
++++ b/src/runtime/route_generation_lock.py
+@@ -0,0 +1,190 @@
++"""Inter-process lock for the ControlProxy route generation table.
++
++This module implements phase 0094. It adds a small importable fcntl.flock
++primitive around the ControlProxy generation table so that two local
++ControlProxy actors cannot allocate the same g2/g3 route generation at the same
++time.
++
++Operational intent:
++- protect active/routes/<route_id>/generation_state.json updates;
++- keep route_id -> current_generation allocation deterministic;
++- increment only when a new route generation is materialized by the caller;
++- keep /dev/shm placement separate from the lock contract.
++
++Boundaries deliberately kept out of this module:
++- No CLI.
++- No OpenRC service and no resident daemon.
++- No watcher or inotify loop.
++- No Scheduler.run() modification.
++- No PriorityQueue, Dispatcher or Component tick contract modification.
++- No live mmap resize.
++- No route generation allocation by the lock itself.
++- ControlProxy does not decide security.
++- Scheduler/policy/zone remain the authority.
++- standard library only.
++
++The lock is an IO boundary for local ControlFS coordination. It does not command
++components and it does not publish policy decisions.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++import errno
++import os
++from pathlib import Path
++from types import TracebackType
++from typing import Any, Literal, Self
++
++try:  # POSIX-only, intentionally isolated in this runtime adapter.
++    import fcntl
++except ImportError:  # pragma: no cover - exercised only on non-POSIX hosts.
++    fcntl = None  # type: ignore[assignment]
++
++from runtime.controlfs_manifest import normalize_route_id
++
++ROUTE_GENERATION_LOCK_SCHEMA = "missipy.controlproxy.route_generation_lock.v1"
++LockState = Literal["locked", "released"]
++
++
++class RouteGenerationLockError(RuntimeError):
++    """Raised when a route generation lock cannot be used safely."""
++
++
++class RouteGenerationLockUnavailable(RouteGenerationLockError):
++    """Raised when a non-blocking route generation lock is already held."""
++
++
++@dataclass(frozen=True, slots=True)
++class RouteGenerationLockInfo:
++    """Serializable description of one route generation lock state."""
++
++    schema: str
++    route_id: str
++    lock_path: str
++    state: LockState
++    blocking: bool
++
++    def to_mapping(self) -> dict[str, Any]:
++        """Return a deterministic JSON-ready projection."""
++
++        return {
++            "blocking": self.blocking,
++            "lock_path": self.lock_path,
++            "route_id": self.route_id,
++            "schema": self.schema,
++            "state": self.state,
++        }
++
++
++class RouteGenerationFileLock:
++    """Context manager for one route generation table inter-process lock.
++
++    The context manager owns only the lock file descriptor. It does not read or
++    write the generation table and it does not allocate a new generation. Callers
++    should keep the critical section small: load table, validate next_generation,
++    materialize the generation, then persist the table.
++    """
++
++    def __init__(
++        self,
++        *,
++        controlfs_root: Path | str,
++        route_id: str,
++        blocking: bool = True,
++    ) -> None:
++        self.route_id = normalize_route_id(route_id)
++        self.lock_path = route_generation_lock_path(controlfs_root, self.route_id)
++        self.blocking = bool(blocking)
++        self._fd: int | None = None
++
++    def acquire(self) -> RouteGenerationLockInfo:
++        """Acquire the route generation lock and return its locked projection."""
++
++        if fcntl is None:
++            raise RouteGenerationLockError("fcntl.flock is required for inter-process locking")
++        if self._fd is not None:
++            raise RouteGenerationLockError("route generation lock is already acquired")
++        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
++        fd = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
++        flags = fcntl.LOCK_EX
++        if not self.blocking:
++            flags |= fcntl.LOCK_NB
++        try:
++            fcntl.flock(fd, flags)
++        except OSError as exc:
++            os.close(fd)
++            if exc.errno in {errno.EACCES, errno.EAGAIN}:
++                raise RouteGenerationLockUnavailable("route generation lock is already held") from exc
++            raise RouteGenerationLockError(f"could not acquire route generation lock: {exc}") from exc
++        self._fd = fd
++        return self.info("locked")
++
++    def release(self) -> RouteGenerationLockInfo:
++        """Release the lock and close its file descriptor."""
++
++        fd = self._fd
++        if fd is None:
++            raise RouteGenerationLockError("route generation lock is not acquired")
++        if fcntl is None:
++            raise RouteGenerationLockError("fcntl.flock is required for inter-process locking")
++        try:
++            fcntl.flock(fd, fcntl.LOCK_UN)
++        finally:
++            os.close(fd)
++            self._fd = None
++        return self.info("released")
++
++    def info(self, state: LockState | None = None) -> RouteGenerationLockInfo:
++        """Return the current lock projection without mutating the lock."""
++
++        current_state: LockState = state or ("locked" if self._fd is not None else "released")
++        return RouteGenerationLockInfo(
++            schema=ROUTE_GENERATION_LOCK_SCHEMA,
++            route_id=self.route_id,
++            lock_path=str(self.lock_path),
++            state=current_state,
++            blocking=self.blocking,
++        )
++
++    def __enter__(self) -> RouteGenerationLockInfo:
++        return self.acquire()
++
++    def __exit__(
++        self,
++        exc_type: type[BaseException] | None,
++        exc: BaseException | None,
++        traceback: TracebackType | None,
++    ) -> None:
++        if self._fd is not None:
++            self.release()
++
++
++def route_generation_lock_path(controlfs_root: Path | str, route_id: str) -> Path:
++    """Return the sidecar ControlFS lock path for one logical route."""
++
++    safe_route_id = normalize_route_id(route_id)
++    return Path(controlfs_root) / "active" / "routes" / safe_route_id / "generation.lock"
++
++
++def acquire_route_generation_lock(
++    *,
++    controlfs_root: Path | str,
++    route_id: str,
++    blocking: bool = True,
++) -> RouteGenerationFileLock:
++    """Build an importable lock context manager for callers.
++
++    Example:
++
++    ```python
++    with acquire_route_generation_lock(controlfs_root=root, route_id="route-a"):
++        ...  # load generation table, materialize g2/g3, persist table
++    ```
++    """
++
++    return RouteGenerationFileLock(
++        controlfs_root=controlfs_root,
++        route_id=route_id,
++        blocking=blocking,
++    )
+diff --git a/tests/rules/test_route_generation_lock_rule.py b/tests/rules/test_route_generation_lock_rule.py
+new file mode 100644
+index 0000000..7a1c8ee
+--- /dev/null
++++ b/tests/rules/test_route_generation_lock_rule.py
+@@ -0,0 +1,83 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "runtime" / "route_generation_lock.py"
++DOC = ROOT / "doc" / "architecture" / "ROUTE_GENERATION_LOCK_0094.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0094_CHANGED_FILES.md"
++REPORT = ROOT / "PHASE0094_TEST_REPORT.md"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing file: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_0094_interprocess_lock_locks_operational_intent() -> None:
++    text = _read(MODULE) + "\n" + _read(DOC)
++    required = [
++        "inter-process lock",
++        "ControlProxy generation table",
++        "active/routes/<route_id>/generation.lock",
++        "route_id -> current_generation",
++        "increment only when a new route generation is materialized",
++        "g2/g3",
++        "No CLI",
++        "No OpenRC service and no resident daemon",
++        "No watcher",
++        "No Scheduler.run() modification",
++        "No live mmap resize",
++        "ControlProxy does not decide security",
++        "Scheduler/policy/zone remain the authority",
++        "standard library only",
++        "fcntl.flock",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0094_manifest_keeps_scope_small() -> None:
++    manifest = _read(MANIFEST)
++    required = [
++        "src/runtime/route_generation_lock.py",
++        "tests/runtime/test_route_generation_lock.py",
++        "tests/rules/test_route_generation_lock_rule.py",
++        "doc/architecture/ROUTE_GENERATION_LOCK_0094.md",
++        "PHASE0094_TEST_REPORT.md",
++    ]
++    for phrase in required:
++        assert phrase in manifest
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/kernel/queue.py",
++        "src/kernel/dispatcher.py",
++        "tools/",
++        "OpenRC unit",
++        "NetworkBridge",
++        "HardwareBridge",
++        "Qdrant",
++        "OpenVINO",
++    ]
++    for phrase in forbidden:
++        assert phrase not in manifest
++
++
++def test_0094_report_contains_code_rule_alignment_block() -> None:
++    report = _read(REPORT)
++    required = [
++        "code_rule_review: done",
++        "code_rule_update_required: false",
++        "live_path_status: green",
++        "live_path_uses_real_backend: false",
++        "context_contract_changed: false",
++        "external_dependencies_added: false",
++        "scheduler_modified: false",
++        "network_added: false",
++        "github_api_added: false",
++        "qdrant_added: false",
++        "llm_or_openvino_added: false",
++        "search_commands_bounded: n/a",
++    ]
++    for phrase in required:
++        assert phrase in report
+diff --git a/tests/runtime/test_route_generation_lock.py b/tests/runtime/test_route_generation_lock.py
+new file mode 100644
+index 0000000..edb3603
+--- /dev/null
++++ b/tests/runtime/test_route_generation_lock.py
+@@ -0,0 +1,78 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++import pytest
++
++from runtime.route_generation_lock import (
++    ROUTE_GENERATION_LOCK_SCHEMA,
++    RouteGenerationFileLock,
++    RouteGenerationLockError,
++    RouteGenerationLockUnavailable,
++    acquire_route_generation_lock,
++    route_generation_lock_path,
++)
++
++
++def test_route_generation_lock_path_is_controlfs_sidecar(tmp_path: Path) -> None:
++    path = route_generation_lock_path(tmp_path, "route-a")
++
++    assert path == tmp_path / "active" / "routes" / "route-a" / "generation.lock"
++
++
++def test_route_generation_lock_rejects_path_traversal(tmp_path: Path) -> None:
++    with pytest.raises(Exception, match="route_id"):
++        route_generation_lock_path(tmp_path, "../route-a")
++
++
++def test_route_generation_lock_serializes_nonblocking_acquire(tmp_path: Path) -> None:
++    first = RouteGenerationFileLock(controlfs_root=tmp_path, route_id="route-a")
++
++    with first as first_info:
++        assert first_info.schema == ROUTE_GENERATION_LOCK_SCHEMA
++        assert first_info.state == "locked"
++        assert first_info.route_id == "route-a"
++        assert Path(first_info.lock_path).exists()
++
++        second = RouteGenerationFileLock(
++            controlfs_root=tmp_path,
++            route_id="route-a",
++            blocking=False,
++        )
++        with pytest.raises(RouteGenerationLockUnavailable):
++            second.acquire()
++
++    third = RouteGenerationFileLock(
++        controlfs_root=tmp_path,
++        route_id="route-a",
++        blocking=False,
++    )
++    with third as third_info:
++        assert third_info.state == "locked"
++
++
++def test_route_generation_lock_allows_different_routes(tmp_path: Path) -> None:
++    with acquire_route_generation_lock(controlfs_root=tmp_path, route_id="route-a") as first_info:
++        with acquire_route_generation_lock(controlfs_root=tmp_path, route_id="route-b", blocking=False) as second_info:
++            assert first_info.route_id == "route-a"
++            assert second_info.route_id == "route-b"
++
++
++def test_route_generation_lock_to_mapping_is_stable(tmp_path: Path) -> None:
++    lock = RouteGenerationFileLock(controlfs_root=tmp_path, route_id="route-a", blocking=False)
++
++    with lock as info:
++        assert info.to_mapping() == {
++            "blocking": False,
++            "lock_path": str(tmp_path / "active" / "routes" / "route-a" / "generation.lock"),
++            "route_id": "route-a",
++            "schema": ROUTE_GENERATION_LOCK_SCHEMA,
++            "state": "locked",
++        }
++
++
++def test_route_generation_lock_release_requires_acquire(tmp_path: Path) -> None:
++    lock = RouteGenerationFileLock(controlfs_root=tmp_path, route_id="route-a")
++
++    with pytest.raises(RouteGenerationLockError, match="not acquired"):
++        lock.release()

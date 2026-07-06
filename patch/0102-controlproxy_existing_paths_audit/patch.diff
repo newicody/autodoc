@@ -1,0 +1,750 @@
+diff --git a/PHASE0102_TEST_REPORT.md b/PHASE0102_TEST_REPORT.md
+new file mode 100644
+index 0000000..b3ca947
+--- /dev/null
++++ b/PHASE0102_TEST_REPORT.md
+@@ -0,0 +1,62 @@
++# Phase 0102 test report — ControlProxy existing paths audit
++
++## Scope
++
++0102 audits and marks the existing Scheduler/ControlProxy surrounding paths before any runtime refactor.
++
++This phase is documentation and rules only. It does not add or modify runtime code.
++
++## Expected local validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/rules/test_controlproxy_existing_paths_audit_0102_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Code rule review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: 0102 applies the existing micro-kernel rules and documents a migration audit; it introduces no new programming technique.
++live_path_status: n/a
++live_path_uses_real_backend: n/a
++context_contract_version: n/a
++context_contract_changed: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++## Guardrails
++
++```text
++No CLI.
++No daemon.
++No OpenRC service.
++No resident watcher.
++No runtime code.
++No Scheduler.run() modification.
++No PriorityQueue modification.
++No Dispatcher implementation modification.
++No PolicyEngine implementation modification.
++No EventBus implementation modification.
++No new bus.
++No ControlProxyRouteCoordinator scheduler-like.
++No RouteRuntimeManager implementation yet.
++No Qdrant path.
++No LLM path.
++No OpenVINO path.
++No NetworkBridge.
++No HardwareBridge.
++```
++
++## Local generation note
++
++The patch is add-only and documentation-focused. It is expected to be validated by the rule test and by the repository-wide rule suite after application.
+diff --git a/doc/CHANGELOG_0102_CONTROLPROXY_EXISTING_PATHS_AUDIT.md b/doc/CHANGELOG_0102_CONTROLPROXY_EXISTING_PATHS_AUDIT.md
+new file mode 100644
+index 0000000..960e5c5
+--- /dev/null
++++ b/doc/CHANGELOG_0102_CONTROLPROXY_EXISTING_PATHS_AUDIT.md
+@@ -0,0 +1,22 @@
++# Changelog — 0102 ControlProxy existing paths audit
++
++## Added
++
++- Audit of existing Scheduler, Dispatcher, PolicyEngine, PriorityQueue, Handler, Specialist, ControlProxy, EventBus, Context, Recorder, and runtime-route paths.
++- Classification of current ControlProxy helpers into compatibility-wrapper candidates, runtime primitives, data-plane primitives, observation readers, and future integration points.
++- Risk register for duplicated concepts before `RouteRuntimeManager` is introduced.
++- Root-attached DOT overlay that shows the audit classification without presenting future runtime wiring as already implemented.
++- Rule test that locks the audit intent before 0103.
++
++## Changed
++
++- The next code direction is clarified: 0103 introduces a narrow `RouteRuntimeManager`; it does not introduce a scheduler-like ControlProxy coordinator.
++
++## Not changed
++
++- No runtime code is changed.
++- No scheduler loop is changed.
++- No dispatcher implementation is changed.
++- No policy implementation is changed.
++- No queue implementation is changed.
++- No EventBus implementation is changed.
+diff --git a/doc/architecture/CONTROLPROXY_EXISTING_PATHS_AUDIT_0102.md b/doc/architecture/CONTROLPROXY_EXISTING_PATHS_AUDIT_0102.md
+new file mode 100644
+index 0000000..5aeb444
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_EXISTING_PATHS_AUDIT_0102.md
+@@ -0,0 +1,171 @@
++# 0102 — ControlProxy existing paths audit
++
++## Decision
++
++0102 is audit and marking only.
++
++The goal is to prevent another parallel architecture before 0103 introduces `RouteRuntimeManager`.
++
++The locked command path remains:
++
++```text
++Component / Specialist
++-> Scheduler.emit()
++-> PolicyEngine.decide()
++-> PriorityQueue
++-> Scheduler.run()
++-> Dispatcher
++-> Handler
++-> capability boundary
++```
++
++The route runtime path remains a data-plane boundary, not a command bus:
++
++```text
++ControlProxy handler
++-> future RouteRuntimeManager
++-> ControlFS
++-> mmap/eventfd data plane
++-> generation table / lifecycle / lock / placement
++```
++
++## Current path classification
++
++### Micro-kernel boundaries
++
++```text
++Scheduler = loop, time, queue submission, priority execution boundary
++PolicyEngine = minimal admission gate before queue
++PriorityQueue = sole deterministic ordering mechanism
++Dispatcher = EventType -> Handler only
++Handler = thin adapter from Event/Request to one capability boundary
++Specialist branch = business logic, reasoning, transformation, strategy
++EventBus = observation only
++```
++
++These boundaries are not ControlProxy responsibilities.
++
++### ControlProxy Scheduler-facing compatibility path
++
++The Scheduler-facing helpers remain valid as compatibility wrapper candidates until 0104 slims them around `RouteRuntimeManager`.
++
++```text
++prepare_route_for_scheduler = compatibility wrapper candidate
++handle_scheduler_route_request = compatibility wrapper candidate
++ControlProxySchedulerRouteRequestHandler = thin handler candidate
++```
++
++They must not become a second Scheduler. They must converge toward:
++
++```text
++Dispatcher
++-> ControlProxySchedulerRouteRequestHandler
++-> RouteRuntimeManager.prepare_route(...)
++```
++
++### Route runtime primitives
++
++The following phases are runtime primitives. They are useful, but they should be composed by one future runtime manager rather than by new ad-hoc coordinators.
++
++```text
++mmap fixed-slot route = data plane primitive
++route notifier eventfd/pipe = data plane notification primitive
++route lease state = route-client lifecycle primitive
++active route materializer = existing materialization primitive
++generation table g2/g3 = generation-state primitive
++route generation lifecycle = candidate/active/draining/closed primitive
++route generation lock = inter-process guard primitive
++locked materializer = critical-section composition primitive
++runtime placement file/dev_shm = explicit placement primitive
++route dispatch filter envelope = boundary filter primitive, not security authority
++```
++
++### Observation and journal paths
++
++```text
++EventBus = observation only
++existing bus visualization adapter = reader of the existing bus
++RouteMessageJournal = journal/replay projection of drained route messages
++Recorder = future higher-level replay/recording projection
++```
++
++`RouteMessageJournal` is not a second EventBus and not the final Recorder. It is a data-plane journal that can feed a Recorder later.
++
++### Context and search paths
++
++```text
++TaskContext / ContextGate = context authority
++GlobalContextSnapshot = kernel-level context view
++Qdrant = projection/search index only
++InferenceContext = specialist-facing reasoning context
++```
++
++Qdrant must not become the context authority. ContextGate and TaskContext remain the authority. Qdrant remains projection and search.
++
++### Future bridge paths
++
++```text
++NetworkBridge = future external bridge, not current command path
++HardwareBridge = future external bridge, not current command path
++ClusterFabric = future distributed placement fabric, not current route manager
++```
++
++They remain out of scope until the local route runtime is coherent.
++
++## Duplication risk register
++
++| Area | Duplicate-looking pieces | Risk | Decision before 0103 |
++| --- | --- | --- | --- |
++| Scheduler / ControlProxy | Scheduler loop and ControlProxy route lifecycle | ControlProxy becomes scheduler-like | ControlProxy remains runtime boundary only |
++| PolicyEngine / route dispatch filter | admission policy and filter envelope | two security authorities | PolicyEngine admits; filter envelope guards dispatch shape |
++| Dispatcher / specialist | EventType routing and business translation | Dispatcher starts doing specialist work | Dispatcher remains EventType -> Handler only |
++| Handler / runtime manager | handler adaptation and route runtime operations | handler becomes runtime brain | handler becomes thin adapter in 0104 |
++| EventBus / mmap-eventfd | observation bus and route data plane | a second bus appears | mmap/eventfd is data plane, not EventBus |
++| Recorder / RouteMessageJournal | event replay and route-message journal | two recorders | RouteMessageJournal is low-level projection; Recorder is later aggregation |
++| ContextGate / Qdrant | context authority and vector projection | search index becomes authority | ContextGate/TaskContext remain authority |
++| lease state / generation lifecycle | client lease and segment generation state | two state machines collapse into confusion | keep separate until 0103 maps them explicitly |
++| active materializer / locked materializer | existing materialization and lock-wrapped generation | duplicated materializers | RouteRuntimeManager chooses one composed path |
++| runtime placement / ControlFS | placement root and state root | hidden /dev/shm assumption | placement is explicit; ControlFS records state |
++
++## 0103 entry criteria
++
++0103 may add code only if it preserves these rules:
++
++```text
++RouteRuntimeManager planned next.
++RouteRuntimeManager composes runtime primitives.
++RouteRuntimeManager does not schedule global work.
++RouteRuntimeManager does not calculate global priority.
++RouteRuntimeManager does not create a bus.
++RouteRuntimeManager does not become PolicyEngine.
++RouteRuntimeManager does not replace Dispatcher.
++```
++
++## 0104 entry criteria
++
++0104 may slim the handler only after 0103 exists.
++
++```text
++ControlProxySchedulerRouteRequestHandler remains thin.
++prepare_route_for_scheduler remains compatibility wrapper or is explicitly deprecated.
++handle_scheduler_route_request remains compatibility wrapper or is explicitly deprecated.
++Dispatcher still resolves EventType -> Handler only.
++```
++
++## Non-goals
++
++```text
++No CLI.
++No daemon/service/OpenRC.
++No resident watcher.
++No runtime code in this phase.
++No Scheduler.run() modification.
++No PriorityQueue modification.
++No Dispatcher implementation modification.
++No PolicyEngine implementation modification.
++No EventBus implementation modification.
++No new bus.
++No ControlProxyRouteCoordinator scheduler-like.
++No RouteRuntimeManager implementation yet.
++No Qdrant / LLM / OpenVINO / NetworkBridge / HardwareBridge path.
++```
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0102.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0102.md
+new file mode 100644
+index 0000000..9980aa6
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0102.md
+@@ -0,0 +1,99 @@
++# ControlProxy operational plan after 0102
++
++0102 audits the existing paths before the next code patch.
++
++## Locked next steps
++
++```text
++0102 audit existing paths and duplication risks
++0103 introduce RouteRuntimeManager as a narrow runtime facade
++0104 slim ControlProxy handler to call RouteRuntimeManager
++0105 clarify priority/admission minimalism
++0106 enforce EventBus versus data-plane separation
++0107 rebuild root and individual graphs after code simplification
++```
++
++## 0103 — RouteRuntimeManager constraints
++
++`RouteRuntimeManager` should be a facade over existing runtime primitives, not a scheduler-like coordinator.
++
++Allowed responsibilities:
++
++```text
++prepare route runtime state
++materialize a generation through the locked materializer
++activate a generation through lifecycle primitive
++mark draining and closed through lifecycle primitive
++cleanup closed generation through lifecycle primitive
++resolve explicit placement file/dev_shm
++write or expose ControlFS state through existing primitives
++```
++
++Forbidden responsibilities:
++
++```text
++run a global loop
++own or mutate global priority
++admit events into the Scheduler queue
++replace PolicyEngine
++replace Dispatcher
++create a new bus
++own specialist business logic
++own ContextGate or TaskContext authority
++turn Qdrant into context authority
++```
++
++## 0104 — handler slimming constraints
++
++After 0103, the handler path should be:
++
++```text
++Scheduler.run()
++-> Dispatcher.dispatch()
++-> ControlProxySchedulerRouteRequestHandler.handle()
++-> RouteRuntimeManager.prepare_route()
++```
++
++Wrappers may remain for compatibility, but their direction must be explicit:
++
++```text
++prepare_route_for_scheduler -> wrapper around RouteRuntimeManager
++handle_scheduler_route_request -> wrapper around RouteRuntimeManager
++```
++
++## 0105 — priority/admission constraints
++
++Priority stays minimal until a separate explicit policy is added.
++
++```text
++Event.priority = numeric scheduling input
++PolicyEngine = minimal admission gate
++PriorityQueue = deterministic ordering
++ControlProxy = no global priority calculation
++Dispatcher = no priority mutation
++Specialist = may request priority through typed intention later
++```
++
++## 0106 — bus/data-plane constraints
++
++The route runtime must not introduce a second command or observation bus.
++
++```text
++EventBus = observation
++Context snapshot = context view
++mmap/eventfd = route data plane
++RouteMessageJournal = data-plane journal projection
++Visualization adapter = reader of existing bus
++```
++
++## 0107 — graph constraints
++
++Graphs must show implemented code and marked transitions separately.
++
++```text
++implemented = solid edge
++planned convergence = dashed edge
++forbidden duplicate = explicit note, not hidden
++root graph owns the global command path
++runtime overlay owns ControlProxy route data plane only
++```
+diff --git a/doc/docs/architecture/runtime/92_controlproxy_existing_paths_audit.dot b/doc/docs/architecture/runtime/92_controlproxy_existing_paths_audit.dot
+new file mode 100644
+index 0000000..4daff91
+--- /dev/null
++++ b/doc/docs/architecture/runtime/92_controlproxy_existing_paths_audit.dot
+@@ -0,0 +1,100 @@
++digraph ControlProxyExistingPathsAudit0102 {
++  graph [
++    label="0102 ControlProxy existing paths audit — root-attached overlay, not an isolated graph",
++    labelloc=t,
++    fontsize=20
++  ];
++  rankdir=LR;
++  node [shape=box, fontsize=11];
++  edge [fontsize=10];
++
++  subgraph cluster_kernel {
++    label="Micro-kernel command path — authority";
++    style=rounded;
++    SchedulerEmit [label="Scheduler.emit()"];
++    PolicyEngine [label="PolicyEngine\nminimal admission gate"];
++    PriorityQueue [label="PriorityQueue\nsole deterministic ordering"];
++    SchedulerRun [label="Scheduler.run()\nunchanged loop"];
++    Dispatcher [label="Dispatcher\nEventType -> Handler only"];
++    Handler [label="Handler\nthin adapter"];
++    SchedulerEmit -> PolicyEngine -> PriorityQueue -> SchedulerRun -> Dispatcher -> Handler;
++  }
++
++  subgraph cluster_specialist {
++    label="Specialist branch — business logic";
++    style=rounded;
++    Specialist [label="Specialist\nreasoning / transformation / strategy"];
++  }
++
++  subgraph cluster_controlproxy_compat {
++    label="ControlProxy Scheduler-facing compatibility path";
++    style=rounded;
++    PrepareForScheduler [label="prepare_route_for_scheduler\ncompatibility wrapper candidate"];
++    HandleRouteRequest [label="handle_scheduler_route_request\ncompatibility wrapper candidate"];
++    ControlProxyHandler [label="ControlProxySchedulerRouteRequestHandler\nthin handler candidate"];
++  }
++
++  subgraph cluster_runtime_primitives {
++    label="Route runtime primitives — to be composed by RouteRuntimeManager";
++    style=rounded;
++    RouteRuntimeManager [label="RouteRuntimeManager\nplanned in 0103\nnot implemented by 0102", style="rounded,dashed"];
++    MmapRoute [label="mmap fixed-slot route\ndata plane primitive"];
++    Notifier [label="eventfd/pipe notifier\ndata plane notification"];
++    LeaseState [label="route lease state\nclient lifecycle primitive"];
++    ActiveMaterializer [label="active route materializer\nexisting primitive"];
++    GenerationTable [label="generation table g2/g3\ngeneration-state primitive"];
++    Lifecycle [label="candidate/active/draining/closed\nlifecycle primitive"];
++    Lock [label="route generation lock\ninter-process guard"];
++    LockedMaterializer [label="locked materializer\ncritical-section composition"];
++    Placement [label="runtime placement\nfile/dev_shm explicit"];
++    ControlFS [label="ControlFS\nstate surface"];
++  }
++
++  subgraph cluster_observation {
++    label="Observation and journal";
++    style=rounded;
++    EventBus [label="EventBus\nobservation only"];
++    ExistingBusReader [label="existing bus visualization adapter\nreader only"];
++    RouteMessageJournal [label="RouteMessageJournal\ndata-plane journal projection"];
++    Recorder [label="Recorder\nfuture higher-level replay projection"];
++  }
++
++  subgraph cluster_context {
++    label="Context and search authority";
++    style=rounded;
++    ContextGate [label="TaskContext / ContextGate\ncontext authority"];
++    GlobalContextSnapshot [label="GlobalContextSnapshot\nkernel context view"];
++    Qdrant [label="Qdrant\nprojection/search only"];
++  }
++
++  Handler -> Specialist [label="specialist capability"];
++  Handler -> ControlProxyHandler [label="route capability"];
++  ControlProxyHandler -> HandleRouteRequest [label="current wrapper path"];
++  HandleRouteRequest -> PrepareForScheduler [label="current wrapper path"];
++  ControlProxyHandler -> RouteRuntimeManager [style=dashed, label="0104 target after 0103"];
++  PrepareForScheduler -> RouteRuntimeManager [style=dashed, label="compat wrapper target"];
++  HandleRouteRequest -> RouteRuntimeManager [style=dashed, label="compat wrapper target"];
++
++  RouteRuntimeManager -> Placement [style=dashed, label="compose"];
++  RouteRuntimeManager -> Lock [style=dashed, label="compose"];
++  RouteRuntimeManager -> LockedMaterializer [style=dashed, label="compose"];
++  RouteRuntimeManager -> GenerationTable [style=dashed, label="compose"];
++  RouteRuntimeManager -> Lifecycle [style=dashed, label="compose"];
++  RouteRuntimeManager -> ActiveMaterializer [style=dashed, label="compose"];
++  RouteRuntimeManager -> MmapRoute [style=dashed, label="compose"];
++  RouteRuntimeManager -> Notifier [style=dashed, label="compose"];
++  RouteRuntimeManager -> LeaseState [style=dashed, label="map explicitly"];
++  RouteRuntimeManager -> ControlFS [style=dashed, label="state"];
++
++  Dispatcher -> EventBus [label="publish observation copy"];
++  EventBus -> ExistingBusReader [label="read tap"];
++  MmapRoute -> RouteMessageJournal [label="drained messages"];
++  RouteMessageJournal -> Recorder [style=dashed, label="future aggregation"];
++
++  ContextGate -> GlobalContextSnapshot;
++  ContextGate -> Qdrant [label="projection only"];
++
++  PolicyEngine -> ControlProxyHandler [style=dotted, label="decision already made before dispatch"];
++  EventBus -> MmapRoute [style=dotted, label="forbidden: EventBus does not command data plane"];
++  ControlProxyHandler -> PriorityQueue [style=dotted, label="forbidden: ControlProxy does not calculate global priority"];
++}
+diff --git a/doc/manifests/MANIFEST_0102_CHANGED_FILES.md b/doc/manifests/MANIFEST_0102_CHANGED_FILES.md
+new file mode 100644
+index 0000000..7985f84
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0102_CHANGED_FILES.md
+@@ -0,0 +1,35 @@
++# Manifest — 0102 ControlProxy existing paths audit
++
++## Added files
++
++```text
++PHASE0102_TEST_REPORT.md
++doc/CHANGELOG_0102_CONTROLPROXY_EXISTING_PATHS_AUDIT.md
++doc/architecture/CONTROLPROXY_EXISTING_PATHS_AUDIT_0102.md
++doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0102.md
++doc/docs/architecture/runtime/92_controlproxy_existing_paths_audit.dot
++doc/manifests/MANIFEST_0102_CHANGED_FILES.md
++tests/rules/test_controlproxy_existing_paths_audit_0102_rule.py
++```
++
++## Intent
++
++0102 is audit and marking only. It classifies the existing paths so 0103 can introduce `RouteRuntimeManager` without creating a scheduler-like ControlProxy coordinator.
++
++## Non-changes
++
++```text
++No runtime code.
++No CLI.
++No daemon/service/OpenRC.
++No resident watcher.
++No kernel-loop modification.
++No queue modification.
++No dispatcher implementation modification.
++No policy implementation modification.
++No EventBus implementation modification.
++No new bus.
++No ControlProxyRouteCoordinator scheduler-like.
++No RouteRuntimeManager implementation yet.
++No Qdrant / LLM / OpenVINO / NetworkBridge / HardwareBridge path.
++```
+diff --git a/tests/rules/__pycache__/test_controlproxy_existing_paths_audit_0102_rule.cpython-313-pytest-9.0.2.pyc b/tests/rules/__pycache__/test_controlproxy_existing_paths_audit_0102_rule.cpython-313-pytest-9.0.2.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..f9ce8a119cc1471f277d4b729eaa00d6519c86fe
+GIT binary patch
+literal 9079
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/rules/__pycache__/test_controlproxy_existing_paths_audit_0102_rule.cpython-313.pyc b/tests/rules/__pycache__/test_controlproxy_existing_paths_audit_0102_rule.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..1faf7016ec56c34cc45971013db4ae14e294e9aa
+GIT binary patch
+literal 4253
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/rules/test_controlproxy_existing_paths_audit_0102_rule.py b/tests/rules/test_controlproxy_existing_paths_audit_0102_rule.py
+new file mode 100644
+index 0000000..79f4d95
+--- /dev/null
++++ b/tests/rules/test_controlproxy_existing_paths_audit_0102_rule.py
+@@ -0,0 +1,90 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "CONTROLPROXY_EXISTING_PATHS_AUDIT_0102.md"
++PLAN = ROOT / "doc" / "architecture" / "CONTROLPROXY_OPERATIONAL_PLAN_0102.md"
++DOT = ROOT / "doc" / "docs" / "architecture" / "runtime" / "92_controlproxy_existing_paths_audit.dot"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0102_CHANGED_FILES.md"
++REPORT = ROOT / "PHASE0102_TEST_REPORT.md"
++
++
++def _read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_0102_audit_files_exist() -> None:
++    for path in (DOC, PLAN, DOT, MANIFEST, REPORT):
++        assert path.exists(), path
++
++
++def test_0102_locks_existing_path_classification() -> None:
++    text = _read(DOC) + "\n" + _read(PLAN)
++    required = [
++        "0102 is audit and marking only",
++        "PolicyEngine = minimal admission gate before queue",
++        "PriorityQueue = sole deterministic ordering mechanism",
++        "Dispatcher = EventType -> Handler only",
++        "Handler = thin adapter",
++        "Specialist branch = business logic",
++        "EventBus = observation only",
++        "mmap/eventfd data plane",
++        "compatibility wrapper candidate",
++        "runtime primitive",
++        "data plane primitive",
++        "boundary filter primitive, not security authority",
++        "TaskContext / ContextGate = context authority",
++        "Qdrant = projection/search index only",
++        "RouteRuntimeManager planned next",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0102_prevents_parallel_scheduler_and_bus_language() -> None:
++    text = _read(DOC) + "\n" + _read(PLAN) + "\n" + _read(REPORT)
++    required = [
++        "No new bus",
++        "No ControlProxyRouteCoordinator scheduler-like",
++        "No RouteRuntimeManager implementation yet",
++        "RouteRuntimeManager does not schedule global work",
++        "RouteRuntimeManager does not calculate global priority",
++        "RouteRuntimeManager does not create a bus",
++        "Dispatcher still resolves EventType -> Handler only",
++        "ControlProxy = no global priority calculation",
++        "mmap/eventfd = route data plane",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0102_dot_is_root_attached_overlay_not_isolated_future_claim() -> None:
++    dot = _read(DOT)
++    required = [
++        "root-attached overlay, not an isolated graph",
++        "Micro-kernel command path",
++        "ControlProxy Scheduler-facing compatibility path",
++        "Route runtime primitives",
++        "RouteRuntimeManager\\nplanned in 0103\\nnot implemented by 0102",
++        "forbidden: EventBus does not command data plane",
++        "forbidden: ControlProxy does not calculate global priority",
++    ]
++    for phrase in required:
++        assert phrase in dot
++
++
++def test_0102_manifest_is_docs_and_rules_only() -> None:
++    manifest = _read(MANIFEST)
++    assert "tests/rules/test_controlproxy_existing_paths_audit_0102_rule.py" in manifest
++    assert "doc/docs/architecture/runtime/92_controlproxy_existing_paths_audit.dot" in manifest
++    assert "No runtime code." in manifest
++    forbidden = [
++        "src/kernel/",
++        "src/policy/",
++        "src/runtime/",
++        "src/contracts/",
++        "tools/",
++    ]
++    for token in forbidden:
++        assert token not in manifest

@@ -1,0 +1,409 @@
+diff --git a/PHASE0105_TEST_REPORT.md b/PHASE0105_TEST_REPORT.md
+new file mode 100644
+index 0000000..80911c3
+--- /dev/null
++++ b/PHASE0105_TEST_REPORT.md
+@@ -0,0 +1,45 @@
++# Phase 0105 test report
++
++Patch: 0105-scheduler_priority_admission_lock
++
++## Scope
++
++Architecture/rules lock only.
++
++## Code rule review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: this phase restates existing micro-kernel invariants and narrows their ControlProxy interpretation.
++live_path_status: n/a
++live_path_uses_real_backend: n/a
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++```
++
++## Expected validation
++
++```text
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/rules/test_scheduler_priority_admission_0105_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Guardrails
++
++```text
++No CLI
++No daemon/service/OpenRC
++No watcher
++No Scheduler.run() modification
++No Dispatcher modification
++No PriorityQueue modification
++No PolicyEngine modification
++No EventBus duplication
++No ControlProxy global priority logic
++No ControlProxy policy/zone authority
++No Qdrant / LLM / OpenVINO path
++```
+diff --git a/doc/CHANGELOG_0105_SCHEDULER_PRIORITY_ADMISSION_LOCK.md b/doc/CHANGELOG_0105_SCHEDULER_PRIORITY_ADMISSION_LOCK.md
+new file mode 100644
+index 0000000..8c07bce
+--- /dev/null
++++ b/doc/CHANGELOG_0105_SCHEDULER_PRIORITY_ADMISSION_LOCK.md
+@@ -0,0 +1,13 @@
++# Changelog — 0105 Scheduler priority/admission lock
++
++Added an architecture/rules lock that freezes the priority and admission model:
++
++- PriorityQueue remains the only deterministic execution ordering mechanism.
++- PolicyEngine remains minimal admission before queue.
++- Dispatcher remains EventType -> Handler only.
++- ControlProxy / RouteRuntimeManager does not compute global priorities.
++- ControlProxy / RouteRuntimeManager does not decide policy/zone admission.
++- EventBus remains observation only.
++- Route mmap/eventfd is named as data plane, not EventBus.
++
++No runtime code was changed.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0105.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0105.md
+new file mode 100644
+index 0000000..c835dd0
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0105.md
+@@ -0,0 +1,56 @@
++# ControlProxy operational plan after 0105
++
++0105 locks the priority/admission direction before more runtime wiring.
++
++## Locked roadmap
++
++```text
++0101 architecture simplification lock
++0102 existing paths audit
++0103 RouteRuntimeManager runtime facade
++0104 thin ControlProxy route runtime handler
++0105 priority/admission lock
++0106 EventBus vs data plane cleanup
++0107 root graph and individual graph reconciliation
++```
++
++## 0105 decision
++
++PriorityQueue is the only deterministic execution ordering mechanism.
++
++PolicyEngine is minimal admission before queue.
++
++Dispatcher is EventType -> Handler only.
++
++ControlProxy / RouteRuntimeManager does not compute global priorities.
++
++ControlProxy / RouteRuntimeManager does not decide policy/zone admission.
++
++EventBus is observation only.
++
++Route mmap/eventfd is data plane, not EventBus.
++
++## What this prevents
++
++```text
++ControlProxy becoming a Scheduler bis
++Dispatcher becoming a business router
++PolicyEngine becoming a specialist strategy engine
++EventBus being duplicated by ControlProxy
++mmap/eventfd being described as an application bus
++priority logic being hidden after enqueue
++```
++
++## What remains allowed
++
++A future explicit priority policy may exist if it stays before enqueue:
++
++```text
++EventClassPolicy + bounded GlobalContextSnapshot -> explicit priority value
++```
++
++A future specialist may produce priority hints if they travel through typed
++commands and the normal kernel path.
++
++RouteRuntimeManager may continue to manage ControlFS, generations, lifecycle,
++locks, placement, mmap/eventfd data plane, and journal input.
+diff --git a/doc/architecture/SCHEDULER_PRIORITY_ADMISSION_0105.md b/doc/architecture/SCHEDULER_PRIORITY_ADMISSION_0105.md
+new file mode 100644
+index 0000000..76e8a73
+--- /dev/null
++++ b/doc/architecture/SCHEDULER_PRIORITY_ADMISSION_0105.md
+@@ -0,0 +1,134 @@
++# 0105 — Scheduler priority and admission lock
++
++## Decision
++
++This phase locks the simplified priority/admission model before any further
++ControlProxy runtime work.
++
++The invariant is:
++
++```text
++Scheduler = loop + time + queue + priority
++PolicyEngine = minimal admission before queue
++PriorityQueue = deterministic execution ordering
++Dispatcher = EventType -> Handler only
++Handler = thin adapter
++Specialist branch = business reasoning / transformation / strategy
++ControlProxy / RouteRuntimeManager = route runtime transport over ControlFS + mmap/eventfd
++EventBus = observation only
++Route mmap/eventfd = data plane, not EventBus
++```
++
++## Priority ownership
++
++PriorityQueue is the only deterministic execution ordering mechanism.
++
++Priority is a scheduler-facing value. It may be carried by an event or by a
++typed command before the event is emitted. It is not recomputed by the
++Dispatcher and it is not recomputed by ControlProxy / RouteRuntimeManager.
++
++Current rule:
++
++```text
++Event priority -> PolicyEngine admission -> PriorityQueue ordering -> Scheduler.run()
++```
++
++Allowed future extension:
++
++```text
++EventClassPolicy + bounded GlobalContextSnapshot -> explicit priority value
++```
++
++That extension must stay before enqueue and must remain deterministic. It must
++not be hidden inside the Dispatcher, ControlProxy, EventBus, route mmap/eventfd,
++or the visualization path. Future priority policy must not be hidden inside the Dispatcher, ControlProxy, EventBus.
++
++## Admission ownership
++
++PolicyEngine is minimal admission before queue.
++
++The current PolicyEngine is kept because it gives the kernel a deterministic
++admission gate before scheduling. It may validate source, destination, priority
++range, reserved event types, declared backend permissions, and similar kernel
++admission facts.
++
++PolicyEngine must not become a business engine. It must not choose a route
++mmap generation, a runtime placement, a specialist strategy, a Qdrant query, an
++OpenVINO backend, or a long-running exploration plan.
++
++## Dispatcher ownership
++
++Dispatcher is EventType -> Handler only.
++
++Dispatcher keeps Scheduler.run() thin by resolving the handler and by keeping
++reply resolution at the kernel boundary. It does not compute priority, it does
++not decide admission, and it does not implement ControlProxy route runtime
++logic.
++
++## ControlProxy / RouteRuntimeManager ownership
++
++ControlProxy / RouteRuntimeManager does not compute global priorities.
++
++ControlProxy / RouteRuntimeManager does not decide policy/zone admission.
++
++It may reject malformed route-runtime input at its boundary, for example a
++missing route id or an absent policy_decision_id on a scheduler-originated route
++request. That rejection is a local boundary guard, not a new scheduling policy
++and not a second security authority.
++
++Its runtime scope is:
++
++```text
++ControlFS state
++mmap/eventfd data plane
++route generation table
++generation lifecycle
++file/dev_shm placement
++inter-process generation lock
++RouteMessage journal input
++```
++
++## Bus separation
++
++EventBus is observation only.
++
++Route mmap/eventfd is data plane, not EventBus.
++
++No ControlProxyBus, RouteBus, or VisualizationBus should be introduced for this
++path. Visualization adapters must read the existing EventBus and existing
++context snapshots. Route transports may emit observable facts later, but they
++must not become a command bus.
++
++## Specialist branch
++
++The specialist branch owns business reasoning and transformation.
++
++A specialist may later produce explicit priority hints or typed commands, but
++those hints must enter the normal kernel path:
++
++```text
++Command dataclass -> Scheduler.emit() -> PolicyEngine -> PriorityQueue -> Scheduler.run() -> Dispatcher -> Handler
++```
++
++The specialist must not bypass the Scheduler by calling RouteRuntimeManager or
++other backends directly for durable system behavior.
++
++## Code impact
++
++This phase is an architecture/rules lock only.
++
++It does not modify Scheduler.run(), Dispatcher, PriorityQueue, PolicyEngine,
++ControlProxy runtime code, handlers, EventBus, or Component.tick/yield/reply.
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: this phase restates and narrows existing code_rule.md invariants without changing the global rule contract.
++live_path_status: n/a
++live_path_uses_real_backend: n/a
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++```
+diff --git a/doc/docs/architecture/runtime/95_scheduler_priority_admission.dot b/doc/docs/architecture/runtime/95_scheduler_priority_admission.dot
+new file mode 100644
+index 0000000..14976e5
+--- /dev/null
++++ b/doc/docs/architecture/runtime/95_scheduler_priority_admission.dot
+@@ -0,0 +1,32 @@
++digraph scheduler_priority_admission_0105 {
++  graph [label="0105 Scheduler priority/admission lock", labelloc="t", fontsize=20];
++  rankdir=LR;
++  node [shape=box, style="rounded"];
++
++  component [label="Component / Specialist\nproduces typed command or event"];
++  emit [label="Scheduler.emit()\nentry to kernel path"];
++  policy [label="PolicyEngine\nminimal admission before queue"];
++  queue [label="PriorityQueue\nonly deterministic execution ordering"];
++  run [label="Scheduler.run()\nloop + time + dequeue"];
++  dispatcher [label="Dispatcher\nEventType -> Handler only"];
++  handler [label="Handler\nthin adapter"];
++  specialist [label="Specialist branch\nbusiness reasoning / strategy"];
++  route_manager [label="RouteRuntimeManager\nControlFS + mmap/eventfd runtime"];
++  eventbus [label="EventBus\nobservation only"];
++  dataplane [label="mmap/eventfd\ndata plane, not EventBus"];
++
++  component -> emit;
++  emit -> policy;
++  policy -> queue;
++  queue -> run;
++  run -> dispatcher;
++  dispatcher -> handler;
++  handler -> specialist [label="business capability"];
++  handler -> route_manager [label="route runtime capability"];
++  route_manager -> dataplane;
++  dispatcher -> eventbus [style=dashed, label="observable fact copy"];
++  route_manager -> eventbus [style=dashed, label="future observable facts only"];
++
++  policy -> specialist [style=dotted, label="does not choose strategy"];
++  dispatcher -> route_manager [style=dotted, label="no direct runtime logic"];
++}
+diff --git a/doc/manifests/MANIFEST_0105_CHANGED_FILES.md b/doc/manifests/MANIFEST_0105_CHANGED_FILES.md
+new file mode 100644
+index 0000000..b778b99
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0105_CHANGED_FILES.md
+@@ -0,0 +1,16 @@
++# Manifest 0105 — Scheduler priority/admission lock
++
++Changed files:
++
++```text
++doc/architecture/SCHEDULER_PRIORITY_ADMISSION_0105.md
++doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0105.md
++doc/docs/architecture/runtime/95_scheduler_priority_admission.dot
++doc/CHANGELOG_0105_SCHEDULER_PRIORITY_ADMISSION_LOCK.md
++doc/manifests/MANIFEST_0105_CHANGED_FILES.md
++tests/rules/test_scheduler_priority_admission_0105_rule.py
++PHASE0105_TEST_REPORT.md
++```
++
++This phase intentionally does not change kernel loop, dispatcher, queue,
++policy, handler, EventBus, Component contract, or ControlProxy runtime files.
+diff --git a/tests/rules/test_scheduler_priority_admission_0105_rule.py b/tests/rules/test_scheduler_priority_admission_0105_rule.py
+new file mode 100644
+index 0000000..de76fc5
+--- /dev/null
++++ b/tests/rules/test_scheduler_priority_admission_0105_rule.py
+@@ -0,0 +1,71 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "SCHEDULER_PRIORITY_ADMISSION_0105.md"
++PLAN = ROOT / "doc" / "architecture" / "CONTROLPROXY_OPERATIONAL_PLAN_0105.md"
++DOT = ROOT / "doc" / "docs" / "architecture" / "runtime" / "95_scheduler_priority_admission.dot"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0105_CHANGED_FILES.md"
++
++
++def _read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_0105_locks_priority_and_admission_responsibilities() -> None:
++    text = _read(DOC) + "\n" + _read(PLAN)
++    required = [
++        "PriorityQueue is the only deterministic execution ordering mechanism",
++        "PolicyEngine is minimal admission before queue",
++        "Dispatcher is EventType -> Handler only",
++        "ControlProxy / RouteRuntimeManager does not compute global priorities",
++        "ControlProxy / RouteRuntimeManager does not decide policy/zone admission",
++        "EventBus is observation only",
++        "Route mmap/eventfd is data plane, not EventBus",
++        "Specialist branch = business reasoning / transformation / strategy",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0105_keeps_future_priority_policy_before_enqueue() -> None:
++    text = _read(DOC) + "\n" + _read(PLAN)
++    assert "EventClassPolicy + bounded GlobalContextSnapshot -> explicit priority value" in text
++    assert "must stay before enqueue" in text
++    assert "must not be hidden inside the Dispatcher, ControlProxy, EventBus" in text
++
++
++def test_0105_graph_keeps_dispatcher_and_data_plane_separate() -> None:
++    graph = _read(DOT)
++    assert "Dispatcher\\nEventType -> Handler only" in graph
++    assert "PriorityQueue\\nonly deterministic execution ordering" in graph
++    assert "EventBus\\nobservation only" in graph
++    assert "mmap/eventfd\\ndata plane, not EventBus" in graph
++    assert "RouteRuntimeManager\\nControlFS + mmap/eventfd runtime" in graph
++    assert "no direct runtime logic" in graph
++
++
++def test_0105_manifest_does_not_touch_kernel_or_runtime_code() -> None:
++    manifest = _read(MANIFEST)
++    assert "tests/rules/test_scheduler_priority_admission_0105_rule.py" in manifest
++    assert "doc/architecture/SCHEDULER_PRIORITY_ADMISSION_0105.md" in manifest
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/kernel/dispatcher.py",
++        "src/kernel/queue.py",
++        "src/policy/engine.py",
++        "src/kernel/event_bus.py",
++        "src/runtime/route_runtime_manager.py",
++    ]
++    for item in forbidden:
++        assert item not in manifest
++
++
++def test_0105_phase_review_marks_architecture_only() -> None:
++    text = _read(ROOT / "PHASE0105_TEST_REPORT.md")
++    assert "code_rule_review: done" in text
++    assert "code_rule_update_required: false" in text
++    assert "live_path_status: n/a" in text
++    assert "No Scheduler.run() modification" in text
++    assert "No EventBus duplication" in text

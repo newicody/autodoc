@@ -1,0 +1,836 @@
+diff --git a/doc/architecture/CONTROLPROXY_ACTIVE_ROUTE_MATERIALIZER.md b/doc/architecture/CONTROLPROXY_ACTIVE_ROUTE_MATERIALIZER.md
+new file mode 100644
+index 0000000..7b3b9a6
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_ACTIVE_ROUTE_MATERIALIZER.md
+@@ -0,0 +1,143 @@
++# ControlProxy active route materializer
++
++Status: 0081 implementation bridge.
++
++This phase starts moving from prototype pieces toward the real implementation
++shape.
++
++## Vocabulary
++
++```text
++ControlProxy = ControlFS declarative surface + RouteProxy materializer
++```
++
++## Purpose
++
++`0080-r2` can create a file-backed fixed-slot mmap route, but the route is not
++yet connected to ControlFS active state.
++
++`0081` connects:
++
++```text
++ControlProxy RoutePrepareDecision
+++ desired RouteManifest
++-> mmap route files
++-> ControlFS active/routes/<route_id>/manifest.json
++-> ControlFS active/routes/<route_id>/status.json
++```
++
++## Surfaces
++
++Runtime mmap surface:
++
++```text
++<runtime_root>/routes/<route_handle>/ring.bin
++<runtime_root>/routes/<route_handle>/status.json
++```
++
++ControlFS active surface:
++
++```text
++<controlfs_root>/active/routes/<route_id>/manifest.json
++<controlfs_root>/active/routes/<route_id>/status.json
++```
++
++The active manifest is a valid `RouteManifest` copy of the accepted desired
++manifest. This keeps the dry-run reconciler compatible: if desired and active
++match, the route can plan as `noop`.
++
++## Active status
++
++Schema:
++
++```text
++missipy.controlproxy.active_route_status.v1
++```
++
++Fields include:
++
++```text
++route_id
++route_handle
++task_id
++zone
++state
++implementation_stage
++runtime_route_dir
++ring_path
++mmap_status_path
++active_manifest_path
++active_status_path
++slot_size
++slot_count
++max_frame_bytes
++notify
++overflow_policy
++route_ready_at
++lease_state
++```
++
++Initial lease state:
++
++```text
++not_leased
++```
++
++## Real implementation path
++
++This is the seam for the real ControlProxy materializer.
++
++Later phases can replace the current direct function call with:
++
++```text
++ControlProxy daemon / OpenRC service
++-> watches ControlFS desired/request state
++-> materializes runtime routes
++-> writes active state
++-> publishes bus facts
++```
++
++The API and files should remain stable.
++
++## Non-goals
++
++This phase does not add:
++
++```text
++POSIX shm_open
++mandatory /dev/shm
++semaphores
++eventfd
++futex
++ControlProxy daemon
++ControlFS watcher
++Scheduler wiring
++route lease issuing
++lease handoff
++live mmap resize
++inter-process safety
++VisPy renderer
++NetworkBridge
++HardwareBridge
++cluster dispatch
++```
++
++## No CLI
++
++This patch intentionally does not add a CLI.
++
++The rule remains:
++
++```text
++module logic is importable
++tests validate behavior
++CLI only when it is a real operator boundary
++```
++
++## Next
++
++```text
++0082 notification primitive
++0083 lease handoff status
++0084 Scheduler handshake integration
++```
+diff --git a/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md b/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
+new file mode 100644
+index 0000000..bfb575f
+--- /dev/null
++++ b/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
+@@ -0,0 +1,50 @@
++# Real implementation sequence from 0081
++
++The local runtime now has enough pieces to start replacing smoke-only surfaces
++with a real ControlProxy implementation.
++
++## Current sequence
++
++```text
++0079-r2/r3
++  ControlProxy sizing + prepare + bus
++
++0080-r2
++  file-backed mmap fixed-slot route
++
++0081
++  active route materializer
++```
++
++## Next real implementation steps
++
++```text
++0082 notification primitive
++  eventfd or semaphore abstraction, still no daemon
++
++0083 route lease state
++  not_leased -> leased -> active -> draining -> closed
++
++0084 ControlProxy OpenRC service skeleton
++  watches ControlFS desired/request state
++  calls active route materializer
++  publishes bus facts
++
++0085 Scheduler handshake
++  Scheduler waits for ready active route
++  returns route_handle/lease to producer
++
++0086 VisPy adapter
++  consumes context.bus/event.bus route state
++```
++
++## Boundary
++
++The active route materializer is the seam between:
++
++```text
++declarative ControlFS
++runtime mmap route
++future Scheduler lease
++future notification primitive
++```
+diff --git a/doc/changelog/0081-controlproxy-active-route-materializer.md b/doc/changelog/0081-controlproxy-active-route-materializer.md
+new file mode 100644
+index 0000000..6e61438
+--- /dev/null
++++ b/doc/changelog/0081-controlproxy-active-route-materializer.md
+@@ -0,0 +1,29 @@
++# 0081 - ControlProxy active route materializer
++
++## Added
++
++- `runtime.controlproxy_active_routes`
++- active route status schema:
++  - `missipy.controlproxy.active_route_status.v1`
++- materialization bridge:
++  - ControlProxy ready decision
++  - desired RouteManifest
++  - mmap route files
++  - ControlFS active manifest/status
++- post-materialization RouteProxy dry-run helper
++- tests proving active route status and noop reconciliation
++- no new CLI
++
++## Not added
++
++- No POSIX `shm_open`.
++- No mandatory `/dev/shm`.
++- No semaphores/eventfd/futex.
++- No daemon.
++- No watcher.
++- No Scheduler wiring.
++- No lease handoff.
++- No live resize.
++- No inter-process safety.
++- No VisPy renderer.
++
+diff --git a/src/runtime/controlproxy_active_routes.py b/src/runtime/controlproxy_active_routes.py
+new file mode 100644
+index 0000000..cd9a320
+--- /dev/null
++++ b/src/runtime/controlproxy_active_routes.py
+@@ -0,0 +1,283 @@
++"""ControlProxy active route materializer.
++
++This module implements phase 0081.
++
++It bridges the 0079-r2/r3 ControlProxy route preparation protocol with the
++0080-r2 file-backed mmap fixed-slot route.
++
++Real implementation direction:
++
++    ControlProxy = ControlFS declarative surface + RouteProxy materializer.
++
++The active route materializer takes:
++- a ready ControlProxy RoutePrepareDecision
++- the desired RouteManifest that Scheduler/ControlProxy already accepted
++
++and writes:
++- mmap runtime route files under <runtime_root>/routes/<route_handle>/
++- ControlFS active route manifest under active/routes/<route_id>/manifest.json
++- ControlFS active route status under active/routes/<route_id>/status.json
++
++It deliberately does not:
++- create POSIX shared memory with shm_open
++- require /dev/shm
++- create semaphores
++- create eventfd
++- create futex
++- start a ControlProxy daemon
++- watch ControlFS with inotify
++- call Scheduler
++- issue route leases
++- implement lease handoff
++- resize live mmap routes
++- implement inter-process safety
++- implement VisPy
++
++This is an importable materialization primitive, not a CLI.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++import json
++from pathlib import Path
++from typing import Any, Iterable, Mapping
++
++from runtime.controlfs_manifest import RouteManifest, normalize_route_id
++from runtime.controlproxy_prepare import RoutePrepareDecision
++from runtime.mmap_fixed_slot_route import (
++    MmapFixedSlotRoute,
++    create_mmap_route_from_decision,
++    route_dir_for_handle,
++)
++from runtime.routeproxy_reconciler import RouteProxyPlan, build_routeproxy_plan
++
++
++ACTIVE_ROUTE_STATUS_SCHEMA = "missipy.controlproxy.active_route_status.v1"
++ACTIVE_ROUTE_IMPLEMENTATION_STAGE = "file_backed_mmap_fixed_slot"
++
++
++class ActiveRouteMaterializationError(RuntimeError):
++    """Raised when a ControlProxy active route cannot be materialized."""
++
++
++@dataclass(frozen=True)
++class ActiveRouteRecord:
++    """A materialized route record linking ControlFS active state to mmap files."""
++
++    schema: str
++    route_id: str
++    route_handle: str
++    task_id: str
++    zone: str
++    state: str
++    implementation_stage: str
++    runtime_route_dir: str
++    ring_path: str
++    mmap_status_path: str
++    active_manifest_path: str
++    active_status_path: str
++    slot_size: int
++    slot_count: int
++    max_frame_bytes: int
++    notify: str
++    overflow_policy: str
++    route_ready_at: str
++    lease_state: str = "not_leased"
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "route_id": self.route_id,
++            "route_handle": self.route_handle,
++            "task_id": self.task_id,
++            "zone": self.zone,
++            "state": self.state,
++            "implementation_stage": self.implementation_stage,
++            "runtime_route_dir": self.runtime_route_dir,
++            "ring_path": self.ring_path,
++            "mmap_status_path": self.mmap_status_path,
++            "active_manifest_path": self.active_manifest_path,
++            "active_status_path": self.active_status_path,
++            "slot_size": self.slot_size,
++            "slot_count": self.slot_count,
++            "max_frame_bytes": self.max_frame_bytes,
++            "notify": self.notify,
++            "overflow_policy": self.overflow_policy,
++            "route_ready_at": self.route_ready_at,
++            "lease_state": self.lease_state,
++        }
++
++
++def active_route_dir(controlfs_root: Path | str, route_id: str) -> Path:
++    """Return ControlFS active/routes/<route_id> after route_id validation."""
++
++    return Path(controlfs_root) / "active" / "routes" / normalize_route_id(route_id)
++
++
++def active_manifest_path(controlfs_root: Path | str, route_id: str) -> Path:
++    """Return ControlFS active route manifest path."""
++
++    return active_route_dir(controlfs_root, route_id) / "manifest.json"
++
++
++def active_status_path(controlfs_root: Path | str, route_id: str) -> Path:
++    """Return ControlFS active route status path."""
++
++    return active_route_dir(controlfs_root, route_id) / "status.json"
++
++
++def materialize_active_route(
++    *,
++    controlfs_root: Path | str,
++    runtime_root: Path | str,
++    decision: RoutePrepareDecision,
++    desired_manifest: RouteManifest,
++    replace: bool = True,
++    close_route: bool = True,
++) -> ActiveRouteRecord:
++    """Materialize a ready ControlProxy decision into mmap and ControlFS active state.
++
++    The desired_manifest is copied into active/routes/<route_id>/manifest.json.
++    This keeps existing RouteProxy dry-run reconciliation compatible: after
++    materialization, desired and active route manifests can compare as noop.
++    """
++
++    if decision.status != "ready":
++        raise ActiveRouteMaterializationError("only ready decisions can become active routes")
++    if decision.route_handle is None:
++        raise ActiveRouteMaterializationError("ready decision must have route_handle")
++    if decision.route_id != desired_manifest.route_id:
++        raise ActiveRouteMaterializationError("decision route_id does not match desired manifest")
++    if decision.task_id != desired_manifest.task_id:
++        raise ActiveRouteMaterializationError("decision task_id does not match desired manifest")
++    if decision.slot_size is None or decision.slot_count is None or decision.max_frame_bytes is None:
++        raise ActiveRouteMaterializationError("ready decision must include slot_size, slot_count and max_frame_bytes")
++    if desired_manifest.slot_size != decision.slot_size:
++        raise ActiveRouteMaterializationError("desired manifest slot_size must match ControlProxy decision")
++    if desired_manifest.slot_count != decision.slot_count:
++        raise ActiveRouteMaterializationError("desired manifest slot_count must match ControlProxy decision")
++    if desired_manifest.max_frame_bytes != decision.max_frame_bytes:
++        raise ActiveRouteMaterializationError("desired manifest max_frame_bytes must match ControlProxy decision")
++
++    route: MmapFixedSlotRoute | None = None
++    try:
++        route = create_mmap_route_from_decision(runtime_root, decision, replace=replace)
++        mmap_stats = route.stats()
++
++        active_dir = active_route_dir(controlfs_root, decision.route_id)
++        active_dir.mkdir(parents=True, exist_ok=True)
++        manifest_path = active_manifest_path(controlfs_root, decision.route_id)
++        status_path = active_status_path(controlfs_root, decision.route_id)
++
++        manifest_path.write_text(
++            json.dumps(desired_manifest.to_mapping(), indent=2, sort_keys=True) + "\n",
++            encoding="utf-8",
++        )
++
++        record = ActiveRouteRecord(
++            schema=ACTIVE_ROUTE_STATUS_SCHEMA,
++            route_id=decision.route_id,
++            route_handle=decision.route_handle,
++            task_id=decision.task_id,
++            zone=decision.zone,
++            state="active",
++            implementation_stage=ACTIVE_ROUTE_IMPLEMENTATION_STAGE,
++            runtime_route_dir=str(route_dir_for_handle(runtime_root, decision.route_handle)),
++            ring_path=mmap_stats.ring_path,
++            mmap_status_path=mmap_stats.status_path,
++            active_manifest_path=str(manifest_path),
++            active_status_path=str(status_path),
++            slot_size=decision.slot_size,
++            slot_count=decision.slot_count,
++            max_frame_bytes=decision.max_frame_bytes,
++            notify=decision.notify or "none",
++            overflow_policy=decision.overflow_policy or "reject",
++            route_ready_at=decision.decided_at,
++        )
++        write_active_route_status(record)
++        return record
++    finally:
++        if close_route and route is not None:
++            route.close()
++
++
++def write_active_route_status(record: ActiveRouteRecord) -> None:
++    """Write ControlFS active/routes/<route_id>/status.json."""
++
++    path = Path(record.active_status_path)
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(record.to_mapping(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++
++def load_active_route_status(path: Path | str) -> ActiveRouteRecord:
++    """Load an active route status JSON file."""
++
++    raw = json.loads(Path(path).read_text(encoding="utf-8"))
++    if raw.get("schema") != ACTIVE_ROUTE_STATUS_SCHEMA:
++        raise ActiveRouteMaterializationError("unsupported active route status schema")
++    return ActiveRouteRecord(
++        schema=str(raw["schema"]),
++        route_id=str(raw["route_id"]),
++        route_handle=str(raw["route_handle"]),
++        task_id=str(raw["task_id"]),
++        zone=str(raw["zone"]),
++        state=str(raw["state"]),
++        implementation_stage=str(raw["implementation_stage"]),
++        runtime_route_dir=str(raw["runtime_route_dir"]),
++        ring_path=str(raw["ring_path"]),
++        mmap_status_path=str(raw["mmap_status_path"]),
++        active_manifest_path=str(raw["active_manifest_path"]),
++        active_status_path=str(raw["active_status_path"]),
++        slot_size=int(raw["slot_size"]),
++        slot_count=int(raw["slot_count"]),
++        max_frame_bytes=int(raw["max_frame_bytes"]),
++        notify=str(raw["notify"]),
++        overflow_policy=str(raw["overflow_policy"]),
++        route_ready_at=str(raw["route_ready_at"]),
++        lease_state=str(raw.get("lease_state", "not_leased")),
++    )
++
++
++def materialize_active_routes(
++    *,
++    controlfs_root: Path | str,
++    runtime_root: Path | str,
++    pairs: Iterable[tuple[RoutePrepareDecision, RouteManifest]],
++    replace: bool = True,
++) -> tuple[ActiveRouteRecord, ...]:
++    """Materialize several ready decisions into active route records."""
++
++    records: list[ActiveRouteRecord] = []
++    for decision, manifest in pairs:
++        if decision.status == "ready":
++            records.append(
++                materialize_active_route(
++                    controlfs_root=controlfs_root,
++                    runtime_root=runtime_root,
++                    decision=decision,
++                    desired_manifest=manifest,
++                    replace=replace,
++                )
++            )
++    return tuple(records)
++
++
++def build_post_materialization_plan(controlfs_root: Path | str) -> RouteProxyPlan:
++    """Build a dry-run plan after materialization.
++
++    Expected behavior for fully materialized desired routes: noop.
++    """
++
++    return build_routeproxy_plan(controlfs_root, include_noop=True)
++
++
++def active_route_summary(records: Iterable[ActiveRouteRecord]) -> dict[str, Any]:
++    """Return compact summary for tests or future views."""
++
++    items = [record.to_mapping() for record in records]
++    return {
++        "active_route_count": len(items),
++        "route_handles": [item["route_handle"] for item in items],
++        "routes": items,
++    }
+diff --git a/tests/rules/test_controlproxy_active_routes_rule.py b/tests/rules/test_controlproxy_active_routes_rule.py
+new file mode 100644
+index 0000000..175c0da
+--- /dev/null
++++ b/tests/rules/test_controlproxy_active_routes_rule.py
+@@ -0,0 +1,74 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "CONTROLPROXY_ACTIVE_ROUTE_MATERIALIZER.md"
++MODULE = ROOT / "src" / "runtime" / "controlproxy_active_routes.py"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing file: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_active_route_materializer_doc_locks_real_implementation_path() -> None:
++    text = _read(DOC)
++
++    required_phrases = [
++        "Status: 0081 implementation bridge.",
++        "ControlProxy = ControlFS declarative surface + RouteProxy materializer",
++        "desired RouteManifest",
++        "mmap route files",
++        "ControlFS active/routes/<route_id>/manifest.json",
++        "ControlFS active/routes/<route_id>/status.json",
++        "missipy.controlproxy.active_route_status.v1",
++        "not_leased",
++        "Real implementation path",
++        "ControlProxy daemon / OpenRC service",
++        "No CLI",
++        "module logic is importable",
++        "CLI only when it is a real operator boundary",
++        "POSIX shm_open",
++        "mandatory /dev/shm",
++        "semaphores",
++        "eventfd",
++        "futex",
++        "Scheduler wiring",
++        "route lease issuing",
++        "lease handoff",
++        "live mmap resize",
++        "inter-process safety",
++        "VisPy renderer",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_active_route_materializer_module_locks_non_goals() -> None:
++    text = _read(MODULE)
++
++    required_phrases = [
++        "ControlProxy = ControlFS declarative surface + RouteProxy materializer",
++        "mmap runtime route files",
++        "ControlFS active route manifest",
++        "ControlFS active route status",
++        "does not:",
++        "create POSIX shared memory with shm_open",
++        "require /dev/shm",
++        "create semaphores",
++        "create eventfd",
++        "create futex",
++        "start a ControlProxy daemon",
++        "watch ControlFS with inotify",
++        "call Scheduler",
++        "issue route leases",
++        "implement lease handoff",
++        "resize live mmap routes",
++        "implement inter-process safety",
++        "implement VisPy",
++        "not a CLI",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
+diff --git a/tests/test_controlproxy_active_routes.py b/tests/test_controlproxy_active_routes.py
+new file mode 100644
+index 0000000..43bbe6e
+--- /dev/null
++++ b/tests/test_controlproxy_active_routes.py
+@@ -0,0 +1,221 @@
++import json
++from pathlib import Path
++
++import pytest
++
++from context.baby_fork_controlfs import (
++    build_baby_fork_routeproxy_plan,
++    build_route_sizing_hints_from_messages,
++    write_baby_fork_desired_manifests,
++)
++from context.baby_fork_runtime_projection import build_baby_fork_runtime_projection
++from runtime.controlfs_manifest import RouteManifest, route_manifest_path
++from runtime.controlproxy_active_routes import (
++    ACTIVE_ROUTE_STATUS_SCHEMA,
++    ActiveRouteMaterializationError,
++    active_manifest_path,
++    active_route_summary,
++    active_status_path,
++    build_post_materialization_plan,
++    load_active_route_status,
++    materialize_active_route,
++    materialize_active_routes,
++)
++from runtime.controlproxy_prepare import decide_route_prepare, route_prepare_request_from_message
++from runtime.mmap_fixed_slot_route import MmapFixedSlotRoute
++from runtime.shm_runtime_schema import ROUTE_MESSAGE_SCHEMA
++
++
++def _report() -> dict:
++    return {
++        "retrieval": {
++            "retrieved_ids": ["baby-silicone-fork", "rounded-stainless-soft-handle"],
++            "rejected_ids": ["nasa-antenna"],
++        },
++        "variant_generator_stub": {
++            "generated_variants": [
++                {"variant_id": "variant-1"},
++                {"variant_id": "variant-2"},
++            ]
++        },
++        "final_context": {
++            "context_id": "ctx-baby-fork-001",
++            "context_version": 2,
++            "selected_variant_id": "variant-1",
++        },
++    }
++
++
++def _message(route_id: str = "baby_fork.retrieval") -> dict:
++    return {
++        "schema": ROUTE_MESSAGE_SCHEMA,
++        "route_id": route_id,
++        "message_id": f"msg:{route_id}.reply",
++        "kind": "reply",
++        "source": "retrieval_worker" if route_id.endswith("retrieval") else "variant_generator_stub",
++        "target": "scheduler",
++        "occurred_at": "2026-07-04T20:00:00Z",
++        "payload_schema": "missipy.baby_fork.route_reply.v1",
++        "payload": {
++            "context_id": "ctx-baby-fork-001",
++            "retrieved_ids": ["baby-silicone-fork", "rounded-stainless-soft-handle"],
++            "rejected_ids": ["nasa-antenna"],
++        },
++    }
++
++
++def _desired_manifest(controlfs_root: Path, route_id: str = "baby_fork.retrieval") -> RouteManifest:
++    projection = build_baby_fork_runtime_projection(_report())
++    hints = build_route_sizing_hints_from_messages(projection.routes)
++    write_baby_fork_desired_manifests(
++        controlfs_root,
++        context_id="ctx-baby-fork-001",
++        sizing_hints=hints,
++    )
++    return RouteManifest.from_path(route_manifest_path(controlfs_root, route_id))
++
++
++def _decision_for_manifest(manifest: RouteManifest):
++    request = route_prepare_request_from_message(
++        _message(manifest.route_id),
++        task_id=manifest.task_id,
++        zone=manifest.zone,
++        scope=manifest.scope,
++    )
++    decision = decide_route_prepare(request)
++    # Use the exact accepted manifest sizing so materialization validates the seam.
++    return type(decision)(
++        schema=decision.schema,
++        request_id=decision.request_id,
++        route_id=decision.route_id,
++        route_handle=decision.route_handle,
++        task_id=decision.task_id,
++        zone=decision.zone,
++        status=decision.status,
++        action=decision.action,
++        reason=decision.reason,
++        required_frame_bytes=decision.required_frame_bytes,
++        current_generation=decision.current_generation,
++        next_generation=decision.next_generation,
++        current_slot_size=decision.current_slot_size,
++        slot_size=manifest.slot_size,
++        slot_count=manifest.slot_count,
++        max_frame_bytes=manifest.max_frame_bytes,
++        max_ring_bytes=decision.max_ring_bytes,
++        max_prepare_ms=decision.max_prepare_ms,
++        drain_timeout_ms=decision.drain_timeout_ms,
++        lease_switch_timeout_ms=decision.lease_switch_timeout_ms,
++        notify=manifest.notify,
++        overflow_policy=manifest.overflow_policy,
++        decided_at=decision.decided_at,
++    )
++
++
++def test_materialize_active_route_writes_mmap_and_controlfs_active_state(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++    manifest = _desired_manifest(controlfs_root)
++    decision = _decision_for_manifest(manifest)
++
++    record = materialize_active_route(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        decision=decision,
++        desired_manifest=manifest,
++    )
++
++    assert record.schema == ACTIVE_ROUTE_STATUS_SCHEMA
++    assert record.route_id == "baby_fork.retrieval"
++    assert record.route_handle == "baby_fork.retrieval@g1"
++    assert record.state == "active"
++    assert record.lease_state == "not_leased"
++    assert Path(record.ring_path).exists()
++    assert Path(record.mmap_status_path).exists()
++    assert Path(record.active_manifest_path).exists()
++    assert Path(record.active_status_path).exists()
++
++    loaded = load_active_route_status(record.active_status_path)
++    assert loaded == record
++
++    active_manifest = RouteManifest.from_path(active_manifest_path(controlfs_root, "baby_fork.retrieval"))
++    assert active_manifest.to_mapping() == manifest.to_mapping()
++
++
++def test_materialized_active_route_can_reconcile_as_noop(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++    manifest = _desired_manifest(controlfs_root)
++    decision = _decision_for_manifest(manifest)
++
++    materialize_active_route(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        decision=decision,
++        desired_manifest=manifest,
++    )
++
++    plan = build_post_materialization_plan(controlfs_root)
++    retrieval_items = [item for item in plan.items if item.route_id == "baby_fork.retrieval"]
++
++    assert len(retrieval_items) == 1
++    assert retrieval_items[0].action == "noop"
++
++
++def test_active_route_mmap_can_accept_frame_after_materialization(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++    manifest = _desired_manifest(controlfs_root)
++    decision = _decision_for_manifest(manifest)
++    record = materialize_active_route(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        decision=decision,
++        desired_manifest=manifest,
++    )
++
++    route = MmapFixedSlotRoute.open(
++        record.ring_path,
++        route_handle=record.route_handle,
++        status_path=record.mmap_status_path,
++        overflow_policy=record.overflow_policy,
++    )
++    try:
++        route.write_message(_message("baby_fork.retrieval"))
++        drained = route.drain()
++        assert len(drained) == 1
++        assert drained[0].message().route_id == "baby_fork.retrieval"
++    finally:
++        route.close()
++
++
++def test_materializer_rejects_mismatched_manifest(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    manifest = _desired_manifest(controlfs_root, "baby_fork.retrieval")
++    other_manifest = _desired_manifest(controlfs_root, "baby_fork.variant_stub")
++    decision = _decision_for_manifest(manifest)
++
++    with pytest.raises(ActiveRouteMaterializationError, match="route_id"):
++        materialize_active_route(
++            controlfs_root=controlfs_root,
++            runtime_root=tmp_path / "runtime",
++            decision=decision,
++            desired_manifest=other_manifest,
++        )
++
++
++def test_materialize_active_routes_summary(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++    manifest = _desired_manifest(controlfs_root)
++    decision = _decision_for_manifest(manifest)
++
++    records = materialize_active_routes(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        pairs=[(decision, manifest)],
++    )
++    summary = active_route_summary(records)
++
++    assert summary["active_route_count"] == 1
++    assert summary["route_handles"] == ["baby_fork.retrieval@g1"]
++    assert summary["routes"][0]["implementation_stage"] == "file_backed_mmap_fixed_slot"

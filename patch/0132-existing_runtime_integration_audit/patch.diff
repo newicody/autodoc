@@ -1,0 +1,619 @@
+diff --git a/PHASE0132_TEST_REPORT.md b/PHASE0132_TEST_REPORT.md
+new file mode 100644
+index 0000000..0b7e4ed
+--- /dev/null
++++ b/PHASE0132_TEST_REPORT.md
+@@ -0,0 +1,27 @@
++# PHASE0132_TEST_REPORT
++
++```text
++phase: 0132-existing_runtime_integration_audit
++code_rule_review: done
++code_rule_update_required: true
++code_rule_reason: user requested no reinventing existing wheels; this patch adds a supplement to the main code_rule family.
++live_path_status: audit_only
++live_path_uses_real_backend: false
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++```
++
++Validation performed in patch build:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/runtime/test_existing_runtime_integration_audit.py tests/rules/test_existing_runtime_integration_audit_0132_rule.py
++# 7 passed
++PYTHONPATH=src:. pytest -q tests/runtime tests/rules
++# 28 passed
++PYTHONPATH=src:. pytest -q
++# 28 passed
++```
++
++0132 is an audit gate before continuing runtime integration.
+diff --git a/doc/CHANGELOG_0132_EXISTING_RUNTIME_INTEGRATION_AUDIT.md b/doc/CHANGELOG_0132_EXISTING_RUNTIME_INTEGRATION_AUDIT.md
+new file mode 100644
+index 0000000..a0b48bf
+--- /dev/null
++++ b/doc/CHANGELOG_0132_EXISTING_RUNTIME_INTEGRATION_AUDIT.md
+@@ -0,0 +1,11 @@
++# Changelog 0132 — Existing runtime integration audit
++
++Added:
++
++- `tools/audit_existing_runtime_integration.py`
++- runtime tests for the audit helper
++- rule tests for the anti-duplication gate
++- architecture docs
++- code_rule supplement for no-reinvent runtime integration
++
++0132 adds no runtime feature and no backend client.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0132.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0132.md
+new file mode 100644
+index 0000000..9774a80
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0132.md
+@@ -0,0 +1,14 @@
++# 0132 operational note — integration audit before next runtime work
++
++0132 does not add ControlProxy behavior.  It adds an audit gate.
++
++Before extending RouteProxy, Scheduler handlers, fake specialists, OpenVINO, or Qdrant, the next patch must inventory existing surfaces and choose reuse/extend/modify/create-with-gap.
++
++For the current local line, the known surfaces are:
++
++```text
++src/runtime/route_proxy_runtime_minimal.py
++src/runtime/scheduler_route_handler_minimal.py
++```
++
++So the next route/handler work should extend those modules or prove that the real repository already has a better target.
+diff --git a/doc/architecture/EXISTING_RUNTIME_INTEGRATION_AUDIT_0132.md b/doc/architecture/EXISTING_RUNTIME_INTEGRATION_AUDIT_0132.md
+new file mode 100644
+index 0000000..5a2c5c6
+--- /dev/null
++++ b/doc/architecture/EXISTING_RUNTIME_INTEGRATION_AUDIT_0132.md
+@@ -0,0 +1,113 @@
++# 0132 — Existing runtime integration audit
++
++0132 is an integration audit, not a new runtime feature.
++
++The goal is to stop adding parallel wheels.  Before any new runtime, handler, worker, adapter, SQL store, EventBus path, or Scheduler integration is added, the patch must prove what already exists and decide whether to reuse, extend, modify, or create.
++
++## Mandatory rule
++
++reuse, extend, or modify existing modules before creating a new module.
++
++New module default: forbidden until audit says no existing wheel fits.
++
++Scheduler.run() must not be modified by integration patches unless a dedicated migration patch explicitly says so.
++
++## What 0132 adds
++
++0132 adds a static, dependency-free audit helper:
++
++```text
++tools/audit_existing_runtime_integration.py
++```
++
++The helper scans source, tests, and docs for candidate surfaces:
++
++```text
++scheduler
++dispatcher
++policy_queue
++route_runtime
++route_handler
++openvino_adapter
++qdrant_adapter
++sql_context
++event_bus
++code_rules
++```
++
++It returns decision hints:
++
++```text
++reuse_or_extend_existing
++create_only_after_documented_gap
++```
++
++This is not a live runtime component.  It does not import project modules, call OpenVINO, call Qdrant, touch PostgreSQL, start daemons, scan sockets, or mutate Scheduler.
++
++## Integration decisions from the current line
++
++The current local line already has:
++
++```text
++src/runtime/route_proxy_runtime_minimal.py
++src/runtime/scheduler_route_handler_minimal.py
++```
++
++So the next runtime patches must not create parallel route writers or handler loops.  They must reuse or extend these surfaces unless a richer existing module in the real repository is detected by the audit.
++
++## Required preflight for next patches
++
++### RouteProxy work
++
++RouteProxy work must first audit existing /dev/shm runtime surfaces.
++
++If `src/runtime/route_proxy_runtime_minimal.py`, an older `route_dev_shm` runtime, or another route manager exists, modify or extend it before adding another route runtime.
++
++### Scheduler/handler work
++
++Fake specialist work must first audit existing handler/worker surfaces.
++
++If a handler/dispatcher surface exists, add the specialist worker as an executor behind the existing handler path rather than inventing another loop.
++
++### OpenVINO work
++
++OpenVINO work must first audit existing embedding adapter surfaces.
++
++If `src/inference/openvino_embedding_adapter.py`, `src/inference/*embedding*`, or another embedding adapter exists, modify or extend it.  Do not introduce a second OpenVINO adapter with overlapping responsibility.
++
++### Qdrant work
++
++Qdrant work must first audit existing projection adapter surfaces.
++
++If `src/inference/qdrant_projection_adapter.py`, `src/vector/*`, or another projection adapter exists, modify or extend it.  Do not introduce a second Qdrant client wrapper with overlapping responsibility.
++
++### Code rules
++
++code_rule update required: yes.
++
++0132 adds a supplement under:
++
++```text
++doc/code-rules/0132_no_reinvent_runtime_rule.md
++```
++
++This is written as a supplement to the main `doc/code-rules/code_rule.md`.  If the main file exists in the real repository, its next maintenance patch should link or include this rule rather than duplicating wording.
++
++## Next patch gate
++
++Before 0133 starts, run:
++
++```bash
++python tools/audit_existing_runtime_integration.py . --format markdown
++```
++
++Then choose one of:
++
++```text
++reuse existing
++extend existing
++modify existing
++create new with documented gap
++```
++
++A new module must include the documented gap in its architecture doc and rule test.
+diff --git a/doc/code-rules/0132_no_reinvent_runtime_rule.md b/doc/code-rules/0132_no_reinvent_runtime_rule.md
+new file mode 100644
+index 0000000..fb01b7a
+--- /dev/null
++++ b/doc/code-rules/0132_no_reinvent_runtime_rule.md
+@@ -0,0 +1,38 @@
++# 0132 code_rule supplement — no reinvent runtime rule
++
++Supplement to doc/code-rules/code_rule.md.
++
++## Rule
++
++No runtime wheel may be added before an existing-runtime audit.
++
++Decision must be one of: reuse existing, extend existing, modify existing, or create new with documented gap.
++
++## Forbidden by default
++
++Creating a parallel Scheduler, handler, RouteProxy, OpenVINO adapter, Qdrant adapter, SQL store, or EventBus path is forbidden.
++
++## Required preflight
++
++Before adding or modifying a runtime/integration patch, run or document an equivalent inventory:
++
++```bash
++python tools/audit_existing_runtime_integration.py . --format markdown
++```
++
++The patch documentation must say which existing files were found and why the chosen decision is correct.
++
++## Allowed outcomes
++
++```text
++reuse existing
++extend existing
++modify existing
++create new with documented gap
++```
++
++`create new with documented gap` is only allowed when no existing surface fits after the audit.
++
++## Scheduler boundary
++
++`Scheduler.run()` must not be modified as part of opportunistic integration.  It can only be changed by a dedicated Scheduler migration patch with explicit rule updates and tests.
+diff --git a/doc/docs/architecture/runtime/132_existing_runtime_integration_audit.dot b/doc/docs/architecture/runtime/132_existing_runtime_integration_audit.dot
+new file mode 100644
+index 0000000..417b528
+--- /dev/null
++++ b/doc/docs/architecture/runtime/132_existing_runtime_integration_audit.dot
+@@ -0,0 +1,17 @@
++digraph existing_runtime_integration_audit_0132 {
++  rankdir=LR;
++  node [shape=box];
++
++  patch [label="new runtime/integration patch"];
++  audit [label="audit_existing_runtime_integration.py\nstatic inventory"];
++  decision [label="decision gate\nreuse / extend / modify / create with gap"];
++  existing [label="existing modules\nScheduler / handler / RouteProxy / adapters"];
++  docs [label="architecture docs + code_rule supplement"];
++  tests [label="rule tests\nanti-duplication"];
++
++  patch -> audit [label="must run or document"];
++  audit -> existing [label="find candidates"];
++  existing -> decision;
++  decision -> docs;
++  docs -> tests;
++}
+diff --git a/doc/manifests/MANIFEST_0132_CHANGED_FILES.md b/doc/manifests/MANIFEST_0132_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1af25b3
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0132_CHANGED_FILES.md
+@@ -0,0 +1,14 @@
++# Manifest 0132 — changed files
++
++- tools/audit_existing_runtime_integration.py
++- tests/runtime/test_existing_runtime_integration_audit.py
++- tests/rules/test_existing_runtime_integration_audit_0132_rule.py
++- doc/architecture/EXISTING_RUNTIME_INTEGRATION_AUDIT_0132.md
++- doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0132.md
++- doc/code-rules/0132_no_reinvent_runtime_rule.md
++- doc/docs/architecture/runtime/132_existing_runtime_integration_audit.dot
++- doc/CHANGELOG_0132_EXISTING_RUNTIME_INTEGRATION_AUDIT.md
++- doc/manifests/MANIFEST_0132_CHANGED_FILES.md
++- PHASE0132_TEST_REPORT.md
++
++Boundary note: 0132 adds an audit tool, docs, and tests only. It does not add a runtime backend client, worker loop, Scheduler mutation, or parallel handler.
+diff --git a/tests/rules/test_existing_runtime_integration_audit_0132_rule.py b/tests/rules/test_existing_runtime_integration_audit_0132_rule.py
+new file mode 100644
+index 0000000..e8e1750
+--- /dev/null
++++ b/tests/rules/test_existing_runtime_integration_audit_0132_rule.py
+@@ -0,0 +1,86 @@
++from __future__ import annotations
++
++import ast
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "audit_existing_runtime_integration.py"
++DOC = ROOT / "doc" / "architecture" / "EXISTING_RUNTIME_INTEGRATION_AUDIT_0132.md"
++RULE = ROOT / "doc" / "code-rules" / "0132_no_reinvent_runtime_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0132_CHANGED_FILES.md"
++
++
++def test_0132_docs_lock_no_reinvent_runtime_integration_rule() -> None:
++    text = DOC.read_text(encoding="utf-8")
++    required = [
++        "0132 is an integration audit, not a new runtime feature",
++        "reuse, extend, or modify existing modules before creating a new module",
++        "Scheduler.run() must not be modified by integration patches unless a dedicated migration patch explicitly says so",
++        "OpenVINO work must first audit existing embedding adapter surfaces",
++        "Qdrant work must first audit existing projection adapter surfaces",
++        "RouteProxy work must first audit existing /dev/shm runtime surfaces",
++        "Fake specialist work must first audit existing handler/worker surfaces",
++        "code_rule update required: yes",
++        "New module default: forbidden until audit says no existing wheel fits",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0132_rule_supplement_mentions_main_code_rule_and_decision_gate() -> None:
++    text = RULE.read_text(encoding="utf-8")
++    required = [
++        "Supplement to doc/code-rules/code_rule.md",
++        "No runtime wheel may be added before an existing-runtime audit",
++        "Decision must be one of: reuse existing, extend existing, modify existing, or create new with documented gap",
++        "Creating a parallel Scheduler, handler, RouteProxy, OpenVINO adapter, Qdrant adapter, SQL store, or EventBus path is forbidden",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0132_manifest_lists_only_audit_docs_tests_and_tool() -> None:
++    text = MANIFEST.read_text(encoding="utf-8")
++    required = [
++        "tools/audit_existing_runtime_integration.py",
++        "tests/runtime/test_existing_runtime_integration_audit.py",
++        "tests/rules/test_existing_runtime_integration_audit_0132_rule.py",
++        "doc/architecture/EXISTING_RUNTIME_INTEGRATION_AUDIT_0132.md",
++        "doc/code-rules/0132_no_reinvent_runtime_rule.md",
++    ]
++    for phrase in required:
++        assert phrase in text
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/runtime/fake_specialist_worker",
++        "src/inference/openvino",
++        "src/inference/qdrant",
++        "requests",
++        "socket",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++
++
++def test_0132_audit_tool_has_no_runtime_backend_imports() -> None:
++    tree = ast.parse(TOOL.read_text(encoding="utf-8"))
++    imports: set[str] = set()
++    for node in ast.walk(tree):
++        if isinstance(node, ast.Import):
++            imports.update(alias.name.split(".", 1)[0] for alias in node.names)
++        elif isinstance(node, ast.ImportFrom) and node.module:
++            imports.add(node.module.split(".", 1)[0])
++    forbidden = {
++        "requests",
++        "httpx",
++        "socket",
++        "subprocess",
++        "openvino",
++        "qdrant",
++        "qdrant_client",
++        "psycopg",
++        "sqlite3",
++        "vispy",
++        "src",
++    }
++    assert sorted(imports & forbidden) == []
+diff --git a/tests/runtime/test_existing_runtime_integration_audit.py b/tests/runtime/test_existing_runtime_integration_audit.py
+new file mode 100644
+index 0000000..2a379e8
+--- /dev/null
++++ b/tests/runtime/test_existing_runtime_integration_audit.py
+@@ -0,0 +1,43 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++from tools.audit_existing_runtime_integration import audit_existing_runtime_integration
++
++
++def test_audit_detects_existing_runtime_surfaces(tmp_path: Path) -> None:
++    (tmp_path / "src" / "runtime").mkdir(parents=True)
++    (tmp_path / "src" / "runtime" / "route_proxy_runtime_minimal.py").write_text("class RouteProxyRuntime: pass\n", encoding="utf-8")
++    (tmp_path / "src" / "kernel").mkdir(parents=True)
++    (tmp_path / "src" / "kernel" / "scheduler.py").write_text("class Scheduler:\n    def run(self): pass\n", encoding="utf-8")
++    (tmp_path / "doc" / "code-rules").mkdir(parents=True)
++    (tmp_path / "doc" / "code-rules" / "code_rule.md").write_text("Do not mutate Scheduler.run.\n", encoding="utf-8")
++
++    audit = audit_existing_runtime_integration(tmp_path)
++    data = audit.to_mapping()
++
++    assert data["new_module_default_allowed"] is False
++    assert data["scheduler_run_mutation_allowed"] is False
++    assert data["category_counts"]["route_runtime"] >= 1
++    assert data["category_counts"]["scheduler"] >= 1
++    assert data["category_counts"]["code_rules"] >= 1
++    scheduler_decision = [decision for decision in audit.decisions if decision.category == "scheduler"][0]
++    assert scheduler_decision.decision == "reuse_or_extend_existing"
++
++
++def test_audit_marks_missing_surfaces_as_create_only_after_documented_gap(tmp_path: Path) -> None:
++    (tmp_path / "README.md").write_text("empty project\n", encoding="utf-8")
++    audit = audit_existing_runtime_integration(tmp_path)
++    missing = [decision for decision in audit.decisions if decision.category == "openvino_adapter"][0]
++    assert missing.decision == "create_only_after_documented_gap"
++    assert "documented no-reinvent justification" in missing.reason
++
++
++def test_audit_markdown_contains_decisions(tmp_path: Path) -> None:
++    (tmp_path / "src" / "inference").mkdir(parents=True)
++    (tmp_path / "src" / "inference" / "openvino_embedding_adapter.py").write_text("OpenVINO EmbeddingAdapter\n", encoding="utf-8")
++    audit = audit_existing_runtime_integration(tmp_path)
++    markdown = audit.to_markdown()
++    assert "Existing runtime integration audit" in markdown
++    assert "openvino_adapter" in markdown
++    assert "reuse_or_extend_existing" in markdown
+diff --git a/tools/audit_existing_runtime_integration.py b/tools/audit_existing_runtime_integration.py
+new file mode 100644
+index 0000000..a03c805
+--- /dev/null
++++ b/tools/audit_existing_runtime_integration.py
+@@ -0,0 +1,196 @@
++"""Audit existing runtime/integration surfaces before adding new wheels.
++
++0132 introduces this audit helper so runtime patches first inspect what already
++exists and decide whether to reuse, extend, modify, or create a new module.  The
++tool is intentionally static and dependency-free: it does not import project
++modules, does not run the Scheduler, and does not touch external backends.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++import argparse
++import json
++from pathlib import Path
++import re
++from typing import Iterable
++
++_AUDIT_SCHEMA = "missipy.audit.existing_runtime_integration.v1"
++_CATEGORY_ORDER = (
++    "scheduler",
++    "dispatcher",
++    "policy_queue",
++    "route_runtime",
++    "route_handler",
++    "openvino_adapter",
++    "qdrant_adapter",
++    "sql_context",
++    "event_bus",
++    "code_rules",
++)
++_CATEGORY_PATTERNS = {
++    "scheduler": ("class Scheduler", "def run(", "Scheduler.run", "scheduler"),
++    "dispatcher": ("Dispatcher", "dispatch", "handler"),
++    "policy_queue": ("PolicyEngine", "PriorityQueue", "policy", "queue"),
++    "route_runtime": ("RouteProxyRuntime", "route_dev_shm", "dev_shm", "route_proxy_runtime"),
++    "route_handler": ("SchedulerRouteHandler", "handle_scheduler_route_command", "route_handler"),
++    "openvino_adapter": ("OpenVINO", "openvino", "EmbeddingAdapter", "embedding_adapter"),
++    "qdrant_adapter": ("Qdrant", "qdrant", "ProjectionAdapter", "projection_adapter"),
++    "sql_context": ("SQLContext", "sql_context", "ContextStore", "SQL"),
++    "event_bus": ("EventBus", "event_bus", "ObservationFact", "observation"),
++    "code_rules": ("code_rule", "code-rules", "Scheduler.run", "anti-duplication"),
++}
++_ALLOWED_SUFFIXES = (".py", ".md", ".dot", ".json", ".toml", ".yaml", ".yml")
++_IGNORED_DIRS = {".git", ".pytest_cache", "__pycache__", ".mypy_cache", ".ruff_cache", "dist", "build"}
++
++
++@dataclass(frozen=True, slots=True)
++class AuditMatch:
++    """One static match for a category in a source/documentation file."""
++
++    category: str
++    path: str
++    matched_terms: tuple[str, ...]
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "category": self.category,
++            "path": self.path,
++            "matched_terms": list(self.matched_terms),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class IntegrationDecision:
++    """Decision hint: reuse/extend/modify when existing surfaces are present."""
++
++    category: str
++    decision: str
++    reason: str
++    candidate_paths: tuple[str, ...]
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "category": self.category,
++            "decision": self.decision,
++            "reason": self.reason,
++            "candidate_paths": list(self.candidate_paths),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class ExistingRuntimeIntegrationAudit:
++    """Static inventory report used before creating runtime modules."""
++
++    root: Path
++    matches: tuple[AuditMatch, ...]
++    decisions: tuple[IntegrationDecision, ...]
++
++    @property
++    def category_counts(self) -> dict[str, int]:
++        counts = {category: 0 for category in _CATEGORY_ORDER}
++        for match in self.matches:
++            counts[match.category] += 1
++        return counts
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _AUDIT_SCHEMA,
++            "root": str(self.root),
++            "category_counts": self.category_counts,
++            "matches": [match.to_mapping() for match in self.matches],
++            "decisions": [decision.to_mapping() for decision in self.decisions],
++            "rule": "reuse_extend_or_modify_existing_before_adding_new_runtime_module",
++            "new_module_default_allowed": False,
++            "scheduler_run_mutation_allowed": False,
++            "external_backend_runtime_calls_allowed": False,
++        }
++
++    def to_markdown(self) -> str:
++        data = self.to_mapping()
++        lines = ["# Existing runtime integration audit", "", f"Root: `{data['root']}`", "", "## Category counts", ""]
++        for category, count in self.category_counts.items():
++            lines.append(f"- `{category}`: {count}")
++        lines.extend(["", "## Decisions", ""])
++        for decision in self.decisions:
++            paths = ", ".join(f"`{path}`" for path in decision.candidate_paths) or "none"
++            lines.append(f"- `{decision.category}` -> **{decision.decision}**: {decision.reason} ({paths})")
++        return "\n".join(lines) + "\n"
++
++
++def audit_existing_runtime_integration(root: Path) -> ExistingRuntimeIntegrationAudit:
++    """Scan source/docs/tests for reusable runtime surfaces."""
++
++    resolved_root = root.resolve()
++    matches = tuple(_scan_matches(resolved_root))
++    decisions = tuple(_build_decisions(matches))
++    return ExistingRuntimeIntegrationAudit(root=resolved_root, matches=matches, decisions=decisions)
++
++
++def _scan_matches(root: Path) -> Iterable[AuditMatch]:
++    for path in sorted(_iter_candidate_files(root)):
++        text = _safe_read_text(path)
++        relative = path.relative_to(root).as_posix()
++        for category in _CATEGORY_ORDER:
++            terms = tuple(term for term in _CATEGORY_PATTERNS[category] if term.lower() in text.lower() or term.lower() in relative.lower())
++            if terms:
++                yield AuditMatch(category=category, path=relative, matched_terms=terms)
++
++
++def _iter_candidate_files(root: Path) -> Iterable[Path]:
++    if not root.exists():
++        raise FileNotFoundError(root)
++    for path in root.rglob("*"):
++        if not path.is_file():
++            continue
++        if any(part in _IGNORED_DIRS for part in path.parts):
++            continue
++        if path.suffix not in _ALLOWED_SUFFIXES:
++            continue
++        yield path
++
++
++def _safe_read_text(path: Path) -> str:
++    try:
++        return path.read_text(encoding="utf-8")
++    except UnicodeDecodeError:
++        return path.read_text(encoding="utf-8", errors="ignore")
++
++
++def _build_decisions(matches: tuple[AuditMatch, ...]) -> Iterable[IntegrationDecision]:
++    by_category: dict[str, list[str]] = {category: [] for category in _CATEGORY_ORDER}
++    for match in matches:
++        by_category[match.category].append(match.path)
++    for category in _CATEGORY_ORDER:
++        paths = tuple(sorted(dict.fromkeys(by_category[category])))
++        if paths:
++            yield IntegrationDecision(
++                category=category,
++                decision="reuse_or_extend_existing",
++                reason="candidate surfaces exist; do not create a parallel wheel without a written exception",
++                candidate_paths=paths,
++            )
++        else:
++            yield IntegrationDecision(
++                category=category,
++                decision="create_only_after_documented_gap",
++                reason="no candidate surface found by static audit; creation still requires a documented no-reinvent justification",
++                candidate_paths=(),
++            )
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Audit existing runtime integration surfaces before adding new modules.")
++    parser.add_argument("root", nargs="?", default=".", help="Repository root to scan")
++    parser.add_argument("--format", choices=("json", "markdown"), default="json", help="Output format")
++    args = parser.parse_args(argv)
++    audit = audit_existing_runtime_integration(Path(args.root))
++    if args.format == "markdown":
++        print(audit.to_markdown(), end="")
++    else:
++        print(json.dumps(audit.to_mapping(), indent=2, sort_keys=True))
++    return 0
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())

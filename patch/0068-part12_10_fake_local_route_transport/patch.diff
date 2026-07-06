@@ -1,0 +1,601 @@
+diff --git a/doc/architecture/FAKE_LOCAL_ROUTE_TRANSPORT.md b/doc/architecture/FAKE_LOCAL_ROUTE_TRANSPORT.md
+new file mode 100644
+index 0000000..9f7e5cb
+--- /dev/null
++++ b/doc/architecture/FAKE_LOCAL_ROUTE_TRANSPORT.md
+@@ -0,0 +1,104 @@
++# Fake local route transport
++
++Status: P5-prep fake transport.
++
++This phase validates the runtime message flow before real `/dev/shm`, semaphores or ring buffers exist.
++
++## Goal
++
++Simulate the future local runtime layout using JSONL files:
++
++```text
++<runtime_root>/
++  data.index.jsonl
++  event.bus.jsonl
++  context.bus.jsonl
++  routes/<route_id>/messages.jsonl
++```
++
++This lets tests exercise:
++
++```text
++DataHandle
++EventBusMessage
++ContextBusMessage
++RouteMessage
++```
++
++without implementing the hot transport.
++
++## What it proves
++
++The fake transport proves that:
++
++```text
++baby_fork_report.json
++-> runtime projection
++-> fake data.index
++-> fake event.bus
++-> fake context.bus
++-> fake routes/<route_id>
++```
++
++is coherent before any shared-memory implementation is introduced.
++
++## What it does not prove
++
++This phase does not prove performance, concurrency or kernel-level IPC.
++
++It does not add:
++
++```text
++real shared memory
++real semaphores
++ring buffer
++eventfd
++futex
++RouteProxy daemon
++ControlFS watcher
++Scheduler wiring
++NetworkBridge
++HardwareBridge
++cluster dispatch
++```
++
++## Python API
++
++```python
++from runtime.fake_route_transport import (
++    FakeLocalRouteTransport,
++    write_projection_to_fake_runtime,
++    load_fake_bus_messages,
++)
++```
++
++## CLI
++
++```bash
++PYTHONPATH=src:. python tools/write_baby_fork_fake_runtime.py \
++  .var/baby_fork_smoke/baby_fork_report.json \
++  .var/baby_fork_fake_runtime
++```
++
++Expected files:
++
++```text
++.var/baby_fork_fake_runtime/data.index.jsonl
++.var/baby_fork_fake_runtime/event.bus.jsonl
++.var/baby_fork_fake_runtime/context.bus.jsonl
++.var/baby_fork_fake_runtime/routes/baby_fork.retrieval/messages.jsonl
++.var/baby_fork_fake_runtime/routes/baby_fork.variant_stub/messages.jsonl
++.var/baby_fork_fake_runtime/routes/baby_fork.context_gate/messages.jsonl
++```
++
++## Next phase after this
++
++The next phase should be one of:
++
++```text
++Recorder ingestion from fake runtime messages
++optional baby-fork CLI flag to emit fake runtime projection
++ControlFS desired route manifests for baby-fork routes
++```
++
++Still do not introduce real shm/semaphore transport until the fake flow is stable.
+diff --git a/doc/changelog/0068-fake-local-route-transport.md b/doc/changelog/0068-fake-local-route-transport.md
+new file mode 100644
+index 0000000..95d23af
+--- /dev/null
++++ b/doc/changelog/0068-fake-local-route-transport.md
+@@ -0,0 +1,28 @@
++# 0068 - Fake local route transport
++
++## Added
++
++- `runtime.fake_route_transport`
++- `FakeLocalRouteTransport`
++- fake JSONL layout for:
++  - `data.index`
++  - `event.bus`
++  - `context.bus`
++  - `routes/<route_id>`
++- CLI tool `tools/write_baby_fork_fake_runtime.py`
++- documentation for fake local route transport
++- tests validating baby-fork projection can be written to fake runtime
++- rule tests locking fake-only scope
++
++## Not added
++
++- No real shared memory.
++- No semaphores.
++- No ring buffer.
++- No eventfd/futex.
++- No RouteProxy daemon.
++- No ControlFS watcher.
++- No Scheduler wiring.
++- No NetworkBridge.
++- No HardwareBridge.
++- No cluster dispatch.
+diff --git a/src/runtime/fake_route_transport.py b/src/runtime/fake_route_transport.py
+new file mode 100644
+index 0000000..7880015
+--- /dev/null
++++ b/src/runtime/fake_route_transport.py
+@@ -0,0 +1,211 @@
++"""Fake local route transport for schema-level runtime tests.
++
++This module implements the P5-prep fake route transport.
++
++It deliberately does not:
++- create shared memory
++- create semaphores
++- implement a ring buffer
++- watch ControlFS
++- call Scheduler
++- call RouteProxy
++- access ZFS
++- implement NetworkBridge or HardwareBridge
++
++It stores validated runtime messages as JSONL files under a caller-provided
++directory so tests can exercise route/event/context/data-handle flow before
++real /dev/shm transport exists.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++import json
++from typing import Iterable, Mapping, Any
++
++from runtime.shm_runtime_schema import (
++    ContextBusMessage,
++    DataHandle,
++    EventBusMessage,
++    RouteMessage,
++    parse_runtime_message,
++)
++
++
++@dataclass(frozen=True)
++class FakeRuntimeSnapshot:
++    """Counts written into the fake runtime surface."""
++
++    data_handle_count: int
++    event_count: int
++    context_count: int
++    route_message_count: int
++    route_ids: tuple[str, ...]
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "data_handle_count": self.data_handle_count,
++            "event_count": self.event_count,
++            "context_count": self.context_count,
++            "route_message_count": self.route_message_count,
++            "route_ids": list(self.route_ids),
++        }
++
++
++class FakeLocalRouteTransport:
++    """File-backed fake local route transport.
++
++    Layout:
++
++    <root>/
++      routes/<route_id>/messages.jsonl
++
++    The class validates every RouteMessage before appending it. It is not a
++    concurrent transport and it is not the future shm implementation.
++    """
++
++    def __init__(self, root: Path | str):
++        self.root = Path(root)
++        self.routes_root = self.root / "routes"
++
++    def send(self, message: RouteMessage | Mapping[str, Any]) -> RouteMessage:
++        """Append a validated RouteMessage to its route JSONL file."""
++
++        parsed = _route_message(message)
++        path = self._route_file(parsed.route_id)
++        path.parent.mkdir(parents=True, exist_ok=True)
++        with path.open("a", encoding="utf-8") as handle:
++            handle.write(json.dumps(parsed.to_mapping(), sort_keys=True, separators=(",", ":")))
++            handle.write("\n")
++        return parsed
++
++    def receive(self, route_id: str) -> tuple[RouteMessage, ...]:
++        """Read all messages currently stored for a route."""
++
++        path = self._route_file(route_id)
++        if not path.exists():
++            return ()
++
++        messages: list[RouteMessage] = []
++        for line in path.read_text(encoding="utf-8").splitlines():
++            if not line.strip():
++                continue
++            parsed = parse_runtime_message(json.loads(line))
++            if not isinstance(parsed, RouteMessage):
++                raise TypeError(f"route file contained non-route message: {type(parsed).__name__}")
++            messages.append(parsed)
++        return tuple(messages)
++
++    def drain(self, route_id: str) -> tuple[RouteMessage, ...]:
++        """Read and remove all messages for a route."""
++
++        messages = self.receive(route_id)
++        path = self._route_file(route_id)
++        if path.exists():
++            path.write_text("", encoding="utf-8")
++        return messages
++
++    def route_ids(self) -> tuple[str, ...]:
++        """Return route IDs that have a fake route file."""
++
++        if not self.routes_root.exists():
++            return ()
++        return tuple(
++            child.name
++            for child in sorted(self.routes_root.iterdir())
++            if child.is_dir() and (child / "messages.jsonl").exists()
++        )
++
++    def snapshot(self) -> dict[str, list[dict[str, Any]]]:
++        """Return all route messages as a JSON-serializable snapshot."""
++
++        return {
++            route_id: [message.to_mapping() for message in self.receive(route_id)]
++            for route_id in self.route_ids()
++        }
++
++    def _route_file(self, route_id: str) -> Path:
++        if "/" in route_id or "\\" in route_id or ".." in route_id or not route_id:
++            raise ValueError("route_id must be a logical route id, not a path")
++        return self.routes_root / route_id / "messages.jsonl"
++
++
++def write_projection_to_fake_runtime(
++    root: Path | str,
++    *,
++    data_handles: Iterable[DataHandle],
++    events: Iterable[EventBusMessage],
++    contexts: Iterable[ContextBusMessage],
++    routes: Iterable[RouteMessage],
++) -> FakeRuntimeSnapshot:
++    """Write a runtime projection to a fake local runtime surface.
++
++    Layout:
++
++    <root>/
++      data.index.jsonl
++      event.bus.jsonl
++      context.bus.jsonl
++      routes/<route_id>/messages.jsonl
++
++    This simulates the future local runtime vocabulary without implementing
++    shared memory or semaphores.
++    """
++
++    runtime_root = Path(root)
++    runtime_root.mkdir(parents=True, exist_ok=True)
++
++    data_handle_items = tuple(data_handles)
++    event_items = tuple(events)
++    context_items = tuple(contexts)
++    route_items = tuple(routes)
++
++    _write_jsonl(runtime_root / "data.index.jsonl", (item.to_mapping() for item in data_handle_items))
++    _write_jsonl(runtime_root / "event.bus.jsonl", (item.to_mapping() for item in event_items))
++    _write_jsonl(runtime_root / "context.bus.jsonl", (item.to_mapping() for item in context_items))
++
++    transport = FakeLocalRouteTransport(runtime_root)
++    for route in route_items:
++        transport.send(route)
++
++    route_ids = transport.route_ids()
++    return FakeRuntimeSnapshot(
++        data_handle_count=len(data_handle_items),
++        event_count=len(event_items),
++        context_count=len(context_items),
++        route_message_count=len(route_items),
++        route_ids=route_ids,
++    )
++
++
++def load_fake_bus_messages(path: Path | str) -> tuple[DataHandle | EventBusMessage | ContextBusMessage | RouteMessage, ...]:
++    """Load validated runtime messages from a fake JSONL bus/index file."""
++
++    p = Path(path)
++    if not p.exists():
++        return ()
++
++    messages = []
++    for line in p.read_text(encoding="utf-8").splitlines():
++        if not line.strip():
++            continue
++        messages.append(parse_runtime_message(json.loads(line)))
++    return tuple(messages)
++
++
++def _route_message(message: RouteMessage | Mapping[str, Any]) -> RouteMessage:
++    if isinstance(message, RouteMessage):
++        return message
++    parsed = parse_runtime_message(message)
++    if not isinstance(parsed, RouteMessage):
++        raise TypeError(f"expected RouteMessage, got {type(parsed).__name__}")
++    return parsed
++
++
++def _write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with path.open("w", encoding="utf-8") as handle:
++        for row in rows:
++            handle.write(json.dumps(dict(row), sort_keys=True, separators=(",", ":")))
++            handle.write("\n")
+diff --git a/tests/rules/test_fake_local_route_transport_rule.py b/tests/rules/test_fake_local_route_transport_rule.py
+new file mode 100644
+index 0000000..79d7a6c
+--- /dev/null
++++ b/tests/rules/test_fake_local_route_transport_rule.py
+@@ -0,0 +1,55 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "FAKE_LOCAL_ROUTE_TRANSPORT.md"
++MODULE = ROOT / "src" / "runtime" / "fake_route_transport.py"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing file: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_fake_local_route_transport_doc_locks_scope() -> None:
++    text = _read(DOC)
++
++    required_phrases = [
++        "fake transport",
++        "data.index.jsonl",
++        "event.bus.jsonl",
++        "context.bus.jsonl",
++        "routes/<route_id>/messages.jsonl",
++        "does not prove performance",
++        "real shared memory",
++        "real semaphores",
++        "ring buffer",
++        "RouteProxy daemon",
++        "ControlFS watcher",
++        "Scheduler wiring",
++        "NetworkBridge",
++        "HardwareBridge",
++        "cluster dispatch",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_fake_local_route_transport_module_is_fake_only() -> None:
++    text = _read(MODULE)
++
++    required_phrases = [
++        "It stores validated runtime messages as JSONL files",
++        "create shared memory",
++        "create semaphores",
++        "implement a ring buffer",
++        "watch ControlFS",
++        "call Scheduler",
++        "call RouteProxy",
++        "access ZFS",
++        "implement NetworkBridge or HardwareBridge",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
+diff --git a/tests/test_fake_route_transport.py b/tests/test_fake_route_transport.py
+new file mode 100644
+index 0000000..646ebbf
+--- /dev/null
++++ b/tests/test_fake_route_transport.py
+@@ -0,0 +1,108 @@
++from pathlib import Path
++
++from context.baby_fork_runtime_projection import build_baby_fork_runtime_projection
++from runtime.fake_route_transport import (
++    FakeLocalRouteTransport,
++    load_fake_bus_messages,
++    write_projection_to_fake_runtime,
++)
++from runtime.shm_runtime_schema import DataHandle, EventBusMessage, ContextBusMessage, RouteMessage
++
++
++def _report() -> dict:
++    return {
++        "ok": True,
++        "retrieval": {
++            "retrieved_ids": ["baby-silicone-fork", "rounded-stainless-soft-handle"],
++            "rejected_ids": ["nasa-antenna"],
++        },
++        "variant_generator_stub": {
++            "generated_variants": [
++                {"variant_id": "variant-1", "label": "soft silicone baby fork", "score": 0.86},
++                {"variant_id": "variant-2", "label": "rounded stainless with soft handle", "score": 0.74},
++            ]
++        },
++        "final_context": {
++            "context_id": "ctx-baby-fork-001",
++            "context_version": 2,
++            "selected_variant_id": "variant-1",
++        },
++    }
++
++
++def test_fake_route_transport_send_receive_and_drain(tmp_path: Path) -> None:
++    projection = build_baby_fork_runtime_projection(_report())
++    transport = FakeLocalRouteTransport(tmp_path)
++
++    sent = transport.send(projection.routes[0])
++    received = transport.receive(sent.route_id)
++
++    assert received == (sent,)
++    assert transport.route_ids() == ("baby_fork.retrieval",)
++
++    drained = transport.drain(sent.route_id)
++    assert drained == (sent,)
++    assert transport.receive(sent.route_id) == ()
++
++
++def test_write_projection_to_fake_runtime_surface(tmp_path: Path) -> None:
++    projection = build_baby_fork_runtime_projection(_report())
++
++    snapshot = write_projection_to_fake_runtime(
++        tmp_path,
++        data_handles=projection.data_handles,
++        events=projection.events,
++        contexts=projection.contexts,
++        routes=projection.routes,
++    )
++
++    assert snapshot.data_handle_count == 1
++    assert snapshot.event_count == 2
++    assert snapshot.context_count == 1
++    assert snapshot.route_message_count == 3
++    assert snapshot.route_ids == (
++        "baby_fork.context_gate",
++        "baby_fork.retrieval",
++        "baby_fork.variant_stub",
++    )
++
++    assert (tmp_path / "data.index.jsonl").exists()
++    assert (tmp_path / "event.bus.jsonl").exists()
++    assert (tmp_path / "context.bus.jsonl").exists()
++    assert (tmp_path / "routes" / "baby_fork.retrieval" / "messages.jsonl").exists()
++
++
++def test_fake_runtime_bus_files_load_as_validated_messages(tmp_path: Path) -> None:
++    projection = build_baby_fork_runtime_projection(_report())
++    write_projection_to_fake_runtime(
++        tmp_path,
++        data_handles=projection.data_handles,
++        events=projection.events,
++        contexts=projection.contexts,
++        routes=projection.routes,
++    )
++
++    data_messages = load_fake_bus_messages(tmp_path / "data.index.jsonl")
++    event_messages = load_fake_bus_messages(tmp_path / "event.bus.jsonl")
++    context_messages = load_fake_bus_messages(tmp_path / "context.bus.jsonl")
++
++    assert isinstance(data_messages[0], DataHandle)
++    assert all(isinstance(message, EventBusMessage) for message in event_messages)
++    assert isinstance(context_messages[0], ContextBusMessage)
++
++
++def test_fake_transport_snapshot_contains_routes(tmp_path: Path) -> None:
++    projection = build_baby_fork_runtime_projection(_report())
++    transport = FakeLocalRouteTransport(tmp_path)
++
++    for message in projection.routes:
++        transport.send(message)
++
++    snapshot = transport.snapshot()
++
++    assert set(snapshot) == {
++        "baby_fork.retrieval",
++        "baby_fork.variant_stub",
++        "baby_fork.context_gate",
++    }
++    assert snapshot["baby_fork.variant_stub"][0]["payload"]["variant_count"] == 2
+diff --git a/tools/write_baby_fork_fake_runtime.py b/tools/write_baby_fork_fake_runtime.py
+new file mode 100644
+index 0000000..da79c20
+--- /dev/null
++++ b/tools/write_baby_fork_fake_runtime.py
+@@ -0,0 +1,59 @@
++#!/usr/bin/env python3
++"""Write baby-fork runtime projection into a fake local runtime surface.
++
++Usage:
++
++    PYTHONPATH=src:. python tools/write_baby_fork_fake_runtime.py \
++      .var/baby_fork_smoke/baby_fork_report.json \
++      .var/baby_fork_fake_runtime
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import sys
++
++from context.baby_fork_runtime_projection import build_baby_fork_runtime_projection
++from runtime.fake_route_transport import write_projection_to_fake_runtime
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Write baby-fork projection into a fake runtime surface.")
++    parser.add_argument("report", type=Path)
++    parser.add_argument("runtime_root", type=Path)
++    parser.add_argument("--occurred-at", default="2026-07-04T20:00:00Z")
++    args = parser.parse_args(argv)
++
++    try:
++        report = json.loads(args.report.read_text(encoding="utf-8"))
++    except OSError as exc:
++        print(f"ERROR: {exc}", file=sys.stderr)
++        return 1
++    except json.JSONDecodeError as exc:
++        print(f"INVALID JSON: {exc}", file=sys.stderr)
++        return 2
++
++    if not isinstance(report, dict):
++        print("INVALID JSON: report must be an object", file=sys.stderr)
++        return 2
++
++    projection = build_baby_fork_runtime_projection(
++        report,
++        report_uri=str(args.report),
++        occurred_at=args.occurred_at,
++    )
++    snapshot = write_projection_to_fake_runtime(
++        args.runtime_root,
++        data_handles=projection.data_handles,
++        events=projection.events,
++        contexts=projection.contexts,
++        routes=projection.routes,
++    )
++    print(json.dumps(snapshot.to_mapping(), indent=2, sort_keys=True))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

@@ -1,0 +1,388 @@
+diff --git a/PHASE0135_TEST_REPORT.md b/PHASE0135_TEST_REPORT.md
+new file mode 100644
+index 0000000..22b834f
+--- /dev/null
++++ b/PHASE0135_TEST_REPORT.md
+@@ -0,0 +1,23 @@
++# PHASE0135_TEST_REPORT
++
++```text
++phase: 0135-vector_indexing_openvino_existing_path
++code_rule_review: done
++code_rule_update_required: true
++code_rule_reason: locks vector-indexing/OpenVINO reuse before any bridge or handler production change.
++live_path_status: transition
++live_path_uses_real_backend: false
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++```
++
++Validation to run on the complete repository:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/inference/test_vector_indexing_openvino_existing_path_0135.py tests/rules/test_vector_indexing_openvino_existing_path_0135_rule.py
++PYTHONPATH=src:. pytest -q tests/inference tests/rules
++```
++
++The patch generator environment does not contain the full `src/inference` and `src/context` stack, so this phase is validated structurally and should be executed on the complete working tree.
+diff --git a/doc/CHANGELOG_0135_VECTOR_INDEXING_OPENVINO_EXISTING_PATH.md b/doc/CHANGELOG_0135_VECTOR_INDEXING_OPENVINO_EXISTING_PATH.md
+new file mode 100644
+index 0000000..f58ae45
+--- /dev/null
++++ b/doc/CHANGELOG_0135_VECTOR_INDEXING_OPENVINO_EXISTING_PATH.md
+@@ -0,0 +1,5 @@
++# Changelog 0135 — vector indexing through existing OpenVINO path
++
++Added tests and documentation proving that `VectorEmbeddingJob` can feed the existing OpenVINO/E5 embedding contracts without creating another adapter.
++
++No production runtime, Scheduler, RouteProxy, Qdrant, or OpenVINO import boundary was changed.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0135.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0135.md
+new file mode 100644
+index 0000000..b3f9f67
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0135.md
+@@ -0,0 +1,15 @@
++# 0135 operational note — vector indexing uses existing OpenVINO path
++
++0135 does not add a new runtime or worker.  It proves that the existing vector indexing contract and existing OpenVINO/E5 embedding membrane can exchange data.
++
++```text
++Scheduler
++-> VectorIndexingJobPlan
++-> VectorEmbeddingJob
++-> OpenVINOEmbeddingText
++-> existing OpenVINO/E5 adapter membrane
++-> vector validation
++-> Qdrant projection later
++```
++
++The RouteProxy and `/dev/shm` route work remains separate.  This patch prepares the embedding side without touching Scheduler.run().
+diff --git a/doc/architecture/VECTOR_INDEXING_OPENVINO_EXISTING_PATH_0135.md b/doc/architecture/VECTOR_INDEXING_OPENVINO_EXISTING_PATH_0135.md
+new file mode 100644
+index 0000000..3872862
+--- /dev/null
++++ b/doc/architecture/VECTOR_INDEXING_OPENVINO_EXISTING_PATH_0135.md
+@@ -0,0 +1,65 @@
++# 0135 — Vector indexing jobs through the existing OpenVINO/E5 path
++
++0135 connects VectorIndexingJobPlan to the existing OpenVINO/E5 embedding membrane by tests only.
++
++The goal is to prove that the vector-indexing plan created in 0128 can already feed the OpenVINO/E5 embedding contracts introduced earlier without inventing another adapter.
++
++## Decision
++
++Do not create a new vector OpenVINO adapter.
++
++Reuse these existing surfaces:
++
++```text
++context.vector_indexing_job_plan.VectorEmbeddingJob
++context.vector_indexing_job_plan.VectorIndexableItem
++inference.openvino_embedding_adapter.OpenVINOEmbeddingText
++inference.openvino_embedding_adapter.build_embedding_vector
++inference.openvino_embedding_adapter.OpenVINOEmbeddingRuntimeTarget
++inference.openvino_embedding_adapter.OpenVINOEmbeddingPolicy
++```
++
++## Contract alignment
++
++VectorEmbeddingJob.item.text_for_embedding is already E5-prefixed.
++
++OpenVINOEmbeddingText is the existing text contract.
++
++build_embedding_vector is the existing vector validation contract.
++
++Scheduler remains the orchestrator and does not import OpenVINO. The Scheduler queues the vector indexing job and remains outside the OpenVINO runtime boundary.  The OpenVINO/E5 adapter executes later behind the existing membrane.
++
++Qdrant projection remains a later adapter step.  SQLContextStore remains durable context authority.
++
++## Flow
++
++```text
++VectorIndexingJobPlan
++-> VectorEmbeddingJob.item.text_for_embedding
++-> OpenVINOEmbeddingText
++-> existing OpenVINO/E5 execution membrane
++-> build_embedding_vector
++-> VectorProjectionJob later
++```
++
++## Non-goals
++
++```text
++no new VectorOpenVINOEmbeddingAdapter
++no Scheduler OpenVINO import
++no Qdrant projection in this patch
++no RouteProxy runtime mutation
++no new worker daemon
++```
++
++## Phase status
++
++```text
++code_rule_review: done
++code_rule_update_required: true
++live_path_status: transition
++live_path_uses_real_backend: false
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++```
+diff --git a/doc/code-rules/0135_vector_indexing_openvino_existing_path_rule.md b/doc/code-rules/0135_vector_indexing_openvino_existing_path_rule.md
+new file mode 100644
+index 0000000..c2794be
+--- /dev/null
++++ b/doc/code-rules/0135_vector_indexing_openvino_existing_path_rule.md
+@@ -0,0 +1,17 @@
++# Code rule addendum — 0135 vector indexing through existing OpenVINO path
++
++Before adding a vector-indexing OpenVINO bridge, audit the existing inference and vector-indexing surfaces.
++
++Required reuse targets:
++
++```text
++reuse context.vector_indexing_job_plan.VectorEmbeddingJob
++reuse inference.openvino_embedding_adapter.OpenVINOEmbeddingText
++reuse inference.openvino_embedding_adapter.build_embedding_vector
++```
++
++Do not create a parallel VectorOpenVINOEmbeddingAdapter.
++
++Do not import OpenVINO from Scheduler, Dispatcher, PolicyEngine, RouteProxy, or context contracts.
++
++The only acceptable next production change is to extend an existing inference module or handler with a documented gap and tests proving that no suitable existing function already covers the need.
+diff --git a/doc/docs/architecture/runtime/135_vector_indexing_openvino_existing_path.dot b/doc/docs/architecture/runtime/135_vector_indexing_openvino_existing_path.dot
+new file mode 100644
+index 0000000..f60d786
+--- /dev/null
++++ b/doc/docs/architecture/runtime/135_vector_indexing_openvino_existing_path.dot
+@@ -0,0 +1,19 @@
++digraph vector_indexing_openvino_existing_path_0135 {
++  rankdir=LR;
++  node [shape=box];
++
++  scheduler [label="Scheduler\norchestrator"];
++  plan [label="VectorIndexingJobPlan\nexisting context contract"];
++  job [label="VectorEmbeddingJob\ntext_for_embedding"];
++  text [label="OpenVINOEmbeddingText\nexisting text contract"];
++  vector [label="build_embedding_vector\nexisting validation"];
++  qdrant [label="Qdrant projection\nlater adapter step"];
++  sql [label="SQLContextStore\ndurable authority"];
++
++  scheduler -> plan;
++  plan -> job;
++  job -> text;
++  text -> vector;
++  vector -> qdrant [style=dashed];
++  job -> sql [label="sql_ref authority"];
++}
+diff --git a/doc/manifests/MANIFEST_0135_CHANGED_FILES.md b/doc/manifests/MANIFEST_0135_CHANGED_FILES.md
+new file mode 100644
+index 0000000..fc41aa1
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0135_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest 0135 — changed files
++
++- tests/inference/test_vector_indexing_openvino_existing_path_0135.py
++- tests/rules/test_vector_indexing_openvino_existing_path_0135_rule.py
++- doc/architecture/VECTOR_INDEXING_OPENVINO_EXISTING_PATH_0135.md
++- doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0135.md
++- doc/code-rules/0135_vector_indexing_openvino_existing_path_rule.md
++- doc/docs/architecture/runtime/135_vector_indexing_openvino_existing_path.dot
++- doc/CHANGELOG_0135_VECTOR_INDEXING_OPENVINO_EXISTING_PATH.md
++- doc/manifests/MANIFEST_0135_CHANGED_FILES.md
++- PHASE0135_TEST_REPORT.md
++
++0135 is tests and docs only. It proves reuse of the existing vector-indexing and OpenVINO/E5 embedding surfaces before any production bridge is added.
+diff --git a/tests/inference/test_vector_indexing_openvino_existing_path_0135.py b/tests/inference/test_vector_indexing_openvino_existing_path_0135.py
+new file mode 100644
+index 0000000..f398d2f
+--- /dev/null
++++ b/tests/inference/test_vector_indexing_openvino_existing_path_0135.py
+@@ -0,0 +1,94 @@
++from __future__ import annotations
++
++from context.vector_indexing_job_plan import (
++    build_indexable_item_from_mapping,
++    build_vector_indexing_job_plan,
++)
++from inference.openvino_embedding_adapter import (
++    OpenVINOEmbeddingPolicy,
++    OpenVINOEmbeddingRuntimeTarget,
++    OpenVINOEmbeddingText,
++    build_embedding_vector,
++)
++
++
++def _unit_vector_384() -> tuple[float, ...]:
++    return (1.0,) + (0.0,) * 383
++
++
++def test_vector_indexing_embedding_job_is_compatible_with_existing_openvino_text_contract() -> None:
++    item = build_indexable_item_from_mapping(
++        source_ref="ctx-fragment:0135-openvino-route",
++        output_kind="context_chunk",
++        text="route handler writes a vector indexing request",
++        embedding_role="passage",
++    )
++    plan = build_vector_indexing_job_plan((item,))
++    job = plan.embedding_jobs[0]
++
++    text = OpenVINOEmbeddingText(
++        source_ref=job.item.source_ref,
++        text=job.item.text_for_embedding,
++        role=job.item.embedding_role,
++        title="0135 vector indexing job",
++        metadata=(
++            ("job_ref", job.job_ref),
++            ("request_frame", job.request_frame.route_ref),
++            ("result_frame", job.result_frame.route_ref),
++        ),
++    )
++
++    assert text.text.startswith("passage: ")
++    assert text.role == "passage"
++    assert text.source_ref == job.item.source_ref
++    assert dict(text.metadata)["job_ref"] == job.job_ref
++
++
++def test_vector_indexing_job_raw_vector_validates_through_existing_openvino_vector_contract() -> None:
++    item = build_indexable_item_from_mapping(
++        source_ref="contract:0135-openvino-vector",
++        output_kind="contract",
++        text="Scheduler queues embedding work; OpenVINO adapter executes later",
++        embedding_role="passage",
++    )
++    plan = build_vector_indexing_job_plan((item,))
++    job = plan.embedding_jobs[0]
++    target = OpenVINOEmbeddingRuntimeTarget(dimension=job.expected_dimension)
++    policy = OpenVINOEmbeddingPolicy(expected_dimension=job.expected_dimension)
++    text = OpenVINOEmbeddingText(
++        source_ref=job.item.source_ref,
++        text=job.item.text_for_embedding,
++        role=job.item.embedding_role,
++        metadata=(("job_ref", job.job_ref),),
++    )
++
++    vector = build_embedding_vector(text, _unit_vector_384(), target, policy)
++
++    assert vector.dimension == job.expected_dimension == 384
++    assert vector.role == "passage"
++    assert vector.backend_ref == target.backend_ref
++    assert vector.normalized is True
++    assert vector.source_ref == item.source_ref
++
++
++def test_vector_indexing_query_role_keeps_existing_e5_prefix_boundary() -> None:
++    item = build_indexable_item_from_mapping(
++        source_ref="scheduler-trace:0135-openvino-query",
++        output_kind="scheduler_trace",
++        text="find the most relevant route pressure signal",
++        embedding_role="query",
++    )
++    plan = build_vector_indexing_job_plan((item,))
++    job = plan.embedding_jobs[0]
++
++    text = OpenVINOEmbeddingText(
++        source_ref=job.item.source_ref,
++        text=job.item.text_for_embedding,
++        role=job.item.embedding_role,
++        metadata=(("job_ref", job.job_ref),),
++    )
++
++    assert text.text.startswith("query: ")
++    assert text.role == "query"
++    assert job.to_mapping()["runtime_import_required_here"] is False
++    assert job.to_mapping()["openvino_adapter_executes_later"] is True
+diff --git a/tests/rules/test_vector_indexing_openvino_existing_path_0135_rule.py b/tests/rules/test_vector_indexing_openvino_existing_path_0135_rule.py
+new file mode 100644
+index 0000000..fc92dc4
+--- /dev/null
++++ b/tests/rules/test_vector_indexing_openvino_existing_path_0135_rule.py
+@@ -0,0 +1,83 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "VECTOR_INDEXING_OPENVINO_EXISTING_PATH_0135.md"
++CODE_RULE = ROOT / "doc" / "code-rules" / "0135_vector_indexing_openvino_existing_path_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0135_CHANGED_FILES.md"
++TEST = ROOT / "tests" / "inference" / "test_vector_indexing_openvino_existing_path_0135.py"
++
++
++def test_0135_documents_vector_jobs_use_existing_openvino_membrane() -> None:
++    text = DOC.read_text(encoding="utf-8")
++    required = [
++        "0135 connects VectorIndexingJobPlan to the existing OpenVINO/E5 embedding membrane by tests only",
++        "Do not create a new vector OpenVINO adapter",
++        "VectorEmbeddingJob.item.text_for_embedding is already E5-prefixed",
++        "OpenVINOEmbeddingText is the existing text contract",
++        "build_embedding_vector is the existing vector validation contract",
++        "Scheduler remains the orchestrator and does not import OpenVINO",
++        "Qdrant projection remains a later adapter step",
++        "SQLContextStore remains durable context authority",
++        "code_rule_review: done",
++        "code_rule_update_required: true",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0135_code_rule_locks_no_parallel_vector_openvino_bridge() -> None:
++    text = CODE_RULE.read_text(encoding="utf-8")
++    required = [
++        "Before adding a vector-indexing OpenVINO bridge",
++        "reuse context.vector_indexing_job_plan.VectorEmbeddingJob",
++        "reuse inference.openvino_embedding_adapter.OpenVINOEmbeddingText",
++        "reuse inference.openvino_embedding_adapter.build_embedding_vector",
++        "Do not create a parallel VectorOpenVINOEmbeddingAdapter",
++        "Do not import OpenVINO from Scheduler, Dispatcher, PolicyEngine, RouteProxy, or context contracts",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0135_manifest_changes_tests_and_docs_only() -> None:
++    text = MANIFEST.read_text(encoding="utf-8")
++    required = [
++        "tests/inference/test_vector_indexing_openvino_existing_path_0135.py",
++        "tests/rules/test_vector_indexing_openvino_existing_path_0135_rule.py",
++        "doc/architecture/VECTOR_INDEXING_OPENVINO_EXISTING_PATH_0135.md",
++        "doc/code-rules/0135_vector_indexing_openvino_existing_path_rule.md",
++    ]
++    for phrase in required:
++        assert phrase in text
++    forbidden = [
++        "src/inference/vector_openvino_embedding_adapter.py",
++        "src/runtime/vector_openvino_worker.py",
++        "src/kernel/scheduler.py",
++        "src/runtime/scheduler.py",
++        "src/policy/engine.py",
++        "src/runtime/route_proxy_runtime_minimal.py",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++
++
++def test_0135_integration_test_uses_existing_modules_not_new_adapter_names() -> None:
++    text = TEST.read_text(encoding="utf-8")
++    required = [
++        "from context.vector_indexing_job_plan import",
++        "from inference.openvino_embedding_adapter import",
++        "OpenVINOEmbeddingText",
++        "build_embedding_vector",
++    ]
++    for phrase in required:
++        assert phrase in text
++    forbidden = [
++        "VectorOpenVINOEmbeddingAdapter",
++        "E5VectorBridgeAdapter",
++        "import openvino",
++        "from openvino",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text

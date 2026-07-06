@@ -1,0 +1,287 @@
+diff --git a/doc/architecture/FAKE_RUNTIME_REPLACE_SEMANTICS.md b/doc/architecture/FAKE_RUNTIME_REPLACE_SEMANTICS.md
+new file mode 100644
+index 0000000..99b6a58
+--- /dev/null
++++ b/doc/architecture/FAKE_RUNTIME_REPLACE_SEMANTICS.md
+@@ -0,0 +1,67 @@
++# Fake runtime replace semantics
++
++Status: corrective phase after 0074.
++
++## Problem
++
++The file-backed fake runtime originally replaced these surfaces:
++
++```text
++data.index.jsonl
++event.bus.jsonl
++context.bus.jsonl
++```
++
++but appended to route files:
++
++```text
++routes/<route_id>/messages.jsonl
++```
++
++That made repeated end-to-end runs non-deterministic.
++
++A second run could produce:
++
++```text
++route_message_count = 6
++record_count = 10
++```
++
++instead of the expected baby-fork counts:
++
++```text
++route_message_count = 3
++record_count = 7
++```
++
++## Fix
++
++`write_projection_to_fake_runtime` now replaces route files by default.
++
++Direct `FakeLocalRouteTransport.send` still keeps append semantics for tests or future queue-like behavior.
++
++## CLI behavior
++
++`tools/write_baby_fork_fake_runtime.py` now replaces routes by default.
++
++Use this only when append behavior is explicitly wanted:
++
++```bash
++--append-routes
++```
++
++## Non-goals
++
++This phase does not add:
++
++```text
++real shared memory
++real semaphores
++ring buffer
++RouteProxy daemon
++Scheduler wiring
++ControlFS mutation
++NetworkBridge
++HardwareBridge
++cluster dispatch
++```
+diff --git a/doc/changelog/0075-fake-runtime-replace-semantics.md b/doc/changelog/0075-fake-runtime-replace-semantics.md
+new file mode 100644
+index 0000000..1a22251
+--- /dev/null
++++ b/doc/changelog/0075-fake-runtime-replace-semantics.md
+@@ -0,0 +1,21 @@
++# 0075 - Fake runtime replace semantics
++
++## Fixed
++
++- Repeated fake runtime writes no longer accumulate route messages by default.
++- End-to-end baby-fork runtime flow remains deterministic:
++  - `route_message_count = 3`
++  - `record_count = 7`
++- `tools/write_baby_fork_fake_runtime.py` now has `--append-routes` for explicit append behavior.
++
++## Not added
++
++- No real shared memory.
++- No semaphores.
++- No ring buffer.
++- No RouteProxy daemon.
++- No Scheduler wiring.
++- No ControlFS mutation.
++- No NetworkBridge.
++- No HardwareBridge.
++- No cluster dispatch.
+diff --git a/src/runtime/fake_route_transport.py b/src/runtime/fake_route_transport.py
+index 7880015..b952fc1 100644
+--- a/src/runtime/fake_route_transport.py
++++ b/src/runtime/fake_route_transport.py
+@@ -22,6 +22,7 @@ from __future__ import annotations
+ from dataclasses import dataclass
+ from pathlib import Path
+ import json
++import shutil
+ from typing import Iterable, Mapping, Any
+ 
+ from runtime.shm_runtime_schema import (
+@@ -138,6 +139,7 @@ def write_projection_to_fake_runtime(
+     events: Iterable[EventBusMessage],
+     contexts: Iterable[ContextBusMessage],
+     routes: Iterable[RouteMessage],
++    replace_routes: bool = True,
+ ) -> FakeRuntimeSnapshot:
+     """Write a runtime projection to a fake local runtime surface.
+ 
+@@ -151,11 +153,19 @@ def write_projection_to_fake_runtime(
+ 
+     This simulates the future local runtime vocabulary without implementing
+     shared memory or semaphores.
++
++    By default route files are replaced, not appended, so repeated end-to-end
++    smoke runs remain deterministic. Use FakeLocalRouteTransport.send directly
++    when append semantics are wanted.
+     """
+ 
+     runtime_root = Path(root)
+     runtime_root.mkdir(parents=True, exist_ok=True)
+ 
++    routes_root = runtime_root / "routes"
++    if replace_routes and routes_root.exists():
++        shutil.rmtree(routes_root)
++
+     data_handle_items = tuple(data_handles)
+     event_items = tuple(events)
+     context_items = tuple(contexts)
+diff --git a/tests/rules/test_fake_runtime_replace_semantics_rule.py b/tests/rules/test_fake_runtime_replace_semantics_rule.py
+new file mode 100644
+index 0000000..3e88080
+--- /dev/null
++++ b/tests/rules/test_fake_runtime_replace_semantics_rule.py
+@@ -0,0 +1,53 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "FAKE_RUNTIME_REPLACE_SEMANTICS.md"
++MODULE = ROOT / "src" / "runtime" / "fake_route_transport.py"
++TOOL = ROOT / "tools" / "write_baby_fork_fake_runtime.py"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing file: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_fake_runtime_replace_semantics_doc_locks_bug_and_fix() -> None:
++    text = _read(DOC)
++
++    required_phrases = [
++        "route_message_count = 6",
++        "record_count = 10",
++        "route_message_count = 3",
++        "record_count = 7",
++        "replaces route files by default",
++        "--append-routes",
++        "real shared memory",
++        "RouteProxy daemon",
++        "Scheduler wiring",
++        "ControlFS mutation",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_fake_route_transport_defaults_to_replacing_routes() -> None:
++    text = _read(MODULE)
++
++    required_phrases = [
++        "replace_routes: bool = True",
++        "shutil.rmtree(routes_root)",
++        "repeated end-to-end",
++        "remain deterministic",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_write_baby_fork_fake_runtime_exposes_append_routes_flag() -> None:
++    text = _read(TOOL)
++
++    assert "--append-routes" in text
++    assert "replace_routes=not args.append_routes" in text
+diff --git a/tests/test_fake_runtime_replace_semantics.py b/tests/test_fake_runtime_replace_semantics.py
+new file mode 100644
+index 0000000..15b253b
+--- /dev/null
++++ b/tests/test_fake_runtime_replace_semantics.py
+@@ -0,0 +1,58 @@
++import json
++from pathlib import Path
++
++from context.baby_fork_runtime_flow import run_baby_fork_runtime_flow
++
++
++def _report() -> dict:
++    return {
++        "retrieval": {
++            "retrieved_ids": ["baby-silicone-fork", "rounded-stainless-soft-handle"],
++            "rejected_ids": ["nasa-antenna"],
++        },
++        "variant_generator_stub": {
++            "generated_variants": [
++                {"variant_id": "variant-1"},
++                {"variant_id": "variant-2"},
++            ]
++        },
++        "final_context": {
++            "context_id": "ctx-baby-fork-001",
++            "context_version": 2,
++            "selected_variant_id": "variant-1",
++        },
++    }
++
++
++def test_repeated_baby_fork_runtime_flow_replaces_fake_route_files(tmp_path: Path) -> None:
++    report_path = tmp_path / "report.json"
++    report_path.write_text(json.dumps(_report()), encoding="utf-8")
++
++    fake_runtime = tmp_path / "fake_runtime"
++    journal = fake_runtime / "runtime_journal.jsonl"
++
++    first = run_baby_fork_runtime_flow(report_path, fake_runtime, journal)
++    second = run_baby_fork_runtime_flow(report_path, fake_runtime, journal)
++
++    assert first.fake_runtime["route_message_count"] == 3
++    assert first.recorder["record_count"] == 7
++    assert second.fake_runtime["route_message_count"] == 3
++    assert second.recorder["record_count"] == 7
++    assert len(journal.read_text(encoding="utf-8").splitlines()) == 7
++
++
++def test_repeated_baby_fork_runtime_flow_with_controlfs_still_replaces_routes(tmp_path: Path) -> None:
++    report_path = tmp_path / "report.json"
++    report_path.write_text(json.dumps(_report()), encoding="utf-8")
++
++    fake_runtime = tmp_path / "fake_runtime"
++    journal = fake_runtime / "runtime_journal.jsonl"
++    controlfs = tmp_path / "controlfs"
++
++    run_baby_fork_runtime_flow(report_path, fake_runtime, journal, controlfs_root=controlfs)
++    second = run_baby_fork_runtime_flow(report_path, fake_runtime, journal, controlfs_root=controlfs)
++
++    assert second.fake_runtime["route_message_count"] == 3
++    assert second.recorder["record_count"] == 7
++    assert second.controlfs is not None
++    assert second.controlfs["action_counts"]["create"] == 3
+diff --git a/tools/write_baby_fork_fake_runtime.py b/tools/write_baby_fork_fake_runtime.py
+index da79c20..89b075b 100644
+--- a/tools/write_baby_fork_fake_runtime.py
++++ b/tools/write_baby_fork_fake_runtime.py
+@@ -24,6 +24,11 @@ def main(argv: list[str] | None = None) -> int:
+     parser.add_argument("report", type=Path)
+     parser.add_argument("runtime_root", type=Path)
+     parser.add_argument("--occurred-at", default="2026-07-04T20:00:00Z")
++    parser.add_argument(
++        "--append-routes",
++        action="store_true",
++        help="Append route messages instead of replacing existing fake route files.",
++    )
+     args = parser.parse_args(argv)
+ 
+     try:
+@@ -50,6 +55,7 @@ def main(argv: list[str] | None = None) -> int:
+         events=projection.events,
+         contexts=projection.contexts,
+         routes=projection.routes,
++        replace_routes=not args.append_routes,
+     )
+     print(json.dumps(snapshot.to_mapping(), indent=2, sort_keys=True))
+     return 0

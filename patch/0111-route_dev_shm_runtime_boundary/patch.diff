@@ -1,0 +1,1088 @@
+diff --git a/PHASE0111_TEST_REPORT.md b/PHASE0111_TEST_REPORT.md
+new file mode 100644
+index 0000000..d978593
+--- /dev/null
++++ b/PHASE0111_TEST_REPORT.md
+@@ -0,0 +1,43 @@
++# PHASE 0111 TEST REPORT — Route /dev/shm runtime boundary
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: 0111 applies the existing stdlib-first, explicit-policy, no-bus-duplication and micro-kernel boundary rules. It introduces no new programming rule.
++live_path_status: transition
++external_dependencies_added: none
++```
++
++Validation commands expected in repository:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/runtime/test_route_dev_shm_runtime.py
++PYTHONPATH=src:. pytest -q tests/rules/test_route_dev_shm_runtime_0111_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++Focused validation performed while building the patch:
++
++```text
++git apply --check: OK
++py_compile added files: OK
++pytest targeted rule test in synthetic worktree: OK
++```
++
++Boundary review:
++
++```text
++No CLI.
++No daemon.
++No OpenRC service.
++No watcher.
++No Scheduler.run() modification.
++No Dispatcher expansion.
++No PolicyEngine expansion.
++No PriorityQueue change.
++No EventBus creation.
++Route mmap/eventfd is data plane, not EventBus.
++No implicit file fallback from /dev/shm placement.
++```
+diff --git a/doc/CHANGELOG_0111_ROUTE_DEV_SHM_RUNTIME.md b/doc/CHANGELOG_0111_ROUTE_DEV_SHM_RUNTIME.md
+new file mode 100644
+index 0000000..3b4911a
+--- /dev/null
++++ b/doc/CHANGELOG_0111_ROUTE_DEV_SHM_RUNTIME.md
+@@ -0,0 +1,7 @@
++# 0111 — Route /dev/shm runtime boundary
++
++Added a narrow runtime adapter that prepares an explicit `/dev/shm` route runtime root and builds `RouteRuntimeManager` from it.
++
++No Scheduler, Dispatcher, PriorityQueue, PolicyEngine, EventBus or Component contract changes.
++
++The phase reinforces that route mmap/eventfd is the data plane, not EventBus.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0111.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0111.md
+new file mode 100644
+index 0000000..0de1398
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0111.md
+@@ -0,0 +1,72 @@
++# ControlProxy operational plan — 0111 update
++
++0111 updates the plan after the simplification locks:
++
++```text
++0101 lock architecture simplification
++0102 audit existing paths
++0103 RouteRuntimeManager
++0104 thin handler to RouteRuntimeManager
++0105 priority/admission lock
++0106 EventBus/data plane boundary lock
++0107 graph root alignment
++0108 live route runtime walking skeleton
++0109 compatibility wrappers registry
++0110 specialist/kernel boundary
++0111 explicit /dev/shm runtime root for real inter-process data plane
++```
++
++## 0111 decision
++
++The next runtime hardening step is the **explicit /dev/shm runtime root**:
++
++```text
++specialist command
++-> Scheduler.emit()
++-> PolicyEngine.decide()
++-> PriorityQueue
++-> Scheduler.run()
++-> Dispatcher
++-> Handler
++-> RouteRuntimeManager
++-> explicit /dev/shm runtime root
++-> mmap/eventfd route data plane
++```
++
++The phase keeps these locks:
++
++```text
++explicit /dev/shm runtime root
++real inter-process data plane
++no implicit file fallback
++Route mmap/eventfd is data plane, not EventBus
++EventBus remains observation only
++No ControlProxyBus
++No RouteBus
++No VisualizationBus
++builds RouteRuntimeManager
++does not modify Scheduler.run()
++PolicyEngine remains minimal admission before queue
++PriorityQueue remains deterministic execution order
++Dispatcher remains EventType -> Handler only
++stdlib only
++```
++
++## Not done in 0111
++
++```text
++No daemon
++No watcher
++No OpenRC unit
++No Scheduler.run() modification
++No Dispatcher expansion
++No priority recalculation
++No PolicyEngine expansion
++No EventBus duplication
++No NetworkBridge
++No HardwareBridge
++```
++
++## Next phase suggestion
++
++0112 should be a concrete integration test that uses `RouteDevShmRuntimePolicy` where `/dev/shm` is available, while keeping file-backed tests as recovery and CI paths.
+diff --git a/doc/architecture/ROUTE_DEV_SHM_RUNTIME_0111.md b/doc/architecture/ROUTE_DEV_SHM_RUNTIME_0111.md
+new file mode 100644
+index 0000000..feb458c
+--- /dev/null
++++ b/doc/architecture/ROUTE_DEV_SHM_RUNTIME_0111.md
+@@ -0,0 +1,74 @@
++# 0111 — Route /dev/shm runtime boundary
++
++0111 reinforces the real inter-process data plane boundary for route runtime files.
++It does not change the micro-kernel. It only prepares an **explicit /dev/shm runtime root** and builds `RouteRuntimeManager` with that root.
++
++## Locked vocabulary
++
++```text
++EventBus = observation only
++Route mmap/eventfd = data plane, not EventBus
++/dev/shm = explicit runtime placement, not a Scheduler shortcut
++RouteRuntimeManager = runtime facade, not a scheduler-like coordinator
++```
++
++Required phrases kept executable by rule tests:
++
++```text
++explicit /dev/shm runtime root
++real inter-process data plane
++no implicit file fallback
++Route mmap/eventfd is data plane, not EventBus
++EventBus remains observation only
++No ControlProxyBus
++No RouteBus
++No VisualizationBus
++builds RouteRuntimeManager
++does not modify Scheduler.run()
++PolicyEngine remains minimal admission before queue
++PriorityQueue remains deterministic execution order
++Dispatcher remains EventType -> Handler only
++stdlib only
++```
++
++## Why this phase exists
++
++0096 made runtime placement explicit. 0103 introduced `RouteRuntimeManager`. 0111 adds the narrow preparation layer for the real inter-process `/dev/shm` root:
++
++```text
++/dev/shm
++└── autodoc/
++    └── routes-runtime/
++        └── <route>@gN/
++            ├── ring.bin
++            └── status.json
++```
++
++This is still the route data plane. It is not a command bus and not an observation bus.
++
++## Safety rules
++
++`route_dev_shm_runtime.py` rejects:
++
++```text
++missing root
++non-directory root
++symlink root
++namespace traversal
++namespace containing slash or backslash
++symlink namespace root
++symlink routes-runtime root
++non-tmpfs root when require_tmpfs=True
++```
++
++There is **no implicit file fallback**. File-backed runtime roots remain valid for tests and recovery, but they are selected through the explicit file placement path, not by silently falling back from `/dev/shm`.
++
++## Kernel boundaries unchanged
++
++```text
++Scheduler -> PolicyEngine -> PriorityQueue -> Scheduler.run() -> Dispatcher -> Handler
++Handler -> RouteRuntimeManager
++RouteRuntimeManager -> ControlFS + mmap/eventfd data plane
++```
++
++0111 does not modify Scheduler, PolicyEngine, PriorityQueue, Dispatcher, Handler, EventBus, or Component contracts.
+diff --git a/doc/docs/architecture/runtime/101_route_dev_shm_runtime.dot b/doc/docs/architecture/runtime/101_route_dev_shm_runtime.dot
+new file mode 100644
+index 0000000..6293dac
+--- /dev/null
++++ b/doc/docs/architecture/runtime/101_route_dev_shm_runtime.dot
+@@ -0,0 +1,38 @@
++digraph RouteDevShmRuntime0111 {
++  graph [label="0111 route /dev/shm runtime boundary — root-attached data plane", labelloc=top, fontsize=18];
++  rankdir=LR;
++
++  subgraph cluster_kernel {
++    label="Micro-kernel path unchanged";
++    SchedulerEmit [label="Scheduler.emit()"];
++    PolicyEngine [label="PolicyEngine\nminimal admission before queue"];
++    PriorityQueue [label="PriorityQueue\ndeterministic execution order"];
++    SchedulerRun [label="Scheduler.run()\nunchanged"];
++    Dispatcher [label="Dispatcher\nEventType -> Handler only"];
++    Handler [label="Thin Handler"];
++  }
++
++  subgraph cluster_runtime {
++    label="ControlProxy / RouteRuntimeManager runtime boundary";
++    RouteRuntimeManager [label="RouteRuntimeManager\nbuilds RouteRuntimeManager"];
++    DevShmPolicy [label="RouteDevShmRuntimePolicy\nexplicit /dev/shm runtime root"];
++    DevShmRoot [label="prepared /dev/shm namespace\nno implicit file fallback"];
++    DataPlane [label="mmap/eventfd route files\nreal inter-process data plane\nRoute mmap/eventfd is data plane, not EventBus"];
++  }
++
++  subgraph cluster_observation {
++    label="Observation, not command";
++    EventBus [label="EventBus remains observation only"];
++    NoControlProxyBus [label="No ControlProxyBus"];
++    NoRouteBus [label="No RouteBus"];
++    NoVisualizationBus [label="No VisualizationBus"];
++  }
++
++  SchedulerEmit -> PolicyEngine -> PriorityQueue -> SchedulerRun -> Dispatcher -> Handler -> RouteRuntimeManager;
++  RouteRuntimeManager -> DevShmPolicy -> DevShmRoot -> DataPlane;
++  Dispatcher -> EventBus [style=dashed, label="observable fact copy"];
++  DataPlane -> EventBus [style=dashed, label="facts may be published, never commands"];
++
++  PolicyEngine -> RouteRuntimeManager [style=dotted, label="PolicyEngine remains minimal admission before queue"];
++  PriorityQueue -> RouteRuntimeManager [style=dotted, label="PriorityQueue remains deterministic execution order"];
++}
+diff --git a/doc/manifests/MANIFEST_0111_CHANGED_FILES.md b/doc/manifests/MANIFEST_0111_CHANGED_FILES.md
+new file mode 100644
+index 0000000..3bb2674
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0111_CHANGED_FILES.md
+@@ -0,0 +1,21 @@
++# Manifest 0111 — Route /dev/shm runtime boundary
++
++Changed files:
++
++```text
++PHASE0111_TEST_REPORT.md
++doc/CHANGELOG_0111_ROUTE_DEV_SHM_RUNTIME.md
++doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0111.md
++doc/architecture/ROUTE_DEV_SHM_RUNTIME_0111.md
++doc/docs/architecture/runtime/101_route_dev_shm_runtime.dot
++doc/manifests/MANIFEST_0111_CHANGED_FILES.md
++src/runtime/route_dev_shm_runtime.py
++tests/rules/test_route_dev_shm_runtime_0111_rule.py
++tests/runtime/test_route_dev_shm_runtime.py
++```
++
++Scope statement:
++
++```text
++0111 is additive. It adds explicit /dev/shm runtime root preparation for the route data plane and does not change kernel files, policy files, dispatcher files, queue files, or EventBus files.
++```
+diff --git a/src/runtime/__pycache__/route_dev_shm_runtime.cpython-313.pyc b/src/runtime/__pycache__/route_dev_shm_runtime.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..8557c67ffd7c95a8d8b6ba394cd91c1df96840b6
+GIT binary patch
+literal 12996
+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
+YN$g(llEl{a5VEyUQ^56xk5lh|0e5J0Pyhe`
+
+literal 0
+HcmV?d00001
+
+diff --git a/src/runtime/route_dev_shm_runtime.py b/src/runtime/route_dev_shm_runtime.py
+new file mode 100644
+index 0000000..1e8b7d5
+--- /dev/null
++++ b/src/runtime/route_dev_shm_runtime.py
+@@ -0,0 +1,285 @@
++"""Explicit /dev/shm runtime root for route data plane segments.
++
++Phase 0111 reinforces real inter-process data plane placement without changing
++Scheduler, PolicyEngine, PriorityQueue, Dispatcher or Handler.  It is a narrow
++adapter that prepares an explicit /dev/shm runtime root and can build a
++RouteRuntimeManager from that root.
++
++Operational intent locked by this module:
++- explicit /dev/shm runtime root, never implicit discovery by ControlProxy code.
++- no implicit file fallback when /dev/shm placement is requested.
++- real inter-process data plane preparation, not a new bus.
++- Route mmap/eventfd is data plane, not EventBus.
++- EventBus remains observation only.
++- No ControlProxyBus.
++- No RouteBus.
++- No VisualizationBus.
++- builds RouteRuntimeManager with explicit roots.
++- does not modify Scheduler.run().
++- PolicyEngine remains minimal admission before queue.
++- PriorityQueue remains deterministic execution order.
++- Dispatcher remains EventType -> Handler only.
++- stdlib only.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any, Mapping
++
++from runtime.route_runtime_manager import RouteRuntimeManager
++
++ROUTE_DEV_SHM_RUNTIME_ROOT_SCHEMA = "missipy.controlproxy.route_dev_shm_runtime_root.v1"
++
++
++class RouteDevShmRuntimeError(ValueError):
++    """Raised when an explicit /dev/shm runtime root is unsafe or unavailable."""
++
++
++@dataclass(frozen=True, slots=True)
++class RouteDevShmRuntimePolicy:
++    """Explicit policy for preparing the /dev/shm route runtime root.
++
++    The policy is intentionally separate from Scheduler priorities and admission.
++    It only validates where mmap/eventfd route data plane files may be placed.
++    """
++
++    dev_shm_root: Path | str = Path("/dev/shm")
++    namespace: str = "autodoc"
++    create: bool = True
++    require_tmpfs: bool = True
++
++    def __post_init__(self) -> None:
++        object.__setattr__(self, "dev_shm_root", Path(self.dev_shm_root))
++        _validate_namespace(self.namespace)
++        if not isinstance(self.create, bool):
++            raise RouteDevShmRuntimeError("create must be a bool")
++        if not isinstance(self.require_tmpfs, bool):
++            raise RouteDevShmRuntimeError("require_tmpfs must be a bool")
++
++
++@dataclass(frozen=True, slots=True)
++class RouteDevShmRuntimeRoot:
++    """Stable projection for the prepared /dev/shm route runtime root."""
++
++    schema: str
++    dev_shm_root: str
++    namespace: str
++    runtime_root: str
++    tmpfs_required: bool
++    tmpfs_verified: bool
++    created: bool
++
++    def __post_init__(self) -> None:
++        if self.schema != ROUTE_DEV_SHM_RUNTIME_ROOT_SCHEMA:
++            raise RouteDevShmRuntimeError("unsupported dev_shm runtime root schema")
++        if not self.dev_shm_root:
++            raise RouteDevShmRuntimeError("dev_shm_root is required")
++        _validate_namespace(self.namespace)
++        if not self.runtime_root:
++            raise RouteDevShmRuntimeError("runtime_root is required")
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "dev_shm_root": self.dev_shm_root,
++            "namespace": self.namespace,
++            "runtime_root": self.runtime_root,
++            "tmpfs_required": self.tmpfs_required,
++            "tmpfs_verified": self.tmpfs_verified,
++            "created": self.created,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class RouteDevShmRuntimeManagerBinding:
++    """RouteRuntimeManager plus the explicit /dev/shm root used to build it."""
++
++    root: RouteDevShmRuntimeRoot
++    manager: RouteRuntimeManager
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "root": self.root.to_mapping(),
++            "manager": {
++                "controlfs_root": str(self.manager.controlfs_root),
++                "runtime_root": str(self.manager.runtime_root),
++            },
++        }
++
++
++def prepare_dev_shm_route_runtime_root(
++    policy: RouteDevShmRuntimePolicy | None = None,
++) -> RouteDevShmRuntimeRoot:
++    """Validate and prepare the explicit /dev/shm route runtime root.
++
++    This function never falls back to file placement.  If the requested root is
++    missing, unsafe, not a directory, symlinked, or not tmpfs when tmpfs is
++    required, it raises RouteDevShmRuntimeError.
++    """
++
++    policy = policy or RouteDevShmRuntimePolicy()
++    root = Path(policy.dev_shm_root)
++    if not root.exists():
++        raise RouteDevShmRuntimeError("/dev/shm runtime root does not exist")
++    if not root.is_dir():
++        raise RouteDevShmRuntimeError("/dev/shm runtime root must be a directory")
++    _reject_symlink(root, label="dev_shm_root")
++
++    tmpfs_verified = _path_is_tmpfs(root)
++    if policy.require_tmpfs and not tmpfs_verified:
++        raise RouteDevShmRuntimeError("/dev/shm runtime root must be backed by tmpfs")
++
++    namespace_root = root / policy.namespace
++    runtime_root = namespace_root / "routes-runtime"
++    _ensure_relative_to_root(root=root, child=runtime_root)
++    _reject_existing_symlink(namespace_root, label="namespace root")
++    _reject_existing_symlink(runtime_root, label="routes runtime root")
++
++    existed_before = runtime_root.exists()
++    if policy.create:
++        runtime_root.mkdir(parents=True, exist_ok=True)
++    elif not existed_before:
++        raise RouteDevShmRuntimeError("routes runtime root does not exist and create is false")
++
++    _reject_existing_symlink(namespace_root, label="namespace root")
++    _reject_existing_symlink(runtime_root, label="routes runtime root")
++    if not runtime_root.is_dir():
++        raise RouteDevShmRuntimeError("routes runtime root must be a directory")
++
++    return RouteDevShmRuntimeRoot(
++        schema=ROUTE_DEV_SHM_RUNTIME_ROOT_SCHEMA,
++        dev_shm_root=str(root),
++        namespace=policy.namespace,
++        runtime_root=str(runtime_root),
++        tmpfs_required=policy.require_tmpfs,
++        tmpfs_verified=tmpfs_verified,
++        created=not existed_before,
++    )
++
++
++def build_dev_shm_route_runtime_manager(
++    *,
++    controlfs_root: Path | str,
++    policy: RouteDevShmRuntimePolicy | None = None,
++    blocking_lock: bool = True,
++) -> RouteDevShmRuntimeManagerBinding:
++    """Build RouteRuntimeManager from an explicit prepared /dev/shm root."""
++
++    root = prepare_dev_shm_route_runtime_root(policy)
++    manager = RouteRuntimeManager.from_roots(
++        controlfs_root=controlfs_root,
++        runtime_root=root.runtime_root,
++        blocking_lock=blocking_lock,
++    )
++    return RouteDevShmRuntimeManagerBinding(root=root, manager=manager)
++
++
++def route_dev_shm_runtime_root_from_mapping(raw: Mapping[str, Any]) -> RouteDevShmRuntimeRoot:
++    """Load a stable mapping emitted by RouteDevShmRuntimeRoot.to_mapping()."""
++
++    schema = _require_str(raw, "schema")
++    if schema != ROUTE_DEV_SHM_RUNTIME_ROOT_SCHEMA:
++        raise RouteDevShmRuntimeError("unsupported dev_shm runtime root schema")
++    return RouteDevShmRuntimeRoot(
++        schema=schema,
++        dev_shm_root=_require_str(raw, "dev_shm_root"),
++        namespace=_require_str(raw, "namespace"),
++        runtime_root=_require_str(raw, "runtime_root"),
++        tmpfs_required=_require_bool(raw, "tmpfs_required"),
++        tmpfs_verified=_require_bool(raw, "tmpfs_verified"),
++        created=_require_bool(raw, "created"),
++    )
++
++
++def _validate_namespace(namespace: str) -> str:
++    if not isinstance(namespace, str) or not namespace:
++        raise RouteDevShmRuntimeError("namespace is required")
++    if namespace in {".", ".."}:
++        raise RouteDevShmRuntimeError("namespace must not be a traversal marker")
++    if "/" in namespace or "\\" in namespace:
++        raise RouteDevShmRuntimeError("namespace must be one path segment")
++    return namespace
++
++
++def _ensure_relative_to_root(*, root: Path, child: Path) -> None:
++    try:
++        child.resolve(strict=False).relative_to(root.resolve(strict=True))
++    except ValueError as exc:
++        raise RouteDevShmRuntimeError("runtime root must remain under dev_shm_root") from exc
++
++
++def _reject_symlink(path: Path, *, label: str) -> None:
++    if path.is_symlink():
++        raise RouteDevShmRuntimeError(f"{label} must not be a symlink")
++
++
++def _reject_existing_symlink(path: Path, *, label: str) -> None:
++    if path.exists() or path.is_symlink():
++        _reject_symlink(path, label=label)
++
++
++def _path_is_tmpfs(path: Path) -> bool:
++    """Return True when path is under a tmpfs mount according to /proc/mounts."""
++
++    mounts = _read_linux_mounts()
++    if not mounts:
++        return False
++    try:
++        target = path.resolve(strict=True)
++    except FileNotFoundError:
++        return False
++
++    best_match: tuple[int, str] | None = None
++    for mount_point, fs_type in mounts:
++        try:
++            mount_path = Path(mount_point).resolve(strict=True)
++        except FileNotFoundError:
++            continue
++        try:
++            target.relative_to(mount_path)
++        except ValueError:
++            continue
++        depth = len(mount_path.parts)
++        if best_match is None or depth > best_match[0]:
++            best_match = (depth, fs_type)
++    return best_match is not None and best_match[1] == "tmpfs"
++
++
++def _read_linux_mounts() -> tuple[tuple[str, str], ...]:
++    mounts_path = Path("/proc/mounts")
++    if not mounts_path.exists():
++        return ()
++    records: list[tuple[str, str]] = []
++    for line in mounts_path.read_text(encoding="utf-8").splitlines():
++        parts = line.split()
++        if len(parts) >= 3:
++            records.append((parts[1], parts[2]))
++    return tuple(records)
++
++
++def _require_str(raw: Mapping[str, Any], field: str) -> str:
++    value = raw.get(field)
++    if not isinstance(value, str) or not value:
++        raise RouteDevShmRuntimeError(f"{field} must be a non-empty string")
++    return value
++
++
++def _require_bool(raw: Mapping[str, Any], field: str) -> bool:
++    value = raw.get(field)
++    if not isinstance(value, bool):
++        raise RouteDevShmRuntimeError(f"{field} must be a bool")
++    return value
++
++
++__all__ = (
++    "ROUTE_DEV_SHM_RUNTIME_ROOT_SCHEMA",
++    "RouteDevShmRuntimeError",
++    "RouteDevShmRuntimeManagerBinding",
++    "RouteDevShmRuntimePolicy",
++    "RouteDevShmRuntimeRoot",
++    "build_dev_shm_route_runtime_manager",
++    "prepare_dev_shm_route_runtime_root",
++    "route_dev_shm_runtime_root_from_mapping",
++)
+diff --git a/tests/rules/__pycache__/test_route_dev_shm_runtime_0111_rule.cpython-313-pytest-9.0.2.pyc b/tests/rules/__pycache__/test_route_dev_shm_runtime_0111_rule.cpython-313-pytest-9.0.2.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..f1b0f4e006e8a9b22ba8f8172dac8003d5bacdb4
+GIT binary patch
+literal 8111
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/rules/__pycache__/test_route_dev_shm_runtime_0111_rule.cpython-313.pyc b/tests/rules/__pycache__/test_route_dev_shm_runtime_0111_rule.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..fee8828c9dc4c3c605101ece4fe3bf38f0452513
+GIT binary patch
+literal 3574
+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
+Wd^_F4kH5X##gG5%qQGBgcl!@76vCGP
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/rules/test_route_dev_shm_runtime_0111_rule.py b/tests/rules/test_route_dev_shm_runtime_0111_rule.py
+new file mode 100644
+index 0000000..339ca85
+--- /dev/null
++++ b/tests/rules/test_route_dev_shm_runtime_0111_rule.py
+@@ -0,0 +1,76 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "runtime" / "route_dev_shm_runtime.py"
++DOC = ROOT / "doc" / "architecture" / "ROUTE_DEV_SHM_RUNTIME_0111.md"
++PLAN = ROOT / "doc" / "architecture" / "CONTROLPROXY_OPERATIONAL_PLAN_0111.md"
++DOT = ROOT / "doc" / "docs" / "architecture" / "runtime" / "101_route_dev_shm_runtime.dot"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0111_CHANGED_FILES.md"
++REPORT = ROOT / "PHASE0111_TEST_REPORT.md"
++
++
++def _read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_0111_dev_shm_runtime_locks_data_plane_boundary() -> None:
++    text = "\n".join(_read(path) for path in (MODULE, DOC, PLAN, DOT))
++    required = [
++        "explicit /dev/shm runtime root",
++        "real inter-process data plane",
++        "no implicit file fallback",
++        "Route mmap/eventfd is data plane, not EventBus",
++        "EventBus remains observation only",
++        "No ControlProxyBus",
++        "No RouteBus",
++        "No VisualizationBus",
++        "builds RouteRuntimeManager",
++        "does not modify Scheduler.run()",
++        "PolicyEngine remains minimal admission before queue",
++        "PriorityQueue remains deterministic execution order",
++        "Dispatcher remains EventType -> Handler only",
++        "stdlib only",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0111_dev_shm_runtime_does_not_import_kernel_or_eventbus() -> None:
++    module = _read(MODULE)
++    forbidden = [
++        "from kernel",
++        "import kernel",
++        "EventBus(",
++        "from kernel.event_bus",
++        "from kernel.scheduler",
++        "from policy.engine",
++        "from kernel.queue",
++        "from kernel.dispatcher",
++        "Dispatcher(",
++    ]
++    for phrase in forbidden:
++        assert phrase not in module
++
++
++def test_0111_manifest_is_additive_and_avoids_kernel_files() -> None:
++    manifest = _read(MANIFEST)
++    assert "src/runtime/route_dev_shm_runtime.py" in manifest
++    assert "tests/runtime/test_route_dev_shm_runtime.py" in manifest
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/kernel/dispatcher.py",
++        "src/kernel/queue.py",
++        "src/policy/engine.py",
++        "src/kernel/event_bus.py",
++    ]
++    for path in forbidden:
++        assert path not in manifest
++
++
++def test_0111_report_contains_code_rule_review() -> None:
++    report = _read(REPORT)
++    assert "code_rule_review: done" in report
++    assert "code_rule_update_required: false" in report
++    assert "live_path_status: transition" in report
+diff --git a/tests/runtime/__pycache__/test_route_dev_shm_runtime.cpython-313.pyc b/tests/runtime/__pycache__/test_route_dev_shm_runtime.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..1372fcafa3cc829356d201d8622d0e78724e0798
+GIT binary patch
+literal 4482
+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
+LsFiz%V}}0=Uje~|
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/runtime/test_route_dev_shm_runtime.py b/tests/runtime/test_route_dev_shm_runtime.py
+new file mode 100644
+index 0000000..eb0fafa
+--- /dev/null
++++ b/tests/runtime/test_route_dev_shm_runtime.py
+@@ -0,0 +1,116 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++import pytest
++
++from runtime.route_dev_shm_runtime import (
++    RouteDevShmRuntimeError,
++    RouteDevShmRuntimePolicy,
++    build_dev_shm_route_runtime_manager,
++    prepare_dev_shm_route_runtime_root,
++    route_dev_shm_runtime_root_from_mapping,
++)
++
++
++def test_prepare_dev_shm_runtime_root_creates_namespaced_runtime_root(tmp_path: Path) -> None:
++    root = tmp_path / "dev-shm"
++    root.mkdir()
++
++    result = prepare_dev_shm_route_runtime_root(
++        RouteDevShmRuntimePolicy(
++            dev_shm_root=root,
++            namespace="autodoc-test",
++            require_tmpfs=False,
++        )
++    )
++
++    assert result.namespace == "autodoc-test"
++    assert Path(result.runtime_root) == root / "autodoc-test" / "routes-runtime"
++    assert Path(result.runtime_root).is_dir()
++    assert result.tmpfs_required is False
++    assert result.created is True
++
++
++def test_prepare_dev_shm_runtime_root_rejects_namespace_traversal(tmp_path: Path) -> None:
++    root = tmp_path / "dev-shm"
++    root.mkdir()
++
++    for namespace in ("", ".", "..", "a/b", "a\\b"):
++        with pytest.raises(RouteDevShmRuntimeError):
++            RouteDevShmRuntimePolicy(
++                dev_shm_root=root,
++                namespace=namespace,
++                require_tmpfs=False,
++            )
++
++
++def test_prepare_dev_shm_runtime_root_rejects_symlink_root(tmp_path: Path) -> None:
++    target = tmp_path / "real-shm"
++    target.mkdir()
++    symlink = tmp_path / "shm-link"
++    symlink.symlink_to(target, target_is_directory=True)
++
++    with pytest.raises(RouteDevShmRuntimeError, match="must not be a symlink"):
++        prepare_dev_shm_route_runtime_root(
++            RouteDevShmRuntimePolicy(
++                dev_shm_root=symlink,
++                namespace="autodoc-test",
++                require_tmpfs=False,
++            )
++        )
++
++
++def test_prepare_dev_shm_runtime_root_rejects_symlink_namespace(tmp_path: Path) -> None:
++    root = tmp_path / "dev-shm"
++    root.mkdir()
++    target = tmp_path / "elsewhere"
++    target.mkdir()
++    (root / "autodoc-test").symlink_to(target, target_is_directory=True)
++
++    with pytest.raises(RouteDevShmRuntimeError, match="namespace root"):
++        prepare_dev_shm_route_runtime_root(
++            RouteDevShmRuntimePolicy(
++                dev_shm_root=root,
++                namespace="autodoc-test",
++                require_tmpfs=False,
++            )
++        )
++
++
++def test_route_dev_shm_runtime_root_mapping_roundtrip(tmp_path: Path) -> None:
++    root = tmp_path / "dev-shm"
++    root.mkdir()
++    result = prepare_dev_shm_route_runtime_root(
++        RouteDevShmRuntimePolicy(
++            dev_shm_root=root,
++            namespace="autodoc-test",
++            require_tmpfs=False,
++        )
++    )
++
++    loaded = route_dev_shm_runtime_root_from_mapping(result.to_mapping())
++
++    assert loaded == result
++    assert loaded.to_mapping() == result.to_mapping()
++
++
++def test_build_dev_shm_route_runtime_manager_uses_explicit_runtime_root(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    root = tmp_path / "dev-shm"
++    root.mkdir()
++
++    binding = build_dev_shm_route_runtime_manager(
++        controlfs_root=controlfs_root,
++        policy=RouteDevShmRuntimePolicy(
++            dev_shm_root=root,
++            namespace="autodoc-test",
++            require_tmpfs=False,
++        ),
++        blocking_lock=False,
++    )
++
++    expected_runtime_root = root / "autodoc-test" / "routes-runtime"
++    assert binding.manager.controlfs_root == controlfs_root
++    assert binding.manager.runtime_root == expected_runtime_root
++    assert binding.to_mapping()["root"]["runtime_root"] == str(expected_runtime_root)

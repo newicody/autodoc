@@ -1,0 +1,499 @@
+diff --git a/doc/architecture/BABY_FORK_RUNTIME_FLOW_CLI.md b/doc/architecture/BABY_FORK_RUNTIME_FLOW_CLI.md
+new file mode 100644
+index 0000000..f552792
+--- /dev/null
++++ b/doc/architecture/BABY_FORK_RUNTIME_FLOW_CLI.md
+@@ -0,0 +1,81 @@
++# Baby-fork runtime flow CLI
++
++Status: 0074 end-to-end file-backed flow.
++
++This phase adds one command for the already validated local flow:
++
++```text
++baby_fork_report.json
++-> runtime projection
++-> fake runtime surface
++-> recorder journal
++-> optional ControlFS desired manifests
++-> optional RouteProxy dry-run plan
++```
++
++## CLI
++
++```bash
++PYTHONPATH=src:. python tools/run_baby_fork_runtime_flow.py \
++  .var/baby_fork_smoke/baby_fork_report.json \
++  .var/baby_fork_fake_runtime \
++  .var/baby_fork_fake_runtime/runtime_journal.jsonl \
++  --controlfs-root .var/baby_fork_controlfs
++```
++
++## Output
++
++The command prints a JSON summary with:
++
++```text
++projection counts
++fake runtime counts
++recorder journal counts
++optional ControlFS RouteProxy action counts
++```
++
++## What this replaces
++
++Before this phase, the same validation required multiple commands:
++
++```text
++export_baby_fork_runtime_projection.py
++write_baby_fork_fake_runtime.py
++record_fake_runtime.py
++write_baby_fork_controlfs_desired.py
++baby_fork_routeproxy_plan.py
++```
++
++This phase does not remove those tools. It only adds a higher-level orchestrator.
++
++## Non-goals
++
++This phase does not add:
++
++```text
++real Scheduler run
++RouteProxy daemon
++real shared memory
++real semaphores
++ring buffer
++active route creation
++revoked route mutation
++ZFS requirement
++NetworkBridge
++HardwareBridge
++cluster dispatch
++```
++
++## Next phase after this
++
++The next phase can finally start a tiny in-process ring buffer model.
++
++Recommended constraints:
++
++```text
++no mmap first
++single producer / single consumer
++bounded capacity
++explicit overflow behavior
++same RouteMessage schema at the boundary
++```
+diff --git a/doc/changelog/0074-baby-fork-runtime-flow-cli.md b/doc/changelog/0074-baby-fork-runtime-flow-cli.md
+new file mode 100644
+index 0000000..d139812
+--- /dev/null
++++ b/doc/changelog/0074-baby-fork-runtime-flow-cli.md
+@@ -0,0 +1,24 @@
++# 0074 - Baby-fork runtime flow CLI
++
++## Added
++
++- `context.baby_fork_runtime_flow`
++- `tools/run_baby_fork_runtime_flow.py`
++- end-to-end flow from baby-fork report to fake runtime and recorder journal
++- optional ControlFS desired manifest + RouteProxy dry-run plan step
++- tests for the complete file-backed flow
++- rule tests locking no-real-runtime scope
++
++## Not added
++
++- No real Scheduler run.
++- No RouteProxy daemon.
++- No real shared memory.
++- No semaphores.
++- No ring buffer.
++- No active route creation.
++- No revoked route mutation.
++- No ZFS requirement.
++- No NetworkBridge.
++- No HardwareBridge.
++- No cluster dispatch.
+diff --git a/src/context/baby_fork_runtime_flow.py b/src/context/baby_fork_runtime_flow.py
+new file mode 100644
+index 0000000..45eb070
+--- /dev/null
++++ b/src/context/baby_fork_runtime_flow.py
+@@ -0,0 +1,156 @@
++"""Baby-fork end-to-end runtime flow CLI helpers.
++
++This module implements phase 0074.
++
++It deliberately does not:
++- run the real Scheduler
++- start RouteProxy
++- create shared memory
++- create semaphores
++- implement a ring buffer
++- mutate active/routes
++- mutate revoked/routes
++- require ZFS
++- implement NetworkBridge or HardwareBridge
++
++It only orchestrates already-validated local pieces:
++baby-fork report -> runtime projection -> fake runtime -> recorder journal
++and optionally writes ControlFS desired manifests plus a RouteProxy dry-run plan.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++import json
++from typing import Any, Mapping
++
++from context.baby_fork_controlfs import (
++    baby_fork_controlfs_summary,
++    build_baby_fork_routeproxy_plan,
++)
++from context.baby_fork_runtime_projection import build_baby_fork_runtime_projection
++from runtime.fake_route_transport import write_projection_to_fake_runtime
++from runtime.fake_runtime_recorder import ingest_fake_runtime_to_journal
++
++
++@dataclass(frozen=True)
++class BabyForkRuntimeFlowSummary:
++    """End-to-end baby-fork runtime flow summary."""
++
++    report_path: str
++    fake_runtime_root: str
++    journal_path: str
++    projection: dict[str, int]
++    fake_runtime: dict[str, Any]
++    recorder: dict[str, Any]
++    controlfs: dict[str, Any] | None = None
++
++    def to_mapping(self) -> dict[str, Any]:
++        payload = {
++            "report_path": self.report_path,
++            "fake_runtime_root": self.fake_runtime_root,
++            "journal_path": self.journal_path,
++            "projection": self.projection,
++            "fake_runtime": self.fake_runtime,
++            "recorder": self.recorder,
++        }
++        if self.controlfs is not None:
++            payload["controlfs"] = self.controlfs
++        return payload
++
++
++def run_baby_fork_runtime_flow(
++    report_path: Path | str,
++    fake_runtime_root: Path | str,
++    journal_path: Path | str,
++    *,
++    occurred_at: str = "2026-07-04T20:00:00Z",
++    append_journal: bool = False,
++    controlfs_root: Path | str | None = None,
++    context_id: str | None = None,
++) -> BabyForkRuntimeFlowSummary:
++    """Run the file-backed end-to-end baby-fork runtime flow.
++
++    The flow writes/updates:
++      - fake runtime files
++      - runtime recorder journal
++      - optional ControlFS desired manifests
++
++    It does not create active routes or real shared memory.
++    """
++
++    report_file = Path(report_path)
++    fake_root = Path(fake_runtime_root)
++    journal = Path(journal_path)
++
++    report = _load_report(report_file)
++    effective_context_id = context_id or _context_id_from_report(report)
++
++    projection = build_baby_fork_runtime_projection(
++        report,
++        report_uri=str(report_file),
++        occurred_at=occurred_at,
++    )
++
++    fake_snapshot = write_projection_to_fake_runtime(
++        fake_root,
++        data_handles=projection.data_handles,
++        events=projection.events,
++        contexts=projection.contexts,
++        routes=projection.routes,
++    )
++
++    recorder_summary = ingest_fake_runtime_to_journal(
++        fake_root,
++        journal,
++        append=append_journal,
++    )
++
++    controlfs_summary: dict[str, Any] | None = None
++    if controlfs_root is not None:
++        plan = build_baby_fork_routeproxy_plan(
++            controlfs_root,
++            context_id=effective_context_id,
++        )
++        controlfs_summary = baby_fork_controlfs_summary(controlfs_root, plan)
++
++    return BabyForkRuntimeFlowSummary(
++        report_path=str(report_file),
++        fake_runtime_root=str(fake_root),
++        journal_path=str(journal),
++        projection={
++            "data_handle_count": len(projection.data_handles),
++            "event_count": len(projection.events),
++            "context_count": len(projection.contexts),
++            "route_message_count": len(projection.routes),
++        },
++        fake_runtime=fake_snapshot.to_mapping(),
++        recorder=recorder_summary.to_mapping(),
++        controlfs=controlfs_summary,
++    )
++
++
++def _load_report(path: Path) -> Mapping[str, Any]:
++    try:
++        report = json.loads(path.read_text(encoding="utf-8"))
++    except json.JSONDecodeError as exc:
++        raise ValueError(f"invalid baby-fork report JSON: {exc}") from exc
++
++    if not isinstance(report, dict):
++        raise ValueError("baby-fork report must be a JSON object")
++    return report
++
++
++def _context_id_from_report(report: Mapping[str, Any]) -> str:
++    final_context = report.get("final_context")
++    if isinstance(final_context, Mapping):
++        value = final_context.get("context_id")
++        if value:
++            return str(value)
++
++    value = report.get("context_id")
++    if value:
++        return str(value)
++
++    return "baby_fork_smoke"
+diff --git a/tests/rules/test_baby_fork_runtime_flow_cli_rule.py b/tests/rules/test_baby_fork_runtime_flow_cli_rule.py
+new file mode 100644
+index 0000000..1d4e8be
+--- /dev/null
++++ b/tests/rules/test_baby_fork_runtime_flow_cli_rule.py
+@@ -0,0 +1,57 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "BABY_FORK_RUNTIME_FLOW_CLI.md"
++MODULE = ROOT / "src" / "context" / "baby_fork_runtime_flow.py"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing file: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_runtime_flow_cli_doc_locks_end_to_end_file_backed_scope() -> None:
++    text = _read(DOC)
++
++    required_phrases = [
++        "baby_fork_report.json",
++        "runtime projection",
++        "fake runtime surface",
++        "recorder journal",
++        "optional ControlFS desired manifests",
++        "optional RouteProxy dry-run plan",
++        "real Scheduler run",
++        "RouteProxy daemon",
++        "real shared memory",
++        "real semaphores",
++        "ring buffer",
++        "active route creation",
++        "ZFS requirement",
++        "NetworkBridge",
++        "HardwareBridge",
++        "cluster dispatch",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_runtime_flow_module_is_orchestrator_only() -> None:
++    text = _read(MODULE)
++
++    required_phrases = [
++        "It only orchestrates already-validated local pieces",
++        "run the real Scheduler",
++        "start RouteProxy",
++        "create shared memory",
++        "create semaphores",
++        "implement a ring buffer",
++        "mutate active/routes",
++        "mutate revoked/routes",
++        "require ZFS",
++        "implement NetworkBridge or HardwareBridge",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
+diff --git a/tests/test_baby_fork_runtime_flow.py b/tests/test_baby_fork_runtime_flow.py
+new file mode 100644
+index 0000000..d48f03f
+--- /dev/null
++++ b/tests/test_baby_fork_runtime_flow.py
+@@ -0,0 +1,92 @@
++import json
++from pathlib import Path
++
++from context.baby_fork_runtime_flow import run_baby_fork_runtime_flow
++
++
++def _report() -> dict:
++    return {
++        "ok": True,
++        "retrieval": {
++            "retrieved_ids": ["baby-silicone-fork", "rounded-stainless-soft-handle"],
++            "rejected_ids": ["nasa-antenna"],
++        },
++        "variant_generator_stub": {
++            "generated_variants": [
++                {"variant_id": "variant-1", "label": "soft silicone baby fork", "score": 0.86},
++                {"variant_id": "variant-2", "label": "rounded stainless with soft handle", "score": 0.74},
++            ]
++        },
++        "final_context": {
++            "context_id": "ctx-baby-fork-001",
++            "context_version": 2,
++            "selected_variant_id": "variant-1",
++        },
++    }
++
++
++def _write_report(tmp_path: Path) -> Path:
++    path = tmp_path / "baby_fork_report.json"
++    path.write_text(json.dumps(_report()), encoding="utf-8")
++    return path
++
++
++def test_runtime_flow_writes_fake_runtime_and_journal(tmp_path: Path) -> None:
++    report = _write_report(tmp_path)
++    fake_runtime = tmp_path / "fake_runtime"
++    journal = fake_runtime / "runtime_journal.jsonl"
++
++    summary = run_baby_fork_runtime_flow(report, fake_runtime, journal)
++
++    assert summary.projection == {
++        "data_handle_count": 1,
++        "event_count": 2,
++        "context_count": 1,
++        "route_message_count": 3,
++    }
++    assert summary.fake_runtime["route_message_count"] == 3
++    assert summary.recorder["record_count"] == 7
++    assert journal.exists()
++    assert len(journal.read_text(encoding="utf-8").splitlines()) == 7
++
++
++def test_runtime_flow_can_include_controlfs_routeproxy_plan(tmp_path: Path) -> None:
++    report = _write_report(tmp_path)
++    fake_runtime = tmp_path / "fake_runtime"
++    journal = fake_runtime / "runtime_journal.jsonl"
++    controlfs = tmp_path / "controlfs"
++
++    summary = run_baby_fork_runtime_flow(
++        report,
++        fake_runtime,
++        journal,
++        controlfs_root=controlfs,
++    )
++
++    assert summary.controlfs is not None
++    assert summary.controlfs["action_counts"] == {
++        "create": 3,
++        "delete": 0,
++        "update": 0,
++        "noop": 0,
++        "error": 0,
++    }
++    assert (controlfs / "desired" / "routes" / "baby_fork.retrieval" / "manifest.json").exists()
++    assert (controlfs / "desired" / "routes" / "baby_fork.variant_stub" / "manifest.json").exists()
++    assert (controlfs / "desired" / "routes" / "baby_fork.context_gate" / "manifest.json").exists()
++
++
++def test_runtime_flow_uses_context_id_from_report_for_controlfs(tmp_path: Path) -> None:
++    report = _write_report(tmp_path)
++    fake_runtime = tmp_path / "fake_runtime"
++    journal = fake_runtime / "runtime_journal.jsonl"
++    controlfs = tmp_path / "controlfs"
++
++    run_baby_fork_runtime_flow(report, fake_runtime, journal, controlfs_root=controlfs)
++
++    manifest = json.loads(
++        (controlfs / "desired" / "routes" / "baby_fork.retrieval" / "manifest.json").read_text(
++            encoding="utf-8"
++        )
++    )
++    assert manifest["task_id"] == "ctx-baby-fork-001"
+diff --git a/tools/run_baby_fork_runtime_flow.py b/tools/run_baby_fork_runtime_flow.py
+new file mode 100644
+index 0000000..293f9a7
+--- /dev/null
++++ b/tools/run_baby_fork_runtime_flow.py
+@@ -0,0 +1,53 @@
++#!/usr/bin/env python3
++"""Run baby-fork report -> fake runtime -> recorder journal.
++
++Usage:
++
++    PYTHONPATH=src:. python tools/run_baby_fork_runtime_flow.py \
++      .var/baby_fork_smoke/baby_fork_report.json \
++      .var/baby_fork_fake_runtime \
++      .var/baby_fork_fake_runtime/runtime_journal.jsonl \
++      --controlfs-root .var/baby_fork_controlfs
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import sys
++
++from context.baby_fork_runtime_flow import run_baby_fork_runtime_flow
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Run baby-fork runtime flow from an existing report.")
++    parser.add_argument("report_path", type=Path)
++    parser.add_argument("fake_runtime_root", type=Path)
++    parser.add_argument("journal_path", type=Path)
++    parser.add_argument("--occurred-at", default="2026-07-04T20:00:00Z")
++    parser.add_argument("--append-journal", action="store_true")
++    parser.add_argument("--controlfs-root", type=Path)
++    parser.add_argument("--context-id")
++    args = parser.parse_args(argv)
++
++    try:
++        summary = run_baby_fork_runtime_flow(
++            args.report_path,
++            args.fake_runtime_root,
++            args.journal_path,
++            occurred_at=args.occurred_at,
++            append_journal=args.append_journal,
++            controlfs_root=args.controlfs_root,
++            context_id=args.context_id,
++        )
++    except (OSError, ValueError) as exc:
++        print(f"ERROR: {exc}", file=sys.stderr)
++        return 1
++
++    print(json.dumps(summary.to_mapping(), indent=2, sort_keys=True))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

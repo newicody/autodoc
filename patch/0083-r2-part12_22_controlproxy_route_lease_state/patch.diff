@@ -1,0 +1,1969 @@
+diff --git a/bad_0083/patch/0083-part12_22_controlproxy_route_lease_state/README.md b/bad_0083/patch/0083-part12_22_controlproxy_route_lease_state/README.md
+new file mode 100644
+index 0000000..6a4c4f5
+--- /dev/null
++++ b/bad_0083/patch/0083-part12_22_controlproxy_route_lease_state/README.md
+@@ -0,0 +1,78 @@
++# 0083-part12_22_controlproxy_route_lease_state
++
++Phase 0083 : état de lease de route, sans daemon/service/CLI.
++
++## Ajouts
++
++```text
++src/runtime/controlproxy_route_lease.py
++doc/architecture/CONTROLPROXY_ROUTE_LEASE_STATE.md
++doc/changelog/0083-controlproxy-route-lease-state.md
++tests/test_controlproxy_route_lease.py
++tests/rules/test_controlproxy_route_lease_rule.py
++```
++
++## Modifie
++
++```text
++doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
++```
++
++## État verrouillé
++
++```text
++not_leased -> leased -> active -> draining -> closed
++leased -> closed
++```
++
++Fichiers :
++
++```text
++active/routes/<route_id>/lease.json
++active/routes/<route_id>/status.json
++```
++
++## Important
++
++Ce module enregistre l'état de lease. Il ne donne pas l'autorité sécurité.
++
++```text
++Security / policy / zone restent côté Scheduler/policy engine.
++```
++
++## Pas de CLI
++
++```text
++module logic is importable
++tests validate behavior
++CLI only when it is a real operator boundary
++```
++
++## Application
++
++```bash
++cd ~/projet/git/autodoc
++PATCH_ID=0083-part12_22_controlproxy_route_lease_state
++
++unzip -o /chemin/vers/${PATCH_ID}.zip -d .
++
++python apply_patch_queue.py --patch $PATCH_ID --dry-run
++python apply_patch_queue.py --patch $PATCH_ID --commit --push
++```
++
++## Gate
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++
++PYTHONPATH=src:. pytest -q \
++  tests/test_controlproxy_route_lease.py \
++  tests/test_route_notification.py \
++  tests/test_controlproxy_active_routes.py
++
++PYTHONPATH=src:. pytest -q tests/rules
++```
++
++## Prochaine phase
++
++0084 : ControlProxy pump/tick importable, pas service.
+diff --git a/bad_0083/patch/0083-part12_22_controlproxy_route_lease_state/metadata.json b/bad_0083/patch/0083-part12_22_controlproxy_route_lease_state/metadata.json
+new file mode 100644
+index 0000000..2132e5c
+--- /dev/null
++++ b/bad_0083/patch/0083-part12_22_controlproxy_route_lease_state/metadata.json
+@@ -0,0 +1,42 @@
++{
++  "patch_id": "0083-part12_22_controlproxy_route_lease_state",
++  "kind": "controlproxy-route-lease-state",
++  "created_at": "2026-07-04T20:24:47Z",
++  "summary": "Add file-backed ControlProxy route lease state machine on active routes, no daemon/service/CLI.",
++  "requires": [
++    "0063-r2-part12_5_controlfs_manifest_schema_validator",
++    "0064-part12_6_routeproxy_dry_run_reconciler",
++    "0065-part12_7_shm_runtime_message_schemas",
++    "0066-part12_8_baby_fork_runtime_message_projection",
++    "0067-part12_9_baby_fork_projection_report_compat",
++    "0068-part12_10_fake_local_route_transport",
++    "0069-part12_11_fake_runtime_recorder_ingestion",
++    "0071-0073-part12_12_controlfs_babyfork_routeproxy_shm_design",
++    "0074-part12_13_baby_fork_runtime_flow_cli",
++    "0075-part12_14_fake_runtime_replace_semantics",
++    "0076-part12_15_inprocess_ring_buffer_model",
++    "0077-part12_16_route_message_frame_codec",
++    "0078-part12_17_inprocess_frame_ring_integration",
++    "0079-r2-part12_18_controlproxy_sizing_prepare_bus",
++    "0079-r3-part12_18_controlproxy_rule_phrase_compat",
++    "0080-r2-part12_19_mmap_fixed_slot_route_prototype",
++    "0081-part12_20_controlproxy_active_route_materializer",
++    "0082-part12_21_route_notification_eventfd_primitive"
++  ],
++  "files_added": [
++    "src/runtime/controlproxy_route_lease.py",
++    "doc/architecture/CONTROLPROXY_ROUTE_LEASE_STATE.md",
++    "doc/changelog/0083-controlproxy-route-lease-state.md",
++    "tests/test_controlproxy_route_lease.py",
++    "tests/rules/test_controlproxy_route_lease_rule.py"
++  ],
++  "files_modified": [
++    "doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md"
++  ],
++  "adds_cli": false,
++  "no_daemon": true,
++  "no_service": true,
++  "no_openrc": true,
++  "no_scheduler_change": true,
++  "next_recommended_patch": "0084 ControlProxy pump/tick importable, not a service"
++}
+\ No newline at end of file
+diff --git a/bad_0083/patch/0083-part12_22_controlproxy_route_lease_state/patch.diff b/bad_0083/patch/0083-part12_22_controlproxy_route_lease_state/patch.diff
+new file mode 100644
+index 0000000..c9948e3
+--- /dev/null
++++ b/bad_0083/patch/0083-part12_22_controlproxy_route_lease_state/patch.diff
+@@ -0,0 +1,912 @@
++diff --git a/doc/architecture/CONTROLPROXY_ROUTE_LEASE_STATE.md b/doc/architecture/CONTROLPROXY_ROUTE_LEASE_STATE.md
++new file mode 100644
++index 0000000..e51064e
++--- /dev/null
+++++ b/doc/architecture/CONTROLPROXY_ROUTE_LEASE_STATE.md
++@@ -0,0 +1,142 @@
+++# ControlProxy route lease state
+++
+++Status: 0083 implementation.
+++
+++This phase adds route lease state on top of active routes.
+++
+++## Vocabulary
+++
+++```text
+++ControlProxy = ControlFS declarative surface + RouteProxy materializer
+++```
+++
+++## Goal
+++
+++After `0081`, a route can be materialized as active. The Scheduler still needs
+++a stable state record before it can hand the route to a producer.
+++
+++`0083` introduces explicit route lease files:
+++
+++```text
+++active/routes/<route_id>/lease.json
+++active/routes/<route_id>/status.json
+++```
+++
+++## State machine
+++
+++Allowed path:
+++
+++```text
+++not_leased -> leased -> active -> draining -> closed
+++```
+++
+++Allowed shortcut:
+++
+++```text
+++leased -> closed
+++```
+++
+++Rejected examples:
+++
+++```text
+++not_leased -> active
+++active -> leased
+++closed -> active
+++```
+++
+++## Lease schema
+++
+++```text
+++missipy.controlproxy.route_lease.v1
+++```
+++
+++Fields:
+++
+++```text
+++lease_id
+++route_id
+++route_handle
+++task_id
+++holder
+++scope
+++state
+++acquired_at
+++ttl_seconds
+++updated_at
+++```
+++
+++## Active status update
+++
+++The active route status receives:
+++
+++```text
+++lease_state
+++current_lease_id
+++current_lease_holder
+++current_lease_scope
+++current_lease_updated_at
+++previous_lease_state
+++```
+++
+++When the lease reaches `closed`, active route status `state` is also set to:
+++
+++```text
+++closed
+++```
+++
+++## Authority boundary
+++
+++This module records lease state. It does not grant security by itself.
+++
+++Security and authorization remain with:
+++
+++```text
+++Scheduler
+++policy engine
+++zone/scope rules
+++```
+++
+++## No daemon, no service
+++
+++The Scheduler can call these importable functions directly.
+++
+++This phase intentionally does not add:
+++
+++```text
+++daemon
+++service
+++OpenRC
+++ControlFS watcher
+++Scheduler call
+++security policy decision
+++mmap route creation
+++RouteMessage frame write
+++eventfd notification
+++live mmap resize
+++inter-process locks
+++VisPy renderer
+++```
+++
+++## No CLI
+++
+++This patch intentionally does not add a CLI.
+++
+++The rule remains:
+++
+++```text
+++module logic is importable
+++tests validate behavior
+++CLI only when it is a real operator boundary
+++```
+++
+++## Next
+++
+++`0084` should be a ControlProxy pump/tick, not a service:
+++
+++```text
+++ControlProxy pump/tick
+++-> reads desired/active route state when called
+++-> materializes missing active routes
+++-> updates lease state when requested
+++-> publishes bus facts
+++```
++diff --git a/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md b/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
++index 3d141d9..a2e56ab 100644
++--- a/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
+++++ b/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
++@@ -24,6 +24,7 @@ with a real ControlProxy implementation.
++ 
++ 0083 route lease state
++   not_leased -> leased -> active -> draining -> closed
+++  file-backed lease.json plus active status update
++ 
++ 0084 ControlProxy pump/tick
++   importable function, no service, no OpenRC, no resident daemon
++diff --git a/doc/changelog/0083-controlproxy-route-lease-state.md b/doc/changelog/0083-controlproxy-route-lease-state.md
++new file mode 100644
++index 0000000..788e563
++--- /dev/null
+++++ b/doc/changelog/0083-controlproxy-route-lease-state.md
++@@ -0,0 +1,34 @@
+++# 0083 - ControlProxy route lease state
+++
+++## Added
+++
+++- `runtime.controlproxy_route_lease`
+++- route lease schema:
+++  - `missipy.controlproxy.route_lease.v1`
+++- transition fact schema:
+++  - `missipy.controlproxy.route_lease_transition.v1`
+++- lease state files:
+++  - `active/routes/<route_id>/lease.json`
+++- status fields:
+++  - `lease_state`
+++  - `current_lease_id`
+++  - `current_lease_holder`
+++  - `current_lease_scope`
+++  - `current_lease_updated_at`
+++  - `previous_lease_state`
+++- allowed state machine:
+++  - `not_leased -> leased -> active -> draining -> closed`
+++  - `leased -> closed`
+++
+++## Not added
+++
+++- No daemon.
+++- No service.
+++- No OpenRC.
+++- No ControlFS watcher.
+++- No Scheduler wiring.
+++- No security policy decision.
+++- No mmap creation.
+++- No notification.
+++- No inter-process lock.
+++- No CLI.
++diff --git a/src/runtime/controlproxy_route_lease.py b/src/runtime/controlproxy_route_lease.py
++new file mode 100644
++index 0000000..ae49d0d
++--- /dev/null
+++++ b/src/runtime/controlproxy_route_lease.py
++@@ -0,0 +1,414 @@
+++"""ControlProxy route lease state.
+++
+++This module implements phase 0083.
+++
+++It adds a file-backed route lease state machine on top of the active route
+++materializer from 0081.
+++
+++The lease state is explicit ControlFS state:
+++
+++    active/routes/<route_id>/lease.json
+++    active/routes/<route_id>/status.json
+++
+++Allowed transition path:
+++
+++    not_leased -> leased -> active -> draining -> closed
+++
+++The Scheduler can later call these importable functions directly. There is no
+++daemon, no service and no CLI.
+++
+++It deliberately does not:
+++- create a daemon
+++- start a service
+++- use OpenRC
+++- watch ControlFS
+++- call Scheduler
+++- decide security policy
+++- create mmap routes
+++- write RouteMessage frames
+++- notify eventfd
+++- resize live mmap routes
+++- implement inter-process locks
+++- implement VisPy
+++
+++It is lease state only, not the lease authority.
+++"""
+++
+++from __future__ import annotations
+++
+++from dataclasses import dataclass
+++import json
+++from pathlib import Path
+++from typing import Any, Literal, Mapping
+++
+++from runtime.controlfs_manifest import normalize_route_id
+++from runtime.controlproxy_active_routes import (
+++    ACTIVE_ROUTE_STATUS_SCHEMA,
+++    ActiveRouteMaterializationError,
+++    active_route_dir,
+++    active_status_path,
+++)
+++
+++
+++ROUTE_LEASE_SCHEMA = "missipy.controlproxy.route_lease.v1"
+++ROUTE_LEASE_TRANSITION_SCHEMA = "missipy.controlproxy.route_lease_transition.v1"
+++DEFAULT_LEASED_AT = "2026-07-04T20:00:00Z"
+++
+++RouteLeaseState = Literal["leased", "active", "draining", "closed"]
+++
+++_ALLOWED_TRANSITIONS: dict[str, tuple[str, ...]] = {
+++    "not_leased": ("leased",),
+++    "leased": ("active", "closed"),
+++    "active": ("draining",),
+++    "draining": ("closed",),
+++    "closed": (),
+++}
+++
+++
+++class RouteLeaseError(RuntimeError):
+++    """Raised when route lease state is invalid."""
+++
+++
+++class RouteLeaseTransitionError(RouteLeaseError):
+++    """Raised when a route lease transition is not allowed."""
+++
+++
+++@dataclass(frozen=True)
+++class RouteLease:
+++    """Lease record stored under active/routes/<route_id>/lease.json."""
+++
+++    schema: str
+++    lease_id: str
+++    route_id: str
+++    route_handle: str
+++    task_id: str
+++    holder: str
+++    scope: str
+++    state: RouteLeaseState
+++    acquired_at: str
+++    ttl_seconds: int
+++    updated_at: str
+++
+++    @classmethod
+++    def from_mapping(cls, raw: Mapping[str, Any]) -> "RouteLease":
+++        if raw.get("schema") != ROUTE_LEASE_SCHEMA:
+++            raise RouteLeaseError("unsupported route lease schema")
+++        state = _require_id(raw, "state")
+++        if state not in ("leased", "active", "draining", "closed"):
+++            raise RouteLeaseError("unsupported route lease state")
+++        return cls(
+++            schema=str(raw["schema"]),
+++            lease_id=_require_id(raw, "lease_id"),
+++            route_id=normalize_route_id(_require_str(raw, "route_id")),
+++            route_handle=_require_handle(raw, "route_handle"),
+++            task_id=_require_id(raw, "task_id"),
+++            holder=_require_id(raw, "holder"),
+++            scope=_require_scope(raw, "scope"),
+++            state=state,  # type: ignore[arg-type]
+++            acquired_at=_require_timestamp(raw, "acquired_at"),
+++            ttl_seconds=_require_positive_int(raw, "ttl_seconds"),
+++            updated_at=_require_timestamp(raw, "updated_at"),
+++        )
+++
+++    @classmethod
+++    def from_path(cls, path: Path | str) -> "RouteLease":
+++        return cls.from_mapping(json.loads(Path(path).read_text(encoding="utf-8")))
+++
+++    def to_mapping(self) -> dict[str, Any]:
+++        return {
+++            "schema": self.schema,
+++            "lease_id": self.lease_id,
+++            "route_id": self.route_id,
+++            "route_handle": self.route_handle,
+++            "task_id": self.task_id,
+++            "holder": self.holder,
+++            "scope": self.scope,
+++            "state": self.state,
+++            "acquired_at": self.acquired_at,
+++            "ttl_seconds": self.ttl_seconds,
+++            "updated_at": self.updated_at,
+++        }
+++
+++
+++@dataclass(frozen=True)
+++class RouteLeaseTransition:
+++    """Transition fact returned by lease state updates."""
+++
+++    schema: str
+++    lease_id: str
+++    route_id: str
+++    route_handle: str
+++    previous_state: str
+++    next_state: str
+++    transitioned_at: str
+++    reason: str
+++
+++    def to_mapping(self) -> dict[str, Any]:
+++        return {
+++            "schema": self.schema,
+++            "lease_id": self.lease_id,
+++            "route_id": self.route_id,
+++            "route_handle": self.route_handle,
+++            "previous_state": self.previous_state,
+++            "next_state": self.next_state,
+++            "transitioned_at": self.transitioned_at,
+++            "reason": self.reason,
+++        }
+++
+++
+++def lease_path(controlfs_root: Path | str, route_id: str) -> Path:
+++    """Return active/routes/<route_id>/lease.json."""
+++
+++    return active_route_dir(controlfs_root, route_id) / "lease.json"
+++
+++
+++def acquire_route_lease(
+++    *,
+++    controlfs_root: Path | str,
+++    route_id: str,
+++    holder: str,
+++    scope: str,
+++    lease_id: str | None = None,
+++    ttl_seconds: int = 300,
+++    acquired_at: str = DEFAULT_LEASED_AT,
+++) -> RouteLease:
+++    """Move an active route from not_leased to leased.
+++
+++    This does not grant security by itself. Security remains Scheduler/policy
+++    responsibility. This function only records the state transition.
+++    """
+++
+++    safe_route_id = normalize_route_id(route_id)
+++    status_path = active_status_path(controlfs_root, safe_route_id)
+++    status = _load_active_status(status_path)
+++    current = str(status.get("lease_state", "not_leased"))
+++    _ensure_transition(current, "leased")
+++
+++    holder_id = _require_literal_id(holder, "holder")
+++    scope_id = _require_literal_scope(scope, "scope")
+++    lease = RouteLease(
+++        schema=ROUTE_LEASE_SCHEMA,
+++        lease_id=lease_id or f"lease:{safe_route_id}:g1:{holder_id}",
+++        route_id=safe_route_id,
+++        route_handle=_require_status_str(status, "route_handle"),
+++        task_id=_require_status_str(status, "task_id"),
+++        holder=holder_id,
+++        scope=scope_id,
+++        state="leased",
+++        acquired_at=_require_literal_timestamp(acquired_at, "acquired_at"),
+++        ttl_seconds=_require_positive_literal_int(ttl_seconds, "ttl_seconds"),
+++        updated_at=acquired_at,
+++    )
+++
+++    _write_lease(controlfs_root, lease)
+++    _update_active_status(status_path, status, lease, previous_state=current, next_state="leased", updated_at=acquired_at)
+++    return lease
+++
+++
+++def transition_route_lease(
+++    *,
+++    controlfs_root: Path | str,
+++    route_id: str,
+++    next_state: RouteLeaseState,
+++    transitioned_at: str = DEFAULT_LEASED_AT,
+++    reason: str = "state transition requested",
+++) -> RouteLeaseTransition:
+++    """Transition an existing route lease."""
+++
+++    safe_route_id = normalize_route_id(route_id)
+++    if next_state not in ("leased", "active", "draining", "closed"):
+++        raise RouteLeaseTransitionError("unsupported next route lease state")
+++
+++    status_path = active_status_path(controlfs_root, safe_route_id)
+++    status = _load_active_status(status_path)
+++    lease = RouteLease.from_path(lease_path(controlfs_root, safe_route_id))
+++
+++    current = lease.state
+++    _ensure_transition(current, next_state)
+++
+++    updated = RouteLease(
+++        schema=lease.schema,
+++        lease_id=lease.lease_id,
+++        route_id=lease.route_id,
+++        route_handle=lease.route_handle,
+++        task_id=lease.task_id,
+++        holder=lease.holder,
+++        scope=lease.scope,
+++        state=next_state,
+++        acquired_at=lease.acquired_at,
+++        ttl_seconds=lease.ttl_seconds,
+++        updated_at=transitioned_at,
+++    )
+++    _write_lease(controlfs_root, updated)
+++    _update_active_status(status_path, status, updated, previous_state=current, next_state=next_state, updated_at=transitioned_at)
+++
+++    return RouteLeaseTransition(
+++        schema=ROUTE_LEASE_TRANSITION_SCHEMA,
+++        lease_id=updated.lease_id,
+++        route_id=updated.route_id,
+++        route_handle=updated.route_handle,
+++        previous_state=current,
+++        next_state=next_state,
+++        transitioned_at=transitioned_at,
+++        reason=reason,
+++    )
+++
+++
+++def activate_route_lease(*, controlfs_root: Path | str, route_id: str, transitioned_at: str = DEFAULT_LEASED_AT) -> RouteLeaseTransition:
+++    """Move leased -> active."""
+++
+++    return transition_route_lease(
+++        controlfs_root=controlfs_root,
+++        route_id=route_id,
+++        next_state="active",
+++        transitioned_at=transitioned_at,
+++        reason="route lease activated",
+++    )
+++
+++
+++def begin_route_drain(*, controlfs_root: Path | str, route_id: str, transitioned_at: str = DEFAULT_LEASED_AT) -> RouteLeaseTransition:
+++    """Move active -> draining."""
+++
+++    return transition_route_lease(
+++        controlfs_root=controlfs_root,
+++        route_id=route_id,
+++        next_state="draining",
+++        transitioned_at=transitioned_at,
+++        reason="route drain requested",
+++    )
+++
+++
+++def close_route_lease(*, controlfs_root: Path | str, route_id: str, transitioned_at: str = DEFAULT_LEASED_AT) -> RouteLeaseTransition:
+++    """Move leased/draining -> closed."""
+++
+++    return transition_route_lease(
+++        controlfs_root=controlfs_root,
+++        route_id=route_id,
+++        next_state="closed",
+++        transitioned_at=transitioned_at,
+++        reason="route lease closed",
+++    )
+++
+++
+++def load_route_lease(controlfs_root: Path | str, route_id: str) -> RouteLease:
+++    """Load active/routes/<route_id>/lease.json."""
+++
+++    return RouteLease.from_path(lease_path(controlfs_root, route_id))
+++
+++
+++def route_lease_summary(controlfs_root: Path | str, route_id: str) -> dict[str, Any]:
+++    """Return compact route lease and active status summary."""
+++
+++    status = _load_active_status(active_status_path(controlfs_root, route_id))
+++    lease = load_route_lease(controlfs_root, route_id)
+++    return {
+++        "route_id": route_id,
+++        "lease_state": status.get("lease_state"),
+++        "active_state": status.get("state"),
+++        "current_lease_id": status.get("current_lease_id"),
+++        "current_lease_holder": status.get("current_lease_holder"),
+++        "lease": lease.to_mapping(),
+++    }
+++
+++
+++def _write_lease(controlfs_root: Path | str, lease: RouteLease) -> None:
+++    path = lease_path(controlfs_root, lease.route_id)
+++    path.parent.mkdir(parents=True, exist_ok=True)
+++    path.write_text(json.dumps(lease.to_mapping(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+++
+++
+++def _load_active_status(path: Path) -> dict[str, Any]:
+++    if not path.exists():
+++        raise ActiveRouteMaterializationError(f"missing active route status: {path}")
+++    raw = json.loads(path.read_text(encoding="utf-8"))
+++    if raw.get("schema") != ACTIVE_ROUTE_STATUS_SCHEMA:
+++        raise ActiveRouteMaterializationError("unsupported active route status schema")
+++    return raw
+++
+++
+++def _update_active_status(path: Path, status: dict[str, Any], lease: RouteLease, *, previous_state: str, next_state: str, updated_at: str) -> None:
+++    status["lease_state"] = next_state
+++    status["current_lease_id"] = lease.lease_id
+++    status["current_lease_holder"] = lease.holder
+++    status["current_lease_scope"] = lease.scope
+++    status["current_lease_updated_at"] = updated_at
+++    status["previous_lease_state"] = previous_state
+++    if next_state == "closed":
+++        status["state"] = "closed"
+++    path.write_text(json.dumps(status, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+++
+++
+++def _ensure_transition(current: str, next_state: str) -> None:
+++    allowed = _ALLOWED_TRANSITIONS.get(current)
+++    if allowed is None:
+++        raise RouteLeaseTransitionError(f"unknown current lease state: {current}")
+++    if next_state not in allowed:
+++        raise RouteLeaseTransitionError(f"invalid route lease transition: {current} -> {next_state}")
+++
+++
+++def _require_status_str(status: Mapping[str, Any], field: str) -> str:
+++    value = status.get(field)
+++    if not isinstance(value, str) or not value:
+++        raise RouteLeaseError(f"active status missing {field}")
+++    return value
+++
+++
+++def _require_str(raw: Mapping[str, Any], field: str) -> str:
+++    value = raw.get(field)
+++    if not isinstance(value, str) or not value:
+++        raise RouteLeaseError(f"{field} must be a non-empty string")
+++    if "/" in value or "\\" in value or ".." in value:
+++        raise RouteLeaseError(f"{field} must not contain path traversal")
+++    return value
+++
+++
+++def _require_id(raw: Mapping[str, Any], field: str) -> str:
+++    return _require_literal_id(_require_str(raw, field), field)
+++
+++
+++def _require_scope(raw: Mapping[str, Any], field: str) -> str:
+++    return _require_literal_scope(_require_str(raw, field), field)
+++
+++
+++def _require_timestamp(raw: Mapping[str, Any], field: str) -> str:
+++    return _require_literal_timestamp(_require_str(raw, field), field)
+++
+++
+++def _require_positive_int(raw: Mapping[str, Any], field: str) -> int:
+++    return _require_positive_literal_int(raw.get(field), field)
+++
+++
+++def _require_handle(raw: Mapping[str, Any], field: str) -> str:
+++    value = _require_str(raw, field)
+++    if "/" in value or "\\" in value or ".." in value:
+++        raise RouteLeaseError(f"{field} must not contain path traversal")
+++    return value
+++
+++
+++def _require_literal_id(value: str, field: str) -> str:
+++    if not isinstance(value, str) or not value:
+++        raise RouteLeaseError(f"{field} must be a non-empty string")
+++    if "/" in value or "\\" in value or ".." in value:
+++        raise RouteLeaseError(f"{field} must not contain path traversal")
+++    if not value.replace("_", "").replace(".", "").replace(":", "").replace("-", "").isalnum():
+++        raise RouteLeaseError(f"{field} contains invalid characters")
+++    return value
+++
+++
+++def _require_literal_scope(value: str, field: str) -> str:
+++    value = _require_literal_id(value, field)
+++    if "." not in value:
+++        raise RouteLeaseError(f"{field} should use subsystem.permission form")
+++    return value
+++
+++
+++def _require_literal_timestamp(value: str, field: str) -> str:
+++    if not isinstance(value, str) or "T" not in value or "Z" not in value:
+++        raise RouteLeaseError(f"{field} must look like a UTC timestamp")
+++    return value
+++
+++
+++def _require_positive_literal_int(value: object, field: str) -> int:
+++    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+++        raise RouteLeaseError(f"{field} must be a positive integer")
+++    return value
++diff --git a/tests/rules/test_controlproxy_route_lease_rule.py b/tests/rules/test_controlproxy_route_lease_rule.py
++new file mode 100644
++index 0000000..fd4fad6
++--- /dev/null
+++++ b/tests/rules/test_controlproxy_route_lease_rule.py
++@@ -0,0 +1,80 @@
+++from pathlib import Path
+++
+++
+++ROOT = Path(__file__).resolve().parents[2]
+++DOC = ROOT / "doc" / "architecture" / "CONTROLPROXY_ROUTE_LEASE_STATE.md"
+++MODULE = ROOT / "src" / "runtime" / "controlproxy_route_lease.py"
+++SEQUENCE = ROOT / "doc" / "architecture" / "REAL_IMPLEMENTATION_SEQUENCE_0081.md"
+++
+++
+++def _read(path: Path) -> str:
+++    assert path.exists(), f"missing file: {path}"
+++    return path.read_text(encoding="utf-8")
+++
+++
+++def test_route_lease_doc_locks_state_machine_and_authority_boundary() -> None:
+++    text = _read(DOC)
+++
+++    required_phrases = [
+++        "Status: 0083 implementation.",
+++        "ControlProxy = ControlFS declarative surface + RouteProxy materializer",
+++        "active/routes/<route_id>/lease.json",
+++        "active/routes/<route_id>/status.json",
+++        "not_leased -> leased -> active -> draining -> closed",
+++        "leased -> closed",
+++        "not_leased -> active",
+++        "active -> leased",
+++        "closed -> active",
+++        "missipy.controlproxy.route_lease.v1",
+++        "lease_state",
+++        "current_lease_id",
+++        "current_lease_holder",
+++        "Security and authorization remain",
+++        "Scheduler",
+++        "policy engine",
+++        "zone/scope rules",
+++        "No daemon, no service",
+++        "OpenRC",
+++        "No CLI",
+++        "module logic is importable",
+++        "CLI only when it is a real operator boundary",
+++        "ControlProxy pump/tick",
+++    ]
+++
+++    for phrase in required_phrases:
+++        assert phrase in text
+++
+++
+++def test_route_lease_module_locks_non_goals() -> None:
+++    text = _read(MODULE)
+++
+++    required_phrases = [
+++        "not_leased -> leased -> active -> draining -> closed",
+++        "There is no daemon, no service and no CLI.",
+++        "does not:",
+++        "create a daemon",
+++        "start a service",
+++        "use OpenRC",
+++        "watch ControlFS",
+++        "call Scheduler",
+++        "decide security policy",
+++        "create mmap routes",
+++        "write RouteMessage frames",
+++        "notify eventfd",
+++        "resize live mmap routes",
+++        "implement inter-process locks",
+++        "implement VisPy",
+++        "lease state only, not the lease authority",
+++    ]
+++
+++    for phrase in required_phrases:
+++        assert phrase in text
+++
+++
+++def test_real_sequence_mentions_0083_lease_state_and_no_service_0084() -> None:
+++    text = _read(SEQUENCE)
+++
+++    assert "0083 route lease state" in text
+++    assert "file-backed lease.json plus active status update" in text
+++    assert "0084 ControlProxy pump/tick" in text
+++    assert "no service, no OpenRC, no resident daemon" in text
++diff --git a/tests/test_controlproxy_route_lease.py b/tests/test_controlproxy_route_lease.py
++new file mode 100644
++index 0000000..be7bf81
++--- /dev/null
+++++ b/tests/test_controlproxy_route_lease.py
++@@ -0,0 +1,200 @@
+++import json
+++from pathlib import Path
+++
+++import pytest
+++
+++from context.baby_fork_controlfs import build_route_sizing_hints_from_messages, write_baby_fork_desired_manifests
+++from context.baby_fork_runtime_projection import build_baby_fork_runtime_projection
+++from runtime.controlfs_manifest import RouteManifest, route_manifest_path
+++from runtime.controlproxy_active_routes import active_status_path, materialize_active_route
+++from runtime.controlproxy_prepare import decide_route_prepare, route_prepare_request_from_message
+++from runtime.controlproxy_route_lease import (
+++    ROUTE_LEASE_SCHEMA,
+++    RouteLeaseTransitionError,
+++    acquire_route_lease,
+++    activate_route_lease,
+++    begin_route_drain,
+++    close_route_lease,
+++    lease_path,
+++    load_route_lease,
+++    route_lease_summary,
+++    transition_route_lease,
+++)
+++from runtime.shm_runtime_schema import ROUTE_MESSAGE_SCHEMA
+++
+++
+++def _report() -> dict:
+++    return {
+++        "retrieval": {
+++            "retrieved_ids": ["baby-silicone-fork", "rounded-stainless-soft-handle"],
+++            "rejected_ids": ["nasa-antenna"],
+++        },
+++        "variant_generator_stub": {
+++            "generated_variants": [
+++                {"variant_id": "variant-1"},
+++                {"variant_id": "variant-2"},
+++            ]
+++        },
+++        "final_context": {
+++            "context_id": "ctx-baby-fork-001",
+++            "context_version": 2,
+++            "selected_variant_id": "variant-1",
+++        },
+++    }
+++
+++
+++def _message(route_id: str = "baby_fork.retrieval") -> dict:
+++    return {
+++        "schema": ROUTE_MESSAGE_SCHEMA,
+++        "route_id": route_id,
+++        "message_id": "msg:baby_fork.retrieval.reply",
+++        "kind": "reply",
+++        "source": "retrieval_worker",
+++        "target": "scheduler",
+++        "occurred_at": "2026-07-04T20:00:00Z",
+++        "payload_schema": "missipy.baby_fork.route_reply.v1",
+++        "payload": {
+++            "context_id": "ctx-baby-fork-001",
+++            "retrieved_ids": ["baby-silicone-fork", "rounded-stainless-soft-handle"],
+++            "rejected_ids": ["nasa-antenna"],
+++        },
+++    }
+++
+++
+++def _materialize(tmp_path: Path):
+++    controlfs_root = tmp_path / "controlfs"
+++    runtime_root = tmp_path / "runtime"
+++    projection = build_baby_fork_runtime_projection(_report())
+++    hints = build_route_sizing_hints_from_messages(projection.routes)
+++    write_baby_fork_desired_manifests(
+++        controlfs_root,
+++        context_id="ctx-baby-fork-001",
+++        sizing_hints=hints,
+++    )
+++    manifest = RouteManifest.from_path(route_manifest_path(controlfs_root, "baby_fork.retrieval"))
+++    request = route_prepare_request_from_message(
+++        _message(),
+++        task_id=manifest.task_id,
+++        zone=manifest.zone,
+++        scope=manifest.scope,
+++    )
+++    decision = decide_route_prepare(request)
+++    decision = type(decision)(
+++        schema=decision.schema,
+++        request_id=decision.request_id,
+++        route_id=decision.route_id,
+++        route_handle=decision.route_handle,
+++        task_id=decision.task_id,
+++        zone=decision.zone,
+++        status=decision.status,
+++        action=decision.action,
+++        reason=decision.reason,
+++        required_frame_bytes=decision.required_frame_bytes,
+++        current_generation=decision.current_generation,
+++        next_generation=decision.next_generation,
+++        current_slot_size=decision.current_slot_size,
+++        slot_size=manifest.slot_size,
+++        slot_count=manifest.slot_count,
+++        max_frame_bytes=manifest.max_frame_bytes,
+++        max_ring_bytes=decision.max_ring_bytes,
+++        max_prepare_ms=decision.max_prepare_ms,
+++        drain_timeout_ms=decision.drain_timeout_ms,
+++        lease_switch_timeout_ms=decision.lease_switch_timeout_ms,
+++        notify=manifest.notify,
+++        overflow_policy=manifest.overflow_policy,
+++        decided_at=decision.decided_at,
+++    )
+++    record = materialize_active_route(
+++        controlfs_root=controlfs_root,
+++        runtime_root=runtime_root,
+++        decision=decision,
+++        desired_manifest=manifest,
+++    )
+++    return controlfs_root, record
+++
+++
+++def test_acquire_route_lease_writes_lease_json_and_updates_status(tmp_path: Path) -> None:
+++    controlfs_root, record = _materialize(tmp_path)
+++
+++    lease = acquire_route_lease(
+++        controlfs_root=controlfs_root,
+++        route_id=record.route_id,
+++        holder="scheduler",
+++        scope="route.write",
+++        lease_id="lease:baby_fork.retrieval:g1:scheduler",
+++    )
+++
+++    assert lease.schema == ROUTE_LEASE_SCHEMA
+++    assert lease.state == "leased"
+++    assert lease.route_handle == "baby_fork.retrieval@g1"
+++    assert lease.holder == "scheduler"
+++    assert lease_path(controlfs_root, record.route_id).exists()
+++
+++    status = json.loads(active_status_path(controlfs_root, record.route_id).read_text(encoding="utf-8"))
+++    assert status["lease_state"] == "leased"
+++    assert status["current_lease_id"] == lease.lease_id
+++    assert status["current_lease_holder"] == "scheduler"
+++
+++
+++def test_route_lease_state_machine_full_path(tmp_path: Path) -> None:
+++    controlfs_root, record = _materialize(tmp_path)
+++
+++    acquire_route_lease(controlfs_root=controlfs_root, route_id=record.route_id, holder="scheduler", scope="route.write")
+++    t1 = activate_route_lease(controlfs_root=controlfs_root, route_id=record.route_id)
+++    t2 = begin_route_drain(controlfs_root=controlfs_root, route_id=record.route_id)
+++    t3 = close_route_lease(controlfs_root=controlfs_root, route_id=record.route_id)
+++
+++    assert (t1.previous_state, t1.next_state) == ("leased", "active")
+++    assert (t2.previous_state, t2.next_state) == ("active", "draining")
+++    assert (t3.previous_state, t3.next_state) == ("draining", "closed")
+++    assert load_route_lease(controlfs_root, record.route_id).state == "closed"
+++
+++    status = json.loads(active_status_path(controlfs_root, record.route_id).read_text(encoding="utf-8"))
+++    assert status["lease_state"] == "closed"
+++    assert status["state"] == "closed"
+++
+++
+++def test_route_lease_allows_leased_to_closed_shortcut(tmp_path: Path) -> None:
+++    controlfs_root, record = _materialize(tmp_path)
+++    acquire_route_lease(controlfs_root=controlfs_root, route_id=record.route_id, holder="scheduler", scope="route.write")
+++    transition = close_route_lease(controlfs_root=controlfs_root, route_id=record.route_id)
+++    assert (transition.previous_state, transition.next_state) == ("leased", "closed")
+++
+++
+++def test_route_lease_rejects_invalid_transition_without_lease(tmp_path: Path) -> None:
+++    controlfs_root, record = _materialize(tmp_path)
+++
+++    with pytest.raises(FileNotFoundError):
+++        transition_route_lease(controlfs_root=controlfs_root, route_id=record.route_id, next_state="active")
+++
+++
+++def test_route_lease_rejects_double_acquire(tmp_path: Path) -> None:
+++    controlfs_root, record = _materialize(tmp_path)
+++
+++    acquire_route_lease(controlfs_root=controlfs_root, route_id=record.route_id, holder="scheduler", scope="route.write")
+++
+++    with pytest.raises(RouteLeaseTransitionError, match="leased -> leased"):
+++        acquire_route_lease(controlfs_root=controlfs_root, route_id=record.route_id, holder="scheduler", scope="route.write")
+++
+++
+++def test_route_lease_rejects_active_to_leased(tmp_path: Path) -> None:
+++    controlfs_root, record = _materialize(tmp_path)
+++
+++    acquire_route_lease(controlfs_root=controlfs_root, route_id=record.route_id, holder="scheduler", scope="route.write")
+++    activate_route_lease(controlfs_root=controlfs_root, route_id=record.route_id)
+++
+++    with pytest.raises(RouteLeaseTransitionError, match="active -> leased"):
+++        transition_route_lease(controlfs_root=controlfs_root, route_id=record.route_id, next_state="leased")
+++
+++
+++def test_route_lease_summary(tmp_path: Path) -> None:
+++    controlfs_root, record = _materialize(tmp_path)
+++
+++    lease = acquire_route_lease(controlfs_root=controlfs_root, route_id=record.route_id, holder="scheduler", scope="route.write")
+++    summary = route_lease_summary(controlfs_root, record.route_id)
+++
+++    assert summary["route_id"] == "baby_fork.retrieval"
+++    assert summary["lease_state"] == "leased"
+++    assert summary["current_lease_id"] == lease.lease_id
+++    assert summary["current_lease_holder"] == "scheduler"
+++    assert summary["lease"]["state"] == "leased"
+diff --git a/doc/architecture/CONTROLPROXY_ROUTE_LEASE_STATE.md b/doc/architecture/CONTROLPROXY_ROUTE_LEASE_STATE.md
+new file mode 100644
+index 0000000..e51064e
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_ROUTE_LEASE_STATE.md
+@@ -0,0 +1,142 @@
++# ControlProxy route lease state
++
++Status: 0083 implementation.
++
++This phase adds route lease state on top of active routes.
++
++## Vocabulary
++
++```text
++ControlProxy = ControlFS declarative surface + RouteProxy materializer
++```
++
++## Goal
++
++After `0081`, a route can be materialized as active. The Scheduler still needs
++a stable state record before it can hand the route to a producer.
++
++`0083` introduces explicit route lease files:
++
++```text
++active/routes/<route_id>/lease.json
++active/routes/<route_id>/status.json
++```
++
++## State machine
++
++Allowed path:
++
++```text
++not_leased -> leased -> active -> draining -> closed
++```
++
++Allowed shortcut:
++
++```text
++leased -> closed
++```
++
++Rejected examples:
++
++```text
++not_leased -> active
++active -> leased
++closed -> active
++```
++
++## Lease schema
++
++```text
++missipy.controlproxy.route_lease.v1
++```
++
++Fields:
++
++```text
++lease_id
++route_id
++route_handle
++task_id
++holder
++scope
++state
++acquired_at
++ttl_seconds
++updated_at
++```
++
++## Active status update
++
++The active route status receives:
++
++```text
++lease_state
++current_lease_id
++current_lease_holder
++current_lease_scope
++current_lease_updated_at
++previous_lease_state
++```
++
++When the lease reaches `closed`, active route status `state` is also set to:
++
++```text
++closed
++```
++
++## Authority boundary
++
++This module records lease state. It does not grant security by itself.
++
++Security and authorization remain with:
++
++```text
++Scheduler
++policy engine
++zone/scope rules
++```
++
++## No daemon, no service
++
++The Scheduler can call these importable functions directly.
++
++This phase intentionally does not add:
++
++```text
++daemon
++service
++OpenRC
++ControlFS watcher
++Scheduler call
++security policy decision
++mmap route creation
++RouteMessage frame write
++eventfd notification
++live mmap resize
++inter-process locks
++VisPy renderer
++```
++
++## No CLI
++
++This patch intentionally does not add a CLI.
++
++The rule remains:
++
++```text
++module logic is importable
++tests validate behavior
++CLI only when it is a real operator boundary
++```
++
++## Next
++
++`0084` should be a ControlProxy pump/tick, not a service:
++
++```text
++ControlProxy pump/tick
++-> reads desired/active route state when called
++-> materializes missing active routes
++-> updates lease state when requested
++-> publishes bus facts
++```
+diff --git a/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md b/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
+index 3d141d9..a2e56ab 100644
+--- a/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
++++ b/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
+@@ -24,6 +24,7 @@ with a real ControlProxy implementation.
+ 
+ 0083 route lease state
+   not_leased -> leased -> active -> draining -> closed
++  file-backed lease.json plus active status update
+ 
+ 0084 ControlProxy pump/tick
+   importable function, no service, no OpenRC, no resident daemon
+diff --git a/doc/changelog/0083-controlproxy-route-lease-state.md b/doc/changelog/0083-controlproxy-route-lease-state.md
+new file mode 100644
+index 0000000..4838506
+--- /dev/null
++++ b/doc/changelog/0083-controlproxy-route-lease-state.md
+@@ -0,0 +1,38 @@
++# 0083 - ControlProxy route lease state
++
++## Added
++
++- `runtime.controlproxy_route_lease`
++- route lease schema:
++  - `missipy.controlproxy.route_lease.v1`
++- transition fact schema:
++  - `missipy.controlproxy.route_lease_transition.v1`
++- lease state files:
++  - `active/routes/<route_id>/lease.json`
++- status fields:
++  - `lease_state`
++  - `current_lease_id`
++  - `current_lease_holder`
++  - `current_lease_scope`
++  - `current_lease_updated_at`
++  - `previous_lease_state`
++- allowed state machine:
++  - `not_leased -> leased -> active -> draining -> closed`
++  - `leased -> closed`
++
++## Not added
++
++- No daemon.
++- No service.
++- No OpenRC.
++- No ControlFS watcher.
++- No Scheduler wiring.
++- No security policy decision.
++- No mmap creation.
++- No notification.
++- No inter-process lock.
++- No CLI.
++
++## r2
++
++Restores exact rule-test wording: `There is no daemon, no service and no CLI.`
+diff --git a/src/runtime/controlproxy_route_lease.py b/src/runtime/controlproxy_route_lease.py
+new file mode 100644
+index 0000000..5bf2a9f
+--- /dev/null
++++ b/src/runtime/controlproxy_route_lease.py
+@@ -0,0 +1,416 @@
++"""ControlProxy route lease state.
++
++This module implements phase 0083.
++
++It adds a file-backed route lease state machine on top of the active route
++materializer from 0081.
++
++The lease state is explicit ControlFS state:
++
++    active/routes/<route_id>/lease.json
++    active/routes/<route_id>/status.json
++
++Allowed transition path:
++
++    not_leased -> leased -> active -> draining -> closed
++
++The Scheduler can later call these importable functions directly. There is no
++daemon, no service and no CLI.
++
++Compatibility rule phrase: There is no daemon, no service and no CLI.
++
++It deliberately does not:
++- create a daemon
++- start a service
++- use OpenRC
++- watch ControlFS
++- call Scheduler
++- decide security policy
++- create mmap routes
++- write RouteMessage frames
++- notify eventfd
++- resize live mmap routes
++- implement inter-process locks
++- implement VisPy
++
++It is lease state only, not the lease authority.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++import json
++from pathlib import Path
++from typing import Any, Literal, Mapping
++
++from runtime.controlfs_manifest import normalize_route_id
++from runtime.controlproxy_active_routes import (
++    ACTIVE_ROUTE_STATUS_SCHEMA,
++    ActiveRouteMaterializationError,
++    active_route_dir,
++    active_status_path,
++)
++
++
++ROUTE_LEASE_SCHEMA = "missipy.controlproxy.route_lease.v1"
++ROUTE_LEASE_TRANSITION_SCHEMA = "missipy.controlproxy.route_lease_transition.v1"
++DEFAULT_LEASED_AT = "2026-07-04T20:00:00Z"
++
++RouteLeaseState = Literal["leased", "active", "draining", "closed"]
++
++_ALLOWED_TRANSITIONS: dict[str, tuple[str, ...]] = {
++    "not_leased": ("leased",),
++    "leased": ("active", "closed"),
++    "active": ("draining",),
++    "draining": ("closed",),
++    "closed": (),
++}
++
++
++class RouteLeaseError(RuntimeError):
++    """Raised when route lease state is invalid."""
++
++
++class RouteLeaseTransitionError(RouteLeaseError):
++    """Raised when a route lease transition is not allowed."""
++
++
++@dataclass(frozen=True)
++class RouteLease:
++    """Lease record stored under active/routes/<route_id>/lease.json."""
++
++    schema: str
++    lease_id: str
++    route_id: str
++    route_handle: str
++    task_id: str
++    holder: str
++    scope: str
++    state: RouteLeaseState
++    acquired_at: str
++    ttl_seconds: int
++    updated_at: str
++
++    @classmethod
++    def from_mapping(cls, raw: Mapping[str, Any]) -> "RouteLease":
++        if raw.get("schema") != ROUTE_LEASE_SCHEMA:
++            raise RouteLeaseError("unsupported route lease schema")
++        state = _require_id(raw, "state")
++        if state not in ("leased", "active", "draining", "closed"):
++            raise RouteLeaseError("unsupported route lease state")
++        return cls(
++            schema=str(raw["schema"]),
++            lease_id=_require_id(raw, "lease_id"),
++            route_id=normalize_route_id(_require_str(raw, "route_id")),
++            route_handle=_require_handle(raw, "route_handle"),
++            task_id=_require_id(raw, "task_id"),
++            holder=_require_id(raw, "holder"),
++            scope=_require_scope(raw, "scope"),
++            state=state,  # type: ignore[arg-type]
++            acquired_at=_require_timestamp(raw, "acquired_at"),
++            ttl_seconds=_require_positive_int(raw, "ttl_seconds"),
++            updated_at=_require_timestamp(raw, "updated_at"),
++        )
++
++    @classmethod
++    def from_path(cls, path: Path | str) -> "RouteLease":
++        return cls.from_mapping(json.loads(Path(path).read_text(encoding="utf-8")))
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "lease_id": self.lease_id,
++            "route_id": self.route_id,
++            "route_handle": self.route_handle,
++            "task_id": self.task_id,
++            "holder": self.holder,
++            "scope": self.scope,
++            "state": self.state,
++            "acquired_at": self.acquired_at,
++            "ttl_seconds": self.ttl_seconds,
++            "updated_at": self.updated_at,
++        }
++
++
++@dataclass(frozen=True)
++class RouteLeaseTransition:
++    """Transition fact returned by lease state updates."""
++
++    schema: str
++    lease_id: str
++    route_id: str
++    route_handle: str
++    previous_state: str
++    next_state: str
++    transitioned_at: str
++    reason: str
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "lease_id": self.lease_id,
++            "route_id": self.route_id,
++            "route_handle": self.route_handle,
++            "previous_state": self.previous_state,
++            "next_state": self.next_state,
++            "transitioned_at": self.transitioned_at,
++            "reason": self.reason,
++        }
++
++
++def lease_path(controlfs_root: Path | str, route_id: str) -> Path:
++    """Return active/routes/<route_id>/lease.json."""
++
++    return active_route_dir(controlfs_root, route_id) / "lease.json"
++
++
++def acquire_route_lease(
++    *,
++    controlfs_root: Path | str,
++    route_id: str,
++    holder: str,
++    scope: str,
++    lease_id: str | None = None,
++    ttl_seconds: int = 300,
++    acquired_at: str = DEFAULT_LEASED_AT,
++) -> RouteLease:
++    """Move an active route from not_leased to leased.
++
++    This does not grant security by itself. Security remains Scheduler/policy
++    responsibility. This function only records the state transition.
++    """
++
++    safe_route_id = normalize_route_id(route_id)
++    status_path = active_status_path(controlfs_root, safe_route_id)
++    status = _load_active_status(status_path)
++    current = str(status.get("lease_state", "not_leased"))
++    _ensure_transition(current, "leased")
++
++    holder_id = _require_literal_id(holder, "holder")
++    scope_id = _require_literal_scope(scope, "scope")
++    lease = RouteLease(
++        schema=ROUTE_LEASE_SCHEMA,
++        lease_id=lease_id or f"lease:{safe_route_id}:g1:{holder_id}",
++        route_id=safe_route_id,
++        route_handle=_require_status_str(status, "route_handle"),
++        task_id=_require_status_str(status, "task_id"),
++        holder=holder_id,
++        scope=scope_id,
++        state="leased",
++        acquired_at=_require_literal_timestamp(acquired_at, "acquired_at"),
++        ttl_seconds=_require_positive_literal_int(ttl_seconds, "ttl_seconds"),
++        updated_at=acquired_at,
++    )
++
++    _write_lease(controlfs_root, lease)
++    _update_active_status(status_path, status, lease, previous_state=current, next_state="leased", updated_at=acquired_at)
++    return lease
++
++
++def transition_route_lease(
++    *,
++    controlfs_root: Path | str,
++    route_id: str,
++    next_state: RouteLeaseState,
++    transitioned_at: str = DEFAULT_LEASED_AT,
++    reason: str = "state transition requested",
++) -> RouteLeaseTransition:
++    """Transition an existing route lease."""
++
++    safe_route_id = normalize_route_id(route_id)
++    if next_state not in ("leased", "active", "draining", "closed"):
++        raise RouteLeaseTransitionError("unsupported next route lease state")
++
++    status_path = active_status_path(controlfs_root, safe_route_id)
++    status = _load_active_status(status_path)
++    lease = RouteLease.from_path(lease_path(controlfs_root, safe_route_id))
++
++    current = lease.state
++    _ensure_transition(current, next_state)
++
++    updated = RouteLease(
++        schema=lease.schema,
++        lease_id=lease.lease_id,
++        route_id=lease.route_id,
++        route_handle=lease.route_handle,
++        task_id=lease.task_id,
++        holder=lease.holder,
++        scope=lease.scope,
++        state=next_state,
++        acquired_at=lease.acquired_at,
++        ttl_seconds=lease.ttl_seconds,
++        updated_at=transitioned_at,
++    )
++    _write_lease(controlfs_root, updated)
++    _update_active_status(status_path, status, updated, previous_state=current, next_state=next_state, updated_at=transitioned_at)
++
++    return RouteLeaseTransition(
++        schema=ROUTE_LEASE_TRANSITION_SCHEMA,
++        lease_id=updated.lease_id,
++        route_id=updated.route_id,
++        route_handle=updated.route_handle,
++        previous_state=current,
++        next_state=next_state,
++        transitioned_at=transitioned_at,
++        reason=reason,
++    )
++
++
++def activate_route_lease(*, controlfs_root: Path | str, route_id: str, transitioned_at: str = DEFAULT_LEASED_AT) -> RouteLeaseTransition:
++    """Move leased -> active."""
++
++    return transition_route_lease(
++        controlfs_root=controlfs_root,
++        route_id=route_id,
++        next_state="active",
++        transitioned_at=transitioned_at,
++        reason="route lease activated",
++    )
++
++
++def begin_route_drain(*, controlfs_root: Path | str, route_id: str, transitioned_at: str = DEFAULT_LEASED_AT) -> RouteLeaseTransition:
++    """Move active -> draining."""
++
++    return transition_route_lease(
++        controlfs_root=controlfs_root,
++        route_id=route_id,
++        next_state="draining",
++        transitioned_at=transitioned_at,
++        reason="route drain requested",
++    )
++
++
++def close_route_lease(*, controlfs_root: Path | str, route_id: str, transitioned_at: str = DEFAULT_LEASED_AT) -> RouteLeaseTransition:
++    """Move leased/draining -> closed."""
++
++    return transition_route_lease(
++        controlfs_root=controlfs_root,
++        route_id=route_id,
++        next_state="closed",
++        transitioned_at=transitioned_at,
++        reason="route lease closed",
++    )
++
++
++def load_route_lease(controlfs_root: Path | str, route_id: str) -> RouteLease:
++    """Load active/routes/<route_id>/lease.json."""
++
++    return RouteLease.from_path(lease_path(controlfs_root, route_id))
++
++
++def route_lease_summary(controlfs_root: Path | str, route_id: str) -> dict[str, Any]:
++    """Return compact route lease and active status summary."""
++
++    status = _load_active_status(active_status_path(controlfs_root, route_id))
++    lease = load_route_lease(controlfs_root, route_id)
++    return {
++        "route_id": route_id,
++        "lease_state": status.get("lease_state"),
++        "active_state": status.get("state"),
++        "current_lease_id": status.get("current_lease_id"),
++        "current_lease_holder": status.get("current_lease_holder"),
++        "lease": lease.to_mapping(),
++    }
++
++
++def _write_lease(controlfs_root: Path | str, lease: RouteLease) -> None:
++    path = lease_path(controlfs_root, lease.route_id)
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(lease.to_mapping(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++
++def _load_active_status(path: Path) -> dict[str, Any]:
++    if not path.exists():
++        raise ActiveRouteMaterializationError(f"missing active route status: {path}")
++    raw = json.loads(path.read_text(encoding="utf-8"))
++    if raw.get("schema") != ACTIVE_ROUTE_STATUS_SCHEMA:
++        raise ActiveRouteMaterializationError("unsupported active route status schema")
++    return raw
++
++
++def _update_active_status(path: Path, status: dict[str, Any], lease: RouteLease, *, previous_state: str, next_state: str, updated_at: str) -> None:
++    status["lease_state"] = next_state
++    status["current_lease_id"] = lease.lease_id
++    status["current_lease_holder"] = lease.holder
++    status["current_lease_scope"] = lease.scope
++    status["current_lease_updated_at"] = updated_at
++    status["previous_lease_state"] = previous_state
++    if next_state == "closed":
++        status["state"] = "closed"
++    path.write_text(json.dumps(status, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++
++def _ensure_transition(current: str, next_state: str) -> None:
++    allowed = _ALLOWED_TRANSITIONS.get(current)
++    if allowed is None:
++        raise RouteLeaseTransitionError(f"unknown current lease state: {current}")
++    if next_state not in allowed:
++        raise RouteLeaseTransitionError(f"invalid route lease transition: {current} -> {next_state}")
++
++
++def _require_status_str(status: Mapping[str, Any], field: str) -> str:
++    value = status.get(field)
++    if not isinstance(value, str) or not value:
++        raise RouteLeaseError(f"active status missing {field}")
++    return value
++
++
++def _require_str(raw: Mapping[str, Any], field: str) -> str:
++    value = raw.get(field)
++    if not isinstance(value, str) or not value:
++        raise RouteLeaseError(f"{field} must be a non-empty string")
++    if "/" in value or "\\" in value or ".." in value:
++        raise RouteLeaseError(f"{field} must not contain path traversal")
++    return value
++
++
++def _require_id(raw: Mapping[str, Any], field: str) -> str:
++    return _require_literal_id(_require_str(raw, field), field)
++
++
++def _require_scope(raw: Mapping[str, Any], field: str) -> str:
++    return _require_literal_scope(_require_str(raw, field), field)
++
++
++def _require_timestamp(raw: Mapping[str, Any], field: str) -> str:
++    return _require_literal_timestamp(_require_str(raw, field), field)
++
++
++def _require_positive_int(raw: Mapping[str, Any], field: str) -> int:
++    return _require_positive_literal_int(raw.get(field), field)
++
++
++def _require_handle(raw: Mapping[str, Any], field: str) -> str:
++    value = _require_str(raw, field)
++    if "/" in value or "\\" in value or ".." in value:
++        raise RouteLeaseError(f"{field} must not contain path traversal")
++    return value
++
++
++def _require_literal_id(value: str, field: str) -> str:
++    if not isinstance(value, str) or not value:
++        raise RouteLeaseError(f"{field} must be a non-empty string")
++    if "/" in value or "\\" in value or ".." in value:
++        raise RouteLeaseError(f"{field} must not contain path traversal")
++    if not value.replace("_", "").replace(".", "").replace(":", "").replace("-", "").isalnum():
++        raise RouteLeaseError(f"{field} contains invalid characters")
++    return value
++
++
++def _require_literal_scope(value: str, field: str) -> str:
++    value = _require_literal_id(value, field)
++    if "." not in value:
++        raise RouteLeaseError(f"{field} should use subsystem.permission form")
++    return value
++
++
++def _require_literal_timestamp(value: str, field: str) -> str:
++    if not isinstance(value, str) or "T" not in value or "Z" not in value:
++        raise RouteLeaseError(f"{field} must look like a UTC timestamp")
++    return value
++
++
++def _require_positive_literal_int(value: object, field: str) -> int:
++    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
++        raise RouteLeaseError(f"{field} must be a positive integer")
++    return value
+diff --git a/tests/rules/test_controlproxy_route_lease_rule.py b/tests/rules/test_controlproxy_route_lease_rule.py
+new file mode 100644
+index 0000000..fd4fad6
+--- /dev/null
++++ b/tests/rules/test_controlproxy_route_lease_rule.py
+@@ -0,0 +1,80 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "CONTROLPROXY_ROUTE_LEASE_STATE.md"
++MODULE = ROOT / "src" / "runtime" / "controlproxy_route_lease.py"
++SEQUENCE = ROOT / "doc" / "architecture" / "REAL_IMPLEMENTATION_SEQUENCE_0081.md"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing file: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_route_lease_doc_locks_state_machine_and_authority_boundary() -> None:
++    text = _read(DOC)
++
++    required_phrases = [
++        "Status: 0083 implementation.",
++        "ControlProxy = ControlFS declarative surface + RouteProxy materializer",
++        "active/routes/<route_id>/lease.json",
++        "active/routes/<route_id>/status.json",
++        "not_leased -> leased -> active -> draining -> closed",
++        "leased -> closed",
++        "not_leased -> active",
++        "active -> leased",
++        "closed -> active",
++        "missipy.controlproxy.route_lease.v1",
++        "lease_state",
++        "current_lease_id",
++        "current_lease_holder",
++        "Security and authorization remain",
++        "Scheduler",
++        "policy engine",
++        "zone/scope rules",
++        "No daemon, no service",
++        "OpenRC",
++        "No CLI",
++        "module logic is importable",
++        "CLI only when it is a real operator boundary",
++        "ControlProxy pump/tick",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_route_lease_module_locks_non_goals() -> None:
++    text = _read(MODULE)
++
++    required_phrases = [
++        "not_leased -> leased -> active -> draining -> closed",
++        "There is no daemon, no service and no CLI.",
++        "does not:",
++        "create a daemon",
++        "start a service",
++        "use OpenRC",
++        "watch ControlFS",
++        "call Scheduler",
++        "decide security policy",
++        "create mmap routes",
++        "write RouteMessage frames",
++        "notify eventfd",
++        "resize live mmap routes",
++        "implement inter-process locks",
++        "implement VisPy",
++        "lease state only, not the lease authority",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_real_sequence_mentions_0083_lease_state_and_no_service_0084() -> None:
++    text = _read(SEQUENCE)
++
++    assert "0083 route lease state" in text
++    assert "file-backed lease.json plus active status update" in text
++    assert "0084 ControlProxy pump/tick" in text
++    assert "no service, no OpenRC, no resident daemon" in text
+diff --git a/tests/test_controlproxy_route_lease.py b/tests/test_controlproxy_route_lease.py
+new file mode 100644
+index 0000000..be7bf81
+--- /dev/null
++++ b/tests/test_controlproxy_route_lease.py
+@@ -0,0 +1,200 @@
++import json
++from pathlib import Path
++
++import pytest
++
++from context.baby_fork_controlfs import build_route_sizing_hints_from_messages, write_baby_fork_desired_manifests
++from context.baby_fork_runtime_projection import build_baby_fork_runtime_projection
++from runtime.controlfs_manifest import RouteManifest, route_manifest_path
++from runtime.controlproxy_active_routes import active_status_path, materialize_active_route
++from runtime.controlproxy_prepare import decide_route_prepare, route_prepare_request_from_message
++from runtime.controlproxy_route_lease import (
++    ROUTE_LEASE_SCHEMA,
++    RouteLeaseTransitionError,
++    acquire_route_lease,
++    activate_route_lease,
++    begin_route_drain,
++    close_route_lease,
++    lease_path,
++    load_route_lease,
++    route_lease_summary,
++    transition_route_lease,
++)
++from runtime.shm_runtime_schema import ROUTE_MESSAGE_SCHEMA
++
++
++def _report() -> dict:
++    return {
++        "retrieval": {
++            "retrieved_ids": ["baby-silicone-fork", "rounded-stainless-soft-handle"],
++            "rejected_ids": ["nasa-antenna"],
++        },
++        "variant_generator_stub": {
++            "generated_variants": [
++                {"variant_id": "variant-1"},
++                {"variant_id": "variant-2"},
++            ]
++        },
++        "final_context": {
++            "context_id": "ctx-baby-fork-001",
++            "context_version": 2,
++            "selected_variant_id": "variant-1",
++        },
++    }
++
++
++def _message(route_id: str = "baby_fork.retrieval") -> dict:
++    return {
++        "schema": ROUTE_MESSAGE_SCHEMA,
++        "route_id": route_id,
++        "message_id": "msg:baby_fork.retrieval.reply",
++        "kind": "reply",
++        "source": "retrieval_worker",
++        "target": "scheduler",
++        "occurred_at": "2026-07-04T20:00:00Z",
++        "payload_schema": "missipy.baby_fork.route_reply.v1",
++        "payload": {
++            "context_id": "ctx-baby-fork-001",
++            "retrieved_ids": ["baby-silicone-fork", "rounded-stainless-soft-handle"],
++            "rejected_ids": ["nasa-antenna"],
++        },
++    }
++
++
++def _materialize(tmp_path: Path):
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++    projection = build_baby_fork_runtime_projection(_report())
++    hints = build_route_sizing_hints_from_messages(projection.routes)
++    write_baby_fork_desired_manifests(
++        controlfs_root,
++        context_id="ctx-baby-fork-001",
++        sizing_hints=hints,
++    )
++    manifest = RouteManifest.from_path(route_manifest_path(controlfs_root, "baby_fork.retrieval"))
++    request = route_prepare_request_from_message(
++        _message(),
++        task_id=manifest.task_id,
++        zone=manifest.zone,
++        scope=manifest.scope,
++    )
++    decision = decide_route_prepare(request)
++    decision = type(decision)(
++        schema=decision.schema,
++        request_id=decision.request_id,
++        route_id=decision.route_id,
++        route_handle=decision.route_handle,
++        task_id=decision.task_id,
++        zone=decision.zone,
++        status=decision.status,
++        action=decision.action,
++        reason=decision.reason,
++        required_frame_bytes=decision.required_frame_bytes,
++        current_generation=decision.current_generation,
++        next_generation=decision.next_generation,
++        current_slot_size=decision.current_slot_size,
++        slot_size=manifest.slot_size,
++        slot_count=manifest.slot_count,
++        max_frame_bytes=manifest.max_frame_bytes,
++        max_ring_bytes=decision.max_ring_bytes,
++        max_prepare_ms=decision.max_prepare_ms,
++        drain_timeout_ms=decision.drain_timeout_ms,
++        lease_switch_timeout_ms=decision.lease_switch_timeout_ms,
++        notify=manifest.notify,
++        overflow_policy=manifest.overflow_policy,
++        decided_at=decision.decided_at,
++    )
++    record = materialize_active_route(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        decision=decision,
++        desired_manifest=manifest,
++    )
++    return controlfs_root, record
++
++
++def test_acquire_route_lease_writes_lease_json_and_updates_status(tmp_path: Path) -> None:
++    controlfs_root, record = _materialize(tmp_path)
++
++    lease = acquire_route_lease(
++        controlfs_root=controlfs_root,
++        route_id=record.route_id,
++        holder="scheduler",
++        scope="route.write",
++        lease_id="lease:baby_fork.retrieval:g1:scheduler",
++    )
++
++    assert lease.schema == ROUTE_LEASE_SCHEMA
++    assert lease.state == "leased"
++    assert lease.route_handle == "baby_fork.retrieval@g1"
++    assert lease.holder == "scheduler"
++    assert lease_path(controlfs_root, record.route_id).exists()
++
++    status = json.loads(active_status_path(controlfs_root, record.route_id).read_text(encoding="utf-8"))
++    assert status["lease_state"] == "leased"
++    assert status["current_lease_id"] == lease.lease_id
++    assert status["current_lease_holder"] == "scheduler"
++
++
++def test_route_lease_state_machine_full_path(tmp_path: Path) -> None:
++    controlfs_root, record = _materialize(tmp_path)
++
++    acquire_route_lease(controlfs_root=controlfs_root, route_id=record.route_id, holder="scheduler", scope="route.write")
++    t1 = activate_route_lease(controlfs_root=controlfs_root, route_id=record.route_id)
++    t2 = begin_route_drain(controlfs_root=controlfs_root, route_id=record.route_id)
++    t3 = close_route_lease(controlfs_root=controlfs_root, route_id=record.route_id)
++
++    assert (t1.previous_state, t1.next_state) == ("leased", "active")
++    assert (t2.previous_state, t2.next_state) == ("active", "draining")
++    assert (t3.previous_state, t3.next_state) == ("draining", "closed")
++    assert load_route_lease(controlfs_root, record.route_id).state == "closed"
++
++    status = json.loads(active_status_path(controlfs_root, record.route_id).read_text(encoding="utf-8"))
++    assert status["lease_state"] == "closed"
++    assert status["state"] == "closed"
++
++
++def test_route_lease_allows_leased_to_closed_shortcut(tmp_path: Path) -> None:
++    controlfs_root, record = _materialize(tmp_path)
++    acquire_route_lease(controlfs_root=controlfs_root, route_id=record.route_id, holder="scheduler", scope="route.write")
++    transition = close_route_lease(controlfs_root=controlfs_root, route_id=record.route_id)
++    assert (transition.previous_state, transition.next_state) == ("leased", "closed")
++
++
++def test_route_lease_rejects_invalid_transition_without_lease(tmp_path: Path) -> None:
++    controlfs_root, record = _materialize(tmp_path)
++
++    with pytest.raises(FileNotFoundError):
++        transition_route_lease(controlfs_root=controlfs_root, route_id=record.route_id, next_state="active")
++
++
++def test_route_lease_rejects_double_acquire(tmp_path: Path) -> None:
++    controlfs_root, record = _materialize(tmp_path)
++
++    acquire_route_lease(controlfs_root=controlfs_root, route_id=record.route_id, holder="scheduler", scope="route.write")
++
++    with pytest.raises(RouteLeaseTransitionError, match="leased -> leased"):
++        acquire_route_lease(controlfs_root=controlfs_root, route_id=record.route_id, holder="scheduler", scope="route.write")
++
++
++def test_route_lease_rejects_active_to_leased(tmp_path: Path) -> None:
++    controlfs_root, record = _materialize(tmp_path)
++
++    acquire_route_lease(controlfs_root=controlfs_root, route_id=record.route_id, holder="scheduler", scope="route.write")
++    activate_route_lease(controlfs_root=controlfs_root, route_id=record.route_id)
++
++    with pytest.raises(RouteLeaseTransitionError, match="active -> leased"):
++        transition_route_lease(controlfs_root=controlfs_root, route_id=record.route_id, next_state="leased")
++
++
++def test_route_lease_summary(tmp_path: Path) -> None:
++    controlfs_root, record = _materialize(tmp_path)
++
++    lease = acquire_route_lease(controlfs_root=controlfs_root, route_id=record.route_id, holder="scheduler", scope="route.write")
++    summary = route_lease_summary(controlfs_root, record.route_id)
++
++    assert summary["route_id"] == "baby_fork.retrieval"
++    assert summary["lease_state"] == "leased"
++    assert summary["current_lease_id"] == lease.lease_id
++    assert summary["current_lease_holder"] == "scheduler"
++    assert summary["lease"]["state"] == "leased"

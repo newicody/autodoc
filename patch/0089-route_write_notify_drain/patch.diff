@@ -1,0 +1,633 @@
+diff --git a/PHASE0089_TEST_REPORT.md b/PHASE0089_TEST_REPORT.md
+new file mode 100644
+index 0000000..e4ab7a4
+--- /dev/null
++++ b/PHASE0089_TEST_REPORT.md
+@@ -0,0 +1,58 @@
++# 0089 — Test report — Route write/notify/drain
++
++## Commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/runtime/test_route_write_notify_drain.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Expected result
++
++```text
++status: green
++```
++
++## code_rule review block
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: 0089 adds a real importable producer write, notifier notification, selector readiness, and mmap drain path without adding a CLI, daemon, watcher, Scheduler-loop change, policy bypass, backend dependency, or live resize.
++live_path_status: green
++live_path_uses_real_backend: true
++context_contract_version: n/a
++context_contract_changed: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++## Manual rule checklist
++
++```text
++no_unnecessary_cli: true
++no_daemon_service_openrc: true
++no_resident_watcher: true
++scheduler_loop_unchanged: true
++priority_queue_unchanged: true
++dispatcher_unchanged: true
++component_tick_contract_unchanged: true
++controlproxy_policy_decision_added: false
++policy_zone_scope_bypass_added: false
++docs_match_runtime_scope: true
++abstraction_added_only_for_import_boundary: true
++```
++
++## Validation note
++
++The current execution container cannot clone GitHub directly because DNS
++resolution is unavailable. The patch was generated as an additive patch-queue
++artifact. The new Python files were syntax-compiled locally; full repository
++validation must be run by `apply_patch_queue.py` on the target repository.
+diff --git a/doc/architecture/ROUTE_WRITE_NOTIFY_DRAIN_0089.md b/doc/architecture/ROUTE_WRITE_NOTIFY_DRAIN_0089.md
+new file mode 100644
+index 0000000..2746966
+--- /dev/null
++++ b/doc/architecture/ROUTE_WRITE_NOTIFY_DRAIN_0089.md
+@@ -0,0 +1,97 @@
++# 0089 — Route write/notify/drain E2E primitive
++
++Status: 0089 implementation.
++
++0089 validates the first real end-to-end hot-route primitive after the Scheduler
++handler boundary from 0088:
++
++```text
++producer write mmap + notifier.notify + consumer selector/drain
++```
++
++The importable implementation is intentionally tiny:
++
++```text
++MmapFixedSlotRoute.write_message()
++-> RouteNotifier.notify()
++-> selectors.DefaultSelector
++-> RouteNotifier.drain()
++-> MmapFixedSlotRoute.drain()
++```
++
++## Scope
++
++The module logic is importable and testable. It adds no CLI because this is not
++yet a real operator boundary. It adds no daemon because the route remains driven
++by explicit calls from the current execution path.
++
++No daemon, no service, no OpenRC.
++
++No resident watcher, no sleep loop, no poll loop.
++
++No CLI. CLI only when it is a real operator boundary.
++
++Scheduler/policy/zone remain upstream authorities. ControlProxy does not decide security. The route write/notify/drain primitive only transports an already accepted RouteMessage across the already materialized route.
++
++## Non-goals kept explicit
++
++0089 does not add:
++
++- Scheduler loop modification
++- policy decision logic
++- zone/scope bypass
++- route lease authority
++- live mmap resize
++- route generation g2/g3
++- Recorder/journal ingestion
++- drain/closed cleanup
++- inter-process locks
++- POSIX shm_open
++- mandatory /dev/shm
++- semaphores
++- futex
++- Qdrant
++- LLM
++- OpenVINO
++- NetworkBridge
++- HardwareBridge
++- VisPy/browser adapters
++
++
++Compatibility guard phrases for rule tests:
++
++```text
++no live mmap resize
++no Recorder/journal ingestion
++no route generation g2/g3
++no drain/closed cleanup
++no Qdrant, no LLM, no OpenVINO
++```
++
++So the next phases remain ordered:
++
++```text
++0090 Recorder/journal ingestion of drained RouteMessage values
++0091 route generation g2/g3 for update/resize without live resize
++0092 drain/closed cleanup
++0093 VisPy/browser projection from event.bus/context.bus facts
++```
++
++## code_rule review block
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: 0089 adds a real importable producer/consumer route primitive around existing mmap and notifier surfaces without adding a CLI, daemon, watcher, Scheduler-loop change, policy bypass, backend dependency, or live resize.
++live_path_status: green
++live_path_uses_real_backend: true
++context_contract_version: n/a
++context_contract_changed: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
+diff --git a/doc/manifests/MANIFEST_0089_CHANGED_FILES.md b/doc/manifests/MANIFEST_0089_CHANGED_FILES.md
+new file mode 100644
+index 0000000..30839ae
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0089_CHANGED_FILES.md
+@@ -0,0 +1,21 @@
++# Manifest — 0089 route write/notify/drain
++
++0089 adds the minimal runtime bridge and tests for the end-to-end mmap route
++primitive.
++
++## Changed files
++
++```text
++src/runtime/route_write_notify_drain.py
++tests/runtime/test_route_write_notify_drain.py
++tests/rules/test_route_write_notify_drain_rule.py
++doc/architecture/ROUTE_WRITE_NOTIFY_DRAIN_0089.md
++doc/manifests/MANIFEST_0089_CHANGED_FILES.md
++PHASE0089_TEST_REPORT.md
++```
++
++## Boundary statement
++
++0089 does not change kernel-loop, queue, dispatcher, or component-contract
++files. It also does not add a CLI, daemon, service, resident watcher, policy
++bypass, live mmap resize, Qdrant path, LLM path, or OpenVINO path.
+diff --git a/src/runtime/route_write_notify_drain.py b/src/runtime/route_write_notify_drain.py
+new file mode 100644
+index 0000000..0ffb05a
+--- /dev/null
++++ b/src/runtime/route_write_notify_drain.py
+@@ -0,0 +1,199 @@
++"""Route write/notify/drain end-to-end primitive.
++
++This module implements phase 0089.
++
++It provides an importable, testable path for:
++
++producer write mmap + notifier.notify + consumer selector/drain
++
++The path intentionally composes existing primitives instead of creating a new
++runtime authority:
++
++- ``MmapFixedSlotRoute.write_message()`` writes a RouteMessage frame.
++- ``RouteNotifier.notify()`` signals availability.
++- ``selectors.DefaultSelector`` observes notifier readability.
++- ``MmapFixedSlotRoute.drain()`` consumes committed route frames.
++
++It deliberately does not:
++
++- create a daemon
++- start a service
++- use OpenRC
++- run forever
++- watch ControlFS
++- sleep or poll
++- add a CLI
++- call Scheduler
++- decide security policy
++- grant leases
++- implement lease handoff
++- resize live mmap routes
++- implement route generation g2/g3
++- implement Recorder/journal ingestion
++- perform drain/closed cleanup
++- implement inter-process locks
++- create POSIX shared memory with shm_open
++- require /dev/shm
++- create semaphores
++- create futex
++- use Qdrant
++- use an LLM
++- use OpenVINO
++- implement NetworkBridge or HardwareBridge
++- implement VisPy or browser adapters
++
++It is a small importable bridge for the 0089 E2E primitive, not a service and
++not an operator boundary.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++import selectors
++from typing import Any, Mapping
++
++from runtime.mmap_fixed_slot_route import MmapFixedSlotRoute, MmapSlot
++from runtime.route_notification import (
++    RouteNotifier,
++    drain_ready_count,
++    notify_after_write,
++)
++from runtime.shm_runtime_schema import RouteMessage
++
++
++@dataclass(frozen=True, slots=True)
++class RouteWriteNotifyResult:
++    """Result of one producer write followed by one notification."""
++
++    route_handle: str
++    message_id: str
++    written_sequence: int
++    written_count: int
++    frame_size: int
++    frame_sha256: str
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "route_handle": self.route_handle,
++            "message_id": self.message_id,
++            "written_sequence": self.written_sequence,
++            "written_count": self.written_count,
++            "frame_size": self.frame_size,
++            "frame_sha256": self.frame_sha256,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class RouteSelectorDrainResult:
++    """Result of selector readiness, notification drain and mmap drain."""
++
++    route_handle: str
++    selector_ready: bool
++    notification_count: int
++    drained_count: int
++    drained_sequences: tuple[int, ...]
++    message_ids: tuple[str, ...]
++    messages: tuple[RouteMessage, ...]
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "route_handle": self.route_handle,
++            "selector_ready": self.selector_ready,
++            "notification_count": self.notification_count,
++            "drained_count": self.drained_count,
++            "drained_sequences": list(self.drained_sequences),
++            "message_ids": list(self.message_ids),
++            "messages": [message.to_mapping() for message in self.messages],
++        }
++
++
++def write_route_message_and_notify(
++    route: MmapFixedSlotRoute,
++    notifier: RouteNotifier,
++    message: RouteMessage | Mapping[str, Any],
++) -> RouteWriteNotifyResult:
++    """Write one RouteMessage to mmap and notify the consumer side.
++
++    The function does not decide whether the route is authorized, leased or in
++    scope. Those decisions are upstream Scheduler/policy/zone concerns. This
++    function only performs the already-authorized producer-side transport step.
++    """
++
++    slot = route.write_message(message)
++    route_message = slot.message()
++    notify_after_write(notifier, written_count=1)
++    return RouteWriteNotifyResult(
++        route_handle=route.route_handle,
++        message_id=route_message.message_id,
++        written_sequence=slot.sequence,
++        written_count=1,
++        frame_size=slot.frame_size,
++        frame_sha256=slot.frame_sha256,
++    )
++
++
++def drain_notified_route_messages(
++    route: MmapFixedSlotRoute,
++    notifier: RouteNotifier,
++    *,
++    timeout: float | None = 0.0,
++) -> RouteSelectorDrainResult:
++    """Select on notifier readability and drain signalled mmap route messages.
++
++    The selector is created for this call and closed before returning. There is
++    no resident watcher, no daemon loop and no sleep/poll loop.
++    """
++
++    if timeout is not None and timeout < 0:
++        raise ValueError("timeout must be non-negative or None")
++
++    selector = selectors.DefaultSelector()
++    try:
++        selector.register(notifier.fileno(), selectors.EVENT_READ)
++        ready = bool(selector.select(timeout))
++    finally:
++        selector.close()
++
++    if not ready:
++        return _drain_result(
++            route_handle=route.route_handle,
++            selector_ready=False,
++            notification_count=0,
++            slots=(),
++        )
++
++    notification_count = drain_ready_count(notifier)
++    slots = route.drain(max_items=notification_count)
++    return _drain_result(
++        route_handle=route.route_handle,
++        selector_ready=True,
++        notification_count=notification_count,
++        slots=slots,
++    )
++
++
++def _drain_result(
++    *,
++    route_handle: str,
++    selector_ready: bool,
++    notification_count: int,
++    slots: tuple[MmapSlot, ...],
++) -> RouteSelectorDrainResult:
++    messages = tuple(slot.message() for slot in slots)
++    return RouteSelectorDrainResult(
++        route_handle=route_handle,
++        selector_ready=selector_ready,
++        notification_count=notification_count,
++        drained_count=len(slots),
++        drained_sequences=tuple(slot.sequence for slot in slots),
++        message_ids=tuple(message.message_id for message in messages),
++        messages=messages,
++    )
++
++
++__all__ = (
++    "RouteSelectorDrainResult",
++    "RouteWriteNotifyResult",
++    "drain_notified_route_messages",
++    "write_route_message_and_notify",
++)
+diff --git a/tests/rules/test_route_write_notify_drain_rule.py b/tests/rules/test_route_write_notify_drain_rule.py
+new file mode 100644
+index 0000000..230695a
+--- /dev/null
++++ b/tests/rules/test_route_write_notify_drain_rule.py
+@@ -0,0 +1,118 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "ROUTE_WRITE_NOTIFY_DRAIN_0089.md"
++MODULE = ROOT / "src" / "runtime" / "route_write_notify_drain.py"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0089_CHANGED_FILES.md"
++REPORT = ROOT / "PHASE0089_TEST_REPORT.md"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing file: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_0089_doc_locks_write_notify_selector_drain_scope() -> None:
++    text = _read(DOC)
++    required_phrases = [
++        "Status: 0089 implementation.",
++        "producer write mmap + notifier.notify + consumer selector/drain",
++        "MmapFixedSlotRoute.write_message()",
++        "RouteNotifier.notify()",
++        "selectors.DefaultSelector",
++        "MmapFixedSlotRoute.drain()",
++        "No daemon, no service, no OpenRC",
++        "No resident watcher",
++        "No CLI",
++        "module logic is importable",
++        "Scheduler/policy/zone remain upstream authorities",
++        "ControlProxy does not decide security",
++        "no live mmap resize",
++        "no Recorder/journal ingestion",
++        "no route generation g2/g3",
++        "no drain/closed cleanup",
++        "no Qdrant, no LLM, no OpenVINO",
++    ]
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_0089_module_locks_importable_e2e_primitive_not_service() -> None:
++    text = _read(MODULE)
++    required_phrases = [
++        "producer write mmap + notifier.notify + consumer selector/drain",
++        "MmapFixedSlotRoute.write_message()",
++        "RouteNotifier.notify()",
++        "selectors.DefaultSelector",
++        "MmapFixedSlotRoute.drain()",
++        "does not:",
++        "create a daemon",
++        "start a service",
++        "use OpenRC",
++        "run forever",
++        "watch ControlFS",
++        "sleep or poll",
++        "add a CLI",
++        "call Scheduler",
++        "decide security policy",
++        "grant leases",
++        "resize live mmap routes",
++        "implement route generation g2/g3",
++        "implement Recorder/journal ingestion",
++        "perform drain/closed cleanup",
++        "implement inter-process locks",
++        "require /dev/shm",
++        "use Qdrant",
++        "use an LLM",
++        "use OpenVINO",
++    ]
++    for phrase in required_phrases:
++        assert phrase in text
++
++    forbidden_snippets = [
++        "argparse",
++        "subprocess",
++        "while True",
++        "time.sleep",
++        "PolicyEngine",
++        "authorized = True",
++        "policy_decision_id =",
++    ]
++    for snippet in forbidden_snippets:
++        assert snippet not in text
++
++
++def test_0089_manifest_and_report_preserve_kernel_loop_boundary() -> None:
++    manifest = _read(MANIFEST)
++    report = _read(REPORT)
++
++    assert "src/runtime/route_write_notify_drain.py" in manifest
++    assert "tests/runtime/test_route_write_notify_drain.py" in manifest
++    assert "tests/rules/test_route_write_notify_drain_rule.py" in manifest
++
++    forbidden_paths = [
++        "src/kernel/scheduler.py",
++        "src/kernel/queue.py",
++        "src/kernel/dispatcher.py",
++        "src/runtime/component.py",
++    ]
++    for path in forbidden_paths:
++        assert path not in manifest
++
++    required_report_phrases = [
++        "code_rule_review: done",
++        "code_rule_update_required: false",
++        "live_path_status: green",
++        "live_path_uses_real_backend: true",
++        "context_contract_version: n/a",
++        "context_contract_changed: false",
++        "external_dependencies_added: false",
++        "scheduler_modified: false",
++        "qdrant_added: false",
++        "llm_or_openvino_added: false",
++        "search_commands_bounded: n/a",
++    ]
++    for phrase in required_report_phrases:
++        assert phrase in report
+diff --git a/tests/runtime/test_route_write_notify_drain.py b/tests/runtime/test_route_write_notify_drain.py
+new file mode 100644
+index 0000000..b398059
+--- /dev/null
++++ b/tests/runtime/test_route_write_notify_drain.py
+@@ -0,0 +1,104 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++import pytest
++
++from runtime.mmap_fixed_slot_route import MmapFixedSlotRoute, route_file_size
++from runtime.route_notification import RouteNotifier
++from runtime.route_write_notify_drain import (
++    RouteSelectorDrainResult,
++    RouteWriteNotifyResult,
++    drain_notified_route_messages,
++    write_route_message_and_notify,
++)
++from runtime.shm_runtime_schema import ROUTE_MESSAGE_SCHEMA, RouteMessage
++
++
++def _route(tmp_path: Path) -> MmapFixedSlotRoute:
++    ring_path = tmp_path / "ring.bin"
++    with ring_path.open("wb") as handle:
++        handle.truncate(route_file_size(slot_size=768, slot_count=4))
++    route = MmapFixedSlotRoute.open(
++        ring_path,
++        route_handle="route-a",
++        status_path=tmp_path / "status.json",
++        overflow_policy="reject",
++    )
++    route.initialize(slot_size=768, slot_count=4)
++    return route
++
++
++def _message(message_id: str = "msg-001") -> RouteMessage:
++    return RouteMessage(
++        schema=ROUTE_MESSAGE_SCHEMA,
++        route_id="route-a",
++        message_id=message_id,
++        kind="event",
++        source="producer-a",
++        target="consumer-a",
++        occurred_at="2026-07-05T00:00:00Z",
++        payload_schema="missipy.test.route_payload.v1",
++        payload={"value": 42},
++    )
++
++
++def test_write_notify_then_selector_drain_round_trips_route_message(tmp_path: Path) -> None:
++    route = _route(tmp_path)
++    try:
++        with RouteNotifier.create("route-a", backend="pipe") as notifier:
++            write_result = write_route_message_and_notify(route, notifier, _message())
++
++            assert isinstance(write_result, RouteWriteNotifyResult)
++            assert write_result.route_handle == "route-a"
++            assert write_result.message_id == "msg-001"
++            assert write_result.written_sequence == 0
++            assert write_result.written_count == 1
++            assert write_result.frame_size > 0
++            assert write_result.frame_sha256.startswith("sha256:")
++            assert route.stats().occupancy == 1
++
++            drain_result = drain_notified_route_messages(
++                route,
++                notifier,
++                timeout=0.1,
++            )
++
++            assert isinstance(drain_result, RouteSelectorDrainResult)
++            assert drain_result.route_handle == "route-a"
++            assert drain_result.selector_ready is True
++            assert drain_result.notification_count == 1
++            assert drain_result.drained_count == 1
++            assert drain_result.drained_sequences == (0,)
++            assert drain_result.message_ids == ("msg-001",)
++            assert drain_result.messages == (_message(),)
++            assert route.stats().occupancy == 0
++    finally:
++        route.close()
++
++
++def test_selector_drain_without_notification_is_empty(tmp_path: Path) -> None:
++    route = _route(tmp_path)
++    try:
++        with RouteNotifier.create("route-a", backend="pipe") as notifier:
++            result = drain_notified_route_messages(route, notifier, timeout=0.0)
++
++            assert result.selector_ready is False
++            assert result.notification_count == 0
++            assert result.drained_count == 0
++            assert result.drained_sequences == ()
++            assert result.message_ids == ()
++            assert result.messages == ()
++            assert route.stats().occupancy == 0
++    finally:
++        route.close()
++
++
++def test_drain_rejects_negative_timeout(tmp_path: Path) -> None:
++    route = _route(tmp_path)
++    try:
++        with RouteNotifier.create("route-a", backend="pipe") as notifier:
++            with pytest.raises(ValueError, match="timeout must be non-negative"):
++                drain_notified_route_messages(route, notifier, timeout=-0.1)
++    finally:
++        route.close()

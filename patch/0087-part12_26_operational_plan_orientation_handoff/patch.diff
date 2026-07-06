@@ -1,0 +1,416 @@
+diff --git a/doc/architecture/NEW_CONTEXT_HANDOFF_0087.md b/doc/architecture/NEW_CONTEXT_HANDOFF_0087.md
+new file mode 100644
+index 0000000..d1d676b
+--- /dev/null
++++ b/doc/architecture/NEW_CONTEXT_HANDOFF_0087.md
+@@ -0,0 +1,64 @@
++# New context handoff
++
++Status: 0087 handoff text.
++
++Use this text at the beginning of the next conversation.
++
++```text
++On reprend le développement du repo Autodoc/MissiPy dans ~/projet/git/autodoc.
++
++Contexte important :
++- Je veux continuer en français.
++- Je veux des patchs zip applicables avec apply_patch_queue.py.
++- Format habituel : /mnt/data/<PATCH_ID>.zip avec patch/<PATCH_ID>/patch.diff, README.md, metadata.json.
++- Application : unzip -o /chemin/vers/${PATCH_ID}.zip -d . puis python apply_patch_queue.py --patch ${PATCH_ID} --dry-run puis --commit --push.
++- Validation : PYTHONPATH=src:. python -m compileall -q src tests tools ; PYTHONPATH=src:. pytest -q tests/rules.
++
++État technique atteint :
++- 0079-r2/r3 : ControlProxy prepare/sizing + bus visibility.
++- 0080-r2 : mmap fixed-slot route avec ring.bin/status.json.
++- 0081 : active route materializer.
++- 0082 : notification primitive eventfd via os.eventfd, fallback ctypes/libc eventfd, fallback pipe.
++- 0083-r2 : route lease state : not_leased -> leased -> active -> draining -> closed.
++- 0084 : tick_controlproxy(), pump importable, pas service.
++- 0085-r2 : prepare_route_for_scheduler(), handshake Scheduler-facing.
++- 0086-r2 : handle_scheduler_route_request(), adapter Scheduler request/reply avec authorized=True + policy_decision_id.
++- 0087 : docs d’orientation opérationnelle et handoff nouveau contexte.
++
++Principe à respecter :
++- Implémentation réelle, pas seulement documentation.
++- Pas de daemon/service/OpenRC pour ControlProxy.
++- Pas de watcher résident.
++- Pas de CLI pour micro-modules ; CLI seulement si vraie frontière opérateur.
++- Fonctions importables d’abord.
++- Tests obligatoires.
++- Ne pas modifier Scheduler.run(), PriorityQueue, Dispatcher, ni le contrat Component.tick/yield/reply tant que le handler concret n’est pas isolé.
++- Events/bus facts = faits, pas commandes.
++- Scheduler/policy/zone restent l’autorité sécurité.
++- ControlProxy ne décide pas la sécurité.
++- L’adapter Scheduler exige authorized=True + policy_decision_id.
++- Pas de live resize mmap ; utiliser génération suivante g2/g3.
++- TaskContext/ContextGate restent autorité contexte ; Qdrant reste projection/recherche.
++
++Ce que signifie “loop” :
++Component.tick() -> yield Event / Request -> ComponentProxy -> Scheduler.emit() -> PolicyEngine.decide() -> PriorityQueue -> Scheduler.run() -> Dispatcher.dispatch() -> Handler -> Request.reply -> ComponentProxy -> tick().asend(result)
++
++On ne touche pas encore ce loop.
++
++Mini-plan opérationnel :
++1. 0088 : créer un handler Scheduler concret qui appelle handle_scheduler_route_request(), sans modifier Scheduler.run().
++2. 0089 : test end-to-end producer write mmap + notifier.notify + consumer selector/drain.
++3. 0090 : ingestion Recorder/journal des RouteMessage drainés.
++4. 0091 : route generation g2/g3 pour update/resize, sans live resize.
++5. 0092 : drain/closed cleanup.
++6. 0093 : adapter VisPy/browser depuis event.bus/context.bus.
++7. Plus tard seulement : inter-process locks, placement /dev/shm réel, NetworkBridge/HardwareBridge.
++
++Je veux maintenant une revue des priorités avant 0088, puis le patch 0088.
++```
++
++## Short version
++
++```text
++On reprend Autodoc/MissiPy dans ~/projet/git/autodoc. On a terminé 0079-r2/r3 → 0086-r2 : ControlProxy sizing, mmap fixed-slot, active routes, eventfd/pipe notification, lease state, pump/tick sans service, Scheduler handshake, Scheduler route adapter avec authorized=True + policy_decision_id. 0087 a mis à jour les docs d’orientation. Principe : implémentation réelle, pas de daemon/service/OpenRC, pas de watcher, pas de CLI pour micro-modules, fonctions importables + tests, ne pas toucher Scheduler.run()/PriorityQueue/Dispatcher/Component.tick loop. Prochaine étape : revue des priorités puis 0088, handler Scheduler concret qui appelle handle_scheduler_route_request(), sans changer le loop.
++```
+diff --git a/doc/architecture/OPERATIONAL_RUNTIME_PLAN_0087.md b/doc/architecture/OPERATIONAL_RUNTIME_PLAN_0087.md
+new file mode 100644
+index 0000000..321706b
+--- /dev/null
++++ b/doc/architecture/OPERATIONAL_RUNTIME_PLAN_0087.md
+@@ -0,0 +1,194 @@
++# Operational runtime plan
++
++Status: 0087 orientation and handoff.
++
++This document freezes the current development orientation before switching to a
++new conversation/context.
++
++## Current principle
++
++```text
++implementation real enough to execute
++no daemon unless unavoidable
++no service
++no OpenRC path
++no resident watcher
++no CLI for micro-modules
++importable functions first
++tests prove the path
++Scheduler loop stays stable until we have a precise handler seam
++```
++
++## What loop means
++
++The Scheduler loop is the central execution cycle:
++
++```text
++Component.tick()
++-> yield Event / Request
++-> ComponentProxy
++-> Scheduler.emit()
++-> PolicyEngine.decide()
++-> PriorityQueue
++-> Scheduler.run()
++-> Dispatcher.dispatch()
++-> Handler
++-> Request.reply
++-> ComponentProxy
++-> tick().asend(result)
++```
++
++Do not casually modify:
++
++```text
++Scheduler.run()
++PriorityQueue
++Dispatcher
++Component.tick/yield/reply contract
++```
++
++## Current implemented runtime path
++
++```text
++ControlFS desired route manifest
++-> ControlProxy prepare/sizing
++-> mmap fixed-slot route
++-> ControlFS active route state
++-> eventfd/pipe notification primitive
++-> route lease state
++-> ControlProxy pump/tick
++-> Scheduler-facing handshake
++-> Scheduler route adapter
++```
++
++Patch map:
++
++```text
++0079-r2/r3  ControlProxy prepare/sizing and bus visibility
++0080-r2     file-backed mmap fixed-slot route
++0081        active route materializer
++0082        route notification primitive using os.eventfd, ctypes eventfd or pipe fallback
++0083-r2     route lease state
++0084        ControlProxy pump/tick, no service
++0085-r2     Scheduler-facing route handshake
++0086-r2     Scheduler route adapter with authorized=True + policy_decision_id
++```
++
++## What exists now
++
++```text
++SchedulerRouteRequest authorized by policy
++-> handle_scheduler_route_request()
++-> prepare_route_for_scheduler()
++-> tick_controlproxy()
++-> active mmap route materialized
++-> lease acquired and activated
++-> SchedulerRouteReply with route_handle + lease_id
++```
++
++This is real enough to execute, but it is not yet wired into the existing
++Scheduler dispatcher.
++
++## What does not exist yet
++
++```text
++concrete Scheduler handler object
++Dispatcher registration
++real producer writing RouteMessage through route_handle
++real consumer waiting on eventfd/pipe fileno
++mmap drain into Recorder
++route generation g2/g3 for updates/resizing
++delete/drain cleanup
++inter-process locking
++VisPy adapter
++NetworkBridge
++HardwareBridge
++```
++
++## Operational priorities
++
++Next work should be more operational and less conceptual.
++
++```text
++P1 - connect a concrete Scheduler handler without changing Scheduler.run()
++P2 - create end-to-end producer write + notify + consumer drain test
++P3 - record drained RouteMessage frames into Recorder/journal
++P4 - add route generation g2 path for update/resize, no live resize
++P5 - add cleanup/drain/closed route lifecycle
++P6 - add VisPy/browser route state adapter from event.bus/context.bus
++P7 - only then evaluate inter-process locks and real /dev/shm placement
++```
++
++## Rules for the next context
++
++```text
++no daemon/service/OpenRC for ControlProxy
++no background watcher
++no CLI unless it is a true operator boundary
++module logic is importable
++tests validate behavior
++events are facts, not commands
++bus facts are not Scheduler commands
++Scheduler policy remains authority
++adapter requires authorized=True + policy_decision_id
++ControlProxy does not decide security
++mmap resize is never live; use next generation
++Qdrant remains projection/search, not source of truth
++TaskContext/ContextGate remain context authority
++```
++
++## Next patch recommendation
++
++```text
++0088 concrete Scheduler route handler
++```
++
++Why 0088 and not 0087:
++
++```text
++0087 is this operational plan and context handoff patch.
++0088 should implement the concrete handler seam.
++```
++
++Expected 0088 shape:
++
++```text
++src/runtime/scheduler_route_handler.py
++tests/test_scheduler_route_handler.py
++tests/rules/test_scheduler_route_handler_rule.py
++doc/architecture/SCHEDULER_ROUTE_HANDLER.md
++doc/changelog/0088-scheduler-route-handler.md
++```
++
++The handler should call:
++
++```text
++handle_scheduler_route_request()
++```
++
++It should not modify:
++
++```text
++Scheduler.run()
++PriorityQueue
++Dispatcher internals
++PolicyEngine
++```
++
++## First end-to-end target after 0088
++
++```text
++authorized Scheduler request
++-> Scheduler route handler
++-> Scheduler route adapter
++-> handshake
++-> pump
++-> active mmap route
++-> lease active
++-> producer writes RouteMessage frame
++-> notifier.notify(1)
++-> consumer selector sees fileno()
++-> notifier.drain()
++-> mmap route drain
++-> Recorder writes journal facts
++```
+diff --git a/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md b/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
+index f32aa87..500e503 100644
+--- a/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
++++ b/doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md
+@@ -44,7 +44,27 @@ with a real ControlProxy implementation.
+   wraps prepare_route_for_scheduler() behind an already-authorized request/reply boundary
+   no Scheduler loop change
+ 
+-0087 VisPy adapter
++0087 operational plan and context handoff
++  freezes operational priorities and new conversation text
++
++0088 Scheduler route handler
++  concrete handler calls handle_scheduler_route_request()
++  no Scheduler.run / PriorityQueue / Dispatcher change
++
++0089 end-to-end route write/notify/drain
++  producer writes RouteMessage frame
++  consumer waits notifier fileno and drains mmap
++
++0090 Recorder ingestion for drained RouteMessage frames
++  journal facts from real route traffic
++
++0091 route generation g2/g3 for update/resize
++  no live mmap resize
++
++0092 drain/closed cleanup
++  route lifecycle cleanup
++
++0093 VisPy adapter
+   consumes context.bus/event.bus route state
+ ```
+ 
+diff --git a/doc/changelog/0087-operational-plan-orientation-handoff.md b/doc/changelog/0087-operational-plan-orientation-handoff.md
+new file mode 100644
+index 0000000..11e83a8
+--- /dev/null
++++ b/doc/changelog/0087-operational-plan-orientation-handoff.md
+@@ -0,0 +1,16 @@
++# 0087 - Operational plan, orientation and handoff
++
++## Added
++
++- `doc/architecture/OPERATIONAL_RUNTIME_PLAN_0087.md`
++- `doc/architecture/NEW_CONTEXT_HANDOFF_0087.md`
++- `tests/rules/test_operational_plan_orientation_handoff_rule.py`
++
++## Updated
++
++- `doc/architecture/REAL_IMPLEMENTATION_SEQUENCE_0081.md`
++
++## Purpose
++
++This patch freezes the current orientation before opening a new conversation.
++It records the current implemented path from 0079-r2/r3 to 0086-r2, the operational priority order, the meaning of Scheduler loop, rules against daemon/service/OpenRC/watcher/CLI sprawl, the next-context prompt, and the next implementation patch target: 0088 concrete Scheduler route handler.
+diff --git a/tests/rules/test_operational_plan_orientation_handoff_rule.py b/tests/rules/test_operational_plan_orientation_handoff_rule.py
+new file mode 100644
+index 0000000..75a27e9
+--- /dev/null
++++ b/tests/rules/test_operational_plan_orientation_handoff_rule.py
+@@ -0,0 +1,85 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++PLAN = ROOT / "doc" / "architecture" / "OPERATIONAL_RUNTIME_PLAN_0087.md"
++HANDOFF = ROOT / "doc" / "architecture" / "NEW_CONTEXT_HANDOFF_0087.md"
++SEQUENCE = ROOT / "doc" / "architecture" / "REAL_IMPLEMENTATION_SEQUENCE_0081.md"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing file: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_operational_plan_locks_current_state_and_priorities() -> None:
++    text = _read(PLAN)
++    required_phrases = [
++        "Status: 0087 orientation and handoff.",
++        "implementation real enough to execute",
++        "no daemon unless unavoidable",
++        "no service",
++        "no OpenRC path",
++        "no resident watcher",
++        "no CLI for micro-modules",
++        "Scheduler loop stays stable",
++        "Component.tick()",
++        "Scheduler.run()",
++        "PriorityQueue",
++        "Dispatcher",
++        "ControlFS desired route manifest",
++        "mmap fixed-slot route",
++        "eventfd/pipe notification primitive",
++        "Scheduler route adapter",
++        "authorized by policy",
++        "handle_scheduler_route_request()",
++        "route_handle + lease_id",
++        "P1 - connect a concrete Scheduler handler without changing Scheduler.run()",
++        "P2 - create end-to-end producer write + notify + consumer drain test",
++        "P3 - record drained RouteMessage frames into Recorder/journal",
++        "mmap resize is never live; use next generation",
++        "0088 concrete Scheduler route handler",
++        "0087 is this operational plan and context handoff patch.",
++    ]
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_new_context_handoff_contains_resume_prompt_and_operational_rules() -> None:
++    text = _read(HANDOFF)
++    required_phrases = [
++        "Use this text at the beginning of the next conversation.",
++        "On reprend le développement du repo Autodoc/MissiPy",
++        "Je veux des patchs zip applicables avec apply_patch_queue.py.",
++        "0079-r2/r3", "0080-r2", "0081", "0082", "0083-r2", "0084", "0085-r2", "0086-r2", "0087",
++        "Implémentation réelle, pas seulement documentation.",
++        "Pas de daemon/service/OpenRC pour ControlProxy.",
++        "Pas de CLI pour micro-modules",
++        "Ne pas modifier Scheduler.run(), PriorityQueue, Dispatcher",
++        "Events/bus facts = faits, pas commandes.",
++        "authorized=True + policy_decision_id",
++        "Pas de live resize mmap",
++        "Mini-plan opérationnel",
++        "0088",
++        "handler Scheduler concret",
++        "Short version",
++    ]
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_real_sequence_is_updated_after_0086() -> None:
++    text = _read(SEQUENCE)
++    required_phrases = [
++        "0087 operational plan and context handoff",
++        "0088 Scheduler route handler",
++        "handle_scheduler_route_request()",
++        "no Scheduler.run / PriorityQueue / Dispatcher change",
++        "0089 end-to-end route write/notify/drain",
++        "0090 Recorder ingestion for drained RouteMessage frames",
++        "0091 route generation g2/g3 for update/resize",
++        "no live mmap resize",
++        "0092 drain/closed cleanup",
++        "0093 VisPy adapter",
++    ]
++    for phrase in required_phrases:
++        assert phrase in text

@@ -1,0 +1,433 @@
+diff --git a/PHASE0106_TEST_REPORT.md b/PHASE0106_TEST_REPORT.md
+new file mode 100644
+index 0000000..7571229
+--- /dev/null
++++ b/PHASE0106_TEST_REPORT.md
+@@ -0,0 +1,29 @@
++# PHASE0106 test report
++
++Patch: 0106-eventbus_dataplane_boundary_lock
++
++## Scope
++
++Documentation, graph and rule-test lock for the EventBus / data plane boundary.
++
++## Local validation performed during patch generation
++
++```text
++python -m py_compile tests/rules/test_eventbus_dataplane_boundary_0106_rule.py
++pytest -q tests/rules/test_eventbus_dataplane_boundary_0106_rule.py
++```
++
++## Expected repository validation
++
++```text
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/rules/test_eventbus_dataplane_boundary_0106_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Guardrails
++
++No runtime code, no CLI, no daemon, no watcher, no Scheduler change, no
++Dispatcher change, no PolicyEngine expansion, no PriorityQueue change and no
++new bus.
+diff --git a/doc/CHANGELOG_0106_EVENTBUS_DATAPLANE_BOUNDARY.md b/doc/CHANGELOG_0106_EVENTBUS_DATAPLANE_BOUNDARY.md
+new file mode 100644
+index 0000000..c178d12
+--- /dev/null
++++ b/doc/CHANGELOG_0106_EVENTBUS_DATAPLANE_BOUNDARY.md
+@@ -0,0 +1,9 @@
++# Changelog — 0106 EventBus / data plane boundary
++
++- Locked EventBus as observation only.
++- Locked route mmap/eventfd as data plane, not EventBus.
++- Rejected ControlProxyBus, RouteBus and VisualizationBus concepts.
++- Documented RouteMessageJournal as drained-message journal, not EventBus.
++- Added runtime `.dot` overlay for the boundary.
++- Added rule tests to prevent terminology drift.
++- No runtime code, no CLI, no daemon, no watcher and no Scheduler/Dispatcher changes.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0106.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0106.md
+new file mode 100644
+index 0000000..3d87ab4
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0106.md
+@@ -0,0 +1,60 @@
++# ControlProxy operational plan — 0106
++
++0106 follows the simplification lock from 0101, the existing-paths audit from
++0102, the `RouteRuntimeManager` introduction from 0103, the thin handler path
++from 0104, and the priority/admission lock from 0105.
++
++## Decision
++
++The project now treats route mmap/eventfd as a data plane and keeps EventBus as
++the single kernel observation path.
++
++```text
++EventBus = observation only
++Route mmap/eventfd = data plane, not EventBus
++RouteMessageJournal = drained route message journal, not EventBus
++Visualization adapter = existing EventBus/context reader, not bus owner
++```
++
++## No second bus
++
++The following names and concepts are intentionally rejected:
++
++```text
++No ControlProxyBus
++No RouteBus
++No VisualizationBus
++No bus created by ControlProxy
++No bus created by RouteRuntimeManager
++No bus owned by visualization adapters
++No mmap/eventfd command bus
++```
++
++## Current live path
++
++```text
++Scheduler.emit()
++-> PolicyEngine.decide()
++-> PriorityQueue
++-> Scheduler.run()
++-> Dispatcher
++-> Handler
++-> RouteRuntimeManager
++-> ControlFS + mmap/eventfd data plane
++```
++
++The EventBus observes; it does not command.
++
++## Next patch
++
++0107 should update the architecture graph set, not runtime code. It must make
++`doc/docs/architecture/00_global.dot` and the runtime overlay consistent with
++this vocabulary:
++
++```text
++command path: Scheduler -> Dispatcher -> Handler
++runtime data plane: RouteRuntimeManager -> mmap/eventfd
++observation path: EventBus readers
++context path: ContextGate / GlobalContextSnapshot
++projection/search path: Qdrant only as projection
++```
+diff --git a/doc/architecture/EVENTBUS_DATAPLANE_BOUNDARY_0106.md b/doc/architecture/EVENTBUS_DATAPLANE_BOUNDARY_0106.md
+new file mode 100644
+index 0000000..8d59d7c
+--- /dev/null
++++ b/doc/architecture/EVENTBUS_DATAPLANE_BOUNDARY_0106.md
+@@ -0,0 +1,107 @@
++# 0106 — EventBus / data plane boundary lock
++
++0106 locks the boundary between the kernel observation channel and the local
++route runtime transport.
++
++This patch is intentionally documentation and rule tests only. It does not add
++runtime code because the architecture decision must be stable before the next
++implementation phase.
++
++## Locked responsibilities
++
++```text
++Scheduler = cooperative loop + time + queue + priority
++PolicyEngine = minimal admission before queue
++PriorityQueue = deterministic execution order
++Dispatcher = EventType -> Handler only
++Handler = thin adapter
++Specialist branch = business logic / reasoning / transformation
++ControlProxy / RouteRuntimeManager = route runtime transport, ControlFS, mmap/eventfd data plane
++EventBus = observation only
++Route mmap/eventfd = data plane, not EventBus
++RouteMessageJournal = drained route message journal, not EventBus
++Visualization adapter = existing EventBus/context reader, not bus owner
++```
++
++## EventBus
++
++The EventBus is the kernel observation path. It carries facts for telemetry,
++recording, replay and visualization readers.
++
++It must not command execution. The deterministic command path remains:
++
++```text
++Scheduler.emit() -> PolicyEngine.decide() -> PriorityQueue -> Scheduler.run() -> Dispatcher -> Handler
++```
++
++The EventBus may receive derived observations produced by handlers or runtime
++boundaries, but those observations do not become commands.
++
++## Data plane
++
++The route runtime data plane is the local high-throughput path used by
++ControlProxy / RouteRuntimeManager.
++
++It is made of explicit runtime primitives:
++
++```text
++mmap fixed-slot route
++route notifier / eventfd or fallback pipe
++route lease state
++route generation table g2/g3
++route lifecycle candidate -> active -> draining -> closed
++route runtime placement file/dev_shm
++RouteMessageJournal for drained messages
++```
++
++The data plane is not a bus. It does not dispatch application commands and it
++must not replace EventBus.
++
++## Forbidden confusions
++
++The architecture rejects these shortcuts:
++
++```text
++No ControlProxyBus
++No RouteBus
++No VisualizationBus
++No bus created by ControlProxy
++No bus created by RouteRuntimeManager
++No bus owned by visualization adapters
++No mmap/eventfd command bus
++No EventBus as command path
++No Dispatcher business logic
++No ControlProxy global priority management
++```
++
++## Allowed relation
++
++The only allowed relation is observational:
++
++```text
++RouteRuntimeManager -> mmap/eventfd data plane -> drained RouteMessage -> RouteMessageJournal
++RouteRuntimeManager -> optional observable facts -> existing EventBus
++Visualization adapter -> reads existing EventBus/context snapshot
++```
++
++This means a route message can be recorded, summarized or projected into a
++fact, but it does not become a second EventBus.
++
++## Impact on next phases
++
++0107 must update the root and individual architecture graphs so the runtime
++subgraph shows:
++
++```text
++Scheduler -> Dispatcher -> Handler -> RouteRuntimeManager
++RouteRuntimeManager -> ControlFS
++RouteRuntimeManager -> mmap/eventfd data plane
++RouteRuntimeManager -> RouteMessageJournal
++EventBus -> observation side path only
++ContextGate -> context authority
++Qdrant -> projection/search only
++```
++
++0108 and later runtime work must keep this vocabulary. Any code that introduces
++`ControlProxyBus`, `RouteBus`, a visualization-owned bus, or mmap/eventfd as a
++command bus is a direction error.
+diff --git a/doc/docs/architecture/runtime/96_eventbus_dataplane_boundary.dot b/doc/docs/architecture/runtime/96_eventbus_dataplane_boundary.dot
+new file mode 100644
+index 0000000..07db919
+--- /dev/null
++++ b/doc/docs/architecture/runtime/96_eventbus_dataplane_boundary.dot
+@@ -0,0 +1,56 @@
++digraph eventbus_dataplane_boundary_0106 {
++  graph [rankdir=LR, label="0106 EventBus / data plane boundary", labelloc=t];
++  node [shape=box];
++
++  subgraph cluster_kernel_command_path {
++    label="kernel command path";
++    scheduler_emit [label="Scheduler.emit()"];
++    policy [label="PolicyEngine\nminimal admission"];
++    queue [label="PriorityQueue\ndeterministic order"];
++    scheduler_run [label="Scheduler.run()"];
++    dispatcher [label="Dispatcher\nEventType -> Handler only"];
++    handler [label="thin Handler"];
++  }
++
++  subgraph cluster_runtime_dataplane {
++    label="ControlProxy / RouteRuntimeManager data plane";
++    manager [label="RouteRuntimeManager\nruntime boundary"];
++    controlfs [label="ControlFS state"];
++    mmap [label="mmap fixed-slot route"];
++    eventfd [label="eventfd / pipe notifier"];
++    journal [label="RouteMessageJournal\ndrained messages"];
++  }
++
++  subgraph cluster_observation {
++    label="observation only";
++    eventbus [label="EventBus\nobservation only"];
++    visualization [label="visualization adapter\nreads existing bus/context"];
++    recorder [label="recorder / replay readers"];
++  }
++
++  subgraph cluster_context_projection {
++    label="context / projection";
++    contextgate [label="ContextGate / TaskContext\ncontext authority"];
++    snapshot [label="GlobalContextSnapshot"];
++    qdrant [label="Qdrant\nprojection/search only"];
++  }
++
++  scheduler_emit -> policy -> queue -> scheduler_run -> dispatcher -> handler -> manager;
++  manager -> controlfs;
++  manager -> mmap;
++  manager -> eventfd;
++  mmap -> journal [label="drain"];
++  eventfd -> journal [label="notify/drain"];
++
++  dispatcher -> eventbus [style=dashed, label="observable fact"];
++  manager -> eventbus [style=dashed, label="optional facts only"];
++  eventbus -> visualization [style=dashed, label="read"];
++  eventbus -> recorder [style=dashed, label="read"];
++
++  contextgate -> snapshot;
++  snapshot -> visualization [style=dashed, label="read"];
++  contextgate -> qdrant [style=dashed, label="projection only"];
++
++  eventbus -> queue [style=dotted, color=red, label="forbidden: command"];
++  mmap -> dispatcher [style=dotted, color=red, label="forbidden: bus"];
++}
+diff --git a/doc/manifests/MANIFEST_0106_CHANGED_FILES.md b/doc/manifests/MANIFEST_0106_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1708e67
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0106_CHANGED_FILES.md
+@@ -0,0 +1,40 @@
++# Manifest 0106 — EventBus / data plane boundary
++
++## Added
++
++```text
++doc/architecture/EVENTBUS_DATAPLANE_BOUNDARY_0106.md
++doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0106.md
++doc/docs/architecture/runtime/96_eventbus_dataplane_boundary.dot
++doc/CHANGELOG_0106_EVENTBUS_DATAPLANE_BOUNDARY.md
++doc/manifests/MANIFEST_0106_CHANGED_FILES.md
++tests/rules/test_eventbus_dataplane_boundary_0106_rule.py
++PHASE0106_TEST_REPORT.md
++```
++
++## Intent
++
++0106 locks the boundary between the existing EventBus observation path and the
++route mmap/eventfd data plane.
++
++## Guardrails
++
++```text
++No CLI
++No OpenRC service and no resident daemon
++No watcher
++No Scheduler.run() modification
++No Dispatcher business logic
++No PriorityQueue modification
++No PolicyEngine expansion into business logic
++No ControlProxy global priority management
++No ControlProxyBus
++No RouteBus
++No VisualizationBus
++No bus created by ControlProxy
++No bus created by RouteRuntimeManager
++No bus owned by visualization adapters
++No mmap/eventfd command bus
++Route mmap/eventfd = data plane, not EventBus
++EventBus = observation only
++```
+diff --git a/tests/rules/test_eventbus_dataplane_boundary_0106_rule.py b/tests/rules/test_eventbus_dataplane_boundary_0106_rule.py
+new file mode 100644
+index 0000000..2422e44
+--- /dev/null
++++ b/tests/rules/test_eventbus_dataplane_boundary_0106_rule.py
+@@ -0,0 +1,90 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "EVENTBUS_DATAPLANE_BOUNDARY_0106.md"
++PLAN = ROOT / "doc" / "architecture" / "CONTROLPROXY_OPERATIONAL_PLAN_0106.md"
++DOT = ROOT / "doc" / "docs" / "architecture" / "runtime" / "96_eventbus_dataplane_boundary.dot"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0106_CHANGED_FILES.md"
++
++
++def _read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_0106_boundary_docs_exist() -> None:
++    assert DOC.exists()
++    assert PLAN.exists()
++    assert DOT.exists()
++    assert MANIFEST.exists()
++
++
++def test_0106_locks_eventbus_as_observation_only() -> None:
++    text = _read(DOC) + "\n" + _read(PLAN) + "\n" + _read(DOT)
++    required = [
++        "EventBus = observation only",
++        "Route mmap/eventfd = data plane, not EventBus",
++        "RouteMessageJournal = drained route message journal, not EventBus",
++        "Visualization adapter = existing EventBus/context reader, not bus owner",
++        "Scheduler.emit() -> PolicyEngine.decide() -> PriorityQueue -> Scheduler.run() -> Dispatcher -> Handler",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0106_rejects_second_bus_concepts() -> None:
++    text = _read(DOC) + "\n" + _read(PLAN) + "\n" + _read(MANIFEST)
++    required = [
++        "No ControlProxyBus",
++        "No RouteBus",
++        "No VisualizationBus",
++        "No bus created by ControlProxy",
++        "No bus created by RouteRuntimeManager",
++        "No bus owned by visualization adapters",
++        "No mmap/eventfd command bus",
++        "No EventBus as command path",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0106_keeps_scheduler_dispatcher_and_priority_roles_small() -> None:
++    text = _read(DOC) + "\n" + _read(PLAN) + "\n" + _read(MANIFEST)
++    required = [
++        "PolicyEngine = minimal admission before queue",
++        "PriorityQueue = deterministic execution order",
++        "Dispatcher = EventType -> Handler only",
++        "No Dispatcher business logic",
++        "No ControlProxy global priority management",
++        "No PolicyEngine expansion into business logic",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0106_graph_shows_observation_and_dataplane_as_separate_paths() -> None:
++    dot = _read(DOT)
++    required = [
++        "cluster_kernel_command_path",
++        "cluster_runtime_dataplane",
++        "cluster_observation",
++        "cluster_context_projection",
++        "EventBus\\nobservation only",
++        "mmap fixed-slot route",
++        "eventfd / pipe notifier",
++        "forbidden: command",
++        "forbidden: bus",
++    ]
++    for phrase in required:
++        assert phrase in dot
++
++
++def test_0106_no_runtime_or_kernel_files_added_to_manifest() -> None:
++    manifest = _read(MANIFEST)
++    forbidden_paths = [
++        "src/kernel/",
++        "src/policy/",
++        "src/runtime/",
++        "tests/runtime/",
++    ]
++    for path in forbidden_paths:
++        assert path not in manifest

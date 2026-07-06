@@ -1,0 +1,832 @@
+diff --git a/PHASE0103_TEST_REPORT.md b/PHASE0103_TEST_REPORT.md
+new file mode 100644
+index 0000000..c97a6e7
+--- /dev/null
++++ b/PHASE0103_TEST_REPORT.md
+@@ -0,0 +1,28 @@
++# PHASE0103_TEST_REPORT
++
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: 0103 follows the locked simplification model from 0101 and the existing audit from 0102. It adds a strict runtime facade without changing kernel responsibilities.
++live_path_status: transition
++live_path_uses_real_backend: n/a
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++
++Expected validation:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/runtime/test_route_runtime_manager.py
++PYTHONPATH=src:. pytest -q tests/rules/test_route_runtime_manager_0103_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++Local patch-build validation:
++
++```text
++git apply --check: OK
++py_compile new Python files: OK
++rule test source inspection: OK
++```
+diff --git a/doc/CHANGELOG_0103_ROUTE_RUNTIME_MANAGER.md b/doc/CHANGELOG_0103_ROUTE_RUNTIME_MANAGER.md
+new file mode 100644
+index 0000000..9741ef0
+--- /dev/null
++++ b/doc/CHANGELOG_0103_ROUTE_RUNTIME_MANAGER.md
+@@ -0,0 +1,7 @@
++# Changelog — 0103 RouteRuntimeManager
++
++- Added `src/runtime/route_runtime_manager.py`.
++- Added runtime tests for materialization, lifecycle, cleanup, denied/reuse no-effect paths and table loading.
++- Added rule tests locking the simplified boundary language.
++- Added a root-attached runtime overlay graph.
++- No Scheduler, Dispatcher, PriorityQueue or PolicyEngine code is modified.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0103.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0103.md
+new file mode 100644
+index 0000000..8229a33
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0103.md
+@@ -0,0 +1,58 @@
++# ControlProxy operational plan — 0103
++
++0103 implements the first code step after the simplification lock.
++
++## Current decision
++
++```text
++Do not apply a scheduler-like ControlProxyRouteCoordinator.
++Use RouteRuntimeManager as a strict runtime facade.
++```
++
++## Path after 0103
++
++```text
++Scheduler.emit()
++-> PolicyEngine.decide()
++-> PriorityQueue
++-> Scheduler.run()
++-> Dispatcher
++-> ControlProxy route Handler
++-> RouteRuntimeManager
++-> ControlFS + mmap/eventfd data plane
++```
++
++## 0103 scope
++
++```text
++RouteRuntimeManager materializes route generations under lock.
++RouteRuntimeManager runs lifecycle transitions.
++RouteRuntimeManager cleans only closed generations.
++RouteRuntimeManager reads the generation table.
++```
++
++## Out of scope
++
++```text
++No CLI
++No OpenRC service and no resident daemon
++No watcher
++No Scheduler.run() modification
++No global priority management
++No policy decision and no zone authority in ControlProxy
++No EventBus creation and no bus duplication
++Route mmap/eventfd is a data plane, not EventBus
++EventBus remains observation only
++Dispatcher remains EventType -> Handler only
++PolicyEngine remains minimal admission before queue
++Specialist branch owns business logic
++```
++
++## Next steps
++
++```text
++0104: slim the ControlProxy scheduler-facing handler so it delegates to RouteRuntimeManager.
++0105: clarify priority/admission boundaries without adding dynamic scheduling.
++0106: audit EventBus vs data plane vocabulary and remove any bus-duplication wording.
++0107: regenerate root-attached graph views after the code path is slimmed.
++```
+diff --git a/doc/architecture/ROUTE_RUNTIME_MANAGER_0103.md b/doc/architecture/ROUTE_RUNTIME_MANAGER_0103.md
+new file mode 100644
+index 0000000..be74562
+--- /dev/null
++++ b/doc/architecture/ROUTE_RUNTIME_MANAGER_0103.md
+@@ -0,0 +1,88 @@
++# 0103 — RouteRuntimeManager
++
++0103 introduces `RouteRuntimeManager` as the single importable runtime facade for the ControlProxy / ControlFS route primitives.
++
++It is deliberately not a new coordinator for Scheduler work.
++
++```text
++RouteRuntimeManager is not a scheduler-like coordinator.
++```
++
++## Locked responsibilities
++
++```text
++Scheduler = loop + time + queue + priority
++PolicyEngine = minimal admission before queue
++PriorityQueue = deterministic ordering
++Dispatcher = EventType -> Handler only
++Handler = thin adapter
++Specialist branch owns business logic
++ControlProxy / RouteRuntimeManager = route/mmap/controlfs runtime transport
++EventBus = observation only
++Route mmap/eventfd is a data plane, not EventBus
++```
++
++## What the manager does
++
++`RouteRuntimeManager` receives explicit roots:
++
++```text
++controlfs_root
++runtime_root
++```
++
++It then composes existing route runtime primitives:
++
++```text
++materialize_generation()
++activate_generation()
++mark_draining()
++mark_closed()
++cleanup_closed()
++load_table()
++```
++
++The manager wraps:
++
++```text
++0091-r2 generation table
++0092 generation lifecycle
++0094 route generation lock
++0095 locked materializer
++```
++
++The manager receives an already-decided `RoutePrepareDecision`. It does not authorize work and does not calculate priority.
++
++## Guardrails
++
++```text
++No CLI
++No OpenRC service and no resident daemon
++No watcher
++No Scheduler.run() modification
++No PriorityQueue, Dispatcher or Component tick contract modification
++No global priority management
++No policy decision and no zone authority in ControlProxy
++No EventBus creation and no bus duplication
++Route mmap/eventfd is a data plane, not EventBus
++EventBus remains observation only
++Dispatcher remains EventType -> Handler only
++PolicyEngine remains minimal admission before queue
++Specialist branch owns business logic
++```
++
++## Why this is not the rejected 0101 coordinator
++
++The rejected direction was a `ControlProxyRouteCoordinator` that could become a second Scheduler.
++
++0103 avoids that by making the new object a runtime manager only:
++
++```text
++Scheduler.run()
++-> Dispatcher
++-> thin ControlProxy handler
++-> RouteRuntimeManager
++-> ControlFS + route data plane
++```
++
++It has no EventBus ownership, no priority ownership, no admission authority and no specialist logic.
+diff --git a/doc/docs/architecture/runtime/93_route_runtime_manager.dot b/doc/docs/architecture/runtime/93_route_runtime_manager.dot
+new file mode 100644
+index 0000000..3ebc2dc
+--- /dev/null
++++ b/doc/docs/architecture/runtime/93_route_runtime_manager.dot
+@@ -0,0 +1,45 @@
++digraph RouteRuntimeManager0103 {
++  // ROOT_GRAPH: doc/docs/architecture/00_global.dot
++  rankdir=LR;
++  graph [label="0103 RouteRuntimeManager root-attached runtime overlay", labelloc=t];
++  node [shape=box];
++
++  Scheduler_emit [label="Scheduler.emit()"];
++  PolicyEngine [label="PolicyEngine\nminimal admission before queue"];
++  PriorityQueue [label="PriorityQueue\ndeterministic ordering"];
++  Scheduler_run [label="Scheduler.run()\nloop + time + queue + priority"];
++  Dispatcher [label="Dispatcher\nEventType -> Handler only"];
++  ControlProxyRouteHandler [label="ControlProxy route Handler\nthin adapter"];
++  RouteRuntimeManager [label="RouteRuntimeManager\nruntime facade, not scheduler-like coordinator"];
++
++  subgraph cluster_runtime {
++    label="ControlProxy / ControlFS runtime boundary";
++    ControlFS [label="ControlFS\ngeneration_state + status"];
++    GenerationTable [label="generation table\ng1/g2/g3"];
++    RouteLock [label="route generation lock"];
++    Lifecycle [label="candidate -> active -> draining -> closed"];
++    RouteDataPlane [label="mmap/eventfd data plane\nnot EventBus"];
++    Journal [label="RouteMessageJournal\nprojection/replay input"];
++  }
++
++  Specialist [label="Specialist branch\nbusiness logic / reasoning"];
++  EventBusObservation [label="existing EventBus\nobservation only"];
++
++  Scheduler_emit -> PolicyEngine;
++  PolicyEngine -> PriorityQueue;
++  PriorityQueue -> Scheduler_run;
++  Scheduler_run -> Dispatcher;
++  Dispatcher -> ControlProxyRouteHandler;
++  ControlProxyRouteHandler -> RouteRuntimeManager;
++
++  RouteRuntimeManager -> ControlFS;
++  RouteRuntimeManager -> GenerationTable;
++  RouteRuntimeManager -> RouteLock;
++  RouteRuntimeManager -> Lifecycle;
++  RouteRuntimeManager -> RouteDataPlane;
++  RouteDataPlane -> Journal [style=dashed, label="drained messages"];
++
++  Dispatcher -> Specialist [style=dashed, label="other handlers"];
++  Dispatcher -> EventBusObservation [style=dotted, label="observable copy"];
++  RouteRuntimeManager -> EventBusObservation [style=dotted, label="future facts only"];
++}
+diff --git a/doc/manifests/MANIFEST_0103_CHANGED_FILES.md b/doc/manifests/MANIFEST_0103_CHANGED_FILES.md
+new file mode 100644
+index 0000000..5aebd11
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0103_CHANGED_FILES.md
+@@ -0,0 +1,15 @@
++# Manifest 0103 — RouteRuntimeManager
++
++```text
++src/runtime/route_runtime_manager.py
++tests/runtime/test_route_runtime_manager.py
++tests/rules/test_route_runtime_manager_0103_rule.py
++doc/architecture/ROUTE_RUNTIME_MANAGER_0103.md
++doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0103.md
++doc/docs/architecture/runtime/93_route_runtime_manager.dot
++doc/CHANGELOG_0103_ROUTE_RUNTIME_MANAGER.md
++doc/manifests/MANIFEST_0103_CHANGED_FILES.md
++PHASE0103_TEST_REPORT.md
++```
++
++0103 adds a runtime facade only. It does not change kernel loop, dispatcher, queue or policy files.
+diff --git a/src/runtime/route_runtime_manager.py b/src/runtime/route_runtime_manager.py
+new file mode 100644
+index 0000000..d79daad
+--- /dev/null
++++ b/src/runtime/route_runtime_manager.py
+@@ -0,0 +1,319 @@
++"""Route runtime manager for ControlProxy / ControlFS route primitives.
++
++Phase 0103 introduces a single importable runtime facade around the route
++helpers added in the previous phases.  The manager intentionally stays below
++Scheduler, PolicyEngine, PriorityQueue, Dispatcher and Handler:
++
++- No CLI.
++- No OpenRC service and no resident daemon.
++- No watcher or inotify loop.
++- No Scheduler.run() modification.
++- No PriorityQueue, Dispatcher or Component tick contract modification.
++- No global priority management.
++- No policy decision and no zone authority in ControlProxy.
++- No EventBus creation and no bus duplication.
++- Route mmap/eventfd is a data plane, not EventBus.
++- EventBus remains observation only.
++- Dispatcher remains EventType -> Handler only.
++- PolicyEngine remains minimal admission before queue.
++- Specialist branch owns business logic.
++
++RouteRuntimeManager is not a scheduler-like coordinator.  It receives an
++already-decided RoutePrepareDecision and performs only route runtime work:
++locked generation materialization, lifecycle transitions, closed-generation
++cleanup and deterministic table reads.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Mapping
++from dataclasses import dataclass, field
++from pathlib import Path
++from types import MappingProxyType
++from typing import Any, Literal
++
++from runtime.controlproxy_prepare import RoutePrepareDecision
++from runtime.route_generation_lifecycle import (
++    ClosedRouteGenerationCleanupResult,
++    RouteGenerationLifecycleResult,
++    activate_route_generation,
++    cleanup_closed_route_generation,
++    mark_route_generation_closed,
++    mark_route_generation_draining,
++)
++from runtime.route_generation_locked_materializer import (
++    materialize_route_generation_candidate_with_lock,
++)
++from runtime.route_generation_table import (
++    RouteGenerationCandidateResult,
++    RouteGenerationTable,
++    load_route_generation_table,
++)
++
++ROUTE_RUNTIME_MANAGER_RESULT_SCHEMA = "missipy.controlproxy.route_runtime_manager_result.v1"
++
++RouteRuntimeManagerAction = Literal[
++    "denied",
++    "reuse_active_route",
++    "materialize_generation",
++    "activate_generation",
++    "mark_draining",
++    "mark_closed",
++    "cleanup_closed",
++    "load_table",
++]
++
++
++class RouteRuntimeManagerError(ValueError):
++    """Raised when the runtime manager receives an incoherent route request."""
++
++
++@dataclass(frozen=True, slots=True)
++class RouteRuntimeManagerConfig:
++    """Explicit roots for ControlFS and route runtime data plane files.
++
++    Placement is intentionally explicit.  The manager does not discover
++    /dev/shm, does not select a backend implicitly and does not own a bus.
++    Callers pass the runtime_root they want to use.
++    """
++
++    controlfs_root: Path | str
++    runtime_root: Path | str
++    blocking_lock: bool = True
++
++    def __post_init__(self) -> None:
++        object.__setattr__(self, "controlfs_root", Path(self.controlfs_root))
++        object.__setattr__(self, "runtime_root", Path(self.runtime_root))
++        if not isinstance(self.blocking_lock, bool):
++            raise RouteRuntimeManagerError("blocking_lock must be a bool")
++
++
++@dataclass(frozen=True, slots=True)
++class RouteRuntimeManagerResult:
++    """Stable projection returned by RouteRuntimeManager methods."""
++
++    schema: str
++    action: RouteRuntimeManagerAction
++    route_id: str
++    generation: int | None
++    status: str
++    payload: Mapping[str, Any] = field(default_factory=dict)
++
++    def __post_init__(self) -> None:
++        if self.schema != ROUTE_RUNTIME_MANAGER_RESULT_SCHEMA:
++            raise RouteRuntimeManagerError("unsupported route runtime manager result schema")
++        if not self.route_id:
++            raise RouteRuntimeManagerError("route_id is required")
++        if not self.status:
++            raise RouteRuntimeManagerError("status is required")
++        if self.generation is not None and self.generation < 1:
++            raise RouteRuntimeManagerError("generation must be positive when provided")
++        object.__setattr__(self, "payload", MappingProxyType(dict(self.payload)))
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "action": self.action,
++            "route_id": self.route_id,
++            "generation": self.generation,
++            "status": self.status,
++            "payload": dict(self.payload),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class RouteRuntimeManager:
++    """Single runtime facade for ControlProxy / ControlFS route operations."""
++
++    config: RouteRuntimeManagerConfig
++
++    @classmethod
++    def from_roots(
++        cls,
++        *,
++        controlfs_root: Path | str,
++        runtime_root: Path | str,
++        blocking_lock: bool = True,
++    ) -> "RouteRuntimeManager":
++        """Build a manager from explicit ControlFS and runtime roots."""
++
++        return cls(
++            RouteRuntimeManagerConfig(
++                controlfs_root=controlfs_root,
++                runtime_root=runtime_root,
++                blocking_lock=blocking_lock,
++            )
++        )
++
++    @property
++    def controlfs_root(self) -> Path:
++        return Path(self.config.controlfs_root)
++
++    @property
++    def runtime_root(self) -> Path:
++        return Path(self.config.runtime_root)
++
++    def handle_prepare_decision(
++        self,
++        decision: RoutePrepareDecision,
++        *,
++        blocking: bool | None = None,
++    ) -> RouteRuntimeManagerResult:
++        """Apply the runtime effect described by an already-decided prepare result.
++
++        This method does not authorize work and does not calculate priority.  It
++        reads the status/action already carried by the RoutePrepareDecision and
++        maps it to one route-runtime operation.
++        """
++
++        if decision.status == "denied" or decision.action == "deny":
++            return self._denied_result(decision)
++        if decision.action == "reuse_active":
++            return self._reuse_active_result(decision)
++        if decision.action in {"create_route_generation", "create_next_generation"}:
++            return self.materialize_generation(decision, blocking=blocking)
++        raise RouteRuntimeManagerError(f"unsupported route runtime action: {decision.action}")
++
++    def materialize_generation(
++        self,
++        decision: RoutePrepareDecision,
++        *,
++        blocking: bool | None = None,
++    ) -> RouteRuntimeManagerResult:
++        """Materialize one mmap/shm-like route generation under the route lock."""
++
++        result = materialize_route_generation_candidate_with_lock(
++            controlfs_root=self.controlfs_root,
++            runtime_root=self.runtime_root,
++            decision=decision,
++            blocking=self.config.blocking_lock if blocking is None else blocking,
++        )
++        return _result_from_candidate(result)
++
++    def activate_generation(self, *, route_id: str, generation: int) -> RouteRuntimeManagerResult:
++        """Mark a candidate generation active."""
++
++        result = activate_route_generation(
++            controlfs_root=self.controlfs_root,
++            route_id=route_id,
++            generation=generation,
++        )
++        return _result_from_lifecycle("activate_generation", result)
++
++    def mark_draining(self, *, route_id: str, generation: int) -> RouteRuntimeManagerResult:
++        """Mark an active generation draining."""
++
++        result = mark_route_generation_draining(
++            controlfs_root=self.controlfs_root,
++            route_id=route_id,
++            generation=generation,
++        )
++        return _result_from_lifecycle("mark_draining", result)
++
++    def mark_closed(self, *, route_id: str, generation: int) -> RouteRuntimeManagerResult:
++        """Mark a draining generation closed."""
++
++        result = mark_route_generation_closed(
++            controlfs_root=self.controlfs_root,
++            route_id=route_id,
++            generation=generation,
++        )
++        return _result_from_lifecycle("mark_closed", result)
++
++    def cleanup_closed(
++        self,
++        *,
++        route_id: str,
++        generation: int,
++        cleaned_at: str = "2026-07-05T00:00:00Z",
++    ) -> RouteRuntimeManagerResult:
++        """Remove runtime files for one closed generation."""
++
++        result = cleanup_closed_route_generation(
++            controlfs_root=self.controlfs_root,
++            runtime_root=self.runtime_root,
++            route_id=route_id,
++            generation=generation,
++            cleaned_at=cleaned_at,
++        )
++        return _result_from_cleanup(result)
++
++    def load_table(self, route_id: str) -> RouteRuntimeManagerResult:
++        """Return the current persisted route generation table."""
++
++        table = load_route_generation_table(self.controlfs_root, route_id)
++        return RouteRuntimeManagerResult(
++            schema=ROUTE_RUNTIME_MANAGER_RESULT_SCHEMA,
++            action="load_table",
++            route_id=table.route_id,
++            generation=table.active_generation,
++            status="loaded",
++            payload=table.to_mapping(),
++        )
++
++    def _denied_result(self, decision: RoutePrepareDecision) -> RouteRuntimeManagerResult:
++        return RouteRuntimeManagerResult(
++            schema=ROUTE_RUNTIME_MANAGER_RESULT_SCHEMA,
++            action="denied",
++            route_id=decision.route_id,
++            generation=decision.next_generation,
++            status="no_runtime_effect",
++            payload=decision.to_mapping(),
++        )
++
++    def _reuse_active_result(self, decision: RoutePrepareDecision) -> RouteRuntimeManagerResult:
++        return RouteRuntimeManagerResult(
++            schema=ROUTE_RUNTIME_MANAGER_RESULT_SCHEMA,
++            action="reuse_active_route",
++            route_id=decision.route_id,
++            generation=decision.current_generation or decision.next_generation,
++            status="no_runtime_effect",
++            payload=decision.to_mapping(),
++        )
++
++
++def _result_from_candidate(result: RouteGenerationCandidateResult) -> RouteRuntimeManagerResult:
++    return RouteRuntimeManagerResult(
++        schema=ROUTE_RUNTIME_MANAGER_RESULT_SCHEMA,
++        action="materialize_generation",
++        route_id=result.record.route_id,
++        generation=result.record.generation,
++        status=result.record.state,
++        payload=result.to_mapping(),
++    )
++
++
++def _result_from_lifecycle(
++    action: Literal["activate_generation", "mark_draining", "mark_closed"],
++    result: RouteGenerationLifecycleResult,
++) -> RouteRuntimeManagerResult:
++    return RouteRuntimeManagerResult(
++        schema=ROUTE_RUNTIME_MANAGER_RESULT_SCHEMA,
++        action=action,
++        route_id=result.record.route_id,
++        generation=result.record.generation,
++        status=result.record.state,
++        payload=result.to_mapping(),
++    )
++
++
++def _result_from_cleanup(result: ClosedRouteGenerationCleanupResult) -> RouteRuntimeManagerResult:
++    status = "removed" if result.removed_runtime_route_dir else "already_absent"
++    return RouteRuntimeManagerResult(
++        schema=ROUTE_RUNTIME_MANAGER_RESULT_SCHEMA,
++        action="cleanup_closed",
++        route_id=result.route_id,
++        generation=result.generation,
++        status=status,
++        payload=result.to_mapping(),
++    )
++
++
++__all__ = (
++    "ROUTE_RUNTIME_MANAGER_RESULT_SCHEMA",
++    "RouteRuntimeManager",
++    "RouteRuntimeManagerAction",
++    "RouteRuntimeManagerConfig",
++    "RouteRuntimeManagerError",
++    "RouteRuntimeManagerResult",
++)
+diff --git a/tests/rules/test_route_runtime_manager_0103_rule.py b/tests/rules/test_route_runtime_manager_0103_rule.py
+new file mode 100644
+index 0000000..e24ecf4
+--- /dev/null
++++ b/tests/rules/test_route_runtime_manager_0103_rule.py
+@@ -0,0 +1,84 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "runtime" / "route_runtime_manager.py"
++DOC = ROOT / "doc" / "architecture" / "ROUTE_RUNTIME_MANAGER_0103.md"
++PLAN = ROOT / "doc" / "architecture" / "CONTROLPROXY_OPERATIONAL_PLAN_0103.md"
++GRAPH = ROOT / "doc" / "docs" / "architecture" / "runtime" / "93_route_runtime_manager.dot"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0103_CHANGED_FILES.md"
++
++
++def _read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_0103_route_runtime_manager_locks_simplified_boundary_language() -> None:
++    text = _read(MODULE) + "\n" + _read(DOC) + "\n" + _read(PLAN)
++    required = [
++        "RouteRuntimeManager is not a scheduler-like coordinator",
++        "No CLI",
++        "No OpenRC service and no resident daemon",
++        "No watcher",
++        "No Scheduler.run() modification",
++        "No global priority management",
++        "No policy decision and no zone authority in ControlProxy",
++        "No EventBus creation and no bus duplication",
++        "Route mmap/eventfd is a data plane, not EventBus",
++        "EventBus remains observation only",
++        "Dispatcher remains EventType -> Handler only",
++        "PolicyEngine remains minimal admission before queue",
++        "Specialist branch owns business logic",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0103_route_runtime_manager_does_not_import_kernel_or_bus() -> None:
++    text = _read(MODULE)
++    forbidden = [
++        "kernel.scheduler",
++        "kernel.dispatcher",
++        "kernel.queue",
++        "policy.engine",
++        "EventBus(",
++        "from kernel.event_bus",
++        "import argparse",
++        "subprocess",
++        "openvino",
++        "qdrant",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++
++
++def test_0103_route_runtime_manager_manifest_is_runtime_only() -> None:
++    manifest = _read(MANIFEST)
++    assert "src/runtime/route_runtime_manager.py" in manifest
++    assert "tests/runtime/test_route_runtime_manager.py" in manifest
++    assert "tests/rules/test_route_runtime_manager_0103_rule.py" in manifest
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/kernel/dispatcher.py",
++        "src/kernel/queue.py",
++        "src/policy/engine.py",
++    ]
++    for path in forbidden:
++        assert path not in manifest
++
++
++def test_0103_route_runtime_manager_graph_is_root_attached_runtime_overlay() -> None:
++    graph = _read(GRAPH)
++    required = [
++        "ROOT_GRAPH: doc/docs/architecture/00_global.dot",
++        "Scheduler_run -> Dispatcher",
++        "Dispatcher -> ControlProxyRouteHandler",
++        "ControlProxyRouteHandler -> RouteRuntimeManager",
++        "RouteRuntimeManager -> ControlFS",
++        "RouteRuntimeManager -> RouteDataPlane",
++        "RouteDataPlane [label=\"mmap/eventfd data plane\\nnot EventBus\"]",
++        "EventBusObservation [label=\"existing EventBus\\nobservation only\"]",
++    ]
++    for phrase in required:
++        assert phrase in graph
+diff --git a/tests/runtime/test_route_runtime_manager.py b/tests/runtime/test_route_runtime_manager.py
+new file mode 100644
+index 0000000..e897d99
+--- /dev/null
++++ b/tests/runtime/test_route_runtime_manager.py
+@@ -0,0 +1,134 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++from runtime.controlproxy_prepare import ROUTE_PREPARE_STATUS_SCHEMA, RoutePrepareDecision
++from runtime.mmap_fixed_slot_route import route_file_size
++from runtime.route_generation_lock import route_generation_lock_path
++from runtime.route_generation_table import load_route_generation_table
++from runtime.route_runtime_manager import RouteRuntimeManager
++
++
++def _decision(
++    *,
++    route_id: str = "route-a",
++    generation: int = 1,
++    action: str = "create_route_generation",
++    status: str = "ready",
++    slot_size: int = 512,
++    slot_count: int = 2,
++) -> RoutePrepareDecision:
++    route_handle = None if action == "deny" else f"{route_id}@g{generation}"
++    return RoutePrepareDecision(
++        schema=ROUTE_PREPARE_STATUS_SCHEMA,
++        request_id=f"prep:{route_id}:g{generation}",
++        route_id=route_id,
++        route_handle=route_handle,
++        task_id="task-a",
++        zone="workers",
++        status=status,  # type: ignore[arg-type]
++        action=action,  # type: ignore[arg-type]
++        reason="pytest route runtime manager",
++        required_frame_bytes=128,
++        current_generation=(generation - 1) if generation > 1 else None,
++        next_generation=None if action == "deny" else generation,
++        current_slot_size=None,
++        slot_size=slot_size if action != "deny" else None,
++        slot_count=slot_count if action != "deny" else None,
++        max_frame_bytes=slot_size if action != "deny" else None,
++        max_ring_bytes=slot_size * slot_count * 8,
++        max_prepare_ms=25,
++        drain_timeout_ms=100,
++        lease_switch_timeout_ms=10,
++        notify="eventfd" if action != "deny" else None,
++        overflow_policy="reject" if action != "deny" else None,
++        decided_at="2026-07-05T00:00:00Z",
++    )
++
++
++def test_route_runtime_manager_materializes_generation_under_lock(tmp_path: Path) -> None:
++    manager = RouteRuntimeManager.from_roots(
++        controlfs_root=tmp_path / "controlfs",
++        runtime_root=tmp_path / "runtime",
++    )
++
++    result = manager.handle_prepare_decision(_decision(generation=1))
++
++    assert result.action == "materialize_generation"
++    assert result.status == "candidate"
++    assert result.generation == 1
++    record = result.payload["record"]
++    ring_path = Path(record["ring_path"])
++    assert ring_path.exists()
++    assert ring_path.stat().st_size == route_file_size(512, 2)
++    assert route_generation_lock_path(tmp_path / "controlfs", "route-a").exists()
++
++    table = load_route_generation_table(tmp_path / "controlfs", "route-a")
++    assert table.next_generation == 2
++    assert table.generations[0].state == "candidate"
++
++
++def test_route_runtime_manager_runs_lifecycle_and_closed_cleanup(tmp_path: Path) -> None:
++    manager = RouteRuntimeManager.from_roots(
++        controlfs_root=tmp_path / "controlfs",
++        runtime_root=tmp_path / "runtime",
++    )
++    candidate = manager.materialize_generation(_decision(generation=1))
++    runtime_route_dir = Path(candidate.payload["record"]["runtime_route_dir"])
++    assert runtime_route_dir.exists()
++
++    active = manager.activate_generation(route_id="route-a", generation=1)
++    assert active.action == "activate_generation"
++    assert active.status == "active"
++
++    draining = manager.mark_draining(route_id="route-a", generation=1)
++    assert draining.action == "mark_draining"
++    assert draining.status == "draining"
++
++    closed = manager.mark_closed(route_id="route-a", generation=1)
++    assert closed.action == "mark_closed"
++    assert closed.status == "closed"
++
++    cleanup = manager.cleanup_closed(
++        route_id="route-a",
++        generation=1,
++        cleaned_at="2026-07-05T01:00:00Z",
++    )
++    assert cleanup.action == "cleanup_closed"
++    assert cleanup.status == "removed"
++    assert not runtime_route_dir.exists()
++
++
++def test_route_runtime_manager_denied_and_reuse_decisions_have_no_runtime_effect(tmp_path: Path) -> None:
++    manager = RouteRuntimeManager.from_roots(
++        controlfs_root=tmp_path / "controlfs",
++        runtime_root=tmp_path / "runtime",
++    )
++
++    denied = manager.handle_prepare_decision(_decision(action="deny", status="denied"))
++    assert denied.action == "denied"
++    assert denied.status == "no_runtime_effect"
++    assert not (tmp_path / "runtime" / "routes").exists()
++
++    reuse_decision = _decision(action="reuse_active", generation=1)
++    reuse = manager.handle_prepare_decision(reuse_decision)
++    assert reuse.action == "reuse_active_route"
++    assert reuse.status == "no_runtime_effect"
++    assert not (tmp_path / "runtime" / "routes").exists()
++
++
++def test_route_runtime_manager_load_table_returns_stable_projection(tmp_path: Path) -> None:
++    manager = RouteRuntimeManager.from_roots(
++        controlfs_root=tmp_path / "controlfs",
++        runtime_root=tmp_path / "runtime",
++    )
++
++    empty = manager.load_table("route-a")
++    assert empty.action == "load_table"
++    assert empty.status == "loaded"
++    assert empty.payload["next_generation"] == 1
++
++    manager.materialize_generation(_decision(generation=1))
++    loaded = manager.load_table("route-a")
++    assert loaded.payload["next_generation"] == 2
++    assert loaded.payload["generations"][0]["route_handle"] == "route-a@g1"

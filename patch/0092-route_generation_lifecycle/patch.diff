@@ -1,0 +1,712 @@
+diff --git a/PHASE0092_TEST_REPORT.md b/PHASE0092_TEST_REPORT.md
+new file mode 100644
+index 0000000..c494b43
+--- /dev/null
++++ b/PHASE0092_TEST_REPORT.md
+@@ -0,0 +1,43 @@
++# Phase 0092 test report
++
++Scope: route generation draining, closed transition, and cleanup of closed
++runtime route directories.
++
++## Commands to run
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/runtime/test_route_generation_lifecycle.py
++PYTHONPATH=src:. pytest -q tests/rules/test_route_generation_lifecycle_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Local patch-generation validation
++
++```text
++git apply --check: passed in patch worktree
++python -m py_compile new files: passed
++```
++
++Full repository pytest must be run by apply_patch_queue.py in the developer
++checkout.
++
++## code_rule alignment
++
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: 0092 adds an importable route lifecycle primitive for closed
++generation cleanup. It does not add a CLI, daemon, watcher, service, network
++path, backend, Scheduler modification, Qdrant, LLM, or OpenVINO integration.
++live_path_status: green
++live_path_uses_real_backend: false
++context_contract_version: n/a
++context_contract_changed: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
+diff --git a/doc/architecture/ROUTE_GENERATION_LIFECYCLE_0092.md b/doc/architecture/ROUTE_GENERATION_LIFECYCLE_0092.md
+new file mode 100644
+index 0000000..687ada2
+--- /dev/null
++++ b/doc/architecture/ROUTE_GENERATION_LIFECYCLE_0092.md
+@@ -0,0 +1,52 @@
++# Route generation lifecycle — 0092
++
++Status: implementation patch.
++
++0092 adds importable lifecycle helpers for the route generation table introduced
++in 0091-r2. The operational state path is explicit:
++
++```text
++candidate -> active -> draining -> closed -> cleanup closed generation
++```
++
++The cleanup entry point is `cleanup_closed_route_generation()`. It removes only
++the runtime route directory belonging to a closed generation and writes a small
++cleanup status record under ControlFS.
++
++## Operational path
++
++```text
++materialized route@gN candidate
++-> activate_route_generation()
++-> mark_route_generation_draining()
++-> mark_route_generation_closed()
++-> cleanup_closed_route_generation()
++```
++
++The cleanup function verifies that the persisted runtime route directory matches
++`runtime_root/routes/<route_handle>` before deleting anything. Cleanup is limited
++to closed generations only. Candidate, active, and draining generations are
++rejected.
++
++## Boundaries
++
++- No CLI.
++- No OpenRC service and no resident daemon.
++- No watcher or inotify loop.
++- No Scheduler.run() modification.
++- No PriorityQueue, Dispatcher or Component tick contract modification.
++- No live mmap resize.
++- No inter-process lock yet.
++- ControlProxy does not decide security.
++- Scheduler/policy/zone remain the authority.
++- No Qdrant, LLM, OpenVINO, network, or GitHub API path.
++
++## code_rule alignment
++
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: 0092 adds a small importable lifecycle/cleanup primitive for
++already materialized route generations. It keeps effects at the route runtime
++boundary, preserves Scheduler/policy/zone authority, and does not add a CLI,
++daemon, watcher, service, backend, Scheduler modification, Qdrant, LLM, or
++OpenVINO path.
+diff --git a/doc/manifests/MANIFEST_0092_CHANGED_FILES.md b/doc/manifests/MANIFEST_0092_CHANGED_FILES.md
+new file mode 100644
+index 0000000..a8debcd
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0092_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest 0092 changed files
++
++```text
++src/runtime/route_generation_lifecycle.py
++tests/runtime/test_route_generation_lifecycle.py
++tests/rules/test_route_generation_lifecycle_rule.py
++doc/architecture/ROUTE_GENERATION_LIFECYCLE_0092.md
++doc/manifests/MANIFEST_0092_CHANGED_FILES.md
++PHASE0092_TEST_REPORT.md
++```
++
++0092 adds an importable route generation lifecycle and closed-generation cleanup
++primitive with focused tests and phase documentation.
+diff --git a/src/runtime/route_generation_lifecycle.py b/src/runtime/route_generation_lifecycle.py
+new file mode 100644
+index 0000000..01232c0
+--- /dev/null
++++ b/src/runtime/route_generation_lifecycle.py
+@@ -0,0 +1,323 @@
++"""ControlProxy route generation drain/closed lifecycle helpers.
++
++This module implements phase 0092. It consumes the route_id ->
++current_generation table introduced in 0091-r2 and adds explicit lifecycle
++transitions for materialized mmap/shm-like route generations:
++
++    candidate -> active -> draining -> closed -> cleanup closed generation
++
++The cleanup path only removes runtime files for closed generations. It never
++resizes a live mmap route, never closes an active route implicitly, and never
++starts a resident loop. The caller is responsible for invoking these functions
++after Scheduler/policy/zone have authorized the lifecycle action.
++
++Boundaries deliberately kept out of this module:
++- No CLI.
++- No OpenRC service and no resident daemon.
++- No watcher or inotify loop.
++- No Scheduler.run() modification.
++- No PriorityQueue, Dispatcher or Component tick contract modification.
++- No policy/zone/scope decision in ControlProxy.
++- ControlProxy does not decide security.
++- Scheduler/policy/zone remain the authority.
++- No live mmap resize.
++- No inter-process lock yet.
++- Cleanup is limited to closed generations only.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, replace
++import json
++from pathlib import Path
++import shutil
++from typing import Any, Literal
++
++from runtime.controlfs_manifest import normalize_route_id
++from runtime.mmap_fixed_slot_route import route_dir_for_handle
++from runtime.route_generation_table import (
++    GenerationState,
++    RouteGenerationRecord,
++    RouteGenerationTable,
++    RouteGenerationTableError,
++    load_route_generation_table,
++    route_generation_status_path,
++    write_route_generation_table,
++)
++
++ROUTE_GENERATION_CLEANUP_SCHEMA = "missipy.controlproxy.route_generation_cleanup.v1"
++
++LifecycleAction = Literal["activate", "draining", "closed", "cleanup_closed"]
++
++
++class RouteGenerationLifecycleError(RouteGenerationTableError):
++    """Raised when a route generation lifecycle transition is invalid."""
++
++
++@dataclass(frozen=True, slots=True)
++class RouteGenerationLifecycleResult:
++    """Stable result for a route generation lifecycle transition."""
++
++    action: LifecycleAction
++    table: RouteGenerationTable
++    record: RouteGenerationRecord
++    previous_state: GenerationState
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "action": self.action,
++            "previous_state": self.previous_state,
++            "record": self.record.to_mapping(),
++            "table": self.table.to_mapping(),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class ClosedRouteGenerationCleanupResult:
++    """Stable result for closed generation runtime cleanup."""
++
++    schema: str
++    route_id: str
++    generation: int
++    route_handle: str
++    runtime_route_dir: str
++    cleanup_status_path: str
++    removed_runtime_route_dir: bool
++    cleaned_at: str
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "route_id": self.route_id,
++            "generation": self.generation,
++            "route_handle": self.route_handle,
++            "runtime_route_dir": self.runtime_route_dir,
++            "cleanup_status_path": self.cleanup_status_path,
++            "removed_runtime_route_dir": self.removed_runtime_route_dir,
++            "cleaned_at": self.cleaned_at,
++        }
++
++
++def route_generation_cleanup_path(controlfs_root: Path | str, route_id: str, generation: int) -> Path:
++    """Return active/routes/<route_id>/generations/gN/cleanup.json."""
++
++    gen = _validate_generation(generation)
++    return (
++        Path(controlfs_root)
++        / "active"
++        / "routes"
++        / normalize_route_id(route_id)
++        / "generations"
++        / f"g{gen}"
++        / "cleanup.json"
++    )
++
++
++def activate_route_generation(
++    *,
++    controlfs_root: Path | str,
++    route_id: str,
++    generation: int,
++) -> RouteGenerationLifecycleResult:
++    """Mark one candidate route generation as active.
++
++    This is an explicit lifecycle transition. It does not select policy and it
++    does not drain an existing active generation implicitly.
++    """
++
++    table = load_route_generation_table(controlfs_root, route_id)
++    record = _record_for_generation(table, generation)
++    if record.state != "candidate":
++        raise RouteGenerationLifecycleError("only candidate generations can become active")
++    active = _active_record(table)
++    if active is not None and active.generation != record.generation:
++        raise RouteGenerationLifecycleError("another active generation must be drained first")
++    return _transition_generation(
++        controlfs_root=controlfs_root,
++        table=table,
++        record=record,
++        next_state="active",
++        active_generation=record.generation,
++        action="activate",
++    )
++
++
++def mark_route_generation_draining(
++    *,
++    controlfs_root: Path | str,
++    route_id: str,
++    generation: int,
++) -> RouteGenerationLifecycleResult:
++    """Mark an active generation as draining."""
++
++    table = load_route_generation_table(controlfs_root, route_id)
++    record = _record_for_generation(table, generation)
++    if record.state != "active":
++        raise RouteGenerationLifecycleError("only active generations can become draining")
++    return _transition_generation(
++        controlfs_root=controlfs_root,
++        table=table,
++        record=record,
++        next_state="draining",
++        active_generation=None if table.active_generation == record.generation else table.active_generation,
++        action="draining",
++    )
++
++
++def mark_route_generation_closed(
++    *,
++    controlfs_root: Path | str,
++    route_id: str,
++    generation: int,
++) -> RouteGenerationLifecycleResult:
++    """Mark a draining generation as closed."""
++
++    table = load_route_generation_table(controlfs_root, route_id)
++    record = _record_for_generation(table, generation)
++    if record.state != "draining":
++        raise RouteGenerationLifecycleError("only draining generations can become closed")
++    return _transition_generation(
++        controlfs_root=controlfs_root,
++        table=table,
++        record=record,
++        next_state="closed",
++        active_generation=None if table.active_generation == record.generation else table.active_generation,
++        action="closed",
++    )
++
++
++def cleanup_closed_route_generation(
++    *,
++    controlfs_root: Path | str,
++    runtime_root: Path | str,
++    route_id: str,
++    generation: int,
++    cleaned_at: str = "2026-07-05T00:00:00Z",
++) -> ClosedRouteGenerationCleanupResult:
++    """Remove runtime files for one closed generation and write cleanup status.
++
++    The function refuses to remove candidate, active or draining generations. It
++    also verifies that the persisted runtime route directory matches the expected
++    runtime_root/routes/<route_handle> directory before deletion.
++    """
++
++    table = load_route_generation_table(controlfs_root, route_id)
++    record = _record_for_generation(table, generation)
++    if record.state != "closed":
++        raise RouteGenerationLifecycleError("cleanup is allowed for closed generations only")
++    runtime_route_dir = _validated_runtime_route_dir(runtime_root, record)
++    removed = False
++    if runtime_route_dir.exists():
++        shutil.rmtree(runtime_route_dir)
++        removed = True
++    result = ClosedRouteGenerationCleanupResult(
++        schema=ROUTE_GENERATION_CLEANUP_SCHEMA,
++        route_id=record.route_id,
++        generation=record.generation,
++        route_handle=record.route_handle,
++        runtime_route_dir=str(runtime_route_dir),
++        cleanup_status_path=str(route_generation_cleanup_path(controlfs_root, record.route_id, record.generation)),
++        removed_runtime_route_dir=removed,
++        cleaned_at=_validate_timestamp(cleaned_at),
++    )
++    _write_cleanup_result(result)
++    return result
++
++
++def _transition_generation(
++    *,
++    controlfs_root: Path | str,
++    table: RouteGenerationTable,
++    record: RouteGenerationRecord,
++    next_state: GenerationState,
++    active_generation: int | None,
++    action: LifecycleAction,
++) -> RouteGenerationLifecycleResult:
++    updated = replace(record, state=next_state)
++    next_table = _replace_record(table, updated, active_generation=active_generation)
++    _write_generation_record(controlfs_root, updated)
++    write_route_generation_table(controlfs_root, next_table)
++    return RouteGenerationLifecycleResult(
++        action=action,
++        table=next_table,
++        record=updated,
++        previous_state=record.state,
++    )
++
++
++def _replace_record(
++    table: RouteGenerationTable,
++    record: RouteGenerationRecord,
++    *,
++    active_generation: int | None,
++) -> RouteGenerationTable:
++    generations = []
++    replaced = False
++    for item in table.generations:
++        if item.generation == record.generation:
++            generations.append(record)
++            replaced = True
++        else:
++            generations.append(item)
++    if not replaced:
++        raise RouteGenerationLifecycleError("generation record not found")
++    candidate = RouteGenerationTable(
++        schema=table.schema,
++        route_id=table.route_id,
++        active_generation=active_generation,
++        next_generation=table.next_generation,
++        generations=tuple(generations),
++    )
++    return RouteGenerationTable.from_mapping(candidate.to_mapping())
++
++
++def _record_for_generation(table: RouteGenerationTable, generation: int) -> RouteGenerationRecord:
++    gen = _validate_generation(generation)
++    for record in table.generations:
++        if record.generation == gen:
++            return record
++    raise RouteGenerationLifecycleError("generation record not found")
++
++
++def _active_record(table: RouteGenerationTable) -> RouteGenerationRecord | None:
++    active_records = [record for record in table.generations if record.state == "active"]
++    if len(active_records) > 1:
++        raise RouteGenerationLifecycleError("route generation table has multiple active generations")
++    if table.active_generation is not None:
++        record = _record_for_generation(table, table.active_generation)
++        if record.state != "active":
++            raise RouteGenerationLifecycleError("active_generation does not reference an active generation")
++        return record
++    return active_records[0] if active_records else None
++
++
++def _write_generation_record(controlfs_root: Path | str, record: RouteGenerationRecord) -> None:
++    path = route_generation_status_path(controlfs_root, record.route_id, record.generation)
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(record.to_mapping(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++
++def _write_cleanup_result(result: ClosedRouteGenerationCleanupResult) -> None:
++    path = Path(result.cleanup_status_path)
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(result.to_mapping(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++
++def _validated_runtime_route_dir(runtime_root: Path | str, record: RouteGenerationRecord) -> Path:
++    expected = route_dir_for_handle(runtime_root, record.route_handle)
++    actual = Path(record.runtime_route_dir)
++    if actual.resolve(strict=False) != expected.resolve(strict=False):
++        raise RouteGenerationLifecycleError("runtime route dir does not match runtime_root/route_handle")
++    return expected
++
++
++def _validate_generation(value: int | None) -> int:
++    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
++        raise RouteGenerationLifecycleError("generation must be a positive integer")
++    return value
++
++
++def _validate_timestamp(value: str) -> str:
++    if not isinstance(value, str) or "T" not in value or "Z" not in value:
++        raise RouteGenerationLifecycleError("cleaned_at must look like an UTC timestamp")
++    return value
+diff --git a/tests/rules/test_route_generation_lifecycle_rule.py b/tests/rules/test_route_generation_lifecycle_rule.py
+new file mode 100644
+index 0000000..76623f4
+--- /dev/null
++++ b/tests/rules/test_route_generation_lifecycle_rule.py
+@@ -0,0 +1,73 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "runtime" / "route_generation_lifecycle.py"
++DOC = ROOT / "doc" / "architecture" / "ROUTE_GENERATION_LIFECYCLE_0092.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0092_CHANGED_FILES.md"
++REPORT = ROOT / "PHASE0092_TEST_REPORT.md"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing file: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_0092_lifecycle_locks_operational_intent() -> None:
++    text = _read(MODULE) + "\n" + _read(DOC)
++    required = [
++        "candidate -> active -> draining -> closed -> cleanup closed generation",
++        "cleanup_closed_route_generation",
++        "closed generations only",
++        "No CLI",
++        "No OpenRC service and no resident daemon",
++        "No watcher",
++        "No Scheduler.run() modification",
++        "No live mmap resize",
++        "ControlProxy does not decide security",
++        "Scheduler/policy/zone remain the authority",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0092_manifest_keeps_scope_small() -> None:
++    manifest = _read(MANIFEST)
++    required = [
++        "src/runtime/route_generation_lifecycle.py",
++        "tests/runtime/test_route_generation_lifecycle.py",
++        "tests/rules/test_route_generation_lifecycle_rule.py",
++        "doc/architecture/ROUTE_GENERATION_LIFECYCLE_0092.md",
++        "PHASE0092_TEST_REPORT.md",
++    ]
++    for phrase in required:
++        assert phrase in manifest
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/kernel/queue.py",
++        "src/kernel/dispatcher.py",
++        "tools/",
++        "routes active resize",
++    ]
++    for phrase in forbidden:
++        assert phrase not in manifest
++
++
++def test_0092_report_contains_code_rule_alignment_block() -> None:
++    report = _read(REPORT)
++    required = [
++        "code_rule_review: done",
++        "code_rule_update_required: false",
++        "live_path_status: green",
++        "live_path_uses_real_backend: false",
++        "context_contract_version: n/a",
++        "context_contract_changed: false",
++        "external_dependencies_added: false",
++        "scheduler_modified: false",
++        "network_added: false",
++        "github_api_added: false",
++        "qdrant_added: false",
++        "llm_or_openvino_added: false",
++        "search_commands_bounded: n/a",
++    ]
++    for phrase in required:
++        assert phrase in report
+diff --git a/tests/runtime/test_route_generation_lifecycle.py b/tests/runtime/test_route_generation_lifecycle.py
+new file mode 100644
+index 0000000..9ba3d3f
+--- /dev/null
++++ b/tests/runtime/test_route_generation_lifecycle.py
+@@ -0,0 +1,172 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++import pytest
++
++from runtime.controlproxy_prepare import ROUTE_PREPARE_STATUS_SCHEMA, RoutePrepareDecision
++from runtime.route_generation_lifecycle import (
++    ROUTE_GENERATION_CLEANUP_SCHEMA,
++    RouteGenerationLifecycleError,
++    activate_route_generation,
++    cleanup_closed_route_generation,
++    mark_route_generation_closed,
++    mark_route_generation_draining,
++    route_generation_cleanup_path,
++)
++from runtime.route_generation_table import (
++    load_route_generation_table,
++    materialize_route_generation_candidate,
++    route_generation_status_path,
++)
++
++
++def _decision(
++    *,
++    route_id: str = "route-a",
++    generation: int = 1,
++    action: str = "create_route_generation",
++    slot_size: int = 512,
++    slot_count: int = 2,
++) -> RoutePrepareDecision:
++    return RoutePrepareDecision(
++        schema=ROUTE_PREPARE_STATUS_SCHEMA,
++        request_id=f"prep:{route_id}:g{generation}",
++        route_id=route_id,
++        route_handle=f"{route_id}@g{generation}",
++        task_id="task-a",
++        zone="workers",
++        status="ready",
++        action=action,  # type: ignore[arg-type]
++        reason="pytest generation lifecycle",
++        required_frame_bytes=128,
++        current_generation=(generation - 1) if generation > 1 else None,
++        next_generation=generation,
++        current_slot_size=None,
++        slot_size=slot_size,
++        slot_count=slot_count,
++        max_frame_bytes=slot_size,
++        max_ring_bytes=slot_size * slot_count * 8,
++        max_prepare_ms=25,
++        drain_timeout_ms=100,
++        lease_switch_timeout_ms=10,
++        notify="eventfd",
++        overflow_policy="reject",
++        decided_at="2026-07-05T00:00:00Z",
++    )
++
++
++def test_route_generation_lifecycle_drains_closes_and_cleans_runtime_dir(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++
++    candidate = materialize_route_generation_candidate(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        decision=_decision(generation=1),
++    )
++    runtime_route_dir = Path(candidate.record.runtime_route_dir)
++    ring_path = Path(candidate.record.ring_path)
++    assert runtime_route_dir.exists()
++    assert ring_path.exists()
++
++    active = activate_route_generation(
++        controlfs_root=controlfs_root,
++        route_id="route-a",
++        generation=1,
++    )
++    assert active.previous_state == "candidate"
++    assert active.record.state == "active"
++    assert active.table.active_generation == 1
++
++    draining = mark_route_generation_draining(
++        controlfs_root=controlfs_root,
++        route_id="route-a",
++        generation=1,
++    )
++    assert draining.previous_state == "active"
++    assert draining.record.state == "draining"
++    assert draining.table.active_generation is None
++
++    closed = mark_route_generation_closed(
++        controlfs_root=controlfs_root,
++        route_id="route-a",
++        generation=1,
++    )
++    assert closed.previous_state == "draining"
++    assert closed.record.state == "closed"
++
++    status = json.loads(route_generation_status_path(controlfs_root, "route-a", 1).read_text(encoding="utf-8"))
++    assert status["state"] == "closed"
++
++    cleanup = cleanup_closed_route_generation(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        route_id="route-a",
++        generation=1,
++        cleaned_at="2026-07-05T01:00:00Z",
++    )
++    assert cleanup.schema == ROUTE_GENERATION_CLEANUP_SCHEMA
++    assert cleanup.removed_runtime_route_dir is True
++    assert not runtime_route_dir.exists()
++    assert not ring_path.exists()
++
++    cleanup_payload = json.loads(route_generation_cleanup_path(controlfs_root, "route-a", 1).read_text(encoding="utf-8"))
++    assert cleanup_payload["schema"] == ROUTE_GENERATION_CLEANUP_SCHEMA
++    assert cleanup_payload["generation"] == 1
++    assert cleanup_payload["removed_runtime_route_dir"] is True
++
++    loaded = load_route_generation_table(controlfs_root, "route-a")
++    assert loaded.active_generation is None
++    assert loaded.generations[0].state == "closed"
++
++
++def test_route_generation_lifecycle_rejects_unsafe_transitions(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++    materialize_route_generation_candidate(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        decision=_decision(generation=1),
++    )
++
++    with pytest.raises(RouteGenerationLifecycleError, match="cleanup is allowed for closed generations only"):
++        cleanup_closed_route_generation(
++            controlfs_root=controlfs_root,
++            runtime_root=runtime_root,
++            route_id="route-a",
++            generation=1,
++        )
++
++    with pytest.raises(RouteGenerationLifecycleError, match="only draining generations"):
++        mark_route_generation_closed(
++            controlfs_root=controlfs_root,
++            route_id="route-a",
++            generation=1,
++        )
++
++    activate_route_generation(controlfs_root=controlfs_root, route_id="route-a", generation=1)
++    with pytest.raises(RouteGenerationLifecycleError, match="only candidate generations"):
++        activate_route_generation(controlfs_root=controlfs_root, route_id="route-a", generation=1)
++
++
++def test_route_generation_lifecycle_requires_active_generation_to_drain_before_next_active(tmp_path: Path) -> None:
++    controlfs_root = tmp_path / "controlfs"
++    runtime_root = tmp_path / "runtime"
++
++    materialize_route_generation_candidate(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        decision=_decision(generation=1),
++    )
++    activate_route_generation(controlfs_root=controlfs_root, route_id="route-a", generation=1)
++
++    materialize_route_generation_candidate(
++        controlfs_root=controlfs_root,
++        runtime_root=runtime_root,
++        decision=_decision(generation=2, action="create_next_generation", slot_size=1024),
++    )
++
++    with pytest.raises(RouteGenerationLifecycleError, match="another active generation must be drained first"):
++        activate_route_generation(controlfs_root=controlfs_root, route_id="route-a", generation=2)

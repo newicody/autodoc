@@ -1,0 +1,416 @@
+diff --git a/PHASE0100_TEST_REPORT.md b/PHASE0100_TEST_REPORT.md
+new file mode 100644
+index 0000000..573cab8
+--- /dev/null
++++ b/PHASE0100_TEST_REPORT.md
+@@ -0,0 +1,24 @@
++# PHASE0100 test report
++
++## Scope
++
++0100 is an architecture correction patch. It records that the ControlProxy graph must not represent the active-route handshake lane and the newer generation/runtime lane as already unified.
++
++## Intended local validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/rules/test_controlproxy_microkernel_direction_0100_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## Manual checks
++
++- No CLI added.
++- No daemon/service/OpenRC added.
++- No watcher added.
++- No Scheduler.run() change.
++- No Dispatcher / PriorityQueue / Component contract change.
++- No event.bus or context.bus command path.
++- No claim that ControlProxy is a security authority.
+diff --git a/doc/architecture/CONTROLPROXY_MICROKERNEL_DIRECTION_AUDIT_0100.md b/doc/architecture/CONTROLPROXY_MICROKERNEL_DIRECTION_AUDIT_0100.md
+new file mode 100644
+index 0000000..afb0cca
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_MICROKERNEL_DIRECTION_AUDIT_0100.md
+@@ -0,0 +1,105 @@
++# 0100 — ControlProxy / micro-kernel direction audit
++
++## Verdict
++
++This patch records an architecture correction before adding more runtime code.
++The repository has not fully deviated, but the graph became more advanced than the implementation.
++The current code has two parallel ControlProxy lanes that are related but not yet unified:
++
++1. `0081/0084/0085/0086/0088`: the Scheduler-facing active-route handshake lane.
++2. `0091-r2/0092/0094/0095/0096`: the generation table, lifecycle, lock, and placement lane.
++
++The graph must not imply that these lanes are already one single operational coordinator.
++They must be shown as adjacent lanes under the same ControlProxy / ControlFS subsystem until a later patch introduces a real coordinator.
++
++## Micro-kernel direction
++
++The micro-kernel remains the owner of scheduling semantics:
++
++```text
++ComponentProxy -> Scheduler.emit() -> PolicyEngine.decide() -> PriorityQueue -> Scheduler.run() -> Dispatcher.dispatch() -> Handler
++```
++
++`Scheduler.run()` is still unchanged. The constraint must not be released only because ControlProxy is growing.
++It can be reconsidered later only if a concrete handler integration exposes a real limitation of the loop.
++
++## Correct role split
++
++```text
++Scheduler / PolicyEngine / PriorityQueue / Dispatcher
++= component scheduling, policy decision, ordering, handler dispatch.
++
++ControlProxy / ControlFS
++= route capability subsystem behind a handler boundary.
++
++RouteDispatchFilterEnvelope
++= policy/zone dispatch filtering for already-decided work,
++  not a security authority and not a second scheduler.
++```
++
++ControlProxy can reject incoherent input at its boundary, for example a missing route id, zone, policy decision id, or `authorized=True` marker.
++That is a dispatch filter and consistency guard, not a new policy decision.
++
++## The actual inconsistency
++
++Some recent graph edges made the system look like this:
++
++```text
++Dispatcher -> RouteDispatchFilterEnvelope -> ControlProxy -> generation table -> lifecycle -> runtime
++```
++
++That is too compact and misleading.
++It hides the fact that the current implementation still has a legacy active-route lane and a newer generation lane.
++The correct graph must show:
++
++```text
++Dispatcher -> ControlProxySchedulerRouteRequestHandler
++
++ControlProxySchedulerRouteRequestHandler -> legacy active-route handshake lane
++ControlProxySchedulerRouteRequestHandler -> future unified route coordinator
++future unified route coordinator -> generation table / lifecycle / lock / placement
++```
++
++Until the coordinator exists, the graph must mark the unification as planned, not current.
++
++## Terminology correction
++
++`ControlProxyZonePolicy` in the prepare module is a legacy name that can be misunderstood as a security-policy engine.
++For the next code cleanup, the intended semantic name is closer to:
++
++```text
++RouteZoneSizingProfile
++RouteDispatchSizingProfile
++RouteRuntimeSizingProfile
++```
++
++The current object mostly contains sizing, timing, notify, overflow, and ring budget rules.
++It should not be documented as a replacement for `PolicyEngine`.
++
++## Next implementation decision
++
++The next code patch should not add another parallel helper.
++It should introduce one importable facade, for example:
++
++```text
++ControlProxyRouteCoordinator
++```
++
++Its role should be to select one route operation path behind the Dispatcher handler:
++
++```text
++reuse active route
++create first generation
++create next generation
++activate candidate generation later
++```
++
++The coordinator must still be called from a handler and must still receive an already Scheduler/policy/zone-authorized request.
++It must not become a scheduler, daemon, watcher, service, or policy engine.
++
++## Graph rule
++
++The graph must show ControlProxy as a bounded subsystem under the handler boundary.
++It must not show ControlProxy as a sibling scheduler or as an alternate Scheduler.run path.
++It must also not show event.bus or context.bus as command channels.
++They remain observation/read surfaces.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0100.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0100.md
+new file mode 100644
+index 0000000..49edf3c
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0100.md
+@@ -0,0 +1,36 @@
++# ControlProxy operational plan — 0100 correction
++
++## Stop adding parallel primitives
++
++The next phase must avoid adding another independent helper around routes.
++The route stack now needs a single coordinator boundary that explains how the existing active-route handshake lane and the generation/runtime lane meet.
++
++## Current lanes
++
++- Lane A: `0081/0084/0085/0086/0088`, active route materialization and Scheduler-facing handshake.
++- Lane B: `0091-r2/0092/0094/0095/0096`, generation table, lifecycle, lock, and runtime placement.
++
++Both lanes are useful, but they are not yet one operational path.
++The graph must represent that honestly.
++
++## 0101 target
++
++Create a small importable coordinator that receives an already authorized Scheduler route payload and chooses between:
++
++- reuse active route through the existing handshake path;
++- create first generation through the locked materializer;
++- create next generation through the locked materializer;
++- leave activation/drain policy explicit and testable.
++
++The coordinator must be behind the Dispatcher handler boundary.
++It must not modify `Scheduler.run()`, `PriorityQueue`, `Dispatcher`, or the Component tick/reply contract.
++
++## Vocabulary update
++
++Replace future documentation language that says ControlProxy "applies security policy" with:
++
++```text
++ControlProxy applies policy/zone dispatch filtering and runtime sizing constraints for already-decided route work.
++```
++
++The `ControlProxyZonePolicy` name is legacy and should later become a sizing/profile object, not a second `PolicyEngine`.
+diff --git a/doc/docs/architecture/runtime/91_controlproxy_microkernel_direction.dot b/doc/docs/architecture/runtime/91_controlproxy_microkernel_direction.dot
+new file mode 100644
+index 0000000..2cb8006
+--- /dev/null
++++ b/doc/docs/architecture/runtime/91_controlproxy_microkernel_direction.dot
+@@ -0,0 +1,107 @@
++digraph ControlProxyMicrokernelDirection0100 {
++  // ROADMAP_ID: runtime_controlproxy_microkernel_direction_0100
++  // ROOT_GRAPH: doc/docs/architecture/00_global.dot
++  // This graph corrects the 0099 overlay direction: the code has two lanes that are not yet unified.
++  rankdir=LR;
++  compound=true;
++  splines=ortho;
++  graph [fontname="Arial", fontsize=11, label="0100 — ControlProxy direction under the MissiPy micro-kernel", labelloc=t];
++  node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10];
++  edge [fontname="Arial", fontsize=9, arrowsize=0.7];
++
++  subgraph cluster_microkernel {
++    label="Existing MissiPy micro-kernel — authority and dispatch";
++    color="#512da8";
++    bgcolor="#ede7f6";
++    node [fillcolor="#ede7f6", color="#512da8"];
++    ComponentProxy [label="ComponentProxy\nyield Event / Request", URL="../scheduler/component_proxy/14_component_proxy.svg"];
++    SchedulerEmit [label="Scheduler.emit()", URL="../scheduler/10_scheduler.svg"];
++    PolicyEngine [label="PolicyEngine.decide()\npolicy/zone authority", URL="../scheduler/10_scheduler.svg"];
++    PriorityQueue [label="PriorityQueue", URL="../scheduler/priority_queue/13_priority_queue.svg"];
++    SchedulerRun [label="Scheduler.run()\nunchanged", URL="../scheduler/10_scheduler.svg"];
++    Dispatcher [label="Dispatcher.dispatch()", URL="../scheduler/dispatcher/11_dispatcher.svg"];
++    EventBus [label="event.bus\nfacts only", URL="../scheduler/event_bus/12_event_bus.svg"];
++  }
++
++  subgraph cluster_handler_boundary {
++    label="Handler boundary — ControlProxy enters here, not beside Scheduler";
++    color="#6a1b9a";
++    bgcolor="#f3e5f5";
++    node [fillcolor="#f3e5f5", color="#6a1b9a"];
++    RouteHandler [label="ControlProxySchedulerRouteRequestHandler\n0088"];
++    DispatchFilter [label="RouteDispatchFilterEnvelope\n0098\nfilter/consistency guard\nnot policy authority"];
++  }
++
++  subgraph cluster_legacy_lane {
++    label="Lane A — current active-route handshake path";
++    color="#ef6c00";
++    bgcolor="#fff3e0";
++    node [fillcolor="#fff3e0", color="#ef6c00"];
++    SchedulerAdapter [label="handle_scheduler_route_request()\n0086 adapter"];
++    RouteHandshake [label="prepare_route_for_scheduler()\n0085"];
++    TickPump [label="tick_controlproxy()\n0084"];
++    ActiveMaterializer [label="active route materializer\n0081"];
++    LeaseState [label="lease state\nnot_leased -> leased -> active -> draining -> closed\n0083"];
++  }
++
++  subgraph cluster_generation_lane {
++    label="Lane B — newer generation/runtime path, not yet fully wired into Lane A";
++    color="#00695c";
++    bgcolor="#e0f2f1";
++    node [fillcolor="#e0f2f1", color="#00695c"];
++    GenerationTable [label="RouteGenerationTable\nroute_id -> current_generation\ng2/g3\n0091-r2"];
++    GenerationLifecycle [label="RouteGenerationLifecycle\ncandidate -> active -> draining -> closed\n0092"];
++    GenerationLock [label="RouteGenerationLock\nfcntl.flock\n0094"];
++    LockedMaterializer [label="locked materializer\nload -> verify -> materialize -> persist\n0095"];
++    Placement [label="RouteRuntimePlacementPolicy\nfile or /dev/shm explicit\n0096"];
++    RuntimeSegments [label="route@g1/g2/g3 ring.bin\nno live resize"];
++  }
++
++  subgraph cluster_unification {
++    label="Required next unification";
++    color="#c62828";
++    bgcolor="#ffebee";
++    node [fillcolor="#ffebee", color="#c62828"];
++    Coordinator [label="ControlProxyRouteCoordinator\nplanned next\nselects reuse/create/activate path"];
++  }
++
++  subgraph cluster_observation {
++    label="Observation only";
++    color="#616161";
++    bgcolor="#f5f5f5";
++    node [fillcolor="#f5f5f5", color="#616161"];
++    ExistingBusViz [label="existing-bus visualization adapter\n0093-r2\nread tap only"];
++    RouteMessageJournal [label="RouteMessageJournal\n0090"];
++    Recorder [label="Recorder / ZFS artifacts"];
++  }
++
++  ComponentProxy -> SchedulerEmit [label="emit"];
++  SchedulerEmit -> PolicyEngine [label="decide"];
++  PolicyEngine -> PriorityQueue [label="allowed -> enqueue"];
++  PolicyEngine -> EventBus [style=dashed, label="denied fact"];
++  PriorityQueue -> SchedulerRun [label="dequeue"];
++  SchedulerRun -> Dispatcher [label="loop dispatch"];
++  Dispatcher -> EventBus [style=dashed, label="publish copy"];
++  Dispatcher -> RouteHandler [label="registered handler"];
++
++  RouteHandler -> DispatchFilter [label="validate envelope"];
++  DispatchFilter -> SchedulerAdapter [label="current path"];
++  SchedulerAdapter -> RouteHandshake;
++  RouteHandshake -> TickPump;
++  TickPump -> ActiveMaterializer;
++  ActiveMaterializer -> LeaseState;
++
++  DispatchFilter -> Coordinator [style=dashed, label="next integration"];
++  Coordinator -> SchedulerAdapter [style=dashed, label="reuse active / legacy compatibility"];
++  Coordinator -> GenerationTable [style=dashed, label="create first/next generation"];
++  GenerationLock -> LockedMaterializer [label="protect critical section"];
++  GenerationTable -> LockedMaterializer [label="next_generation"];
++  LockedMaterializer -> Placement [label="resolve runtime root"];
++  Placement -> RuntimeSegments [label="materialize new segment"];
++  LockedMaterializer -> GenerationLifecycle [label="persist state"];
++
++  EventBus -> ExistingBusViz [style=dashed, label="read existing facts"];
++  RuntimeSegments -> RouteMessageJournal [style=dashed, label="drained messages"];
++  RouteMessageJournal -> Recorder [label="journal"];
++  Recorder -> EventBus [style=dotted, label="facts, not commands"];
++}
+diff --git a/doc/manifests/MANIFEST_0100_CHANGED_FILES.md b/doc/manifests/MANIFEST_0100_CHANGED_FILES.md
+new file mode 100644
+index 0000000..d9323ee
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0100_CHANGED_FILES.md
+@@ -0,0 +1,29 @@
++# Manifest 0100 — ControlProxy micro-kernel direction audit
++
++## Changed files
++
++```text
++doc/architecture/CONTROLPROXY_MICROKERNEL_DIRECTION_AUDIT_0100.md
++doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0100.md
++doc/docs/architecture/runtime/91_controlproxy_microkernel_direction.dot
++doc/manifests/MANIFEST_0100_CHANGED_FILES.md
++tests/rules/test_controlproxy_microkernel_direction_0100_rule.py
++PHASE0100_TEST_REPORT.md
++```
++
++## Intent
++
++0100 records that the current graph was too optimistic: it connected the active-route handshake lane and the newer route-generation lane as if a single coordinator already existed.
++The implementation has not fully deviated, but the graph must show that the unification is planned rather than current.
++
++## Guardrails
++
++No CLI.
++No OpenRC service and no resident daemon.
++No watcher.
++No Scheduler.run() modification.
++No PriorityQueue, Dispatcher, or Component tick contract modification.
++No ControlProxy security authority.
++No live mmap resize.
++No event.bus command path.
++No context.bus command path.
+diff --git a/tests/rules/test_controlproxy_microkernel_direction_0100_rule.py b/tests/rules/test_controlproxy_microkernel_direction_0100_rule.py
+new file mode 100644
+index 0000000..19e505c
+--- /dev/null
++++ b/tests/rules/test_controlproxy_microkernel_direction_0100_rule.py
+@@ -0,0 +1,79 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++AUDIT = ROOT / "doc" / "architecture" / "CONTROLPROXY_MICROKERNEL_DIRECTION_AUDIT_0100.md"
++PLAN = ROOT / "doc" / "architecture" / "CONTROLPROXY_OPERATIONAL_PLAN_0100.md"
++DOT = ROOT / "doc" / "docs" / "architecture" / "runtime" / "91_controlproxy_microkernel_direction.dot"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0100_CHANGED_FILES.md"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing expected file: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_0100_records_parallel_lane_issue_without_claiming_deviation() -> None:
++    text = _read(AUDIT) + "\n" + _read(PLAN)
++    required = [
++        "The repository has not fully deviated",
++        "two parallel ControlProxy lanes",
++        "legacy active-route lane",
++        "newer generation lane",
++        "not yet unified",
++        "ControlProxyRouteCoordinator",
++        "planned, not current",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0100_preserves_microkernel_authority_and_loop_boundary() -> None:
++    text = _read(AUDIT) + "\n" + _read(DOT) + "\n" + _read(MANIFEST)
++    required = [
++        "Scheduler.emit()",
++        "PolicyEngine.decide()",
++        "PriorityQueue",
++        "Scheduler.run()",
++        "Dispatcher.dispatch()",
++        "Handler",
++        "Scheduler.run()\\nunchanged",
++        "not a second scheduler",
++        "not policy authority",
++        "No Scheduler.run() modification",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0100_graph_shows_controlproxy_under_handler_boundary() -> None:
++    dot = _read(DOT)
++    required = [
++        "cluster_microkernel",
++        "cluster_handler_boundary",
++        "cluster_legacy_lane",
++        "cluster_generation_lane",
++        "cluster_unification",
++        "Dispatcher -> RouteHandler",
++        "RouteHandler -> DispatchFilter",
++        "DispatchFilter -> SchedulerAdapter",
++        "DispatchFilter -> Coordinator [style=dashed, label=\"next integration\"]",
++        "Coordinator -> GenerationTable [style=dashed, label=\"create first/next generation\"]",
++    ]
++    for phrase in required:
++        assert phrase in dot
++
++
++def test_0100_keeps_bus_observation_only() -> None:
++    text = _read(AUDIT) + "\n" + _read(DOT) + "\n" + _read(MANIFEST)
++    required = [
++        "event.bus\\nfacts only",
++        "existing-bus visualization adapter",
++        "read tap only",
++        "facts, not commands",
++        "No event.bus command path",
++        "No context.bus command path",
++    ]
++    for phrase in required:
++        assert phrase in text

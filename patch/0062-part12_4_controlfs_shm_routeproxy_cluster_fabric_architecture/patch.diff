@@ -1,0 +1,940 @@
+diff --git a/doc/architecture/RUNTIME_CONTROLFS_SHM_CLUSTER_FABRIC_GRAPH.md b/doc/architecture/RUNTIME_CONTROLFS_SHM_CLUSTER_FABRIC_GRAPH.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/architecture/RUNTIME_CONTROLFS_SHM_CLUSTER_FABRIC_GRAPH.md
+@@ -0,0 +1,376 @@
++# Runtime ControlFS / SHM / RouteProxy / Cluster Fabric architecture
++
++Status: locked architecture note for the next development tasks.
++
++This document updates the runtime graph after the Gateway/Proxy concept was corrected into a passive RouteProxy model.
++
++## Locked vocabulary
++
++Use these terms consistently:
++
++- **SecurityFS**: persistent rule surface, usually `/etc/autodoc/security`.
++- **Scheduler**: decision authority. It reads security snapshots and active context, then writes desired state.
++- **ControlFS**: Unix filesystem state surface, usually `/run/autodoc/controlfs`.
++- **RouteProxy**: passive reconciler. It watches ControlFS and materializes routes.
++- **SHM Runtime**: local fast runtime surface in `/dev/shm/autodoc`.
++- **DataHandle**: compact reference to a payload stored outside the hot bus.
++- **Recorder**: durable journal writer.
++- **ZFS Store**: persistent journal, contracts, artifacts, replay and snapshots.
++- **NetworkBridge**: future software extension for remote routes and handles.
++- **Hardware Cluster Fabric**: distant future FPGA/ASIC PCIe/LVDS extension for passive network observation, acceleration and cluster routing.
++
++Avoid the old wording:
++
++- `Gateway calls Scheduler`
++- `RuntimeProxy commands Scheduler`
++- `Proxy decides access`
++- `FPGA shares /dev/shm directly`
++
++Correct wording:
++
++- `Scheduler writes desired route state into ControlFS.`
++- `RouteProxy passively watches ControlFS.`
++- `RouteProxy creates/deletes shm routes and semaphores.`
++- `Workers use only materialized routes.`
++- `FPGA/ASIC exposes DMA-backed route buffers through a HardwareBridge, not direct /dev/shm sharing.`
++
++## Core invariant
++
++```text
++SecurityFS decides the rules.
++Scheduler compiles and writes desired state.
++ControlFS carries declarative state.
++RouteProxy materializes routes.
++SHM Runtime carries fast local runtime traffic.
++DataHandle references heavy payloads.
++Recorder persists facts.
++ZFS Store keeps durable memory.
++NetworkBridge and Hardware Cluster Fabric are future extensions.
++```
++
++## Current local graph
++
++```text
++                         +--------------------------------+
++                         | SecurityFS                     |
++                         | /etc/autodoc/security          |
++                         | subsystem rules / zones/scopes |
++                         +---------------+----------------+
++                                         |
++                                         | read + compile
++                                         v
++                         +--------------------------------+
++                         | Scheduler                      |
++                         | decision authority             |
++                         | security snapshot in RAM       |
++                         | active context / budget/order  |
++                         | writes desired route state     |
++                         | does not create shm            |
++                         +---------------+----------------+
++                                         |
++                                         | mkdir/write/rename desired state
++                                         v
+++--------------------------------------------------------------------------------+
++| ControlFS Unix                                                                 |
++| /run/autodoc/controlfs                                                         |
++| desired/routes/  leases/  revoked/  status/  active/routes/                    |
++| This is the runtime access surface formerly confused with Gateway/Proxy.        |
+++-------------------------------+------------------------------------------------+
++                                |
++                                | passive watch / reconcile
++                                v
++                         +--------------------------------+
++                         | RouteProxy                     |
++                         | external passive reconciler    |
++                         | does not call Scheduler        |
++                         | does not decide policy         |
++                         | creates/deletes shm routes     |
++                         | creates/deletes semaphores     |
++                         | writes active/status           |
++                         +---------------+----------------+
++                                         |
++                                         | materialize
++                                         v
+++--------------------------------------------------------------------------------+
++| SHM Runtime local                                                              |
++| /dev/shm/autodoc                                                              |
++| event.bus  context.bus  data.index  routes/<route_id>/  semaphores             |
++| Fast path: mmap/shm/memfd/ring buffers + semaphore/eventfd/futex wakeups.      |
+++-------------------------------+------------------------------------------------+
++                                |
++                                | route access
++                                v
++                         +--------------------------------+
++                         | Workers / Experts              |
++                         | RetrievalWorker                |
++                         | VariantGeneratorStub now       |
++                         | future MVTC / Qdrant workers   |
++                         | use materialized routes only   |
++                         +---------------+----------------+
++                                         |
++                                         | events / context patches / data handles
++                                         v
+++-------------------------+       +--------------------------------+
++| event.bus / context.bus |------>| Recorder                       |
++| lightweight facts       |       | journal / replay writer        |
+++-------------------------+       +---------------+----------------+
++                                                 |
++                                                 | durable write
++                                                 v
++                                      +----------------------------+
++                                      | ZFS Store                  |
++                                      | journal / contracts        |
++                                      | artifacts / replay         |
++                                      | snapshots / ARC            |
++                                      +-------------+--------------+
++                                                    |
++                                                    v
++                                      +----------------------------+
++                                      | Cell Lens                  |
++                                      | observation, not hot path  |
++                                      +----------------------------+
++```
++
++## ControlFS is not the hot bus
++
++ControlFS is a Unix filesystem state surface. It is used when a route or lease changes.
++
++Examples:
++
++```text
++desired/routes/baby_fork.retrieval/
++desired/routes/baby_fork.variant_stub/
++desired/routes/baby_fork.context_gate/
++leases/<lease_id>/
++revoked/<route_id>/
++status/<component_id>/
++active/routes/<route_id>/
++```
++
++The hot path is not repeated filesystem mutation. The hot path is:
++
++```text
++route exists
++-> shm ring buffer exists
++-> semaphore/eventfd wakes readers
++-> worker reads/writes compact messages
++-> heavy payloads are referenced by DataHandle
++```
++
++## SHM Runtime layout
++
++Recommended local runtime layout:
++
++```text
++/dev/shm/autodoc/
++  event.bus
++  context.bus
++  data.index
++
++  routes/
++    baby_fork.retrieval/
++      ring
++      index
++      state
++
++    baby_fork.variant_stub/
++      ring
++      index
++      state
++
++    baby_fork.context_gate/
++      ring
++      index
++      state
++```
++
++Recommended semaphore namespace:
++
++```text
++/autodoc_event_bus
++/autodoc_context_bus
++/autodoc_data_index
++/autodoc_route_<route_id>_read
++/autodoc_route_<route_id>_write
++/autodoc_route_<route_id>_control
++```
++
++A semaphore does not carry a message. It only wakes a reader/writer. The message is in shm.
++
++## Bus count
++
++For the current architecture, lock this shape:
++
++```text
++1. ControlFS        declarative route state, not a fast bus
++2. event.bus        lightweight facts
++3. context.bus      compact active context and patch proposals
++4. data.index       handles to heavy payloads
++5. routes/*         dynamic shm channels created by RouteProxy
++```
++
++Do not add more buses until the smoke path proves a real bottleneck.
++
++## Scheduler reachable surface
++
++The Scheduler should not become a throughput pipe. Its reachable surface is extended by shared local surfaces:
++
++```text
++SecurityFS    rules
++ControlFS     desired route state
++context.bus   compact context
++event.bus     facts that affect scheduling
++data.index    handles and payload metadata
++```
++
++The Scheduler sees compact identifiers:
++
++```text
++route_id
++lease_id
++context_id
++data_handle
++schema
++hash
++size
++zone
++budget
++status
++```
++
++The Scheduler should not transport:
++
++```text
++large PDFs
++large embeddings
++large blobs
++network streams
++video/audio payloads
++full datasets
++```
++
++## Local performance model
++
++```text
++very hot:
++  CPU cache + RAM + shm + mmap + ring buffers + semaphores
++
++hot durable:
++  ZFS ARC + NVMe datasets
++
++cold durable:
++  ZFS datasets + HDD + snapshots
++```
++
++`/dev/shm` does not use ZFS ARC directly. ZFS ARC helps the durable side: journals, contracts, artifacts, replay, documents and persistent stores.
++
++## Current baby-fork target flow
++
++```text
++ProjectRequest
++-> context.bus or initial task surface
++-> Scheduler reads active context/security snapshot
++-> Scheduler writes desired/routes/baby_fork.retrieval
++-> RouteProxy materializes /dev/shm/autodoc/routes/baby_fork.retrieval
++-> RetrievalWorker uses route and emits retrieval.completed
++-> Scheduler allows baby_fork.variant_stub route
++-> VariantGeneratorStub produces variants
++-> ContextGate validates ContextPatchProposal
++-> context.versioned event is recorded
++-> Recorder persists to ZFS
++-> Cell Lens observes durable journal
++```
++
++## Future software network extension
++
++NetworkBridge is future, not V0.
++
++```text
++SHM Runtime local
++  event.bus / context.bus / data.index / routes/*
++        |
++        v
++NetworkBridge future
++  replicate selected facts
++  translate local handle -> remote handle
++  expose remote route status
++  never replace Scheduler authority
++        |
++        v
++remote server SHM Runtime future
++```
++
++NetworkBridge must not turn the Scheduler into a network payload pipe. It only extends reachable surfaces through compact events, remote handles and route metadata.
++
++## Distant future hardware extension
++
++Hardware Cluster Fabric is future lointain and must not be implemented now.
++
++It keeps together two linked ideas:
++
++1. A PCIe FPGA/ASIC network-oriented passive observer/accelerator.
++2. A distributed server cluster where tasks are dispatched across machines while contexts and data can be recovered through a fast route.
++
++Conceptual shape:
++
++```text
++Server A SHM Runtime
++  routes/*  context.bus  data.index
++        |
++        v
++PCIe HardwareBridge
++  DMA-backed route buffers
++  BAR/MMIO control
++  MSI-X/eventfd notifications
++        |
++        v
++FPGA/ASIC passive network fabric
++  observe / monitor / anticipate flows
++  accelerate routing decisions
++  bridge machines through LVDS or a dedicated direct link
++        |
++        v
++FPGA/ASIC passive network fabric
++        |
++        v
++PCIe HardwareBridge
++        |
++        v
++Server B SHM Runtime
++```
++
++Correct hardware wording:
++
++```text
++FPGA/ASIC does not share /dev/shm directly.
++FPGA/ASIC exposes DMA-backed route buffers and hardware notifications.
++HardwareBridge presents them as shm-like routes to the runtime.
++```
++
++This is deliberately not part of the current implementation. It only conditions the architecture so that local routes, remote routes and hardware routes remain compatible concepts.
++
++## Architecture lock
++
++The current implementation should only document and prepare this model.
++
++Do not implement now:
++
++```text
++NetworkBridge
++HardwareBridge
++RDMA/DPDK/AF_XDP
++FPGA/ASIC control
++cluster scheduling
++remote context replication
++```
++
++Implement first:
++
++```text
++ControlFS schema
++RouteProxy dry-run model
++local shm route vocabulary
++event/context/data handle rules
++baby-fork smoke project integration
++documentation and rule tests
++```
+
+diff --git a/doc/architecture/RUNTIME_CONTROLFS_SHM_PRIORITY_PLAN.md b/doc/architecture/RUNTIME_CONTROLFS_SHM_PRIORITY_PLAN.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/architecture/RUNTIME_CONTROLFS_SHM_PRIORITY_PLAN.md
+@@ -0,0 +1,312 @@
++# Runtime ControlFS / SHM development priorities
++
++Status: development priority plan.
++
++This plan converts the locked graph into practical next tasks. It keeps the current work local-first and avoids implementing the distant cluster/hardware fabric too early.
++
++## Priority 0: lock the vocabulary and graph
++
++Goal: make the architecture readable and stable before changing runtime code.
++
++Deliverables:
++
++- Locked graph document.
++- Glossary for SecurityFS, Scheduler, ControlFS, RouteProxy, SHM Runtime, DataHandle, Recorder, ZFS Store, NetworkBridge and Hardware Cluster Fabric.
++- Explicit statement that RouteProxy is passive.
++- Explicit statement that Scheduler writes desired state, not shm.
++- Explicit statement that NetworkBridge and Hardware Cluster Fabric are future only.
++
++Acceptance checks:
++
++```text
++docs mention ControlFS
++docs mention RouteProxy passive reconciler
++docs mention SHM Runtime
++docs mention ZFS durable store
++docs mention future NetworkBridge
++docs mention distant future Hardware Cluster Fabric
++```
++
++## Priority 1: ControlFS schema, no runtime behavior change
++
++Goal: define the filesystem shape without wiring the real Scheduler yet.
++
++Target layout:
++
++```text
++/run/autodoc/controlfs/
++  desired/
++    routes/
++  active/
++    routes/
++  leases/
++  revoked/
++  status/
++```
++
++Route manifest minimal fields:
++
++```text
++route_id
++task_id
++zone
++scope
++producer
++consumer
++ttl
++mode
++schema
++created_by
++created_at
++```
++
++Rules:
++
++- Scheduler owns desired state.
++- RouteProxy owns active/status state.
++- Workers never write desired/ or active/.
++- Writes should be atomic: write temp file then rename.
++- Route identifiers must be normalized and must not contain path traversal.
++
++Acceptance checks:
++
++```text
++manifest schema documented
++desired/ vs active/ ownership documented
++atomic write rule documented
++```
++
++## Priority 2: RouteProxy dry-run reconciler
++
++Goal: introduce a testable passive reconciler without creating real shm yet.
++
++Dry-run behavior:
++
++```text
++read desired/routes/*
++read active/routes/*
++plan create for desired route missing in active
++plan delete for active route missing in desired
++plan update when manifest changed
++emit route.opened / route.closed plans as data structures
++```
++
++No real shm. No real semaphore. No scheduler integration yet.
++
++Acceptance checks:
++
++```text
++route create plan from desired entry
++route delete plan when desired removed
++route update plan when manifest changes
++invalid manifest ignored with error event
++```
++
++## Priority 3: SHM vocabulary and local fake transport
++
++Goal: model the runtime transport shape before using low-level IPC.
++
++Objects:
++
++```text
++event.bus
++context.bus
++data.index
++routes/<route_id>
++semaphore names
++```
++
++Implement as Python in-memory or files first if needed, but preserve the final naming.
++
++Acceptance checks:
++
++```text
++event message schema exists
++context message schema exists
++data handle schema exists
++route message schema exists
++```
++
++## Priority 4: Baby-fork integration with route vocabulary
++
++Goal: keep the baby-fork smoke project as the validation path.
++
++Current flow remains logical and local:
++
++```text
++TaskContext v1
++-> retrieval worker
++-> variant stub
++-> context gate
++-> TaskContext v2
++-> recorder/cell lens snapshot
++```
++
++Next flow should use the new vocabulary:
++
++```text
++desired/routes/baby_fork.retrieval
++active/routes/baby_fork.retrieval
++event retrieval.completed
++context patch proposed
++context versioned
++data handle for evidence set if payload grows
++```
++
++Acceptance checks:
++
++```text
++baby-fork emits route-like source classes or events
++baby-fork report references route_id
++baby-fork still rejects nasa-antenna evidence
++baby-fork still selects variant-1
++```
++
++## Priority 5: Local shm/semaphore prototype
++
++Goal: only after dry-run and smoke graph are stable, prototype the local fast layer.
++
++Candidate Linux mechanisms:
++
++```text
++/dev/shm tmpfs
++shm_open + mmap
++memfd for anonymous sealed payloads
++POSIX semaphore or eventfd for wakeups
++ring buffer for compact messages
++```
++
++Rules:
++
++- ControlFS remains the declarative state.
++- SHM Runtime is the hot path.
++- Semaphores wake readers/writers.
++- Heavy payloads stay behind DataHandle.
++- Scheduler never transports large payloads.
++
++Acceptance checks:
++
++```text
++route can be materialized in /dev/shm
++reader/writer can exchange compact message
++semaphore wakeup works
++data handle can point to a payload
++```
++
++## Priority 6: Recorder and replay
++
++Goal: convert runtime facts into durable memory.
++
++Recorder consumes:
++
++```text
++event.bus
++route.opened
++route.closed
++context.patch.proposed
++context.versioned
++retrieval.completed
++worker.started
++worker.completed
++```
++
++Recorder writes:
++
++```text
++ZFS-backed journal
++replay records
++cell lens snapshots
++```
++
++Acceptance checks:
++
++```text
++events survive runtime restart through journal
++cell lens can show route lifecycle
++replay can reconstruct baby-fork context versions
++```
++
++## Priority 7: NetworkBridge design only
++
++Goal: prepare remote extension without implementing it.
++
++Document only:
++
++```text
++remote_handle
++remote_route
++remote_event
++network bridge responsibility
++non-responsibility of Scheduler for network payload transport
++```
++
++Acceptance checks:
++
++```text
++NetworkBridge future appears in graph
++no code depends on network bridge
++local smoke tests remain local-only
++```
++
++## Priority 8: Hardware Cluster Fabric design only
++
++Goal: preserve the distant FPGA/ASIC PCIe/LVDS project without pulling it into the current implementation.
++
++Document only:
++
++```text
++PCIe HardwareBridge
++DMA-backed route buffers
++BAR/MMIO control
++MSI-X/eventfd notification
++passive network observation/monitoring
++LVDS or dedicated direct link between machines
++cluster task dispatch future
++```
++
++Acceptance checks:
++
++```text
++Hardware Cluster Fabric future appears in graph
++document says not implemented now
++document says FPGA/ASIC does not share /dev/shm directly
++document says hardware routes are DMA-backed shm-like routes
++```
++
++## Development order summary
++
++```text
++P0 docs vocabulary and graph
++P1 ControlFS schema
++P2 RouteProxy dry-run reconciler
++P3 SHM message/handle schemas
++P4 baby-fork route vocabulary integration
++P5 local shm/semaphore prototype
++P6 recorder/replay integration
++P7 NetworkBridge design only
++P8 Hardware Cluster Fabric design only
++```
++
++## Do not do yet
++
++```text
++Do not refactor Scheduler spawn.
++Do not implement network routing.
++Do not implement RDMA/DPDK/AF_XDP.
++Do not implement FPGA/ASIC bridge.
++Do not make Qdrant source of truth.
++Do not put heavy payloads in event.bus.
++Do not let RouteProxy decide security.
++Do not let workers write ControlFS desired/active state.
++```
++
++## Next recommended patch after this one
++
++The next patch should be Priority 1:
++
++```text
++Introduce a documented ControlFS manifest schema and a small parser/validator.
++No real shm.
++No real Scheduler integration.
++No real RouteProxy daemon.
++```
+
+diff --git a/doc/architecture/ADR-0062-controlfs-shm-routeproxy-cluster-fabric.md b/doc/architecture/ADR-0062-controlfs-shm-routeproxy-cluster-fabric.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/architecture/ADR-0062-controlfs-shm-routeproxy-cluster-fabric.md
+@@ -0,0 +1,86 @@
++# ADR-0062: ControlFS, passive RouteProxy, SHM Runtime and future cluster fabric
++
++## Status
++
++Accepted for architecture documentation.
++
++## Context
++
++The earlier Gateway/Proxy model was too direct and did not represent the desired runtime shape.
++
++The corrected architecture says:
++
++- Scheduler should not be called directly by a proxy.
++- RouteProxy should be outside the Scheduler and passive.
++- RouteProxy should observe a Unix filesystem state surface.
++- RouteProxy should create/delete shared memory routes and semaphores.
++- Scheduler should read/compile security rules and write desired route state.
++- Runtime traffic should use `/dev/shm` routes, context/event buses and data handles.
++- Persistent memory should go through Recorder and ZFS.
++- Future network and hardware cluster concepts should be kept in the roadmap, not implemented now.
++
++## Decision
++
++Adopt the following runtime architecture:
++
++```text
++SecurityFS -> Scheduler -> ControlFS -> RouteProxy -> SHM Runtime -> Workers
++                                             |
++                                             v
++                                      event/context/data handles
++                                             |
++                                             v
++                                      Recorder -> ZFS -> Cell Lens
++```
++
++Future-only extensions:
++
++```text
++SHM Runtime -> NetworkBridge -> remote SHM Runtime
++SHM Runtime -> PCIe HardwareBridge -> FPGA/ASIC Cluster Fabric -> remote machine
++```
++
++## Consequences
++
++Good:
++
++- Scheduler is not a throughput bottleneck.
++- RouteProxy is a simple materializer, not a policy engine.
++- ControlFS gives a clear Unix-native surface for route state.
++- SHM Runtime gives a fast local path.
++- ZFS keeps durable truth and replay.
++- Network/hardware extensions remain possible without polluting V0.
++
++Tradeoffs:
++
++- More surfaces must be named clearly.
++- ControlFS and SHM Runtime must not be confused.
++- Low-level IPC must be delayed until schemas and dry-run behavior are stable.
++- Hardware fabric is powerful but overkill for current smoke tests.
++
++## Non-goals
++
++This ADR does not implement:
++
++- real shared memory rings
++- semaphores
++- NetworkBridge
++- HardwareBridge
++- FPGA/ASIC integration
++- cluster dispatch
++- Scheduler spawn changes
++
++## Locked statements
++
++```text
++Scheduler writes desired route state into ControlFS.
++RouteProxy passively watches ControlFS.
++RouteProxy creates/deletes shm routes and semaphores.
++RouteProxy does not call Scheduler.
++RouteProxy does not decide security.
++ControlFS is declarative state, not the hot bus.
++SHM Runtime is the local fast path.
++ZFS is durable memory.
++NetworkBridge is future.
++Hardware Cluster Fabric is future lointain.
++```
+
+diff --git a/tests/rules/test_controlfs_shm_routeproxy_cluster_fabric_architecture_rule.py b/tests/rules/test_controlfs_shm_routeproxy_cluster_fabric_architecture_rule.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/rules/test_controlfs_shm_routeproxy_cluster_fabric_architecture_rule.py
+@@ -0,0 +1,96 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++GRAPH_DOC = ROOT / "doc" / "architecture" / "RUNTIME_CONTROLFS_SHM_CLUSTER_FABRIC_GRAPH.md"
++PLAN_DOC = ROOT / "doc" / "architecture" / "RUNTIME_CONTROLFS_SHM_PRIORITY_PLAN.md"
++ADR_DOC = ROOT / "doc" / "architecture" / "ADR-0062-controlfs-shm-routeproxy-cluster-fabric.md"
++
++
++def _read(path: Path) -> str:
++    assert path.exists(), f"missing architecture document: {path}"
++    return path.read_text(encoding="utf-8")
++
++
++def test_controlfs_shm_routeproxy_graph_locks_the_runtime_surfaces() -> None:
++    text = _read(GRAPH_DOC)
++
++    required_phrases = [
++        "SecurityFS decides the rules.",
++        "Scheduler compiles and writes desired state.",
++        "ControlFS carries declarative state.",
++        "RouteProxy materializes routes.",
++        "SHM Runtime carries fast local runtime traffic.",
++        "DataHandle references heavy payloads.",
++        "Recorder persists facts.",
++        "ZFS Store keeps durable memory.",
++        "NetworkBridge and Hardware Cluster Fabric are future extensions.",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_routeproxy_is_passive_and_does_not_call_scheduler() -> None:
++    text = _read(GRAPH_DOC) + "\n" + _read(ADR_DOC)
++
++    required_phrases = [
++        "RouteProxy passively watches ControlFS.",
++        "RouteProxy creates/deletes shm routes and semaphores.",
++        "RouteProxy does not call Scheduler.",
++        "RouteProxy does not decide security.",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_scheduler_is_not_a_payload_pipe() -> None:
++    text = _read(GRAPH_DOC)
++
++    required_phrases = [
++        "The Scheduler should not become a throughput pipe.",
++        "large PDFs",
++        "large embeddings",
++        "large blobs",
++        "network streams",
++        "full datasets",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_priorities_keep_network_and_hardware_as_future_only() -> None:
++    text = _read(PLAN_DOC)
++
++    required_phrases = [
++        "P0 docs vocabulary and graph",
++        "P1 ControlFS schema",
++        "P2 RouteProxy dry-run reconciler",
++        "P3 SHM message/handle schemas",
++        "P4 baby-fork route vocabulary integration",
++        "P5 local shm/semaphore prototype",
++        "P7 NetworkBridge design only",
++        "P8 Hardware Cluster Fabric design only",
++        "Do not implement FPGA/ASIC bridge.",
++        "Do not implement network routing.",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
++
++
++def test_hardware_cluster_fabric_is_kept_as_distant_future() -> None:
++    text = _read(GRAPH_DOC) + "\n" + _read(PLAN_DOC)
++
++    required_phrases = [
++        "Hardware Cluster Fabric is future lointain",
++        "FPGA/ASIC does not share /dev/shm directly.",
++        "DMA-backed route buffers",
++        "LVDS or a dedicated direct link",
++        "cluster task dispatch future",
++    ]
++
++    for phrase in required_phrases:
++        assert phrase in text
+
+diff --git a/doc/changelog/0062-controlfs-shm-routeproxy-cluster-fabric.md b/doc/changelog/0062-controlfs-shm-routeproxy-cluster-fabric.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/changelog/0062-controlfs-shm-routeproxy-cluster-fabric.md
+@@ -0,0 +1,36 @@
++# 0062 - ControlFS / SHM / RouteProxy / Cluster Fabric architecture
++
++## Added
++
++- Locked runtime architecture document for:
++  - SecurityFS
++  - Scheduler
++  - ControlFS
++  - passive RouteProxy
++  - SHM Runtime
++  - DataHandle
++  - Recorder
++  - ZFS Store
++  - future NetworkBridge
++  - distant future Hardware Cluster Fabric
++- Priority plan for the next development tasks.
++- ADR-0062 documenting the decision.
++- Rule tests checking the locked phrases and future-only boundaries.
++
++## Changed
++
++- Replaces the old mental model `Gateway/Proxy -> Scheduler` with:
++  - `Scheduler -> ControlFS desired state`
++  - `RouteProxy watches ControlFS`
++  - `RouteProxy materializes shm routes and semaphores`
++
++## Not implemented
++
++- No Scheduler code change.
++- No RouteProxy daemon.
++- No real shm rings.
++- No semaphores.
++- No NetworkBridge.
++- No HardwareBridge.
++- No FPGA/ASIC integration.
++- No distributed cluster dispatch.

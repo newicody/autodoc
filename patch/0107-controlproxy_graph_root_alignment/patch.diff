@@ -1,0 +1,475 @@
+diff --git a/PHASE0107_TEST_REPORT.md b/PHASE0107_TEST_REPORT.md
+new file mode 100644
+index 0000000..1c4808f
+--- /dev/null
++++ b/PHASE0107_TEST_REPORT.md
+@@ -0,0 +1,46 @@
++# PHASE0107 test report
++
++Patch: 0107-controlproxy_graph_root_alignment
++
++## Scope
++
++Architecture graph root alignment after the 0101-0106 simplification locks.
++
++This phase is documentation, DOT overlay and rule tests only. It does not add
++runtime code and it does not modify Scheduler, Dispatcher, PolicyEngine,
++PriorityQueue, EventBus, RouteRuntimeManager or specialist code.
++
++## Local validation performed during patch generation
++
++```text
++python -m py_compile tests/rules/test_controlproxy_graph_root_alignment_0107_rule.py
++pytest -q tests/rules/test_controlproxy_graph_root_alignment_0107_rule.py
++```
++
++## Expected repository validation
++
++```text
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/rules/test_controlproxy_graph_root_alignment_0107_rule.py
++PYTHONPATH=src:. pytest -q tests/rules
++PYTHONPATH=src:. pytest -q
++```
++
++## code_rule review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: 0107 locks the existing micro-kernel and graph boundaries; it does not introduce a new programming technique, backend, CLI, service, watcher, bus or Scheduler behavior.
++live_path_status: n/a
++live_path_uses_real_backend: n/a
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++```
++
++## Guardrails
++
++No runtime code, no CLI, no daemon, no watcher, no Scheduler.run() change, no
++Dispatcher change, no PolicyEngine expansion, no PriorityQueue change, no new
++bus and no scheduler-like ControlProxy coordinator.
+diff --git a/doc/CHANGELOG_0107_CONTROLPROXY_GRAPH_ROOT_ALIGNMENT.md b/doc/CHANGELOG_0107_CONTROLPROXY_GRAPH_ROOT_ALIGNMENT.md
+new file mode 100644
+index 0000000..b352182
+--- /dev/null
++++ b/doc/CHANGELOG_0107_CONTROLPROXY_GRAPH_ROOT_ALIGNMENT.md
+@@ -0,0 +1,13 @@
++# Changelog — 0107 ControlProxy graph root alignment
++
++- Added a root-attached runtime overlay for ControlProxy / RouteRuntimeManager.
++- Added a graph integration note explaining how the runtime overlay relates to
++  `doc/docs/architecture/00_global.dot` and the existing Scheduler and Context
++  graph families.
++- Locked that the runtime overlay is not an isolated graph.
++- Locked that Scheduler, PolicyEngine, PriorityQueue, Dispatcher, Handler,
++  Specialist, EventBus, Context and RouteRuntimeManager keep separate roles.
++- Locked that route mmap/eventfd is data plane, not EventBus.
++- Added rule tests for the graph-root alignment.
++- No runtime code, CLI, daemon, watcher, Scheduler, Dispatcher, PolicyEngine,
++  PriorityQueue or EventBus change.
+diff --git a/doc/architecture/CONTROLPROXY_GRAPH_ROOT_ALIGNMENT_0107.md b/doc/architecture/CONTROLPROXY_GRAPH_ROOT_ALIGNMENT_0107.md
+new file mode 100644
+index 0000000..8a2d3aa
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_GRAPH_ROOT_ALIGNMENT_0107.md
+@@ -0,0 +1,119 @@
++# ControlProxy graph root alignment — 0107
++
++0107 aligns the architecture graphs after the simplification locks introduced
++from 0101 to 0106. It answers one specific problem: recent runtime graphs were
++useful, but they could be read as a second architecture next to the micro-kernel.
++That reading is not allowed.
++
++```text
++ROOT_GRAPH: doc/docs/architecture/00_global.dot
++root-attached runtime overlay
++not an isolated graph
++```
++
++## Locked architecture line
++
++The graph line remains:
++
++```text
++Scheduler -> PolicyEngine -> PriorityQueue -> Scheduler.run() -> Dispatcher -> Handler
++```
++
++The meaning of each block is locked as follows:
++
++```text
++Scheduler = loop, time, queue intake and cooperative execution
++PolicyEngine = minimal admission before queue
++PriorityQueue = deterministic execution order
++Dispatcher = EventType -> Handler only
++Handler = thin adapter
++Specialist branch owns business logic
++RouteRuntimeManager = runtime data-plane boundary
++EventBus = observation only
++Route mmap/eventfd = data plane, not EventBus
++```
++
++## ControlProxy placement
++
++ControlProxy is not a scheduler layer. In the graph it must appear under the
++handler side of the Scheduler boundary:
++
++```text
++Scheduler.run()
++-> Dispatcher
++-> ControlProxy route handler
++-> RouteRuntimeManager
++-> ControlFS + mmap/eventfd data plane
++```
++
++ControlProxy does not manage global priorities. ControlProxy does not decide
++policy/zone. ControlProxy does not own EventBus. ControlProxy does not create a
++second bus.
++
++The following concepts remain rejected:
++
++```text
++No ControlProxyBus
++No RouteBus
++No VisualizationBus
++No scheduler-like ControlProxy coordinator
++```
++
++## Relation to existing individual graphs
++
++The existing Scheduler graph family remains authoritative for the micro-kernel
++boundary:
++
++```text
++doc/docs/architecture/scheduler/10_scheduler.dot
++doc/docs/architecture/scheduler/11_dispatcher.dot
++doc/docs/architecture/scheduler/12_event_bus.dot
++doc/docs/architecture/scheduler/13_priority_queue.dot
++doc/docs/architecture/scheduler/14_component_proxy.dot
++```
++
++The existing Context graph family remains authoritative for context ownership:
++
++```text
++TaskContext / ContextGate remain context authority
++Qdrant remains projection/search only
++```
++
++0107 adds the runtime overlay under:
++
++```text
++doc/docs/architecture/runtime/97_controlproxy_root_alignment.dot
++```
++
++That overlay is a root-attached runtime overlay. It exists to show where
++ControlProxy/RouteRuntimeManager lands relative to the existing root graph and
++not to create a new graph root.
++
++## Coverage of phases 0101 to 0107
++
++```text
++0101 -> 0102 -> 0103 -> 0104 -> 0105 -> 0106 -> 0107
++```
++
++Coverage summary:
++
++```text
++0101 locks the simplified responsibility model.
++0102 audits existing paths and marks wrappers/runtime primitives.
++0103 introduces RouteRuntimeManager as runtime boundary.
++0104 makes the ControlProxy handler a thin adapter.
++0105 locks priority/admission minimalism.
++0106 locks EventBus versus data plane.
++0107 attaches the runtime graph to the root graph structure.
++```
++
++## What 0107 deliberately does not do
++
++0107 does not rewrite `00_global.dot` directly. That file is a long-lived phase
++roadmap graph and is already dense. Directly editing it in this step would make
++patch application fragile and would not by itself solve the ambiguity. Instead,
++0107 adds a root-attached runtime overlay and rule tests that lock how it must be
++read.
++
++A later graph-rendering pass may merge overlays into generated SVG artifacts,
++but that pass must still preserve the boundaries locked here.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0107.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0107.md
+new file mode 100644
+index 0000000..696ab5f
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0107.md
+@@ -0,0 +1,65 @@
++# ControlProxy operational plan — 0107
++
++0107 follows the locked simplification path:
++
++```text
++0101 -> 0102 -> 0103 -> 0104 -> 0105 -> 0106 -> 0107
++```
++
++## Current decision
++
++The graph structure must reflect the code direction rather than an aspirational
++parallel runtime. The ControlProxy route runtime is a subgraph attached to the
++micro-kernel path, not an independent architecture.
++
++```text
++ROOT_GRAPH: doc/docs/architecture/00_global.dot
++root-attached runtime overlay
++not an isolated graph
++```
++
++## Required reading of the runtime path
++
++```text
++Scheduler -> PolicyEngine -> PriorityQueue -> Scheduler.run() -> Dispatcher -> Handler
++Handler -> RouteRuntimeManager
++RouteRuntimeManager -> ControlFS
++RouteRuntimeManager -> mmap/eventfd data plane
++RouteRuntimeManager -> generation table / lifecycle / placement
++RouteRuntimeManager -> RouteMessageJournal
++EventBus = observation only
++```
++
++## Boundaries preserved
++
++```text
++Dispatcher = EventType -> Handler only
++Handler = thin adapter
++Specialist branch owns business logic
++PolicyEngine = minimal admission before queue
++PriorityQueue = deterministic execution order
++ControlProxy does not manage global priorities
++Route mmap/eventfd = data plane, not EventBus
++```
++
++## Next steps after 0107
++
++0108 should move from graph alignment back to an executable path check. The
++recommended next step is a small end-to-end scenario that proves the thin
++ControlProxy handler can call RouteRuntimeManager without changing Scheduler,
++Dispatcher, PolicyEngine, PriorityQueue or EventBus.
++
++0109 can then identify legacy wrappers that now only delegate to the thin path.
++
++## Prohibited regressions
++
++```text
++No ControlProxyBus
++No RouteBus
++No VisualizationBus
++No scheduler-like ControlProxy coordinator
++No ControlProxy priority engine
++No Dispatcher business logic
++No PolicyEngine business logic
++No EventBus command path
++```
+diff --git a/doc/docs/architecture/runtime/97_controlproxy_root_alignment.dot b/doc/docs/architecture/runtime/97_controlproxy_root_alignment.dot
+new file mode 100644
+index 0000000..b7b971b
+--- /dev/null
++++ b/doc/docs/architecture/runtime/97_controlproxy_root_alignment.dot
+@@ -0,0 +1,83 @@
++digraph ControlProxyRootAlignment0107 {
++  // ROADMAP_ID: controlproxy-root-alignment-0107
++  // ROOT_GRAPH: doc/docs/architecture/00_global.dot
++  // This is a root-attached runtime overlay, not an isolated graph.
++  // It clarifies how the ControlProxy runtime path attaches to the existing
++  // micro-kernel graph family without creating a second Scheduler or bus.
++
++  graph [
++    label="0107 ControlProxy root-attached runtime overlay",
++    labelloc=t,
++    fontname="Arial",
++    fontsize=12,
++    rankdir=LR,
++    compound=true,
++    splines=ortho
++  ];
++
++  node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10];
++  edge [fontname="Arial", fontsize=9, arrowsize=0.7];
++
++  subgraph cluster_root {
++    label="Root micro-kernel command path";
++    style="rounded";
++
++    scheduler_emit [label="Scheduler.emit()"];
++    policy_engine [label="PolicyEngine\nminimal admission before queue"];
++    priority_queue [label="PriorityQueue\ndeterministic execution order"];
++    scheduler_run [label="Scheduler.run()"];
++    dispatcher [label="Dispatcher\nEventType -> Handler only"];
++    handler [label="Handler\nthin adapter"];
++
++    scheduler_emit -> policy_engine -> priority_queue -> scheduler_run -> dispatcher -> handler;
++  }
++
++  subgraph cluster_specialist {
++    label="Specialist branch";
++    style="rounded,dashed";
++
++    specialist [label="Specialist\nbusiness logic / reasoning / transformation"];
++  }
++
++  subgraph cluster_controlproxy {
++    label="ControlProxy / RouteRuntimeManager runtime boundary";
++    style="rounded";
++
++    route_runtime_manager [label="RouteRuntimeManager\nruntime data-plane boundary"];
++    controlfs [label="ControlFS\nstate surface"];
++    generation_table [label="generation table\ng2/g3"];
++    lifecycle [label="lifecycle\ncandidate/active/draining/closed"];
++    placement [label="placement\nfile or /dev/shm"];
++    dataplane [label="mmap/eventfd\ndata plane, not EventBus"];
++    journal [label="RouteMessageJournal\ndrained messages"];
++
++    route_runtime_manager -> controlfs;
++    route_runtime_manager -> generation_table;
++    route_runtime_manager -> lifecycle;
++    route_runtime_manager -> placement;
++    route_runtime_manager -> dataplane;
++    dataplane -> journal [label="drained route messages"];
++  }
++
++  subgraph cluster_observation {
++    label="Observation and context";
++    style="rounded,dashed";
++
++    eventbus [label="EventBus\nobservation only"];
++    visualization [label="visualization adapter\nreads existing EventBus/context"];
++    context_gate [label="TaskContext / ContextGate\ncontext authority"];
++    qdrant [label="Qdrant\nprojection/search only"];
++
++    eventbus -> visualization [label="facts"];
++    context_gate -> visualization [label="snapshot"];
++    context_gate -> qdrant [label="projection"];
++  }
++
++  handler -> route_runtime_manager [label="ControlProxy route handler"];
++  handler -> specialist [label="specialist handlers"];
++  dispatcher -> eventbus [label="observable copy", style=dashed];
++  journal -> eventbus [label="optional facts only", style=dashed];
++
++  policy_note [shape=note, label="ControlProxy does not manage global priorities\nControlProxy does not decide policy/zone\nNo ControlProxyBus / RouteBus / VisualizationBus"];
++  route_runtime_manager -> policy_note [style=dotted, arrowhead=none];
++}
+diff --git a/doc/manifests/MANIFEST_0107_CHANGED_FILES.md b/doc/manifests/MANIFEST_0107_CHANGED_FILES.md
+new file mode 100644
+index 0000000..c67b2ad
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0107_CHANGED_FILES.md
+@@ -0,0 +1,31 @@
++# Manifest — 0107 ControlProxy graph root alignment
++
++0107 is a documentation, DOT and rule-test patch. It does not add runtime code.
++
++## Added files
++
++```text
++PHASE0107_TEST_REPORT.md
++doc/CHANGELOG_0107_CONTROLPROXY_GRAPH_ROOT_ALIGNMENT.md
++doc/architecture/CONTROLPROXY_GRAPH_ROOT_ALIGNMENT_0107.md
++doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0107.md
++doc/docs/architecture/runtime/97_controlproxy_root_alignment.dot
++doc/manifests/MANIFEST_0107_CHANGED_FILES.md
++tests/rules/test_controlproxy_graph_root_alignment_0107_rule.py
++```
++
++## Kernel guardrails
++
++0107 does not modify Scheduler, Dispatcher, PolicyEngine, PriorityQueue,
++EventBus, Component contracts, ContextGate, Qdrant, RouteRuntimeManager or any
++runtime module.
++
++## Graph guardrails
++
++```text
++ROOT_GRAPH: doc/docs/architecture/00_global.dot
++root-attached runtime overlay
++not an isolated graph
++Dispatcher = EventType -> Handler only
++Route mmap/eventfd = data plane, not EventBus
++```
+diff --git a/tests/rules/test_controlproxy_graph_root_alignment_0107_rule.py b/tests/rules/test_controlproxy_graph_root_alignment_0107_rule.py
+new file mode 100644
+index 0000000..b7ed7e0
+--- /dev/null
++++ b/tests/rules/test_controlproxy_graph_root_alignment_0107_rule.py
+@@ -0,0 +1,76 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "CONTROLPROXY_GRAPH_ROOT_ALIGNMENT_0107.md"
++PLAN = ROOT / "doc" / "architecture" / "CONTROLPROXY_OPERATIONAL_PLAN_0107.md"
++DOT = ROOT / "doc" / "docs" / "architecture" / "runtime" / "97_controlproxy_root_alignment.dot"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0107_CHANGED_FILES.md"
++
++
++def _read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_0107_graph_root_alignment_files_exist() -> None:
++    for path in (DOC, PLAN, DOT, MANIFEST):
++        assert path.exists(), path
++
++
++def test_0107_graph_is_root_attached_not_isolated() -> None:
++    text = _read(DOC) + "\n" + _read(PLAN) + "\n" + _read(DOT)
++    required = [
++        "ROOT_GRAPH: doc/docs/architecture/00_global.dot",
++        "root-attached runtime overlay",
++        "not an isolated graph",
++        "Scheduler -> PolicyEngine -> PriorityQueue -> Scheduler.run() -> Dispatcher -> Handler",
++        "0101 -> 0102 -> 0103 -> 0104 -> 0105 -> 0106 -> 0107",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0107_locks_microkernel_responsibilities() -> None:
++    text = _read(DOC) + "\n" + _read(PLAN) + "\n" + _read(DOT)
++    required = [
++        "PolicyEngine = minimal admission before queue",
++        "PriorityQueue = deterministic execution order",
++        "Dispatcher = EventType -> Handler only",
++        "Handler = thin adapter",
++        "Specialist branch owns business logic",
++        "RouteRuntimeManager = runtime data-plane boundary",
++        "ControlProxy does not manage global priorities",
++        "EventBus = observation only",
++        "Route mmap/eventfd = data plane, not EventBus",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0107_rejects_second_bus_and_scheduler_like_controlproxy() -> None:
++    text = _read(DOC) + "\n" + _read(PLAN) + "\n" + _read(DOT)
++    required = [
++        "No ControlProxyBus",
++        "No RouteBus",
++        "No VisualizationBus",
++        "No scheduler-like ControlProxy coordinator",
++        "No Dispatcher business logic",
++        "No PolicyEngine business logic",
++        "No EventBus command path",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0107_manifest_stays_documentation_only() -> None:
++    manifest = _read(MANIFEST)
++    assert "doc/docs/architecture/runtime/97_controlproxy_root_alignment.dot" in manifest
++    assert "tests/rules/test_controlproxy_graph_root_alignment_0107_rule.py" in manifest
++    for forbidden in (
++        "src/kernel/scheduler.py",
++        "src/kernel/dispatcher.py",
++        "src/kernel/queue.py",
++        "src/policy/engine.py",
++        "src/kernel/event_bus.py",
++        "src/runtime/route_runtime_manager.py",
++    ):
++        assert forbidden not in manifest

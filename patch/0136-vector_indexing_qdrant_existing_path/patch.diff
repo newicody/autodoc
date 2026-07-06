@@ -1,0 +1,356 @@
+diff --git a/PHASE0136_TEST_REPORT.md b/PHASE0136_TEST_REPORT.md
+new file mode 100644
+index 0000000..abe9c49
+--- /dev/null
++++ b/PHASE0136_TEST_REPORT.md
+@@ -0,0 +1,23 @@
++# PHASE0136_TEST_REPORT
++
++```text
++phase: 0136-vector_indexing_qdrant_existing_path
++code_rule_review: done
++code_rule_update_required: true
++code_rule_reason: locks vector-indexing/Qdrant reuse before any bridge or handler production change.
++live_path_status: transition
++live_path_uses_real_backend: false
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++```
++
++Validation to run on the complete repository:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/inference/test_vector_indexing_qdrant_existing_path_0136.py tests/rules/test_vector_indexing_qdrant_existing_path_0136_rule.py
++PYTHONPATH=src:. pytest -q tests/inference tests/rules
++```
++
++The patch generator environment does not contain the full `src/inference` and `src/context` stack, so this phase is validated structurally and should be executed on the complete working tree.
+diff --git a/doc/CHANGELOG_0136_VECTOR_INDEXING_QDRANT_EXISTING_PATH.md b/doc/CHANGELOG_0136_VECTOR_INDEXING_QDRANT_EXISTING_PATH.md
+new file mode 100644
+index 0000000..da92783
+--- /dev/null
++++ b/doc/CHANGELOG_0136_VECTOR_INDEXING_QDRANT_EXISTING_PATH.md
+@@ -0,0 +1,5 @@
++# Changelog 0136 — vector indexing through existing Qdrant path
++
++Added tests and documentation proving that `VectorProjectionJob` should reuse the existing Qdrant projection membrane and vector collection registry before any production bridge is added.
++
++No production runtime, Scheduler, RouteProxy, Qdrant client, OpenVINO adapter, or durable SQL store was changed.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0136.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0136.md
+new file mode 100644
+index 0000000..b7275f3
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0136.md
+@@ -0,0 +1,15 @@
++# 0136 operational note — vector indexing uses existing Qdrant path
++
++0136 does not add a Qdrant runtime client, worker, scheduler branch, or RouteProxy branch. It locks the existing projection path before the real handler is wired.
++
++```text
++Scheduler
++-> VectorIndexingJobPlan
++-> VectorProjectionJob
++-> existing Qdrant projection adapter
++-> VectorCollectionRegistry
++-> Qdrant collection
++-> SQL ref for durable hydration
++```
++
++RouteProxy and `/dev/shm` may later carry request/result frames, but Qdrant projection remains an inference/vector adapter responsibility, not a Scheduler or RouteProxy responsibility.
+diff --git a/doc/architecture/VECTOR_INDEXING_QDRANT_EXISTING_PATH_0136.md b/doc/architecture/VECTOR_INDEXING_QDRANT_EXISTING_PATH_0136.md
+new file mode 100644
+index 0000000..c2946c1
+--- /dev/null
++++ b/doc/architecture/VECTOR_INDEXING_QDRANT_EXISTING_PATH_0136.md
+@@ -0,0 +1,71 @@
++# 0136 — Vector indexing jobs through the existing Qdrant projection path
++
++0136 connects VectorProjectionJob to the existing Qdrant projection adapter by tests and integration documentation.
++
++The goal is to prove that the vector-indexing plan created in 0128 can already target the existing Qdrant projection membrane without inventing another adapter.
++
++## Decision
++
++Do not create a parallel VectorQdrantProjectionAdapter.
++
++Reuse these existing surfaces:
++
++```text
++src/inference/qdrant_projection_adapter.py is the existing Qdrant projection membrane
++context.vector_collection_registry.VectorCollectionRegistry remains the collection registry
++context.vector_indexing_job_plan.VectorProjectionJob remains the projection job contract
++```
++
++## Contract alignment
++
++VectorEmbeddingJob produces an embedding result later.
++
++VectorProjectionJob remains the handoff contract for projection.
++
++VectorCollectionRegistry remains the collection registry.
++
++src/inference/qdrant_projection_adapter.py is the existing Qdrant projection membrane.
++
++Scheduler remains the orchestrator and does not import Qdrant.
++
++RouteProxy remains outside Qdrant projection.
++
++SQLContextStore remains durable context authority.
++
++Qdrant stores projections and recall indexes, not durable truth.
++
++## Flow
++
++```text
++Scheduler
++-> VectorIndexingJobPlan
++-> VectorEmbeddingJob
++-> existing OpenVINO/E5 embedding membrane
++-> VectorProjectionJob
++-> existing Qdrant projection membrane
++-> collection registry
++-> sql_ref preserved for hydration
++```
++
++## Non-goals
++
++```text
++no new VectorQdrantProjectionAdapter
++no Scheduler Qdrant import
++no RouteProxy Qdrant import
++no Qdrant durable authority
++no new worker daemon
++```
++
++## Phase status
++
++```text
++code_rule_review: done
++code_rule_update_required: true
++code_rule_reason: locks Qdrant projection reuse before any production bridge or handler change.
++live_path_status: transition
++live_path_uses_real_backend: false
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++```
+diff --git a/doc/code-rules/0136_vector_indexing_qdrant_existing_path_rule.md b/doc/code-rules/0136_vector_indexing_qdrant_existing_path_rule.md
+new file mode 100644
+index 0000000..2238fdb
+--- /dev/null
++++ b/doc/code-rules/0136_vector_indexing_qdrant_existing_path_rule.md
+@@ -0,0 +1,19 @@
++# Code rule addendum — 0136 vector indexing through existing Qdrant path
++
++Before adding a vector-indexing Qdrant bridge, audit the existing inference, vector-indexing, and registry surfaces.
++
++Required reuse targets:
++
++```text
++reuse or extend src/inference/qdrant_projection_adapter.py
++reuse context.vector_collection_registry.VectorCollectionRegistry
++reuse context.vector_indexing_job_plan.VectorProjectionJob
++```
++
++Do not create a parallel VectorQdrantProjectionAdapter.
++
++Do not import Qdrant from Scheduler, Dispatcher, PolicyEngine, RouteProxy, or context contracts.
++
++Qdrant stores projections and recall indexes, not durable truth. SQLContextStore remains durable context authority.
++
++The next production change must extend an existing inference/vector module or handler with a documented gap and tests proving that no suitable existing function already covers the need.
+diff --git a/doc/docs/architecture/runtime/136_vector_indexing_qdrant_existing_path.dot b/doc/docs/architecture/runtime/136_vector_indexing_qdrant_existing_path.dot
+new file mode 100644
+index 0000000..56e6a3a
+--- /dev/null
++++ b/doc/docs/architecture/runtime/136_vector_indexing_qdrant_existing_path.dot
+@@ -0,0 +1,21 @@
++digraph vector_indexing_qdrant_existing_path_0136 {
++  rankdir=LR;
++  node [shape=box];
++
++  scheduler [label="Scheduler\norchestrator"];
++  plan [label="VectorIndexingJobPlan\nexisting context contract"];
++  embedding [label="Embedding result\nfrom existing OpenVINO/E5 path"];
++  projection [label="VectorProjectionJob\nexisting projection job"];
++  adapter [label="qdrant_projection_adapter.py\nexisting projection membrane"];
++  registry [label="VectorCollectionRegistry\nrole collections"];
++  qdrant [label="Qdrant\nprojection/recall only"];
++  sql [label="SQLContextStore\ndurable authority"];
++
++  scheduler -> plan;
++  plan -> embedding;
++  embedding -> projection;
++  projection -> adapter;
++  adapter -> registry;
++  adapter -> qdrant;
++  projection -> sql [label="sql_ref preserved"];
++}
+diff --git a/doc/manifests/MANIFEST_0136_CHANGED_FILES.md b/doc/manifests/MANIFEST_0136_CHANGED_FILES.md
+new file mode 100644
+index 0000000..83a5379
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0136_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest 0136 — changed files
++
++- tests/inference/test_vector_indexing_qdrant_existing_path_0136.py
++- tests/rules/test_vector_indexing_qdrant_existing_path_0136_rule.py
++- doc/architecture/VECTOR_INDEXING_QDRANT_EXISTING_PATH_0136.md
++- doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0136.md
++- doc/code-rules/0136_vector_indexing_qdrant_existing_path_rule.md
++- doc/docs/architecture/runtime/136_vector_indexing_qdrant_existing_path.dot
++- doc/CHANGELOG_0136_VECTOR_INDEXING_QDRANT_EXISTING_PATH.md
++- doc/manifests/MANIFEST_0136_CHANGED_FILES.md
++- PHASE0136_TEST_REPORT.md
++
++0136 is tests and docs only. It proves reuse of the existing vector-indexing, collection registry, and Qdrant projection surfaces before any production bridge is added.
+diff --git a/tests/inference/test_vector_indexing_qdrant_existing_path_0136.py b/tests/inference/test_vector_indexing_qdrant_existing_path_0136.py
+new file mode 100644
+index 0000000..fde6e16
+--- /dev/null
++++ b/tests/inference/test_vector_indexing_qdrant_existing_path_0136.py
+@@ -0,0 +1,51 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++import pytest
++
++ROOT = Path(__file__).resolve().parents[2]
++QDRANT_ADAPTER = ROOT / "src" / "inference" / "qdrant_projection_adapter.py"
++VECTOR_JOB_PLAN = ROOT / "src" / "context" / "vector_indexing_job_plan.py"
++VECTOR_COLLECTION_REGISTRY = ROOT / "src" / "context" / "vector_collection_registry.py"
++
++
++def _read_existing(path: Path) -> str:
++    if not path.exists():
++        pytest.skip(f"complete repository surface not present in reduced test fixture: {path}")
++    return path.read_text(encoding="utf-8")
++
++
++def test_vector_projection_path_reuses_existing_qdrant_adapter_file() -> None:
++    qdrant_text = _read_existing(QDRANT_ADAPTER)
++    plan_text = _read_existing(VECTOR_JOB_PLAN)
++
++    assert "qdrant" in qdrant_text.lower()
++    assert "Projection" in qdrant_text or "projection" in qdrant_text
++    assert "VectorProjectionJob" in plan_text
++    assert "sql_ref" in plan_text or "source_ref" in plan_text
++
++
++def test_vector_projection_path_reuses_existing_collection_registry() -> None:
++    registry_text = _read_existing(VECTOR_COLLECTION_REGISTRY)
++    qdrant_text = _read_existing(QDRANT_ADAPTER)
++
++    assert "VectorCollectionRegistry" in registry_text
++    assert "contracts_e5_384" in registry_text
++    assert "specialist_outputs_e5_384" in registry_text
++    assert "collection" in qdrant_text.lower()
++
++
++def test_qdrant_existing_adapter_stays_outside_scheduler_and_route_proxy() -> None:
++    qdrant_text = _read_existing(QDRANT_ADAPTER)
++    forbidden = [
++        "from kernel.scheduler",
++        "import kernel.scheduler",
++        "Scheduler(",
++        "Scheduler.run(",
++        "PolicyEngine(",
++        "RouteProxyRuntime(",
++        "route_proxy_runtime_minimal",
++    ]
++    for phrase in forbidden:
++        assert phrase not in qdrant_text
+diff --git a/tests/rules/test_vector_indexing_qdrant_existing_path_0136_rule.py b/tests/rules/test_vector_indexing_qdrant_existing_path_0136_rule.py
+new file mode 100644
+index 0000000..b6a29c4
+--- /dev/null
++++ b/tests/rules/test_vector_indexing_qdrant_existing_path_0136_rule.py
+@@ -0,0 +1,84 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "VECTOR_INDEXING_QDRANT_EXISTING_PATH_0136.md"
++CODE_RULE = ROOT / "doc" / "code-rules" / "0136_vector_indexing_qdrant_existing_path_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0136_CHANGED_FILES.md"
++TEST = ROOT / "tests" / "inference" / "test_vector_indexing_qdrant_existing_path_0136.py"
++
++
++def test_0136_documents_vector_jobs_use_existing_qdrant_projection_path() -> None:
++    text = DOC.read_text(encoding="utf-8")
++    required = [
++        "0136 connects VectorProjectionJob to the existing Qdrant projection adapter by tests and integration documentation",
++        "Do not create a parallel VectorQdrantProjectionAdapter",
++        "src/inference/qdrant_projection_adapter.py is the existing Qdrant projection membrane",
++        "context.vector_collection_registry.VectorCollectionRegistry remains the collection registry",
++        "context.vector_indexing_job_plan.VectorProjectionJob remains the projection job contract",
++        "Scheduler remains the orchestrator and does not import Qdrant",
++        "RouteProxy remains outside Qdrant projection",
++        "SQLContextStore remains durable context authority",
++        "Qdrant stores projections and recall indexes, not durable truth",
++        "code_rule_review: done",
++        "code_rule_update_required: true",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0136_code_rule_locks_no_parallel_vector_qdrant_bridge() -> None:
++    text = CODE_RULE.read_text(encoding="utf-8")
++    required = [
++        "Before adding a vector-indexing Qdrant bridge",
++        "reuse or extend src/inference/qdrant_projection_adapter.py",
++        "reuse context.vector_collection_registry.VectorCollectionRegistry",
++        "reuse context.vector_indexing_job_plan.VectorProjectionJob",
++        "Do not create a parallel VectorQdrantProjectionAdapter",
++        "Do not import Qdrant from Scheduler, Dispatcher, PolicyEngine, RouteProxy, or context contracts",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0136_manifest_changes_tests_and_docs_only() -> None:
++    text = MANIFEST.read_text(encoding="utf-8")
++    required = [
++        "tests/inference/test_vector_indexing_qdrant_existing_path_0136.py",
++        "tests/rules/test_vector_indexing_qdrant_existing_path_0136_rule.py",
++        "doc/architecture/VECTOR_INDEXING_QDRANT_EXISTING_PATH_0136.md",
++        "doc/code-rules/0136_vector_indexing_qdrant_existing_path_rule.md",
++    ]
++    for phrase in required:
++        assert phrase in text
++    forbidden = [
++        "src/inference/vector_qdrant_projection_adapter.py",
++        "src/runtime/vector_qdrant_worker.py",
++        "src/kernel/scheduler.py",
++        "src/runtime/scheduler.py",
++        "src/policy/engine.py",
++        "src/runtime/route_proxy_runtime_minimal.py",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++
++
++def test_0136_integration_test_uses_existing_paths_not_new_adapter_names() -> None:
++    text = TEST.read_text(encoding="utf-8")
++    required = [
++        "qdrant_projection_adapter.py",
++        "vector_indexing_job_plan.py",
++        "vector_collection_registry.py",
++        "VectorProjectionJob",
++        "VectorCollectionRegistry",
++    ]
++    for phrase in required:
++        assert phrase in text
++    forbidden = [
++        "VectorQdrantProjectionAdapter",
++        "QdrantVectorBridgeAdapter",
++        "from qdrant_client import QdrantClient",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
