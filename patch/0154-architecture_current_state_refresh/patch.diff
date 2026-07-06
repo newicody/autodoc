@@ -1,0 +1,412 @@
+diff --git a/PHASE0154_TEST_REPORT.md b/PHASE0154_TEST_REPORT.md
+new file mode 100644
+index 0000000..80de812
+--- /dev/null
++++ b/PHASE0154_TEST_REPORT.md
+@@ -0,0 +1,14 @@
++# Phase 0154 test report — architecture current state refresh
++
++Local reduced validation for the patch contents:
++
++- current-state documentation files generated.
++- current-state DOT summary graphs generated.
++- rule tests generated to keep hierarchy and boundary strings stable.
++
++Expected repository validation:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/rules/test_architecture_current_state_refresh_0154_rule.py
++```
+diff --git a/doc/CHANGELOG_0154_ARCHITECTURE_CURRENT_STATE_REFRESH.md b/doc/CHANGELOG_0154_ARCHITECTURE_CURRENT_STATE_REFRESH.md
+new file mode 100644
+index 0000000..03b13db
+--- /dev/null
++++ b/doc/CHANGELOG_0154_ARCHITECTURE_CURRENT_STATE_REFRESH.md
+@@ -0,0 +1,14 @@
++# Changelog — 0154 architecture current-state refresh
++
++0154 adds canonical current-state documentation after the 0153 architecture/docs/surface audit.
++
++The patch does not delete historical phase documents. It keeps the existing hierarchy and adds index/summary pages that point to the current canonical surfaces.
++
++Added:
++
++- `doc/architecture/CURRENT_ARCHITECTURE_STATE_0154.md`
++- `doc/architecture/P1_TO_P5_ROADMAP_0154.md`
++- `doc/architecture/DOC_REFRESH_POLICY_0154.md`
++- `doc/docs/architecture/runtime/154_current_p1_pipeline.dot`
++- `doc/docs/architecture/runtime/154_p1_to_p5_roadmap.dot`
++- `doc/code-rules/0154_architecture_current_state_refresh_rule.md`
+diff --git a/doc/architecture/CURRENT_ARCHITECTURE_STATE_0154.md b/doc/architecture/CURRENT_ARCHITECTURE_STATE_0154.md
+new file mode 100644
+index 0000000..49d1bf9
+--- /dev/null
++++ b/doc/architecture/CURRENT_ARCHITECTURE_STATE_0154.md
+@@ -0,0 +1,72 @@
++# Current architecture state — 0154
++
++This page is the current-state index after the 0153 documentation and surface audit. Historical phase documents remain useful as implementation history, but this page is the canonical high-level map for the active architecture.
++
++## Current boundary model
++
++The active system is organized around four durable roles and two execution roles:
++
++| Role | Current surface | Responsibility | Must not become |
++| --- | --- | --- | --- |
++| SQL durable authority | `src/context/sql_context_store.py` | Stores typed context records, provenance, metadata, and readback state. | Vector index, inference runtime, scheduler. |
++| Qdrant projection index | `src/inference/qdrant_projection_adapter.py` plus `tools/run_qdrant_projection_live_smoke.py` | Stores recall projections with `sql_ref` payloads. | Durable truth. |
++| OpenVINO/E5 embedding path | `tools/embed_e5.py`, `src/inference/openvino_embedding_adapter.py`, `src/inference/openvino_runtime.py` | Produces normalized E5 vectors. | Database or scheduler. |
++| RouteProxy runtime | `src/runtime/route_proxy_runtime_minimal.py` | Fast request/result frames and readback. | Policy authority or durable store. |
++| Scheduler-shaped boundary | `src/runtime/scheduler_route_handler_minimal.py` | Writes route frames and carries command-shaped intent. | Embedding runner or Qdrant client. |
++| Artifact surface | `tools/run_local_artifact_vector_indexing_runner.py`, `src/context/artifact_intake_contract.py`, `src/context/artifact_route_refs.py` | Human/replayable artifact input, reports, and dynamic refs. | Hidden bus. |
++
++## Current validated P1 chain
++
++The validated local path is:
++
++```text
++artifact local
++-> ArtifactIntakeContract
++-> dynamic artifact route refs
++-> Scheduler-shaped vector request frame
++-> RouteProxyRuntime readback
++-> OpenVINO/E5 full-vector JSON
++-> Qdrant projection/search with sql_ref
++-> RouteProxyRuntime result frame
++-> SQL persistence handoff
++-> SQLContextStore persistence record
++-> DbApiSqlContextStore.upsert_record
++-> SQL readback OK
++```
++
++The stable local SQL database is resolved by the controlled write smoke in this order:
++
++```text
++1. --db-path
++2. AUTODOC_SQL_CONTEXT_DB
++3. .var/local/sql_context_store.sqlite3
++```
++
++## Meaning of E5, OpenVINO, Qdrant, and SQL
++
++- E5 is the embedding model. It converts text into vectors.
++- OpenVINO is the local Intel inference runtime used to execute E5.
++- Qdrant is the vector recall index. It stores projections and metadata such as `sql_ref`.
++- SQL is the durable authority. It stores context records and makes Qdrant rebuildable.
++
++The current invariant is:
++
++```text
++SQL owns durable context. Qdrant owns recall projections. OpenVINO/E5 owns vector generation. RouteProxy owns fast frames.
++```
++
++## Current completeness snapshot from the 0153 audit
++
++The 0153 audit reported P1 near complete, P2 not started, P3 partially prepared, and VisPy/GitHub/distribution missing. The reported OpenVINO/E5 partial status is a static audit warning, not a live failure: the strict machine-vector handoff has been validated by the 0142/0143/0147/0151 smoke chain.
++
++## Reuse-first rule
++
++Before adding new runtime, handler, adapter, or worker surfaces, inspect existing code and prefer extension of the current surfaces above. New surfaces are allowed only when an explicit gap is documented.
++
++## Current non-goals
++
++- No separate SQL worker or SQL orchestrator.
++- No new vector adapter parallel to the existing Qdrant projection adapter.
++- No new OpenVINO embedding adapter parallel to the existing embedding membrane.
++- No direct Qdrant or OpenVINO backend imports from Scheduler, RouteProxy, or context contracts.
++- No deletion of historical phase docs during current-state refresh.
+diff --git a/doc/architecture/DOC_REFRESH_POLICY_0154.md b/doc/architecture/DOC_REFRESH_POLICY_0154.md
+new file mode 100644
+index 0000000..64d55d8
+--- /dev/null
++++ b/doc/architecture/DOC_REFRESH_POLICY_0154.md
+@@ -0,0 +1,25 @@
++# Documentation refresh policy — 0154
++
++The repository now contains many historical phase documents. The current documentation policy is:
++
++1. Preserve historical phase docs. They explain why a boundary was introduced.
++2. Add current-state index pages for the active architecture.
++3. Add summary DOT graphs rather than deleting phase graphs.
++4. Keep hierarchy stable:
++   - `doc/architecture` for narrative architecture.
++   - `doc/code-rules` for enforceable rules.
++   - `doc/docs/architecture/runtime` for DOT graphs.
++   - `doc/manifests` for patch manifests.
++5. Avoid live-runtime constructor signatures in rule/docs text when a rule forbids those exact strings. Use descriptive wording instead.
++6. Re-run `tools/audit_architecture_docs_and_surfaces.py` before broad documentation rewrites.
++
++## Canonical current-state pages
++
++- `doc/architecture/CURRENT_ARCHITECTURE_STATE_0154.md`
++- `doc/architecture/P1_TO_P5_ROADMAP_0154.md`
++- `doc/architecture/DOC_REFRESH_POLICY_0154.md`
++
++## Canonical current-state graphs
++
++- `doc/docs/architecture/runtime/154_current_p1_pipeline.dot`
++- `doc/docs/architecture/runtime/154_p1_to_p5_roadmap.dot`
+diff --git a/doc/architecture/P1_TO_P5_ROADMAP_0154.md b/doc/architecture/P1_TO_P5_ROADMAP_0154.md
+new file mode 100644
+index 0000000..ef31593
+--- /dev/null
++++ b/doc/architecture/P1_TO_P5_ROADMAP_0154.md
+@@ -0,0 +1,105 @@
++# P1 to P5 roadmap — 0154
++
++This page records the active roadmap after the 0153 audit and the 0151/0152 SQL controlled-write work.
++
++## P1 — Local artifact pipeline
++
++Goal: one local artifact can be indexed, projected, persisted, and read back.
++
++Status: mostly complete.
++
++Completed capabilities:
++
++- OpenVINO/E5 live vector generation.
++- Qdrant REST projection/search.
++- Strict machine-vector handoff.
++- Scheduler-shaped request frames through RouteProxyRuntime.
++- Dynamic artifact/job route refs.
++- Result frames.
++- Artifact reports.
++- SQL handoff and persistence records.
++- Real DB-API write through `DbApiSqlContextStore.upsert_record`.
++- Stable configured local DB path.
++
++Remaining P1 closure work:
++
++1. Add one P1 runner that executes artifact intake, vector projection, SQL write, Qdrant search, and SQL readback in a single command.
++2. Add Qdrant-to-SQL rehydration verification: search Qdrant, recover `sql_ref`, read SQL.
++3. Separate `.var/smoke`, `.var/local`, and future `.var/prod` conventions.
++4. Normalize collection names and model metadata through the existing registry.
++
++## P2 — Local knowledge base ingestion
++
++Goal: process folders/repos/documents, not just one demo artifact.
++
++Required capabilities:
++
++1. Filesystem intake contract.
++2. Content hashing and stable source refs.
++3. Chunking contract for Markdown, code, JSON, logs, and future PDF-derived text.
++4. SQL document/chunk/fact records.
++5. Batch embedding and batch Qdrant projection.
++6. Deduplication by content hash.
++7. Rebuild Qdrant projections from SQL records.
++8. Collection lifecycle: smoke, local, dev, prod, archive.
++
++## P3 — Operational Scheduler
++
++Goal: move from smoke tools to real job lifecycle while keeping the Scheduler as orchestrator.
++
++Required capabilities:
++
++1. Job contracts for vector indexing, retrieval, validation, and persistence.
++2. Dispatcher binding to existing handlers.
++3. Status lifecycle: pending, running, done, failed, stale, cancelled.
++4. Retry and timeout policies.
++5. RouteProxy leases and stale-frame handling.
++6. Operator CLI: run, status, list, retry, cancel.
++7. EventBus observation only.
++8. Optional local daemon only after tools are stable.
++
++## P4 — Context specialists and synthesis
++
++Goal: allow specialist outputs while preserving traceability.
++
++Required capabilities:
++
++1. Specialist input/output contracts.
++2. Context pack builder from Qdrant recall plus SQL rehydration.
++3. Validation pass with evidence refs.
++4. Synthesis pass with provenance.
++5. Contradiction handling.
++6. Feedback records.
++7. Context generations and stale record management.
++8. GitHub artifact exchange design may begin here, but GitHub remains an exchange surface rather than an internal bus.
++
++## P5 — Distributed and future hardware seam
++
++Goal: prepare multi-node execution and later hardware acceleration without changing the core authority model.
++
++Required capabilities:
++
++1. Node identity contracts.
++2. Distributed RouteProxy frame exchange.
++3. Shard-aware SQL/Qdrant metadata.
++4. Task dispatch across nodes.
++5. Failure domains and replay.
++6. Rebuild projections from SQL across nodes.
++7. Observability and replay tooling.
++8. Future PCIe/LVDS/FPGA observer only after the software protocol is stable.
++
++## After P5
++
++P6: observability and replay, including VisPy if the audit confirms or adds a usable surface.
++
++P7: GitHub artifact exchange and project workflow integration.
++
++P8: knowledge operations: rebuilds, migrations, quality checks, and benchmarks.
++
++P9: stable multi-node operations.
++
++P10: hardware acceleration seam.
++
++P11: declarative job DSL and state-machine layer.
++
++P12: packaging, services, backup/restore, and operational hardening.
+diff --git a/doc/code-rules/0154_architecture_current_state_refresh_rule.md b/doc/code-rules/0154_architecture_current_state_refresh_rule.md
+new file mode 100644
+index 0000000..bfb947a
+--- /dev/null
++++ b/doc/code-rules/0154_architecture_current_state_refresh_rule.md
+@@ -0,0 +1,15 @@
++# Code rule — 0154 architecture current-state refresh
++
++0154 adds current-state documentation and summary DOT graphs only.
++
++Rules:
++
++- keep historical phase docs; do not delete them as part of current-state refresh.
++- preserve the existing documentation hierarchy.
++- SQL remains the durable authority.
++- Qdrant remains projection and recall metadata.
++- OpenVINO/E5 remains vector generation behind the existing embedding path.
++- RouteProxy remains fast frame IO.
++- Scheduler remains the orchestrating boundary and must not import vector or inference backends.
++- do not introduce parallel worker/orchestrator/adapter surfaces in documentation refresh patches.
++- broad documentation rewrites should be driven by the 0153 audit report.
+diff --git a/doc/docs/architecture/runtime/154_current_p1_pipeline.dot b/doc/docs/architecture/runtime/154_current_p1_pipeline.dot
+new file mode 100644
+index 0000000..2de90f8
+--- /dev/null
++++ b/doc/docs/architecture/runtime/154_current_p1_pipeline.dot
+@@ -0,0 +1,18 @@
++digraph current_p1_pipeline_0154 {
++  rankdir=LR;
++  node [shape=box];
++
++  artifact [label="Local artifact"];
++  contract [label="ArtifactIntakeContract"];
++  refs [label="Dynamic artifact route refs"];
++  request [label="RouteProxy request frame"];
++  e5 [label="OpenVINO/E5 full vector JSON"];
++  qdrant [label="Qdrant projection/search\nprojection metadata only"];
++  result [label="RouteProxy result frame"];
++  handoff [label="SQL persistence handoff"];
++  record [label="SQL persistence record"];
++  sql [label="DbApiSqlContextStore.upsert_record\nSQL durable authority"];
++  readback [label="SQL readback OK"];
++
++  artifact -> contract -> refs -> request -> e5 -> qdrant -> result -> handoff -> record -> sql -> readback;
++}
+diff --git a/doc/docs/architecture/runtime/154_p1_to_p5_roadmap.dot b/doc/docs/architecture/runtime/154_p1_to_p5_roadmap.dot
+new file mode 100644
+index 0000000..051d791
+--- /dev/null
++++ b/doc/docs/architecture/runtime/154_p1_to_p5_roadmap.dot
+@@ -0,0 +1,13 @@
++digraph p1_to_p5_roadmap_0154 {
++  rankdir=TB;
++  node [shape=box];
++
++  p1 [label="P1 local artifact pipeline\nartifact -> vector -> Qdrant -> SQL -> readback"];
++  p2 [label="P2 local knowledge ingestion\nfilesystem -> hash -> chunk -> batch index"];
++  p3 [label="P3 operational Scheduler\njob lifecycle -> dispatcher -> retry/status"];
++  p4 [label="P4 specialists and synthesis\ncontext packs -> validation -> provenance"];
++  p5 [label="P5 distributed seam\nnode identity -> distributed RouteProxy -> rebuild"];
++  p6 [label="P6+ observability, GitHub exchange, knowledge ops, hardware seam"];
++
++  p1 -> p2 -> p3 -> p4 -> p5 -> p6;
++}
+diff --git a/doc/manifests/MANIFEST_0154_CHANGED_FILES.md b/doc/manifests/MANIFEST_0154_CHANGED_FILES.md
+new file mode 100644
+index 0000000..d10e8c2
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0154_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest — 0154 architecture current-state refresh
++
++Changed files:
++
++- `PHASE0154_TEST_REPORT.md`
++- `doc/CHANGELOG_0154_ARCHITECTURE_CURRENT_STATE_REFRESH.md`
++- `doc/architecture/CURRENT_ARCHITECTURE_STATE_0154.md`
++- `doc/architecture/P1_TO_P5_ROADMAP_0154.md`
++- `doc/architecture/DOC_REFRESH_POLICY_0154.md`
++- `doc/code-rules/0154_architecture_current_state_refresh_rule.md`
++- `doc/docs/architecture/runtime/154_current_p1_pipeline.dot`
++- `doc/docs/architecture/runtime/154_p1_to_p5_roadmap.dot`
++- `tests/rules/test_architecture_current_state_refresh_0154_rule.py`
+diff --git a/tests/rules/test_architecture_current_state_refresh_0154_rule.py b/tests/rules/test_architecture_current_state_refresh_0154_rule.py
+new file mode 100644
+index 0000000..4d0b540
+--- /dev/null
++++ b/tests/rules/test_architecture_current_state_refresh_0154_rule.py
+@@ -0,0 +1,63 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++CURRENT = ROOT / "doc" / "architecture" / "CURRENT_ARCHITECTURE_STATE_0154.md"
++ROADMAP = ROOT / "doc" / "architecture" / "P1_TO_P5_ROADMAP_0154.md"
++POLICY = ROOT / "doc" / "architecture" / "DOC_REFRESH_POLICY_0154.md"
++DOT_PIPELINE = ROOT / "doc" / "docs" / "architecture" / "runtime" / "154_current_p1_pipeline.dot"
++DOT_ROADMAP = ROOT / "doc" / "docs" / "architecture" / "runtime" / "154_p1_to_p5_roadmap.dot"
++RULE = ROOT / "doc" / "code-rules" / "0154_architecture_current_state_refresh_rule.md"
++
++
++def test_0154_current_state_docs_exist_and_keep_hierarchy() -> None:
++    for path in [CURRENT, ROADMAP, POLICY, DOT_PIPELINE, DOT_ROADMAP, RULE]:
++        assert path.exists(), path
++
++
++def test_0154_current_state_declares_authority_boundaries() -> None:
++    text = CURRENT.read_text(encoding="utf-8")
++    required = [
++        "SQL owns durable context",
++        "Qdrant owns recall projections",
++        "OpenVINO/E5 owns vector generation",
++        "RouteProxy owns fast frames",
++        "DbApiSqlContextStore.upsert_record",
++        "AUTODOC_SQL_CONTEXT_DB",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0154_roadmap_covers_p1_to_p5_and_after_p5() -> None:
++    text = ROADMAP.read_text(encoding="utf-8")
++    for phrase in ["P1", "P2", "P3", "P4", "P5", "After P5", "P6", "P12"]:
++        assert phrase in text
++
++
++def test_0154_docs_do_not_introduce_parallel_runtime_signatures() -> None:
++    combined = "\n".join(
++        path.read_text(encoding="utf-8")
++        for path in [CURRENT, ROADMAP, POLICY, RULE, DOT_PIPELINE, DOT_ROADMAP]
++    )
++    forbidden = [
++        "SQLPersistenceWorker" + "(",
++        "SQLOrchestrator" + "(",
++        "LocalArtifactOrchestrator" + "(",
++        "LocalVectorIndexingOrchestrator" + "(",
++        "SchedulerOpenVINORunner" + "(",
++        "VectorOpenVINOEmbeddingAdapter" + "(",
++        "VectorQdrantProjectionAdapter" + "(",
++        "Scheduler" + ".run(",
++        "qdrant_client",
++        "openvino.runtime",
++    ]
++    for phrase in forbidden:
++        assert phrase not in combined
++
++
++def test_0154_dot_graphs_parse_as_graphviz_sources() -> None:
++    for path in [DOT_PIPELINE, DOT_ROADMAP]:
++        text = path.read_text(encoding="utf-8")
++        assert text.startswith("digraph ")
++        assert "->" in text
++        assert text.rstrip().endswith("}")

@@ -55,7 +55,8 @@ def test_resolve_configured_db_path_precedence(tmp_path: Path) -> None:
     assert default_source == "default:.var/local/sql_context_store.sqlite3"
 
 
-def test_controlled_write_plan_uses_stable_default_db_path(tmp_path: Path) -> None:
+def test_controlled_write_plan_uses_stable_default_db_path(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.delenv("AUTODOC_SQL_CONTEXT_DB", raising=False)
     persistence = tmp_path / "persistence.json"
     persistence.write_text(json.dumps(_persistence_mapping()), encoding="utf-8")
 
