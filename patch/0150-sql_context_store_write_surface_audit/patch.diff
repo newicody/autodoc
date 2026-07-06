@@ -1,0 +1,920 @@
+diff --git a/PHASE0150_TEST_REPORT.md b/PHASE0150_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0150_TEST_REPORT.md
+@@ -0,0 +1,21 @@
++# PHASE0150_TEST_REPORT
++
++```text
++phase: 0150-sql_context_store_write_surface_audit
++code_rule_review: done
++code_rule_update_required: true
++code_rule_reason: SQLContextStore writes must be explicit on the existing durable authority surface; no backend-specific client or SQL worker may be invented.
++live_path_status: sql_context_store_write_surface_audit
++live_path_uses_real_backend: false
++context_contract_version: sql-context-store-write-surface-audit-0150
++context_contract_changed: true
++search_commands_bounded: n/a
++```
++
++Validation performed in patch build:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/tools/test_sql_context_store_write_surface_audit_0150.py tests/rules/test_sql_context_store_write_surface_audit_0150_rule.py
++# expected: 8 passed
++```
+diff --git a/doc/CHANGELOG_0150_SQL_CONTEXT_STORE_WRITE_SURFACE_AUDIT.md b/doc/CHANGELOG_0150_SQL_CONTEXT_STORE_WRITE_SURFACE_AUDIT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0150_SQL_CONTEXT_STORE_WRITE_SURFACE_AUDIT.md
+@@ -0,0 +1,10 @@
++# Changelog 0150 — SQLContextStore write surface audit
++
++Added:
++
++- `src/context/sql_context_store_write_surface_contract.py`
++- `tools/run_sql_context_store_write_surface_audit.py`
++- SQLContextStore write-surface audit tests and code-rule tests
++- architecture/code-rule docs
++
++0150 consumes the 0149 persistence record and audits the existing SQLContextStore class for an explicit write method. It remains audit-only and performs no backend write.
+diff --git a/doc/architecture/SQL_CONTEXT_STORE_WRITE_SURFACE_AUDIT_0150.md b/doc/architecture/SQL_CONTEXT_STORE_WRITE_SURFACE_AUDIT_0150.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/SQL_CONTEXT_STORE_WRITE_SURFACE_AUDIT_0150.md
+@@ -0,0 +1,25 @@
++# 0150 — SQLContextStore write surface audit
++
++0150 consumes the SQLContextStore persistence record from 0149 and audits the existing SQLContextStore class for an explicit write method.
++
++Validated path:
++
++```text
++sql_context_store_persistence_record.json
++-> SQLContextStore source audit
++-> sql_context_store_write_surface_audit.json
++-> sql_context_store_write_surface_report.md
++```
++
++Boundary:
++
++- `src/context/sql_context_store.py` remains the durable authority surface.
++- `src/context/sql_context_store_write_surface_contract.py` is pure and serializable.
++- `tools/run_sql_context_store_write_surface_audit.py` only inspects source and writes local audit artifacts.
++- 0150 does not create a SQL worker or SQL orchestrator.
++- 0150 does not import backend-specific SQL clients.
++- 0150 does not import OpenVINO or Qdrant backends.
++- Qdrant identifiers remain projection metadata only.
++- The Scheduler run loop is not modified.
++
++If no explicit write method exists, the expected status is `blocked_no_explicit_sql_context_store_write_method`. The next patch should then add or expose a small explicit method on the existing SQLContextStore surface rather than creating a parallel SQL runtime.
+diff --git a/doc/code-rules/0150_sql_context_store_write_surface_audit_rule.md b/doc/code-rules/0150_sql_context_store_write_surface_audit_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0150_sql_context_store_write_surface_audit_rule.md
+@@ -0,0 +1,23 @@
++# Code rule 0150 — SQLContextStore write surface audit
++
++0150 may audit the existing SQLContextStore source and prepare a write-surface decision.
++
++Required boundary:
++
++- SQLContextStore remains durable authority.
++- Qdrant remains projection/recall only.
++- `src/context/sql_context_store_write_surface_contract.py` may define pure serializable audit contracts.
++- `tools/run_sql_context_store_write_surface_audit.py` may inspect `src/context/sql_context_store.py` and write local audit artifacts.
++- `write_attempted` must remain false in 0150.
++
++Forbidden in 0150:
++
++- must not create SQLPersistenceWorker.
++- must not create SQLOrchestrator.
++- must not create LocalArtifactOrchestrator.
++- must not create LocalVectorIndexingOrchestrator.
++- must not import OpenVINO or Qdrant backend clients.
++- must not import backend-specific SQL clients.
++- must not modify the Scheduler run loop.
++
++If no explicit SQLContextStore write method is present, 0150 must report `blocked_no_explicit_sql_context_store_write_method` rather than guessing an API.
+diff --git a/doc/docs/architecture/runtime/150_sql_context_store_write_surface_audit.dot b/doc/docs/architecture/runtime/150_sql_context_store_write_surface_audit.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/150_sql_context_store_write_surface_audit.dot
+@@ -0,0 +1,11 @@
++digraph sql_context_store_write_surface_audit_0150 {
++  rankdir=LR;
++  record [label="0149 persistence record"];
++  store [label="SQLContextStore source"];
++  audit [label="write surface audit"];
++  next [label="next controlled write patch"];
++
++  record -> audit;
++  store -> audit;
++  audit -> next [label="only if explicit method exists"];
++}
+diff --git a/src/context/sql_context_store_write_surface_contract.py b/src/context/sql_context_store_write_surface_contract.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/context/sql_context_store_write_surface_contract.py
+@@ -0,0 +1,322 @@
++"""Pure SQLContextStore write-surface audit contracts.
++
++0150 inspects the existing SQLContextStore source after the 0149 persistence
++record smoke.  It deliberately does not import backend-specific SQL clients,
++does not call OpenVINO or Qdrant, and does not create a SQL worker.  Its job is
++to decide whether a later patch can perform a controlled write through an
++explicit existing SQLContextStore method.
++"""
++
++from __future__ import annotations
++
++import ast
++import json
++from dataclasses import dataclass, field
++from pathlib import Path
++from typing import Any, Iterable, Mapping, Sequence
++
++_DEFAULT_CANDIDATE_WRITE_METHODS = (
++    "persist_context_record",
++    "persist_context",
++    "upsert_context",
++    "save_context",
++    "write_context",
++    "store_context",
++    "put_context",
++    "record_context",
++    "create_context",
++)
++
++_WRITE_STATUS_READY = "ready_for_controlled_write_patch"
++_WRITE_STATUS_BLOCKED = "blocked_no_explicit_sql_context_store_write_method"
++
++
++def _require_non_empty(value: str, *, field_name: str) -> str:
++    if not isinstance(value, str) or not value.strip():
++        raise ValueError(f"{field_name} must be a non-empty string")
++    return value.strip()
++
++
++def _require_prefix(value: str, *, field_name: str, prefix: str) -> str:
++    value = _require_non_empty(value, field_name=field_name)
++    if not value.startswith(prefix):
++        raise ValueError(f"{field_name} must start with {prefix!r}: {value!r}")
++    return value
++
++
++@dataclass(frozen=True, slots=True)
++class SqlContextStoreMethodSignature:
++    """A source-level method found on the SQLContextStore class."""
++
++    name: str
++    args: tuple[str, ...]
++    has_varargs: bool
++    has_kwargs: bool
++    line_number: int
++
++    def __post_init__(self) -> None:
++        _require_non_empty(self.name, field_name="name")
++        if self.line_number <= 0:
++            raise ValueError("line_number must be positive")
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "name": self.name,
++            "args": list(self.args),
++            "has_varargs": self.has_varargs,
++            "has_kwargs": self.has_kwargs,
++            "line_number": self.line_number,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class SqlContextStoreWriteSurfaceAudit:
++    """Serializable audit for the existing SQLContextStore write surface."""
++
++    sql_context_store_path: str
++    exists: bool
++    has_sql_context_store_class: bool
++    method_signatures: tuple[SqlContextStoreMethodSignature, ...]
++    candidate_write_methods: tuple[str, ...]
++    selected_write_method: str | None
++    requested_write_method: str | None = None
++    write_status: str = _WRITE_STATUS_BLOCKED
++    recommended_next_patch: str = "0151-sql_context_store_explicit_write_method"
++    gap_reason: str = "no explicit SQLContextStore write method found"
++    payload: Mapping[str, Any] = field(default_factory=dict)
++
++    def __post_init__(self) -> None:
++        _require_non_empty(self.sql_context_store_path, field_name="sql_context_store_path")
++        if self.selected_write_method is not None:
++            _require_non_empty(self.selected_write_method, field_name="selected_write_method")
++        if self.requested_write_method is not None:
++            _require_non_empty(self.requested_write_method, field_name="requested_write_method")
++        if self.write_status not in {_WRITE_STATUS_READY, _WRITE_STATUS_BLOCKED}:
++            raise ValueError("unexpected write_status")
++        _require_non_empty(self.recommended_next_patch, field_name="recommended_next_patch")
++        _require_non_empty(self.gap_reason, field_name="gap_reason")
++
++    @property
++    def ready_for_controlled_write_patch(self) -> bool:
++        return self.selected_write_method is not None
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "sql_context_store_path": self.sql_context_store_path,
++            "exists": self.exists,
++            "has_sql_context_store_class": self.has_sql_context_store_class,
++            "method_signatures": [signature.to_mapping() for signature in self.method_signatures],
++            "candidate_write_methods": list(self.candidate_write_methods),
++            "selected_write_method": self.selected_write_method,
++            "requested_write_method": self.requested_write_method,
++            "ready_for_controlled_write_patch": self.ready_for_controlled_write_patch,
++            "write_status": self.write_status,
++            "recommended_next_patch": self.recommended_next_patch,
++            "gap_reason": self.gap_reason,
++            "payload": dict(self.payload),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class SqlContextStoreWriteSurfaceRecord:
++    """Audit record tying a 0149 persistence record to SQLContextStore surface."""
++
++    audit_ref: str
++    persistence_ref: str
++    sql_ref: str
++    artifact_ref: str
++    handoff_ref: str
++    surface_audit: SqlContextStoreWriteSurfaceAudit
++    persistence_mode: str = "sql_context_store_write_surface_audit"
++    durable_authority: str = "sql"
++    qdrant_role: str = "projection_recall_index"
++    write_attempted: bool = False
++
++    def __post_init__(self) -> None:
++        _require_prefix(self.audit_ref, field_name="audit_ref", prefix="sql-context-write-surface:")
++        _require_prefix(self.persistence_ref, field_name="persistence_ref", prefix="sql-context-persist:")
++        _require_prefix(self.sql_ref, field_name="sql_ref", prefix="sql:")
++        _require_prefix(self.artifact_ref, field_name="artifact_ref", prefix="artifact:")
++        _require_prefix(self.handoff_ref, field_name="handoff_ref", prefix="sql-handoff:")
++        if self.persistence_mode != "sql_context_store_write_surface_audit":
++            raise ValueError("unexpected persistence_mode")
++        if self.durable_authority != "sql":
++            raise ValueError("SQL must remain durable authority")
++        if self.qdrant_role != "projection_recall_index":
++            raise ValueError("Qdrant must remain projection/recall only")
++        if self.write_attempted:
++            raise ValueError("0150 is audit-only and must not attempt a backend write")
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "audit_ref": self.audit_ref,
++            "persistence_ref": self.persistence_ref,
++            "sql_ref": self.sql_ref,
++            "artifact_ref": self.artifact_ref,
++            "handoff_ref": self.handoff_ref,
++            "surface_audit": self.surface_audit.to_mapping(),
++            "persistence_mode": self.persistence_mode,
++            "durable_authority": self.durable_authority,
++            "qdrant_role": self.qdrant_role,
++            "write_attempted": self.write_attempted,
++            "write_status": self.surface_audit.write_status,
++            "selected_write_method": self.surface_audit.selected_write_method,
++            "recommended_next_patch": self.surface_audit.recommended_next_patch,
++        }
++
++
++def default_write_surface_audit_ref(*, persistence_ref: str, sql_ref: str) -> str:
++    raw = f"{persistence_ref}/write-surface/{sql_ref}"
++    safe = "".join(ch if ch.isalnum() else "-" for ch in raw).strip("-").lower()
++    while "--" in safe:
++        safe = safe.replace("--", "-")
++    return f"sql-context-write-surface:{safe}"
++
++
++def inspect_sql_context_store_write_surface(
++    root: str | Path,
++    *,
++    requested_write_method: str | None = None,
++    candidate_write_methods: Sequence[str] = _DEFAULT_CANDIDATE_WRITE_METHODS,
++) -> SqlContextStoreWriteSurfaceAudit:
++    """Inspect SQLContextStore source through AST without importing any backend."""
++
++    path = Path(root) / "src" / "context" / "sql_context_store.py"
++    if not path.exists():
++        return SqlContextStoreWriteSurfaceAudit(
++            sql_context_store_path=str(path),
++            exists=False,
++            has_sql_context_store_class=False,
++            method_signatures=(),
++            candidate_write_methods=(),
++            selected_write_method=None,
++            requested_write_method=requested_write_method,
++            write_status=_WRITE_STATUS_BLOCKED,
++            gap_reason="src/context/sql_context_store.py is missing",
++            payload={"candidate_write_methods_checked": list(candidate_write_methods)},
++        )
++
++    source = path.read_text(encoding="utf-8")
++    try:
++        tree = ast.parse(source)
++    except SyntaxError as exc:
++        return SqlContextStoreWriteSurfaceAudit(
++            sql_context_store_path=str(path),
++            exists=True,
++            has_sql_context_store_class="SQLContextStore" in source,
++            method_signatures=(),
++            candidate_write_methods=(),
++            selected_write_method=None,
++            requested_write_method=requested_write_method,
++            write_status=_WRITE_STATUS_BLOCKED,
++            gap_reason=f"SQLContextStore source is not parseable: {exc.msg}",
++            payload={"candidate_write_methods_checked": list(candidate_write_methods)},
++        )
++
++    sql_store_classes = [node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "SQLContextStore"]
++    if not sql_store_classes:
++        return SqlContextStoreWriteSurfaceAudit(
++            sql_context_store_path=str(path),
++            exists=True,
++            has_sql_context_store_class=False,
++            method_signatures=(),
++            candidate_write_methods=(),
++            selected_write_method=None,
++            requested_write_method=requested_write_method,
++            write_status=_WRITE_STATUS_BLOCKED,
++            gap_reason="SQLContextStore class not found",
++            payload={"candidate_write_methods_checked": list(candidate_write_methods)},
++        )
++
++    signatures = tuple(_method_signature(node) for node in _class_methods(sql_store_classes[0]))
++    method_names = {signature.name for signature in signatures}
++    candidates = tuple(method for method in candidate_write_methods if method in method_names)
++    selected = _select_write_method(
++        candidates=candidates,
++        method_names=method_names,
++        requested_write_method=requested_write_method,
++    )
++    if selected is None:
++        gap_reason = "no explicit SQLContextStore write method found"
++        write_status = _WRITE_STATUS_BLOCKED
++    elif requested_write_method and selected != requested_write_method:
++        gap_reason = f"requested write method {requested_write_method!r} was not found"
++        selected = None
++        write_status = _WRITE_STATUS_BLOCKED
++    else:
++        gap_reason = "explicit SQLContextStore write method is present; next patch may bind it"
++        write_status = _WRITE_STATUS_READY
++
++    return SqlContextStoreWriteSurfaceAudit(
++        sql_context_store_path=str(path),
++        exists=True,
++        has_sql_context_store_class=True,
++        method_signatures=signatures,
++        candidate_write_methods=candidates,
++        selected_write_method=selected,
++        requested_write_method=requested_write_method,
++        write_status=write_status,
++        gap_reason=gap_reason,
++        payload={
++            "candidate_write_methods_checked": list(candidate_write_methods),
++            "all_method_names": sorted(method_names),
++            "audit_only": True,
++        },
++    )
++
++
++def build_sql_context_store_write_surface_record(
++    *,
++    persistence_record: Mapping[str, Any],
++    surface_audit: SqlContextStoreWriteSurfaceAudit,
++    audit_ref: str | None = None,
++) -> SqlContextStoreWriteSurfaceRecord:
++    persistence_ref = str(persistence_record.get("persistence_ref"))
++    sql_ref = str(persistence_record.get("sql_ref"))
++    audit_ref = audit_ref or default_write_surface_audit_ref(
++        persistence_ref=persistence_ref,
++        sql_ref=sql_ref,
++    )
++    return SqlContextStoreWriteSurfaceRecord(
++        audit_ref=audit_ref,
++        persistence_ref=persistence_ref,
++        sql_ref=sql_ref,
++        artifact_ref=str(persistence_record.get("artifact_ref")),
++        handoff_ref=str(persistence_record.get("handoff_ref")),
++        surface_audit=surface_audit,
++    )
++
++
++def read_json_mapping(path: str | Path) -> dict[str, Any]:
++    loaded = json.loads(Path(path).read_text(encoding="utf-8"))
++    if not isinstance(loaded, dict):
++        raise ValueError(f"expected JSON object in {path}")
++    return loaded
++
++
++def _class_methods(class_node: ast.ClassDef) -> Iterable[ast.FunctionDef | ast.AsyncFunctionDef]:
++    for node in class_node.body:
++        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
++            yield node
++
++
++def _method_signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> SqlContextStoreMethodSignature:
++    args = tuple(arg.arg for arg in node.args.args)
++    return SqlContextStoreMethodSignature(
++        name=node.name,
++        args=args,
++        has_varargs=node.args.vararg is not None,
++        has_kwargs=node.args.kwarg is not None,
++        line_number=int(getattr(node, "lineno", 1)),
++    )
++
++
++def _select_write_method(
++    *,
++    candidates: Sequence[str],
++    method_names: set[str],
++    requested_write_method: str | None,
++) -> str | None:
++    if requested_write_method:
++        return requested_write_method if requested_write_method in method_names else None
++    return candidates[0] if candidates else None
+diff --git a/tests/rules/test_sql_context_store_write_surface_audit_0150_rule.py b/tests/rules/test_sql_context_store_write_surface_audit_0150_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_sql_context_store_write_surface_audit_0150_rule.py
+@@ -0,0 +1,65 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++CONTRACT = Path("src/context/sql_context_store_write_surface_contract.py")
++TOOL = Path("tools/run_sql_context_store_write_surface_audit.py")
++DOC = Path("doc/code-rules/0150_sql_context_store_write_surface_audit_rule.md")
++
++
++def test_0150_files_exist() -> None:
++    assert CONTRACT.exists()
++    assert TOOL.exists()
++    assert DOC.exists()
++
++
++def test_0150_contract_contains_required_boundary_strings() -> None:
++    text = CONTRACT.read_text(encoding="utf-8")
++    required = [
++        "SqlContextStoreWriteSurfaceAudit",
++        "SqlContextStoreWriteSurfaceRecord",
++        "inspect_sql_context_store_write_surface",
++        "ready_for_controlled_write_patch",
++        "blocked_no_explicit_sql_context_store_write_method",
++        "Qdrant must remain projection/recall only",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0150_tool_contains_required_boundary_strings() -> None:
++    text = TOOL.read_text(encoding="utf-8")
++    required = [
++        "sql_context_store_persistence_record.json",
++        "src/context/sql_context_store.py",
++        "src/context/sql_context_store_write_surface_contract.py",
++        "write_attempted",
++        "selected_write_method",
++        "ready_for_controlled_write_patch",
++        "does not modify the Scheduler run loop",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0150_forbidden_parallel_or_backend_strings_absent() -> None:
++    combined = "\n".join(
++        path.read_text(encoding="utf-8")
++        for path in [CONTRACT, TOOL, DOC]
++    )
++    forbidden = [
++        "SQLPersistenceWorker(",
++        "SQLOrchestrator(",
++        "LocalArtifactOrchestrator(",
++        "LocalVectorIndexingOrchestrator(",
++        "SchedulerOpenVINORunner(",
++        "VectorOpenVINOEmbeddingAdapter(",
++        "VectorQdrantProjectionAdapter(",
++        "Scheduler.run(",
++        "qdrant_client",
++        "openvino.runtime",
++        "psycopg.connect",
++        "sqlalchemy.create_engine",
++    ]
++    for phrase in forbidden:
++        assert phrase not in combined
+diff --git a/tests/tools/test_sql_context_store_write_surface_audit_0150.py b/tests/tools/test_sql_context_store_write_surface_audit_0150.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_sql_context_store_write_surface_audit_0150.py
+@@ -0,0 +1,119 @@
++from __future__ import annotations
++
++import importlib.util
++import json
++import sys
++from pathlib import Path
++
++from context.sql_context_store_write_surface_contract import (
++    build_sql_context_store_write_surface_record,
++    inspect_sql_context_store_write_surface,
++)
++
++
++def _write_fake_persistence_record(path: Path) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(
++        json.dumps(
++            {
++                "persistence_ref": "sql-context-persist:demo",
++                "handoff_ref": "sql-handoff:demo",
++                "sql_ref": "sql:artifact/vector-indexing/demo",
++                "artifact_ref": "artifact:local/demo",
++            }
++        ),
++        encoding="utf-8",
++    )
++
++
++def _load_tool_module():
++    path = Path("tools/run_sql_context_store_write_surface_audit.py")
++    spec = importlib.util.spec_from_file_location("run_sql_context_store_write_surface_audit", path)
++    assert spec is not None and spec.loader is not None
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    spec.loader.exec_module(module)
++    return module
++
++
++def test_0150_inspects_existing_sql_context_store_write_method(tmp_path: Path) -> None:
++    store = tmp_path / "src" / "context" / "sql_context_store.py"
++    store.parent.mkdir(parents=True)
++    store.write_text(
++        "class SQLContextStore:\n"
++        "    def __init__(self):\n"
++        "        pass\n"
++        "    def upsert_context(self, record):\n"
++        "        return record\n",
++        encoding="utf-8",
++    )
++
++    audit = inspect_sql_context_store_write_surface(tmp_path)
++
++    assert audit.exists is True
++    assert audit.has_sql_context_store_class is True
++    assert audit.selected_write_method == "upsert_context"
++    assert audit.write_status == "ready_for_controlled_write_patch"
++    assert audit.ready_for_controlled_write_patch is True
++
++
++def test_0150_reports_gap_when_no_explicit_write_method(tmp_path: Path) -> None:
++    store = tmp_path / "src" / "context" / "sql_context_store.py"
++    store.parent.mkdir(parents=True)
++    store.write_text("class SQLContextStore:\n    def connect(self):\n        pass\n", encoding="utf-8")
++
++    audit = inspect_sql_context_store_write_surface(tmp_path)
++
++    assert audit.selected_write_method is None
++    assert audit.write_status == "blocked_no_explicit_sql_context_store_write_method"
++    assert audit.ready_for_controlled_write_patch is False
++
++
++def test_0150_builds_write_surface_record_without_write_attempt(tmp_path: Path) -> None:
++    store = tmp_path / "src" / "context" / "sql_context_store.py"
++    store.parent.mkdir(parents=True)
++    store.write_text("class SQLContextStore:\n    def save_context(self, record):\n        return record\n", encoding="utf-8")
++    persistence_record = {
++        "persistence_ref": "sql-context-persist:demo",
++        "handoff_ref": "sql-handoff:demo",
++        "sql_ref": "sql:artifact/vector-indexing/demo",
++        "artifact_ref": "artifact:local/demo",
++    }
++
++    audit = inspect_sql_context_store_write_surface(tmp_path)
++    record = build_sql_context_store_write_surface_record(
++        persistence_record=persistence_record,
++        surface_audit=audit,
++    ).to_mapping()
++
++    assert record["audit_ref"].startswith("sql-context-write-surface:")
++    assert record["durable_authority"] == "sql"
++    assert record["qdrant_role"] == "projection_recall_index"
++    assert record["write_attempted"] is False
++    assert record["selected_write_method"] == "save_context"
++
++
++def test_0150_tool_writes_audit_artifacts(tmp_path: Path) -> None:
++    store = tmp_path / "src" / "context" / "sql_context_store.py"
++    store.parent.mkdir(parents=True)
++    store.write_text("class SQLContextStore:\n    def store_context(self, record):\n        return record\n", encoding="utf-8")
++    (tmp_path / "src" / "context" / "sql_context_store_write_surface_contract.py").write_text("# test surface\n", encoding="utf-8")
++    persistence_json = tmp_path / ".var" / "smoke" / "artifacts" / "0149" / "sql_context_store_persistence_record.json"
++    _write_fake_persistence_record(persistence_json)
++    module = _load_tool_module()
++
++    plan = module.build_sql_context_store_write_surface_audit_plan(
++        tmp_path,
++        persistence_json=persistence_json,
++        output_dir=Path(".var/smoke/artifacts/0150"),
++        requested_write_method=None,
++        execute=True,
++    )
++    rc = module.execute_sql_context_store_write_surface_audit_plan(plan)
++
++    assert rc == 0
++    assert plan.audit_json.exists()
++    assert plan.audit_report.exists()
++    written = json.loads(plan.audit_json.read_text(encoding="utf-8"))
++    assert written["selected_write_method"] == "store_context"
++    assert written["write_attempted"] is False
+diff --git a/tools/run_sql_context_store_write_surface_audit.py b/tools/run_sql_context_store_write_surface_audit.py
+new file mode 100755
+index 0000000..1111111
+--- /dev/null
++++ b/tools/run_sql_context_store_write_surface_audit.py
+@@ -0,0 +1,270 @@
++#!/usr/bin/env python3
++"""Audit SQLContextStore write surface from a 0149 persistence record.
++
++0150 is intentionally audit-only. It consumes the 0149 persistence record,
++inspects the existing SQLContextStore class, and reports whether a later patch
++can bind an explicit write method. It does not import backend clients and does
++not perform a database write.
++"""
++
++from __future__ import annotations
++
++import argparse
++from dataclasses import dataclass
++import json
++from pathlib import Path
++import sys
++from typing import Any, Mapping, Sequence
++
++DEFAULT_PERSISTENCE_JSON = ".var/smoke/artifacts/0149/sql_context_store_persistence_record.json"
++DEFAULT_OUTPUT_DIR = ".var/smoke/artifacts/0150"
++
++
++@dataclass(frozen=True, slots=True)
++class SqlContextStoreWriteSurfaceAuditSurface:
++    key: str
++    path: Path
++    reason: str
++    required: bool = True
++
++    def to_mapping(self, *, root: Path) -> dict[str, Any]:
++        return {
++            "key": self.key,
++            "status": "present" if self.path.exists() else "missing",
++            "path": _display_path(self.path, root=root),
++            "reason": self.reason,
++            "required": self.required,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class SqlContextStoreWriteSurfaceAuditPlan:
++    repository_root: Path
++    persistence_json: Path
++    output_dir: Path
++    audit_json: Path
++    audit_report: Path
++    requested_write_method: str | None
++    execute: bool
++    surfaces: tuple[SqlContextStoreWriteSurfaceAuditSurface, ...]
++
++    @property
++    def ready(self) -> bool:
++        return all(surface.path.exists() for surface in self.surfaces if surface.required)
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "repository_root": str(self.repository_root),
++            "persistence_json": str(self.persistence_json),
++            "output_dir": str(self.output_dir),
++            "audit_json": str(self.audit_json),
++            "audit_report": str(self.audit_report),
++            "requested_write_method": self.requested_write_method,
++            "ready_for_sql_context_store_write_surface_audit": self.ready,
++            "execute": self.execute,
++            "surfaces": [surface.to_mapping(root=self.repository_root) for surface in self.surfaces],
++            "boundary": "audit-only SQLContextStore write surface check; no backend write in 0150",
++        }
++
++    def to_markdown(self) -> str:
++        lines = [
++            "# SQLContextStore write surface audit plan",
++            "",
++            f"repository_root: `{self.repository_root}`",
++            f"persistence_json: `{self.persistence_json}`",
++            f"output_dir: `{self.output_dir}`",
++            f"audit_json: `{self.audit_json}`",
++            f"audit_report: `{self.audit_report}`",
++            f"requested_write_method: `{self.requested_write_method}`",
++            f"ready_for_sql_context_store_write_surface_audit: `{str(self.ready).lower()}`",
++            f"execute: `{str(self.execute).lower()}`",
++            "",
++            "## Existing surfaces",
++            "",
++            "| key | status | required | path | reason |",
++            "| --- | --- | --- | --- | --- |",
++        ]
++        for surface in self.surfaces:
++            row = surface.to_mapping(root=self.repository_root)
++            lines.append(f"| {row['key']} | {row['status']} | `{str(row['required']).lower()}` | `{row['path']}` | {row['reason']} |")
++        lines.extend([
++            "",
++            "## Boundary",
++            "",
++            "- consumes sql_context_store_persistence_record.json from 0149",
++            "- reuses src/context/sql_context_store.py as the existing durable authority surface",
++            "- reuses src/context/sql_context_store_write_surface_contract.py as a pure audit contract",
++            "- writes sql_context_store_write_surface_audit.json and sql_context_store_write_surface_report.md only",
++            "- does not create SQLPersistenceWorker",
++            "- does not create SQLOrchestrator",
++            "- does not create backend-specific SQL clients",
++            "- does not import OpenVINO or Qdrant backends",
++            "- does not modify the Scheduler run loop",
++            "- Qdrant identifiers stay projection metadata; SQL remains durable authority",
++        ])
++        return "\n".join(lines) + "\n"
++
++
++def build_sql_context_store_write_surface_audit_plan(
++    root: Path,
++    *,
++    persistence_json: Path,
++    output_dir: Path,
++    requested_write_method: str | None,
++    execute: bool,
++) -> SqlContextStoreWriteSurfaceAuditPlan:
++    root = root.resolve()
++    persistence_json = _resolve_repo_path(root, persistence_json)
++    output_dir = _resolve_repo_path(root, output_dir)
++    return SqlContextStoreWriteSurfaceAuditPlan(
++        repository_root=root,
++        persistence_json=persistence_json,
++        output_dir=output_dir,
++        audit_json=output_dir / "sql_context_store_write_surface_audit.json",
++        audit_report=output_dir / "sql_context_store_write_surface_report.md",
++        requested_write_method=requested_write_method,
++        execute=execute,
++        surfaces=(
++            SqlContextStoreWriteSurfaceAuditSurface(
++                key="sql_context_store",
++                path=root / "src" / "context" / "sql_context_store.py",
++                reason="existing durable SQL authority surface",
++                required=True,
++            ),
++            SqlContextStoreWriteSurfaceAuditSurface(
++                key="sql_context_store_persistence_record",
++                path=persistence_json,
++                reason="record produced by 0149",
++                required=True,
++            ),
++            SqlContextStoreWriteSurfaceAuditSurface(
++                key="sql_context_store_write_surface_contract",
++                path=root / "src" / "context" / "sql_context_store_write_surface_contract.py",
++                reason="pure write-surface audit contract from 0150",
++                required=True,
++            ),
++        ),
++    )
++
++
++def execute_sql_context_store_write_surface_audit_plan(plan: SqlContextStoreWriteSurfaceAuditPlan) -> int:
++    if not plan.ready:
++        for surface in plan.surfaces:
++            if surface.required and not surface.path.exists():
++                print(f"missing required surface: {surface.path}", file=sys.stderr)
++        return 2
++
++    _ensure_context_import_path(plan.repository_root)
++    from context.sql_context_store_write_surface_contract import (
++        build_sql_context_store_write_surface_record,
++        inspect_sql_context_store_write_surface,
++        read_json_mapping,
++    )
++
++    persistence_record = read_json_mapping(plan.persistence_json)
++    surface_audit = inspect_sql_context_store_write_surface(
++        plan.repository_root,
++        requested_write_method=plan.requested_write_method,
++    )
++    record = build_sql_context_store_write_surface_record(
++        persistence_record=persistence_record,
++        surface_audit=surface_audit,
++    )
++    mapping = record.to_mapping()
++    plan.output_dir.mkdir(parents=True, exist_ok=True)
++    plan.audit_json.write_text(json.dumps(mapping, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    report = _audit_report_markdown(plan, mapping)
++    plan.audit_report.write_text(report, encoding="utf-8")
++    print("==> sql_context_store_write_surface_audit")
++    print(report, end="")
++    return 0
++
++
++def _audit_report_markdown(plan: SqlContextStoreWriteSurfaceAuditPlan, mapping: Mapping[str, Any]) -> str:
++    audit = mapping["surface_audit"]
++    method_names = [method["name"] for method in audit.get("method_signatures", [])]
++    lines = [
++        "# SQLContextStore write surface audit result",
++        "",
++        f"audit_json: `{plan.audit_json}`",
++        f"audit_report: `{plan.audit_report}`",
++        f"audit_ref: `{mapping['audit_ref']}`",
++        f"persistence_ref: `{mapping['persistence_ref']}`",
++        f"sql_ref: `{mapping['sql_ref']}`",
++        f"artifact_ref: `{mapping['artifact_ref']}`",
++        f"durable_authority: `{mapping['durable_authority']}`",
++        f"qdrant_role: `{mapping['qdrant_role']}`",
++        f"write_attempted: `{str(mapping['write_attempted']).lower()}`",
++        f"write_status: `{mapping['write_status']}`",
++        f"selected_write_method: `{mapping['selected_write_method']}`",
++        f"ready_for_controlled_write_patch: `{str(audit.get('ready_for_controlled_write_patch')).lower()}`",
++        f"recommended_next_patch: `{mapping['recommended_next_patch']}`",
++        f"gap_reason: `{audit.get('gap_reason')}`",
++        f"sql_context_store_exists: `{str(audit.get('exists')).lower()}`",
++        f"has_sql_context_store_class: `{str(audit.get('has_sql_context_store_class')).lower()}`",
++        f"method_count: `{len(method_names)}`",
++        "",
++        "## SQLContextStore methods",
++        "",
++    ]
++    if method_names:
++        for method_name in method_names:
++            lines.append(f"- `{method_name}`")
++    else:
++        lines.append("- none detected")
++    lines.extend([
++        "",
++        "boundary: `0150 audits the existing SQLContextStore write surface only; no backend write is performed`",
++        "",
++    ])
++    return "\n".join(lines)
++
++
++def parse_args(argv: Sequence[str]) -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description="Audit the existing SQLContextStore write surface from a 0149 persistence record.")
++    parser.add_argument("repository_root", type=Path)
++    parser.add_argument("--persistence-json", type=Path, default=Path(DEFAULT_PERSISTENCE_JSON))
++    parser.add_argument("--output-dir", type=Path, default=Path(DEFAULT_OUTPUT_DIR))
++    parser.add_argument("--write-method", default=None, help="Require a specific existing SQLContextStore method name for the next controlled write patch.")
++    parser.add_argument("--execute", action="store_true")
++    parser.add_argument("--format", choices=("markdown", "json"), default="markdown")
++    return parser.parse_args(argv)
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = parse_args(tuple(sys.argv[1:] if argv is None else argv))
++    plan = build_sql_context_store_write_surface_audit_plan(
++        args.repository_root,
++        persistence_json=args.persistence_json,
++        output_dir=args.output_dir,
++        requested_write_method=args.write_method,
++        execute=args.execute,
++    )
++    if args.format == "json":
++        print(json.dumps(plan.to_mapping(), indent=2, sort_keys=True))
++    else:
++        print(plan.to_markdown(), end="")
++    if not args.execute:
++        return 0 if plan.ready else 2
++    return execute_sql_context_store_write_surface_audit_plan(plan)
++
++
++def _ensure_context_import_path(root: Path) -> None:
++    src = str(root / "src")
++    if src not in sys.path:
++        sys.path.insert(0, src)
++
++
++def _resolve_repo_path(root: Path, path: Path) -> Path:
++    return path if path.is_absolute() else root / path
++
++
++def _display_path(path: Path, *, root: Path) -> str:
++    try:
++        return str(path.relative_to(root))
++    except ValueError:
++        return str(path)
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

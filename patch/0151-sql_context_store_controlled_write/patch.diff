@@ -1,0 +1,910 @@
+diff --git a/PHASE0151_TEST_REPORT.md b/PHASE0151_TEST_REPORT.md
+new file mode 100644
+index 0000000..713f84f
+--- /dev/null
++++ b/PHASE0151_TEST_REPORT.md
+@@ -0,0 +1,21 @@
++# PHASE0151_TEST_REPORT
++
++```text
++phase: 0151-sql_context_store_controlled_write
++code_rule_review: done
++code_rule_update_required: true
++code_rule_reason: Real SQL persistence must go through DbApiSqlContextStore.upsert_record and keep Qdrant as projection metadata only.
++live_path_status: controlled_sql_context_store_write
++live_path_uses_real_backend: sqlite_smoke_dbapi
++context_contract_version: sql-context-store-controlled-write-0151
++context_contract_changed: true
++search_commands_bounded: n/a
++```
++
++Validation performed in patch build:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/tools/test_sql_context_store_controlled_write_smoke_0151.py tests/rules/test_sql_context_store_controlled_write_smoke_0151_rule.py
++# expected: 8 passed
++```
+diff --git a/doc/CHANGELOG_0151_SQL_CONTEXT_STORE_CONTROLLED_WRITE.md b/doc/CHANGELOG_0151_SQL_CONTEXT_STORE_CONTROLLED_WRITE.md
+new file mode 100644
+index 0000000..8a5718a
+--- /dev/null
++++ b/doc/CHANGELOG_0151_SQL_CONTEXT_STORE_CONTROLLED_WRITE.md
+@@ -0,0 +1,10 @@
++# Changelog 0151 — SQLContextStore controlled write
++
++Added:
++
++- `src/context/sql_context_store_controlled_write_contract.py`
++- `tools/run_sql_context_store_controlled_write_smoke.py`
++- controlled write tests and code-rule tests
++- architecture/code-rule docs
++
++0151 consumes the 0149 SQLContextStore persistence record, converts it into a `SqlContextRecord`, writes it through `DbApiSqlContextStore.upsert_record`, and reads it back from the smoke database.
+diff --git a/doc/architecture/SQL_CONTEXT_STORE_CONTROLLED_WRITE_0151.md b/doc/architecture/SQL_CONTEXT_STORE_CONTROLLED_WRITE_0151.md
+new file mode 100644
+index 0000000..c6b3f07
+--- /dev/null
++++ b/doc/architecture/SQL_CONTEXT_STORE_CONTROLLED_WRITE_0151.md
+@@ -0,0 +1,27 @@
++# 0151 — SQLContextStore controlled write smoke
++
++0151 performs the first real SQLContextStore write in the local artifact vector indexing chain.
++
++The path becomes:
++
++```text
++0149 sql_context_store_persistence_record.json
++-> SqlContextRecord
++-> DbApiSqlContextStore.upsert_record
++-> sql_context_records table in a DB-API SQLite smoke database
++-> readback by context_ref
++-> sql_context_store_controlled_write_result.json
++```
++
++Boundary:
++
++- The existing `src/context/sql_context_store.py` surface is reused.
++- The selected store class is `DbApiSqlContextStore`.
++- The selected write method is `upsert_record`.
++- The tool writes through an injected DB-API SQLite smoke database.
++- SQL remains durable authority.
++- Qdrant remains projection/recall only; Qdrant ids are metadata in the SQL record body/metadata.
++- OpenVINO and Qdrant backend clients are not imported.
++- The Scheduler run loop and RouteProxy runtime behavior are not modified.
++
++0151 is intentionally a controlled smoke write. A later patch may switch the database connection source from the local SQLite smoke file to the production SQL connection factory already authorized by the project.
+diff --git a/doc/code-rules/0151_sql_context_store_controlled_write_rule.md b/doc/code-rules/0151_sql_context_store_controlled_write_rule.md
+new file mode 100644
+index 0000000..4f3a61e
+--- /dev/null
++++ b/doc/code-rules/0151_sql_context_store_controlled_write_rule.md
+@@ -0,0 +1,25 @@
++# Code rule 0151 — SQLContextStore controlled write
++
++0151 may perform a real local SQL write only through the existing SQL context store authority surface.
++
++Required boundary:
++
++- `DbApiSqlContextStore.upsert_record` is the selected write method.
++- `SqlContextRecord` is the record shape written to SQL.
++- SQL remains durable authority.
++- Qdrant remains projection/recall only.
++- Qdrant identifiers may be persisted only as projection metadata.
++- `tools/run_sql_context_store_controlled_write_smoke.py` may use a DB-API SQLite smoke database as an injected connection for the existing store.
++
++Forbidden in 0151:
++
++- must not create SQLPersistenceWorker.
++- must not create SQLOrchestrator.
++- must not create LocalArtifactOrchestrator.
++- must not create LocalVectorIndexingOrchestrator.
++- must not import OpenVINO backend clients.
++- must not import Qdrant backend clients.
++- must not modify the Scheduler run loop.
++- must not make Qdrant the durable source of truth.
++
++The smoke must write and read back through `DbApiSqlContextStore`, not through a parallel SQL API.
+diff --git a/doc/docs/architecture/runtime/151_sql_context_store_controlled_write.dot b/doc/docs/architecture/runtime/151_sql_context_store_controlled_write.dot
+new file mode 100644
+index 0000000..a25e6bb
+--- /dev/null
++++ b/doc/docs/architecture/runtime/151_sql_context_store_controlled_write.dot
+@@ -0,0 +1,17 @@
++digraph sql_context_store_controlled_write_0151 {
++  rankdir=LR;
++  record [label="0149 persistence record"];
++  sqlrecord [label="SqlContextRecord"];
++  store [label="DbApiSqlContextStore.upsert_record"];
++  db [label="DB-API SQLite smoke DB"];
++  readback [label="get_record readback"];
++  result [label="controlled write result"];
++  qdrant [label="Qdrant ids\nmetadata only"];
++
++  record -> sqlrecord;
++  qdrant -> sqlrecord [style=dotted];
++  sqlrecord -> store;
++  store -> db;
++  db -> readback;
++  readback -> result;
++}
+diff --git a/doc/manifests/MANIFEST_0151_CHANGED_FILES.md b/doc/manifests/MANIFEST_0151_CHANGED_FILES.md
+new file mode 100644
+index 0000000..4d4aaa7
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0151_CHANGED_FILES.md
+@@ -0,0 +1,12 @@
++# Manifest 0151
++
++- `src/context/sql_context_store_controlled_write_contract.py`
++- `tools/run_sql_context_store_controlled_write_smoke.py`
++- `tests/tools/test_sql_context_store_controlled_write_smoke_0151.py`
++- `tests/rules/test_sql_context_store_controlled_write_smoke_0151_rule.py`
++- `doc/architecture/SQL_CONTEXT_STORE_CONTROLLED_WRITE_0151.md`
++- `doc/code-rules/0151_sql_context_store_controlled_write_rule.md`
++- `doc/CHANGELOG_0151_SQL_CONTEXT_STORE_CONTROLLED_WRITE.md`
++- `doc/manifests/MANIFEST_0151_CHANGED_FILES.md`
++- `doc/docs/architecture/runtime/151_sql_context_store_controlled_write.dot`
++- `PHASE0151_TEST_REPORT.md`
+diff --git a/src/context/sql_context_store_controlled_write_contract.py b/src/context/sql_context_store_controlled_write_contract.py
+new file mode 100644
+index 0000000..7087ac5
+--- /dev/null
++++ b/src/context/sql_context_store_controlled_write_contract.py
+@@ -0,0 +1,231 @@
++"""Controlled SQLContextStore write contract for persistence records.
++
++0151 is the first real persistence step after the 0148/0149 handoff chain. It
++converts the prepared persistence record into the existing SqlContextRecord
++shape and is intentionally limited to the existing DbApiSqlContextStore boundary.
++It does not create a SQL worker, does not call OpenVINO or Qdrant, and does not
++turn Qdrant projection identifiers into durable truth.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++import json
++from typing import Any, Mapping
++
++from .sql_context_store import SqlContextRecord, SqlContextStoreWriteResult
++
++_SCHEMA = "missipy.sql_context_store.controlled_write.v1"
++_WRITE_MODE = "dbapi_sql_context_store_upsert_record"
++_DURABLE_AUTHORITY = "sql"
++_QDRANT_ROLE = "projection_recall_index"
++_SELECTED_STORE_CLASS = "DbApiSqlContextStore"
++_SELECTED_WRITE_METHOD = "upsert_record"
++
++
++def _require_non_empty(value: Any, *, field_name: str) -> str:
++    if not isinstance(value, str) or not value.strip():
++        raise ValueError(f"{field_name} must be a non-empty string")
++    return value.strip()
++
++
++def _require_prefix(value: Any, *, field_name: str, prefix: str) -> str:
++    normalized = _require_non_empty(value, field_name=field_name)
++    if not normalized.startswith(prefix):
++        raise ValueError(f"{field_name} must start with {prefix!r}: {normalized!r}")
++    return normalized
++
++
++def _normalize_bool(value: Any, *, field_name: str) -> bool:
++    if isinstance(value, bool):
++        return value
++    if isinstance(value, str):
++        lowered = value.lower()
++        if lowered == "true":
++            return True
++        if lowered == "false":
++            return False
++    raise ValueError(f"{field_name} must be boolean-compatible")
++
++
++def _metadata_value(value: Any) -> str:
++    if value is None:
++        return ""
++    if isinstance(value, (str, int, float, bool)):
++        return str(value)
++    return json.dumps(value, sort_keys=True, separators=(",", ":"))
++
++
++def _metadata_items(mapping: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
++    keys = (
++        "persistence_ref",
++        "handoff_ref",
++        "artifact_ref",
++        "artifact_kind",
++        "artifact_path",
++        "artifact_contract_path",
++        "artifact_report",
++        "artifact_json",
++        "result_frame_path",
++        "point_id",
++        "qdrant_rest_id",
++        "vector_json",
++        "collection",
++        "dimension",
++        "status",
++        "machine_vector_handoff",
++        "strict_vector_handoff",
++        "durable_authority",
++        "qdrant_role",
++        "persistence_mode",
++    )
++    return tuple((key, _metadata_value(mapping.get(key))) for key in keys if key in mapping)
++
++
++def _record_body(mapping: Mapping[str, Any]) -> str:
++    payload = {
++        "schema": _SCHEMA,
++        "durable_authority": _DURABLE_AUTHORITY,
++        "qdrant_role": _QDRANT_ROLE,
++        "write_mode": _WRITE_MODE,
++        "selected_store_class": _SELECTED_STORE_CLASS,
++        "selected_write_method": _SELECTED_WRITE_METHOD,
++        "sql_ref": mapping.get("sql_ref"),
++        "artifact_ref": mapping.get("artifact_ref"),
++        "artifact_kind": mapping.get("artifact_kind"),
++        "artifact_path": mapping.get("artifact_path"),
++        "artifact_contract_path": mapping.get("artifact_contract_path"),
++        "artifact_report": mapping.get("artifact_report"),
++        "artifact_json": mapping.get("artifact_json"),
++        "result_frame_path": mapping.get("result_frame_path"),
++        "point_id": mapping.get("point_id"),
++        "qdrant_rest_id": mapping.get("qdrant_rest_id"),
++        "vector_json": mapping.get("vector_json"),
++        "collection": mapping.get("collection"),
++        "dimension": mapping.get("dimension"),
++        "status": mapping.get("status"),
++        "machine_vector_handoff": mapping.get("machine_vector_handoff"),
++        "strict_vector_handoff": mapping.get("strict_vector_handoff"),
++        "source_persistence_ref": mapping.get("persistence_ref"),
++        "source_handoff_ref": mapping.get("handoff_ref"),
++    }
++    return json.dumps(payload, indent=2, sort_keys=True)
++
++
++def build_sql_context_record_from_persistence_mapping(mapping: Mapping[str, Any]) -> SqlContextRecord:
++    """Convert a 0149 persistence mapping into the existing SQL record type."""
++
++    sql_ref = _require_prefix(mapping.get("sql_ref"), field_name="sql_ref", prefix="sql:")
++    artifact_ref = _require_prefix(mapping.get("artifact_ref"), field_name="artifact_ref", prefix="artifact:")
++    _require_prefix(mapping.get("point_id"), field_name="point_id", prefix="qdrant-point:")
++    _require_non_empty(mapping.get("qdrant_rest_id"), field_name="qdrant_rest_id")
++    _normalize_bool(mapping.get("machine_vector_handoff"), field_name="machine_vector_handoff")
++    _normalize_bool(mapping.get("strict_vector_handoff"), field_name="strict_vector_handoff")
++
++    return SqlContextRecord(
++        context_ref=sql_ref,
++        kind="artifact",
++        title=f"Artifact vector indexing result for {artifact_ref}",
++        body=_record_body(mapping),
++        parent_ref=artifact_ref,
++        metadata=_metadata_items(mapping),
++    )
++
++
++@dataclass(frozen=True, slots=True)
++class SqlContextStoreControlledWriteSummary:
++    """Serializable summary for a controlled DbApiSqlContextStore write."""
++
++    persistence_ref: str
++    sql_ref: str
++    artifact_ref: str
++    db_path: str
++    selected_store_class: str = _SELECTED_STORE_CLASS
++    selected_write_method: str = _SELECTED_WRITE_METHOD
++    write_mode: str = _WRITE_MODE
++    durable_authority: str = _DURABLE_AUTHORITY
++    qdrant_role: str = _QDRANT_ROLE
++    write_status: str = "persisted"
++    inserted: bool = False
++    replaced: bool = False
++    readback_ok: bool = False
++    point_id: str = ""
++    qdrant_rest_id: str = ""
++    vector_json: str = ""
++    metadata: Mapping[str, Any] = field(default_factory=dict)
++
++    def __post_init__(self) -> None:
++        _require_prefix(self.persistence_ref, field_name="persistence_ref", prefix="sql-context-persist:")
++        _require_prefix(self.sql_ref, field_name="sql_ref", prefix="sql:")
++        _require_prefix(self.artifact_ref, field_name="artifact_ref", prefix="artifact:")
++        _require_non_empty(self.db_path, field_name="db_path")
++        if self.selected_store_class != _SELECTED_STORE_CLASS:
++            raise ValueError("0151 must use DbApiSqlContextStore")
++        if self.selected_write_method != _SELECTED_WRITE_METHOD:
++            raise ValueError("0151 must use upsert_record")
++        if self.durable_authority != _DURABLE_AUTHORITY:
++            raise ValueError("durable_authority must remain sql")
++        if self.qdrant_role != _QDRANT_ROLE:
++            raise ValueError("qdrant_role must remain projection_recall_index")
++        if self.write_mode != _WRITE_MODE:
++            raise ValueError("invalid 0151 write_mode")
++
++    @classmethod
++    def from_write_result(
++        cls,
++        *,
++        persistence_mapping: Mapping[str, Any],
++        write_result: SqlContextStoreWriteResult,
++        db_path: str,
++        readback_ok: bool,
++    ) -> "SqlContextStoreControlledWriteSummary":
++        return cls(
++            persistence_ref=_require_prefix(
++                persistence_mapping.get("persistence_ref"),
++                field_name="persistence_ref",
++                prefix="sql-context-persist:",
++            ),
++            sql_ref=write_result.record.context_ref,
++            artifact_ref=_require_prefix(
++                persistence_mapping.get("artifact_ref"),
++                field_name="artifact_ref",
++                prefix="artifact:",
++            ),
++            db_path=db_path,
++            inserted=write_result.inserted,
++            replaced=write_result.replaced,
++            readback_ok=readback_ok,
++            point_id=str(persistence_mapping.get("point_id", "")),
++            qdrant_rest_id=str(persistence_mapping.get("qdrant_rest_id", "")),
++            vector_json=str(persistence_mapping.get("vector_json", "")),
++            metadata={
++                "source_handoff_ref": persistence_mapping.get("handoff_ref"),
++                "source_persistence_mode": persistence_mapping.get("persistence_mode"),
++                "machine_vector_handoff": persistence_mapping.get("machine_vector_handoff"),
++                "strict_vector_handoff": persistence_mapping.get("strict_vector_handoff"),
++                "collection": persistence_mapping.get("collection"),
++                "dimension": persistence_mapping.get("dimension"),
++            },
++        )
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": _SCHEMA,
++            "persistence_ref": self.persistence_ref,
++            "sql_ref": self.sql_ref,
++            "artifact_ref": self.artifact_ref,
++            "db_path": self.db_path,
++            "selected_store_class": self.selected_store_class,
++            "selected_write_method": self.selected_write_method,
++            "write_mode": self.write_mode,
++            "durable_authority": self.durable_authority,
++            "qdrant_role": self.qdrant_role,
++            "write_status": self.write_status,
++            "inserted": self.inserted,
++            "replaced": self.replaced,
++            "readback_ok": self.readback_ok,
++            "point_id": self.point_id,
++            "qdrant_rest_id": self.qdrant_rest_id,
++            "vector_json": self.vector_json,
++            "metadata": dict(self.metadata),
++        }
+diff --git a/tests/rules/test_sql_context_store_controlled_write_smoke_0151_rule.py b/tests/rules/test_sql_context_store_controlled_write_smoke_0151_rule.py
+new file mode 100644
+index 0000000..a01712a
+--- /dev/null
++++ b/tests/rules/test_sql_context_store_controlled_write_smoke_0151_rule.py
+@@ -0,0 +1,49 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++CONTRACT = ROOT / "src" / "context" / "sql_context_store_controlled_write_contract.py"
++TOOL = ROOT / "tools" / "run_sql_context_store_controlled_write_smoke.py"
++RULE = ROOT / "doc" / "code-rules" / "0151_sql_context_store_controlled_write_rule.md"
++DOC = ROOT / "doc" / "architecture" / "SQL_CONTEXT_STORE_CONTROLLED_WRITE_0151.md"
++
++
++def test_0151_files_exist() -> None:
++    for path in (CONTRACT, TOOL, RULE, DOC):
++        assert path.exists(), path
++
++
++def test_0151_uses_existing_dbapi_sql_context_store_surface() -> None:
++    contract = CONTRACT.read_text(encoding="utf-8")
++    tool = TOOL.read_text(encoding="utf-8")
++    assert "DbApiSqlContextStore" in contract
++    assert "SqlContextRecord" in contract
++    assert "upsert_record" in contract
++    assert "DbApiSqlContextStore(connection)" in tool
++    assert "store.upsert_record(record)" in tool
++    assert "store.get_record(record.context_ref)" in tool
++
++
++def test_0151_boundary_forbids_parallel_sql_runtime() -> None:
++    combined = CONTRACT.read_text(encoding="utf-8") + "\n" + TOOL.read_text(encoding="utf-8")
++    forbidden = [
++        "SQLPersistenceWorker(",
++        "SQLOrchestrator(",
++        "LocalArtifactOrchestrator(",
++        "LocalVectorIndexingOrchestrator(",
++        "qdrant_client",
++        "openvino.runtime",
++        "Scheduler.run(",
++    ]
++    for phrase in forbidden:
++        assert phrase not in combined
++
++
++def test_0151_rule_doc_locks_sql_authority_and_qdrant_projection() -> None:
++    text = RULE.read_text(encoding="utf-8")
++    assert "DbApiSqlContextStore.upsert_record" in text
++    assert "SQL remains durable authority" in text
++    assert "Qdrant remains projection/recall only" in text
++    assert "must not create SQLPersistenceWorker" in text
++    assert "must not create SQLOrchestrator" in text
+diff --git a/tests/tools/test_sql_context_store_controlled_write_smoke_0151.py b/tests/tools/test_sql_context_store_controlled_write_smoke_0151.py
+new file mode 100644
+index 0000000..b05477e
+--- /dev/null
++++ b/tests/tools/test_sql_context_store_controlled_write_smoke_0151.py
+@@ -0,0 +1,147 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++import sqlite3
++import subprocess
++import sys
++
++from context.sql_context_store import DbApiSqlContextStore
++from context.sql_context_store_controlled_write_contract import (
++    SqlContextStoreControlledWriteSummary,
++    build_sql_context_record_from_persistence_mapping,
++)
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "run_sql_context_store_controlled_write_smoke.py"
++
++
++def _persistence_mapping() -> dict[str, object]:
++    return {
++        "persistence_ref": "sql-context-persist:demo",
++        "handoff_ref": "sql-handoff:demo",
++        "sql_ref": "sql:artifact/vector-indexing/test",
++        "artifact_ref": "artifact:local/test/demo",
++        "artifact_kind": "local_markdown",
++        "artifact_path": ".var/smoke/artifacts/test/artifact_input.md",
++        "artifact_contract_path": ".var/smoke/artifacts/test/artifact_intake_contract.json",
++        "artifact_report": ".var/smoke/artifacts/test/artifact_vector_indexing_report.md",
++        "artifact_json": ".var/smoke/artifacts/test/artifact_vector_indexing_report.json",
++        "result_frame_path": ".var/smoke/routeproxy-test/routes/frames/result.json",
++        "point_id": "qdrant-point:abc123",
++        "qdrant_rest_id": "00000000-0000-0000-0000-000000000000",
++        "vector_json": ".var/smoke/e5_vector_test.json",
++        "collection": "autodoc_smoke_e5_384",
++        "dimension": 384,
++        "status": "ok",
++        "machine_vector_handoff": True,
++        "strict_vector_handoff": True,
++        "persistence_mode": "sql_context_store_record",
++        "durable_authority": "sql",
++        "qdrant_role": "projection_recall_index",
++    }
++
++
++def test_build_sql_context_record_from_persistence_mapping() -> None:
++    record = build_sql_context_record_from_persistence_mapping(_persistence_mapping())
++
++    assert record.context_ref == "sql:artifact/vector-indexing/test"
++    assert record.kind == "artifact"
++    assert record.parent_ref == "artifact:local/test/demo"
++    assert "qdrant-point:abc123" in record.body
++    metadata = dict(record.metadata)
++    assert metadata["qdrant_role"] == "projection_recall_index"
++    assert metadata["point_id"] == "qdrant-point:abc123"
++
++
++def test_dbapi_sql_context_store_upsert_record_roundtrip() -> None:
++    record = build_sql_context_record_from_persistence_mapping(_persistence_mapping())
++    connection = sqlite3.connect(":memory:")
++    try:
++        store = DbApiSqlContextStore(connection)
++        store.initialize_schema()
++        result = store.upsert_record(record)
++        readback = store.get_record(record.context_ref)
++    finally:
++        connection.close()
++
++    assert result.inserted is True
++    assert result.replaced is False
++    assert readback is not None
++    assert readback.context_ref == record.context_ref
++
++
++def test_controlled_write_summary_mapping() -> None:
++    record = build_sql_context_record_from_persistence_mapping(_persistence_mapping())
++    connection = sqlite3.connect(":memory:")
++    try:
++        store = DbApiSqlContextStore(connection)
++        store.initialize_schema()
++        result = store.upsert_record(record)
++    finally:
++        connection.close()
++
++    summary = SqlContextStoreControlledWriteSummary.from_write_result(
++        persistence_mapping=_persistence_mapping(),
++        write_result=result,
++        db_path=":memory:",
++        readback_ok=True,
++    )
++    mapping = summary.to_mapping()
++
++    assert mapping["write_status"] == "persisted"
++    assert mapping["selected_store_class"] == "DbApiSqlContextStore"
++    assert mapping["selected_write_method"] == "upsert_record"
++    assert mapping["durable_authority"] == "sql"
++    assert mapping["qdrant_role"] == "projection_recall_index"
++
++
++def test_controlled_write_tool_execute(tmp_path: Path) -> None:
++    persistence = tmp_path / "persistence.json"
++    persistence.write_text(json.dumps(_persistence_mapping()), encoding="utf-8")
++    output_dir = tmp_path / "out"
++    db_path = output_dir / "store.sqlite3"
++
++    dry = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            str(ROOT),
++            "--persistence-json",
++            str(persistence),
++            "--output-dir",
++            str(output_dir),
++            "--db-path",
++            str(db_path),
++        ],
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.STDOUT,
++        check=False,
++    )
++    assert dry.returncode == 0, dry.stdout
++    assert "ready_for_sql_context_store_controlled_write: `true`" in dry.stdout
++
++    live = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            str(ROOT),
++            "--persistence-json",
++            str(persistence),
++            "--output-dir",
++            str(output_dir),
++            "--db-path",
++            str(db_path),
++            "--execute",
++        ],
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.STDOUT,
++        check=False,
++    )
++    assert live.returncode == 0, live.stdout
++    result = json.loads((output_dir / "sql_context_store_controlled_write_result.json").read_text(encoding="utf-8"))
++    assert result["write_status"] == "persisted"
++    assert result["readback_ok"] is True
++    assert result["sql_ref"] == "sql:artifact/vector-indexing/test"
++    assert db_path.exists()
+diff --git a/tools/run_sql_context_store_controlled_write_smoke.py b/tools/run_sql_context_store_controlled_write_smoke.py
+new file mode 100755
+index 0000000..2bcc711
+--- /dev/null
++++ b/tools/run_sql_context_store_controlled_write_smoke.py
+@@ -0,0 +1,311 @@
++#!/usr/bin/env python3
++"""Perform a controlled real write through DbApiSqlContextStore.upsert_record.
++
++0151 consumes the 0149 SQLContextStore persistence record and writes it through
++DbApiSqlContextStore using a DB-API SQLite smoke database.  The write path is the
++existing SQL context store authority boundary; this tool does not create a SQL
++worker, does not import OpenVINO/Qdrant backends, and does not modify Scheduler
++or RouteProxy runtime behavior.
++"""
++
++from __future__ import annotations
++
++import argparse
++from dataclasses import dataclass
++import json
++from pathlib import Path
++import sqlite3
++import sys
++from typing import Any, Mapping, Sequence
++
++
++def _ensure_context_import_path(root: Path) -> None:
++    src = str(root / "src")
++    if src not in sys.path:
++        sys.path.insert(0, src)
++
++
++def _resolve_repo_path(root: Path, path: Path) -> Path:
++    path = path.expanduser()
++    if path.is_absolute():
++        return path
++    return root / path
++
++
++def _display_path(path: Path, *, root: Path) -> str:
++    try:
++        return str(path.relative_to(root))
++    except ValueError:
++        return str(path)
++
++
++def _read_json_mapping(path: Path) -> dict[str, Any]:
++    loaded = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(loaded, dict):
++        raise ValueError(f"expected JSON object in {path}")
++    return loaded
++
++
++@dataclass(frozen=True, slots=True)
++class ExistingSurface:
++    key: str
++    path: Path
++    required: bool
++    reason: str
++
++    def to_mapping(self, *, root: Path) -> dict[str, Any]:
++        return {
++            "key": self.key,
++            "status": "present" if self.path.exists() else "missing",
++            "required": self.required,
++            "path": _display_path(self.path, root=root),
++            "reason": self.reason,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class SqlContextStoreControlledWritePlan:
++    repository_root: Path
++    persistence_json: Path
++    output_dir: Path
++    db_path: Path
++    write_json: Path
++    write_report: Path
++    execute: bool
++    surfaces: tuple[ExistingSurface, ...]
++
++    @property
++    def ready(self) -> bool:
++        return all(not surface.required or surface.path.exists() for surface in self.surfaces)
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "repository_root": str(self.repository_root),
++            "persistence_json": str(self.persistence_json),
++            "output_dir": str(self.output_dir),
++            "db_path": str(self.db_path),
++            "write_json": str(self.write_json),
++            "write_report": str(self.write_report),
++            "selected_store_class": "DbApiSqlContextStore",
++            "selected_write_method": "upsert_record",
++            "write_mode": "dbapi_sql_context_store_upsert_record",
++            "ready_for_sql_context_store_controlled_write": self.ready,
++            "execute": self.execute,
++            "surfaces": [surface.to_mapping(root=self.repository_root) for surface in self.surfaces],
++            "boundary": [
++                "consumes sql_context_store_persistence_record.json from 0149",
++                "uses DbApiSqlContextStore.upsert_record from src/context/sql_context_store.py",
++                "builds an existing SqlContextRecord before writing",
++                "uses a DB-API SQLite smoke database injected into DbApiSqlContextStore",
++                "writes sql_context_store_controlled_write_result.json and report markdown",
++                "does not create a SQL worker or SQL orchestrator",
++                "does not import OpenVINO or Qdrant backends",
++                "does not modify the Scheduler run loop",
++                "Qdrant identifiers remain projection metadata; SQL remains durable authority",
++            ],
++        }
++
++    def to_markdown(self) -> str:
++        mapping = self.to_mapping()
++        lines = [
++            "# SQLContextStore controlled write smoke plan",
++            "",
++            f"repository_root: `{mapping['repository_root']}`",
++            f"persistence_json: `{mapping['persistence_json']}`",
++            f"output_dir: `{mapping['output_dir']}`",
++            f"db_path: `{mapping['db_path']}`",
++            f"write_json: `{mapping['write_json']}`",
++            f"write_report: `{mapping['write_report']}`",
++            f"selected_store_class: `{mapping['selected_store_class']}`",
++            f"selected_write_method: `{mapping['selected_write_method']}`",
++            f"write_mode: `{mapping['write_mode']}`",
++            f"ready_for_sql_context_store_controlled_write: `{str(mapping['ready_for_sql_context_store_controlled_write']).lower()}`",
++            f"execute: `{str(self.execute).lower()}`",
++            "",
++            "## Existing surfaces",
++            "",
++            "| key | status | required | path | reason |",
++            "| --- | --- | --- | --- | --- |",
++        ]
++        for surface in mapping["surfaces"]:
++            lines.append(
++                f"| {surface['key']} | {surface['status']} | `{str(surface['required']).lower()}` | "
++                f"`{surface['path']}` | {surface['reason']} |"
++            )
++        lines.extend(["", "## Boundary", ""])
++        lines.extend(f"- {item}" for item in mapping["boundary"])
++        return "\n".join(lines) + "\n"
++
++
++def build_sql_context_store_controlled_write_plan(
++    repository_root: str | Path,
++    *,
++    persistence_json: str | Path = ".var/smoke/artifacts/0149/sql_context_store_persistence_record.json",
++    output_dir: str | Path = ".var/smoke/artifacts/0151",
++    db_path: str | Path | None = None,
++    execute: bool = False,
++) -> SqlContextStoreControlledWritePlan:
++    root = Path(repository_root).resolve()
++    persistence_path = _resolve_repo_path(root, Path(persistence_json)).resolve()
++    out = _resolve_repo_path(root, Path(output_dir)).resolve()
++    database = _resolve_repo_path(root, Path(db_path)).resolve() if db_path is not None else out / "sql_context_store.sqlite3"
++    return SqlContextStoreControlledWritePlan(
++        repository_root=root,
++        persistence_json=persistence_path,
++        output_dir=out,
++        db_path=database,
++        write_json=out / "sql_context_store_controlled_write_result.json",
++        write_report=out / "sql_context_store_controlled_write_report.md",
++        execute=execute,
++        surfaces=(
++            ExistingSurface(
++                "sql_context_store",
++                root / "src" / "context" / "sql_context_store.py",
++                True,
++                "existing durable SQL authority with DbApiSqlContextStore.upsert_record",
++            ),
++            ExistingSurface(
++                "sql_context_store_controlled_write_contract",
++                root / "src" / "context" / "sql_context_store_controlled_write_contract.py",
++                True,
++                "pure 0151 mapping from persistence record to SqlContextRecord",
++            ),
++            ExistingSurface(
++                "sql_context_store_persistence_record",
++                persistence_path,
++                True,
++                "record produced by 0149",
++            ),
++        ),
++    )
++
++
++def execute_sql_context_store_controlled_write_plan(plan: SqlContextStoreControlledWritePlan) -> int:
++    if not plan.ready:
++        return 2
++    _ensure_context_import_path(plan.repository_root)
++
++    from context.sql_context_store import DbApiSqlContextStore  # noqa: WPS433 - existing boundary import
++    from context.sql_context_store_controlled_write_contract import (  # noqa: WPS433
++        SqlContextStoreControlledWriteSummary,
++        build_sql_context_record_from_persistence_mapping,
++    )
++
++    persistence = _read_json_mapping(plan.persistence_json)
++    record = build_sql_context_record_from_persistence_mapping(persistence)
++    plan.output_dir.mkdir(parents=True, exist_ok=True)
++    plan.db_path.parent.mkdir(parents=True, exist_ok=True)
++
++    connection = sqlite3.connect(str(plan.db_path))
++    try:
++        store = DbApiSqlContextStore(connection)
++        store.initialize_schema()
++        write_result = store.upsert_record(record)
++        readback = store.get_record(record.context_ref)
++    finally:
++        connection.close()
++
++    summary = SqlContextStoreControlledWriteSummary.from_write_result(
++        persistence_mapping=persistence,
++        write_result=write_result,
++        db_path=str(plan.db_path),
++        readback_ok=readback is not None and readback.context_ref == record.context_ref,
++    )
++    mapping = summary.to_mapping()
++    plan.write_json.write_text(json.dumps(mapping, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    plan.write_report.write_text(_write_report_markdown(plan=plan, result=mapping), encoding="utf-8")
++
++    print("==> sql_context_store_controlled_write")
++    print(_result_markdown(plan=plan, result=mapping), end="")
++    return 0 if mapping["readback_ok"] else 1
++
++
++def _write_report_markdown(*, plan: SqlContextStoreControlledWritePlan, result: Mapping[str, Any]) -> str:
++    lines = [
++        "# SQLContextStore controlled write report",
++        "",
++        f"write_status: `{result.get('write_status')}`",
++        f"readback_ok: `{str(result.get('readback_ok')).lower()}`",
++        f"sql_ref: `{result.get('sql_ref')}`",
++        f"artifact_ref: `{result.get('artifact_ref')}`",
++        f"db_path: `{plan.db_path}`",
++        f"selected_store_class: `{result.get('selected_store_class')}`",
++        f"selected_write_method: `{result.get('selected_write_method')}`",
++        f"inserted: `{str(result.get('inserted')).lower()}`",
++        f"replaced: `{str(result.get('replaced')).lower()}`",
++        f"point_id: `{result.get('point_id')}`",
++        f"qdrant_rest_id: `{result.get('qdrant_rest_id')}`",
++        "",
++        "Boundary: SQL is the durable authority; Qdrant identifiers are metadata for projection/recall.",
++    ]
++    return "\n".join(lines) + "\n"
++
++
++def _result_markdown(*, plan: SqlContextStoreControlledWritePlan, result: Mapping[str, Any]) -> str:
++    lines = [
++        "# SQLContextStore controlled write smoke result",
++        "",
++        f"write_json: `{plan.write_json}`",
++        f"write_report: `{plan.write_report}`",
++        f"db_path: `{plan.db_path}`",
++        f"write_status: `{result.get('write_status')}`",
++        f"readback_ok: `{str(result.get('readback_ok')).lower()}`",
++        f"selected_store_class: `{result.get('selected_store_class')}`",
++        f"selected_write_method: `{result.get('selected_write_method')}`",
++        f"write_mode: `{result.get('write_mode')}`",
++        f"sql_ref: `{result.get('sql_ref')}`",
++        f"artifact_ref: `{result.get('artifact_ref')}`",
++        f"inserted: `{str(result.get('inserted')).lower()}`",
++        f"replaced: `{str(result.get('replaced')).lower()}`",
++        f"point_id: `{result.get('point_id')}`",
++        f"qdrant_rest_id: `{result.get('qdrant_rest_id')}`",
++        f"durable_authority: `{result.get('durable_authority')}`",
++        f"qdrant_role: `{result.get('qdrant_role')}`",
++        "boundary: `DbApiSqlContextStore.upsert_record real DB-API write with readback`",
++    ]
++    return "\n".join(lines) + "\n"
++
++
++def parse_args(argv: Sequence[str]) -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("repository_root")
++    parser.add_argument(
++        "--persistence-json",
++        default=".var/smoke/artifacts/0149/sql_context_store_persistence_record.json",
++        help="0149 SQLContextStore persistence record JSON.",
++    )
++    parser.add_argument(
++        "--output-dir",
++        default=".var/smoke/artifacts/0151",
++        help="Directory for 0151 output artifacts.",
++    )
++    parser.add_argument(
++        "--db-path",
++        default=None,
++        help="SQLite smoke database path injected into DbApiSqlContextStore.",
++    )
++    parser.add_argument("--execute", action="store_true")
++    parser.add_argument("--format", choices=("markdown", "json"), default="markdown")
++    return parser.parse_args(argv)
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = parse_args(tuple(sys.argv[1:] if argv is None else argv))
++    plan = build_sql_context_store_controlled_write_plan(
++        args.repository_root,
++        persistence_json=args.persistence_json,
++        output_dir=args.output_dir,
++        db_path=args.db_path,
++        execute=args.execute,
++    )
++    if args.format == "json":
++        print(json.dumps(plan.to_mapping(), indent=2, sort_keys=True))
++    else:
++        print(plan.to_markdown(), end="")
++    if not args.execute:
++        return 0 if plan.ready else 2
++    return execute_sql_context_store_controlled_write_plan(plan)
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())

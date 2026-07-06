@@ -1,0 +1,483 @@
+diff --git a/PHASE0152_TEST_REPORT.md b/PHASE0152_TEST_REPORT.md
+new file mode 100644
+index 0000000..21f7272
+--- /dev/null
++++ b/PHASE0152_TEST_REPORT.md
+@@ -0,0 +1,21 @@
++# PHASE0152_TEST_REPORT
++
++```text
++phase: 0152-sql_context_store_configured_db_path
++code_rule_review: done
++code_rule_update_required: true
++code_rule_reason: Local SQL writes need a stable configured DB path while preserving DbApiSqlContextStore.upsert_record.
++live_path_status: configured_sql_context_store_db_path
++live_path_uses_real_backend: sqlite_dbapi_configured_path
++context_contract_version: sql-context-store-configured-db-path-0152
++context_contract_changed: false
++search_commands_bounded: n/a
++```
++
++Validation performed in patch build:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/tools/test_sql_context_store_configured_db_path_0152.py tests/rules/test_sql_context_store_configured_db_path_0152_rule.py
++# expected: 7 passed
++```
+diff --git a/doc/CHANGELOG_0152_SQL_CONTEXT_STORE_CONFIGURED_DB_PATH.md b/doc/CHANGELOG_0152_SQL_CONTEXT_STORE_CONFIGURED_DB_PATH.md
+new file mode 100644
+index 0000000..15ef3ab
+--- /dev/null
++++ b/doc/CHANGELOG_0152_SQL_CONTEXT_STORE_CONFIGURED_DB_PATH.md
+@@ -0,0 +1,12 @@
++# Changelog 0152 — SQLContextStore configured DB path
++
++Changed:
++
++- `tools/run_sql_context_store_controlled_write_smoke.py` now resolves the SQL DB path from `--db-path`, `AUTODOC_SQL_CONTEXT_DB`, or `.var/local/sql_context_store.sqlite3`.
++
++Added:
++
++- configured DB path tests and code-rule tests
++- architecture/code-rule docs
++
++0152 keeps the existing `DbApiSqlContextStore.upsert_record` write path and only stabilizes where the DB-API SQLite database lives by default.
+diff --git a/doc/architecture/SQL_CONTEXT_STORE_CONFIGURED_DB_PATH_0152.md b/doc/architecture/SQL_CONTEXT_STORE_CONFIGURED_DB_PATH_0152.md
+new file mode 100644
+index 0000000..cad0f5a
+--- /dev/null
++++ b/doc/architecture/SQL_CONTEXT_STORE_CONFIGURED_DB_PATH_0152.md
+@@ -0,0 +1,34 @@
++# 0152 — SQLContextStore configured DB path
++
++0152 moves the controlled SQL write smoke from a phase-local SQLite path toward a stable local SQL context store path.
++
++The write path stays unchanged:
++
++```text
++0149 sql_context_store_persistence_record.json
++-> SqlContextRecord
++-> DbApiSqlContextStore.upsert_record
++-> DB-API SQLite database
++-> get_record readback
++-> sql_context_store_controlled_write_result.json
++```
++
++Only database path resolution changes:
++
++```text
++--db-path
++-> AUTODOC_SQL_CONTEXT_DB
++-> .var/local/sql_context_store.sqlite3
++```
++
++Boundary:
++
++- `src/context/sql_context_store.py` remains the authority surface.
++- `DbApiSqlContextStore.upsert_record` remains the selected write method.
++- The tool does not create a SQL worker, SQL orchestrator, or backend-specific client.
++- SQL remains durable authority.
++- Qdrant remains projection/recall only.
++- OpenVINO and Qdrant backend clients are not imported.
++- The Scheduler run loop is not modified.
++
++This prepares a stable local P1 database while preserving the same DB-API injection seam for a future PostgreSQL connection.
+diff --git a/doc/code-rules/0152_sql_context_store_configured_db_path_rule.md b/doc/code-rules/0152_sql_context_store_configured_db_path_rule.md
+new file mode 100644
+index 0000000..0aba150
+--- /dev/null
++++ b/doc/code-rules/0152_sql_context_store_configured_db_path_rule.md
+@@ -0,0 +1,25 @@
++# Code rule 0152 — SQLContextStore configured DB path
++
++0152 may stabilize the local SQL database path, but it must keep the existing SQL authority surface.
++
++Required boundary:
++
++- `DbApiSqlContextStore.upsert_record` remains the selected write method.
++- `SqlContextRecord` remains the durable record shape.
++- DB path precedence is `--db-path`, then `AUTODOC_SQL_CONTEXT_DB`, then `.var/local/sql_context_store.sqlite3`.
++- SQL remains durable authority.
++- Qdrant remains projection/recall only.
++- Qdrant identifiers may be persisted only as projection metadata.
++
++Forbidden in 0152:
++
++- must not create SQLPersistenceWorker.
++- must not create SQLOrchestrator.
++- must not create LocalArtifactOrchestrator.
++- must not create LocalVectorIndexingOrchestrator.
++- must not import OpenVINO backend clients.
++- must not import Qdrant backend clients.
++- must not modify the Scheduler run loop.
++- must not make Qdrant the durable source of truth.
++
++0152 only changes connection path selection for the existing DB-API SQLContextStore write smoke.
+diff --git a/doc/docs/architecture/runtime/152_sql_context_store_configured_db_path.dot b/doc/docs/architecture/runtime/152_sql_context_store_configured_db_path.dot
+new file mode 100644
+index 0000000..fc04a11
+--- /dev/null
++++ b/doc/docs/architecture/runtime/152_sql_context_store_configured_db_path.dot
+@@ -0,0 +1,19 @@
++digraph sql_context_store_configured_db_path_0152 {
++  rankdir=LR;
++  record [label="0149 persistence record"];
++  sqlrecord [label="SqlContextRecord"];
++  store [label="DbApiSqlContextStore.upsert_record"];
++  explicit [label="--db-path"];
++  env [label="AUTODOC_SQL_CONTEXT_DB"];
++  defaultdb [label=".var/local/sql_context_store.sqlite3"];
++  db [label="Configured DB-API SQLite DB"];
++  readback [label="get_record readback"];
++
++  record -> sqlrecord;
++  sqlrecord -> store;
++  explicit -> db;
++  env -> db;
++  defaultdb -> db;
++  store -> db;
++  db -> readback;
++}
+diff --git a/doc/manifests/MANIFEST_0152_CHANGED_FILES.md b/doc/manifests/MANIFEST_0152_CHANGED_FILES.md
+new file mode 100644
+index 0000000..84e16ac
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0152_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest 0152
++
++- `tools/run_sql_context_store_controlled_write_smoke.py`
++- `tests/tools/test_sql_context_store_configured_db_path_0152.py`
++- `tests/rules/test_sql_context_store_configured_db_path_0152_rule.py`
++- `doc/architecture/SQL_CONTEXT_STORE_CONFIGURED_DB_PATH_0152.md`
++- `doc/code-rules/0152_sql_context_store_configured_db_path_rule.md`
++- `doc/CHANGELOG_0152_SQL_CONTEXT_STORE_CONFIGURED_DB_PATH.md`
++- `doc/manifests/MANIFEST_0152_CHANGED_FILES.md`
++- `doc/docs/architecture/runtime/152_sql_context_store_configured_db_path.dot`
++- `PHASE0152_TEST_REPORT.md`
+diff --git a/tests/rules/test_sql_context_store_configured_db_path_0152_rule.py b/tests/rules/test_sql_context_store_configured_db_path_0152_rule.py
+new file mode 100644
+index 0000000..01f4c24
+--- /dev/null
++++ b/tests/rules/test_sql_context_store_configured_db_path_0152_rule.py
+@@ -0,0 +1,48 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "run_sql_context_store_controlled_write_smoke.py"
++RULE = ROOT / "doc" / "code-rules" / "0152_sql_context_store_configured_db_path_rule.md"
++DOC = ROOT / "doc" / "architecture" / "SQL_CONTEXT_STORE_CONFIGURED_DB_PATH_0152.md"
++
++
++def test_0152_files_exist() -> None:
++    for path in (TOOL, RULE, DOC):
++        assert path.exists(), path
++
++
++def test_0152_tool_exposes_configured_db_path_without_new_store() -> None:
++    text = TOOL.read_text(encoding="utf-8")
++    assert "AUTODOC_SQL_CONTEXT_DB" in text
++    assert ".var/local/sql_context_store.sqlite3" in text
++    assert "resolve_configured_sql_context_db_path" in text
++    assert "DbApiSqlContextStore(connection)" in text
++    assert "store.upsert_record(record)" in text
++    assert "db_path_source" in text
++
++
++def test_0152_boundary_forbids_parallel_sql_runtime() -> None:
++    combined = TOOL.read_text(encoding="utf-8") + "\n" + RULE.read_text(encoding="utf-8")
++    forbidden = [
++        "SQLPersistenceWorker(",
++        "SQLOrchestrator(",
++        "LocalArtifactOrchestrator(",
++        "LocalVectorIndexingOrchestrator(",
++        "qdrant_client",
++        "openvino.runtime",
++        "Scheduler.run(",
++    ]
++    for phrase in forbidden:
++        assert phrase not in combined
++
++
++def test_0152_rule_locks_stable_db_path_precedence() -> None:
++    text = RULE.read_text(encoding="utf-8")
++    assert "--db-path" in text
++    assert "AUTODOC_SQL_CONTEXT_DB" in text
++    assert ".var/local/sql_context_store.sqlite3" in text
++    assert "DbApiSqlContextStore.upsert_record" in text
++    assert "SQL remains durable authority" in text
++    assert "Qdrant remains projection/recall only" in text
+diff --git a/tests/tools/test_sql_context_store_configured_db_path_0152.py b/tests/tools/test_sql_context_store_configured_db_path_0152.py
+new file mode 100644
+index 0000000..033ef66
+--- /dev/null
++++ b/tests/tools/test_sql_context_store_configured_db_path_0152.py
+@@ -0,0 +1,127 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++import sqlite3
++import subprocess
++import sys
++
++from tools.run_sql_context_store_controlled_write_smoke import (
++    build_sql_context_store_controlled_write_plan,
++    resolve_configured_sql_context_db_path,
++)
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "run_sql_context_store_controlled_write_smoke.py"
++
++
++def _persistence_mapping() -> dict[str, object]:
++    return {
++        "persistence_ref": "sql-context-persist:configured-db-demo",
++        "handoff_ref": "sql-handoff:configured-db-demo",
++        "sql_ref": "sql:artifact/vector-indexing/configured-db-test",
++        "artifact_ref": "artifact:local/0152/configured-db-demo",
++        "artifact_kind": "local_markdown",
++        "artifact_path": ".var/smoke/artifacts/0152/artifact_input.md",
++        "artifact_contract_path": ".var/smoke/artifacts/0152/artifact_intake_contract.json",
++        "artifact_report": ".var/smoke/artifacts/0152/artifact_vector_indexing_report.md",
++        "artifact_json": ".var/smoke/artifacts/0152/artifact_vector_indexing_report.json",
++        "result_frame_path": ".var/smoke/routeproxy-0152/routes/frames/result.json",
++        "point_id": "qdrant-point:configureddb123",
++        "qdrant_rest_id": "11111111-1111-1111-1111-111111111111",
++        "vector_json": ".var/smoke/e5_vector_0152.json",
++        "collection": "autodoc_smoke_e5_384",
++        "dimension": 384,
++        "status": "ok",
++        "machine_vector_handoff": True,
++        "strict_vector_handoff": True,
++        "persistence_mode": "sql_context_store_record",
++        "durable_authority": "sql",
++        "qdrant_role": "projection_recall_index",
++    }
++
++
++def test_resolve_configured_db_path_precedence(tmp_path: Path) -> None:
++    root = tmp_path
++    explicit, explicit_source = resolve_configured_sql_context_db_path(root, "explicit.sqlite3", environ={})
++    env_path, env_source = resolve_configured_sql_context_db_path(root, None, environ={"AUTODOC_SQL_CONTEXT_DB": "env.sqlite3"})
++    default_path, default_source = resolve_configured_sql_context_db_path(root, None, environ={})
++
++    assert explicit == (root / "explicit.sqlite3").resolve()
++    assert explicit_source == "explicit"
++    assert env_path == (root / "env.sqlite3").resolve()
++    assert env_source == "env:AUTODOC_SQL_CONTEXT_DB"
++    assert default_path == (root / ".var/local/sql_context_store.sqlite3").resolve()
++    assert default_source == "default:.var/local/sql_context_store.sqlite3"
++
++
++def test_controlled_write_plan_uses_stable_default_db_path(tmp_path: Path) -> None:
++    persistence = tmp_path / "persistence.json"
++    persistence.write_text(json.dumps(_persistence_mapping()), encoding="utf-8")
++
++    plan = build_sql_context_store_controlled_write_plan(
++        ROOT,
++        persistence_json=persistence,
++        output_dir=tmp_path / "out",
++    )
++
++    assert plan.db_path == (ROOT / ".var/local/sql_context_store.sqlite3").resolve()
++    assert plan.db_path_source == "default:.var/local/sql_context_store.sqlite3"
++    assert plan.output_dir == (tmp_path / "out").resolve()
++
++
++def test_controlled_write_tool_uses_env_db_path(tmp_path: Path) -> None:
++    persistence = tmp_path / "persistence.json"
++    persistence.write_text(json.dumps(_persistence_mapping()), encoding="utf-8")
++    output_dir = tmp_path / "out"
++    env_db = tmp_path / "configured" / "sql_context_store.sqlite3"
++
++    env = {"AUTODOC_SQL_CONTEXT_DB": str(env_db), "PYTHONPATH": f"{ROOT / 'src'}:{ROOT}"}
++    dry = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            str(ROOT),
++            "--persistence-json",
++            str(persistence),
++            "--output-dir",
++            str(output_dir),
++        ],
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.STDOUT,
++        check=False,
++        env=env,
++    )
++    assert dry.returncode == 0, dry.stdout
++    assert f"db_path: `{env_db}`" in dry.stdout
++    assert "db_path_source: `env:AUTODOC_SQL_CONTEXT_DB`" in dry.stdout
++
++    live = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            str(ROOT),
++            "--persistence-json",
++            str(persistence),
++            "--output-dir",
++            str(output_dir),
++            "--execute",
++        ],
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.STDOUT,
++        check=False,
++        env=env,
++    )
++    assert live.returncode == 0, live.stdout
++    assert env_db.exists()
++    result = json.loads((output_dir / "sql_context_store_controlled_write_result.json").read_text(encoding="utf-8"))
++    assert result["write_status"] == "persisted"
++    assert result["readback_ok"] is True
++    with sqlite3.connect(env_db) as connection:
++        row = connection.execute(
++            "SELECT context_ref FROM sql_context_records WHERE context_ref = ?",
++            ("sql:artifact/vector-indexing/configured-db-test",),
++        ).fetchone()
++    assert row == ("sql:artifact/vector-indexing/configured-db-test",)
+diff --git a/tools/run_sql_context_store_controlled_write_smoke.py b/tools/run_sql_context_store_controlled_write_smoke.py
+index 2bcc711..da8a358 100755
+--- a/tools/run_sql_context_store_controlled_write_smoke.py
++++ b/tools/run_sql_context_store_controlled_write_smoke.py
+@@ -13,12 +13,17 @@ from __future__ import annotations
+ import argparse
+ from dataclasses import dataclass
+ import json
++import os
+ from pathlib import Path
+ import sqlite3
+ import sys
+ from typing import Any, Mapping, Sequence
+ 
+ 
++_SQL_CONTEXT_DB_ENV = "AUTODOC_SQL_CONTEXT_DB"
++_DEFAULT_CONFIGURED_DB_PATH = Path(".var/local/sql_context_store.sqlite3")
++
++
+ def _ensure_context_import_path(root: Path) -> None:
+     src = str(root / "src")
+     if src not in sys.path:
+@@ -46,6 +51,23 @@ def _read_json_mapping(path: Path) -> dict[str, Any]:
+     return loaded
+ 
+ 
++def resolve_configured_sql_context_db_path(
++    root: Path,
++    db_path: str | Path | None = None,
++    *,
++    environ: Mapping[str, str] | None = None,
++) -> tuple[Path, str]:
++    """Resolve the DB path without changing the DbApiSqlContextStore API."""
++
++    if db_path is not None:
++        return _resolve_repo_path(root, Path(db_path)).resolve(), "explicit"
++    env = os.environ if environ is None else environ
++    configured = env.get(_SQL_CONTEXT_DB_ENV, "").strip()
++    if configured:
++        return _resolve_repo_path(root, Path(configured)).resolve(), f"env:{_SQL_CONTEXT_DB_ENV}"
++    return _resolve_repo_path(root, _DEFAULT_CONFIGURED_DB_PATH).resolve(), "default:.var/local/sql_context_store.sqlite3"
++
++
+ @dataclass(frozen=True, slots=True)
+ class ExistingSurface:
+     key: str
+@@ -69,6 +91,7 @@ class SqlContextStoreControlledWritePlan:
+     persistence_json: Path
+     output_dir: Path
+     db_path: Path
++    db_path_source: str
+     write_json: Path
+     write_report: Path
+     execute: bool
+@@ -84,6 +107,8 @@ class SqlContextStoreControlledWritePlan:
+             "persistence_json": str(self.persistence_json),
+             "output_dir": str(self.output_dir),
+             "db_path": str(self.db_path),
++            "db_path_source": self.db_path_source,
++            "sql_context_db_env": _SQL_CONTEXT_DB_ENV,
+             "write_json": str(self.write_json),
+             "write_report": str(self.write_report),
+             "selected_store_class": "DbApiSqlContextStore",
+@@ -96,7 +121,8 @@ class SqlContextStoreControlledWritePlan:
+                 "consumes sql_context_store_persistence_record.json from 0149",
+                 "uses DbApiSqlContextStore.upsert_record from src/context/sql_context_store.py",
+                 "builds an existing SqlContextRecord before writing",
+-                "uses a DB-API SQLite smoke database injected into DbApiSqlContextStore",
++                "uses a configured DB-API SQLite database injected into DbApiSqlContextStore",
++                "resolves the database from --db-path, AUTODOC_SQL_CONTEXT_DB, then .var/local/sql_context_store.sqlite3",
+                 "writes sql_context_store_controlled_write_result.json and report markdown",
+                 "does not create a SQL worker or SQL orchestrator",
+                 "does not import OpenVINO or Qdrant backends",
+@@ -114,6 +140,8 @@ class SqlContextStoreControlledWritePlan:
+             f"persistence_json: `{mapping['persistence_json']}`",
+             f"output_dir: `{mapping['output_dir']}`",
+             f"db_path: `{mapping['db_path']}`",
++            f"db_path_source: `{mapping['db_path_source']}`",
++            f"sql_context_db_env: `{mapping['sql_context_db_env']}`",
+             f"write_json: `{mapping['write_json']}`",
+             f"write_report: `{mapping['write_report']}`",
+             f"selected_store_class: `{mapping['selected_store_class']}`",
+@@ -141,19 +169,20 @@ def build_sql_context_store_controlled_write_plan(
+     repository_root: str | Path,
+     *,
+     persistence_json: str | Path = ".var/smoke/artifacts/0149/sql_context_store_persistence_record.json",
+-    output_dir: str | Path = ".var/smoke/artifacts/0151",
++    output_dir: str | Path = ".var/smoke/artifacts/0152",
+     db_path: str | Path | None = None,
+     execute: bool = False,
+ ) -> SqlContextStoreControlledWritePlan:
+     root = Path(repository_root).resolve()
+     persistence_path = _resolve_repo_path(root, Path(persistence_json)).resolve()
+     out = _resolve_repo_path(root, Path(output_dir)).resolve()
+-    database = _resolve_repo_path(root, Path(db_path)).resolve() if db_path is not None else out / "sql_context_store.sqlite3"
++    database, db_source = resolve_configured_sql_context_db_path(root, db_path)
+     return SqlContextStoreControlledWritePlan(
+         repository_root=root,
+         persistence_json=persistence_path,
+         output_dir=out,
+         db_path=database,
++        db_path_source=db_source,
+         write_json=out / "sql_context_store_controlled_write_result.json",
+         write_report=out / "sql_context_store_controlled_write_report.md",
+         execute=execute,
+@@ -229,6 +258,7 @@ def _write_report_markdown(*, plan: SqlContextStoreControlledWritePlan, result:
+         f"sql_ref: `{result.get('sql_ref')}`",
+         f"artifact_ref: `{result.get('artifact_ref')}`",
+         f"db_path: `{plan.db_path}`",
++        f"db_path_source: `{plan.db_path_source}`",
+         f"selected_store_class: `{result.get('selected_store_class')}`",
+         f"selected_write_method: `{result.get('selected_write_method')}`",
+         f"inserted: `{str(result.get('inserted')).lower()}`",
+@@ -248,6 +278,7 @@ def _result_markdown(*, plan: SqlContextStoreControlledWritePlan, result: Mappin
+         f"write_json: `{plan.write_json}`",
+         f"write_report: `{plan.write_report}`",
+         f"db_path: `{plan.db_path}`",
++        f"db_path_source: `{plan.db_path_source}`",
+         f"write_status: `{result.get('write_status')}`",
+         f"readback_ok: `{str(result.get('readback_ok')).lower()}`",
+         f"selected_store_class: `{result.get('selected_store_class')}`",
+@@ -276,13 +307,13 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+     )
+     parser.add_argument(
+         "--output-dir",
+-        default=".var/smoke/artifacts/0151",
+-        help="Directory for 0151 output artifacts.",
++        default=".var/smoke/artifacts/0152",
++        help="Directory for 0152 output artifacts.",
+     )
+     parser.add_argument(
+         "--db-path",
+         default=None,
+-        help="SQLite smoke database path injected into DbApiSqlContextStore.",
++        help="SQLite database path injected into DbApiSqlContextStore; overrides AUTODOC_SQL_CONTEXT_DB.",
+     )
+     parser.add_argument("--execute", action="store_true")
+     parser.add_argument("--format", choices=("markdown", "json"), default="markdown")

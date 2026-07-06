@@ -1,0 +1,878 @@
+diff --git a/PHASE0148_TEST_REPORT.md b/PHASE0148_TEST_REPORT.md
+new file mode 100644
+index 0000000..ba20be2
+--- /dev/null
++++ b/PHASE0148_TEST_REPORT.md
+@@ -0,0 +1,21 @@
++# PHASE0148_TEST_REPORT
++
++```text
++phase: 0148-sql_persistence_handoff
++code_rule_review: done
++code_rule_update_required: true
++code_rule_reason: SQL persistence must start as a handoff envelope; SQL remains durable authority while Qdrant remains projection/recall only.
++live_path_status: handoff_only
++live_path_uses_real_backend: false
++context_contract_version: sql-persistence-handoff-0148
++context_contract_changed: true
++search_commands_bounded: n/a
++```
++
++Validation performed in patch build:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/tools/test_sql_persistence_handoff_0148.py tests/rules/test_sql_persistence_handoff_0148_rule.py
++# expected: 7 passed
++```
+diff --git a/doc/CHANGELOG_0148_SQL_PERSISTENCE_HANDOFF.md b/doc/CHANGELOG_0148_SQL_PERSISTENCE_HANDOFF.md
+new file mode 100644
+index 0000000..20b5fb1
+--- /dev/null
++++ b/doc/CHANGELOG_0148_SQL_PERSISTENCE_HANDOFF.md
+@@ -0,0 +1,10 @@
++# Changelog 0148 — SQL persistence handoff
++
++Added:
++
++- `src/context/sql_persistence_handoff_contract.py`
++- `tools/run_sql_persistence_handoff_smoke.py`
++- SQL handoff tests and code-rule tests
++- architecture/code-rule docs
++
++0148 packages artifact vector-indexing output as a SQL persistence handoff. It does not write to SQL yet.
+diff --git a/doc/architecture/SQL_PERSISTENCE_HANDOFF_0148.md b/doc/architecture/SQL_PERSISTENCE_HANDOFF_0148.md
+new file mode 100644
+index 0000000..d1aa009
+--- /dev/null
++++ b/doc/architecture/SQL_PERSISTENCE_HANDOFF_0148.md
+@@ -0,0 +1,39 @@
++# 0148 — SQL persistence handoff
++
++0148 creates a structured handoff envelope from the validated local artifact
++vector-indexing result toward SQL persistence.
++
++The current validated path is:
++
++```text
++artifact_intake_contract
++-> dynamic artifact route refs
++-> Scheduler-shaped request frame
++-> OpenVINO/E5 full vector handoff
++-> Qdrant projection/search
++-> vector_indexing_result frame
++-> artifact_vector_indexing_report.json
++```
++
++0148 adds:
++
++```text
++artifact_vector_indexing_report.json
+++ artifact_intake_contract.json
+++ optional vector_indexing_result frame
++-> sql_persistence_handoff.json
++-> sql_persistence_handoff_report.md
++```
++
++Boundary:
++
++- `src/context/sql_persistence_handoff_contract.py` is pure and serializable.
++- `tools/run_sql_persistence_handoff_smoke.py` is an operator smoke tool only.
++- 0148 does not write SQL rows.
++- 0148 does not create a SQL worker or orchestrator.
++- SQLContextStore remains the durable authority.
++- Qdrant remains a projection and recall index.
++- OpenVINO and Qdrant adapters are not modified.
++- The Scheduler run loop is not modified.
++
++The next patch can connect this handoff to the existing SQLContextStore surface.
+diff --git a/doc/code-rules/0148_sql_persistence_handoff_rule.md b/doc/code-rules/0148_sql_persistence_handoff_rule.md
+new file mode 100644
+index 0000000..81eddde
+--- /dev/null
++++ b/doc/code-rules/0148_sql_persistence_handoff_rule.md
+@@ -0,0 +1,20 @@
++# Code rule 0148 — SQL persistence handoff only
++
++0148 is handoff-only.
++
++Required boundary:
++
++- SQLContextStore remains durable authority.
++- Qdrant remains projection/recall only.
++- `src/context/sql_persistence_handoff_contract.py` may define a pure serializable contract.
++- `tools/run_sql_persistence_handoff_smoke.py` may write local handoff JSON/Markdown artifacts.
++
++Forbidden in 0148:
++
++- must not create SQLPersistenceWorker.
++- must not create SQLOrchestrator.
++- must not import Qdrant or OpenVINO backends.
++- must not write SQL rows directly.
++- must not modify the Scheduler run loop.
++
++The next patch may connect the handoff to the existing SQLContextStore through the established context authority surface.
+diff --git a/doc/docs/architecture/runtime/148_sql_persistence_handoff.dot b/doc/docs/architecture/runtime/148_sql_persistence_handoff.dot
+new file mode 100644
+index 0000000..267f1a4
+--- /dev/null
++++ b/doc/docs/architecture/runtime/148_sql_persistence_handoff.dot
+@@ -0,0 +1,15 @@
++digraph sql_persistence_handoff_0148 {
++  rankdir=LR;
++  artifact_result [label="artifact_vector_indexing_report.json"];
++  artifact_contract [label="artifact_intake_contract.json"];
++  result_frame [label="vector_indexing_result frame"];
++  handoff [label="sql_persistence_handoff.json"];
++  sql [label="SQLContextStore\nfuture consumer"];
++  qdrant [label="Qdrant\nprojection only"];
++
++  artifact_result -> handoff;
++  artifact_contract -> handoff;
++  result_frame -> handoff;
++  handoff -> sql [style=dashed, label="0149+"];
++  qdrant -> handoff [style=dotted, label="point ids only"];
++}
+diff --git a/doc/manifests/MANIFEST_0148_CHANGED_FILES.md b/doc/manifests/MANIFEST_0148_CHANGED_FILES.md
+new file mode 100644
+index 0000000..36ae7fd
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0148_CHANGED_FILES.md
+@@ -0,0 +1,12 @@
++# Manifest 0148
++
++- `src/context/sql_persistence_handoff_contract.py`
++- `tools/run_sql_persistence_handoff_smoke.py`
++- `tests/tools/test_sql_persistence_handoff_0148.py`
++- `tests/rules/test_sql_persistence_handoff_0148_rule.py`
++- `doc/architecture/SQL_PERSISTENCE_HANDOFF_0148.md`
++- `doc/code-rules/0148_sql_persistence_handoff_rule.md`
++- `doc/CHANGELOG_0148_SQL_PERSISTENCE_HANDOFF.md`
++- `doc/manifests/MANIFEST_0148_CHANGED_FILES.md`
++- `doc/docs/architecture/runtime/148_sql_persistence_handoff.dot`
++- `PHASE0148_TEST_REPORT.md`
+diff --git a/src/context/sql_persistence_handoff_contract.py b/src/context/sql_persistence_handoff_contract.py
+new file mode 100644
+index 0000000..47d8ebf
+--- /dev/null
++++ b/src/context/sql_persistence_handoff_contract.py
+@@ -0,0 +1,203 @@
++"""Pure SQL persistence handoff contract for vector indexing results.
++
++0148 does not write to SQL and does not create a SQL worker.  It creates a
++serializable handoff envelope that can be consumed by the existing SQL context
++store in a later patch.  SQL remains the durable authority; Qdrant remains a
++projection and recall index.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++from pathlib import Path
++from typing import Any, Mapping
++
++_DURABLE_AUTHORITY = "sql"
++_QDRANT_ROLE = "projection_recall_index"
++_DEFAULT_PERSISTENCE_MODE = "handoff_only"
++
++
++def _require_non_empty(value: str, *, field_name: str) -> str:
++    if not isinstance(value, str) or not value.strip():
++        raise ValueError(f"{field_name} must be a non-empty string")
++    return value.strip()
++
++
++def _require_prefix(value: str, *, field_name: str, prefix: str) -> str:
++    value = _require_non_empty(value, field_name=field_name)
++    if not value.startswith(prefix):
++        raise ValueError(f"{field_name} must start with {prefix!r}: {value!r}")
++    return value
++
++
++def _normalize_bool(value: Any, *, field_name: str) -> bool:
++    if isinstance(value, bool):
++        return value
++    if isinstance(value, str):
++        lowered = value.lower()
++        if lowered == "true":
++            return True
++        if lowered == "false":
++            return False
++    raise ValueError(f"{field_name} must be boolean-compatible")
++
++
++def _normalize_dimension(value: Any) -> int:
++    try:
++        dimension = int(value)
++    except (TypeError, ValueError) as exc:
++        raise ValueError("dimension must be an integer") from exc
++    if dimension <= 0:
++        raise ValueError("dimension must be positive")
++    return dimension
++
++
++@dataclass(frozen=True, slots=True)
++class SqlPersistenceHandoffContract:
++    """Serializable handoff from vector-indexing result to SQL persistence."""
++
++    handoff_ref: str
++    sql_ref: str
++    artifact_ref: str
++    artifact_kind: str
++    artifact_path: str
++    artifact_contract_path: str
++    artifact_report: str
++    artifact_json: str
++    result_frame_path: str
++    point_id: str
++    qdrant_rest_id: str
++    vector_json: str
++    collection: str
++    dimension: int
++    status: str
++    machine_vector_handoff: bool
++    strict_vector_handoff: bool
++    persistence_mode: str = _DEFAULT_PERSISTENCE_MODE
++    durable_authority: str = _DURABLE_AUTHORITY
++    qdrant_role: str = _QDRANT_ROLE
++    payload: Mapping[str, Any] = field(default_factory=dict)
++
++    def __post_init__(self) -> None:
++        _require_prefix(self.handoff_ref, field_name="handoff_ref", prefix="sql-handoff:")
++        _require_prefix(self.sql_ref, field_name="sql_ref", prefix="sql:")
++        _require_prefix(self.artifact_ref, field_name="artifact_ref", prefix="artifact:")
++        _require_non_empty(self.artifact_kind, field_name="artifact_kind")
++        _require_non_empty(self.artifact_path, field_name="artifact_path")
++        _require_non_empty(self.artifact_contract_path, field_name="artifact_contract_path")
++        _require_non_empty(self.artifact_report, field_name="artifact_report")
++        _require_non_empty(self.artifact_json, field_name="artifact_json")
++        _require_non_empty(self.result_frame_path, field_name="result_frame_path")
++        _require_prefix(self.point_id, field_name="point_id", prefix="qdrant-point:")
++        _require_non_empty(self.qdrant_rest_id, field_name="qdrant_rest_id")
++        _require_non_empty(self.vector_json, field_name="vector_json")
++        _require_non_empty(self.collection, field_name="collection")
++        _normalize_dimension(self.dimension)
++        _require_non_empty(self.status, field_name="status")
++        _normalize_bool(self.machine_vector_handoff, field_name="machine_vector_handoff")
++        _normalize_bool(self.strict_vector_handoff, field_name="strict_vector_handoff")
++        if self.persistence_mode != _DEFAULT_PERSISTENCE_MODE:
++            raise ValueError("0148 only supports handoff_only persistence_mode")
++        if self.durable_authority != _DURABLE_AUTHORITY:
++            raise ValueError("durable_authority must remain sql")
++        if self.qdrant_role != _QDRANT_ROLE:
++            raise ValueError("qdrant_role must remain projection_recall_index")
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "handoff_ref": self.handoff_ref,
++            "sql_ref": self.sql_ref,
++            "artifact_ref": self.artifact_ref,
++            "artifact_kind": self.artifact_kind,
++            "artifact_path": self.artifact_path,
++            "artifact_contract_path": self.artifact_contract_path,
++            "artifact_report": self.artifact_report,
++            "artifact_json": self.artifact_json,
++            "result_frame_path": self.result_frame_path,
++            "point_id": self.point_id,
++            "qdrant_rest_id": self.qdrant_rest_id,
++            "vector_json": self.vector_json,
++            "collection": self.collection,
++            "dimension": self.dimension,
++            "status": self.status,
++            "machine_vector_handoff": self.machine_vector_handoff,
++            "strict_vector_handoff": self.strict_vector_handoff,
++            "persistence_mode": self.persistence_mode,
++            "durable_authority": self.durable_authority,
++            "qdrant_role": self.qdrant_role,
++            "payload": dict(self.payload),
++        }
++
++
++def build_sql_persistence_handoff_contract(
++    *,
++    handoff_ref: str,
++    artifact_result: Mapping[str, Any],
++    artifact_contract: Mapping[str, Any],
++    result_frame_payload: Mapping[str, Any] | None = None,
++) -> SqlPersistenceHandoffContract:
++    """Build a SQL handoff contract from existing artifact/result outputs."""
++
++    result_frame_payload = result_frame_payload or {}
++    sql_ref = str(artifact_result.get("sql_ref") or artifact_contract.get("sql_ref") or result_frame_payload.get("sql_ref"))
++    artifact_ref = str(artifact_contract.get("artifact_ref") or artifact_result.get("artifact_ref"))
++    artifact_kind = str(artifact_contract.get("artifact_kind") or artifact_result.get("artifact_kind") or "local_markdown")
++    artifact_path = str(artifact_contract.get("artifact_path") or artifact_result.get("artifact_input"))
++    artifact_contract_path = str(artifact_result.get("artifact_contract_path") or artifact_contract.get("artifact_contract_path"))
++    artifact_report = str(artifact_result.get("artifact_report"))
++    artifact_json = str(artifact_result.get("artifact_json"))
++    result_frame_path = str(artifact_result.get("result_frame_path") or result_frame_payload.get("result_frame_path"))
++    point_id = str(artifact_result.get("point_id") or result_frame_payload.get("point_id"))
++    qdrant_rest_id = str(artifact_result.get("qdrant_rest_id") or result_frame_payload.get("qdrant_rest_id"))
++    vector_json = str(artifact_result.get("vector_json") or result_frame_payload.get("vector_json"))
++    collection = str(artifact_contract.get("collection") or artifact_result.get("collection") or result_frame_payload.get("collection"))
++    dimension = _normalize_dimension(artifact_contract.get("dimension") or artifact_result.get("dimension") or result_frame_payload.get("dimension") or 384)
++    status = str(result_frame_payload.get("status") or artifact_result.get("status") or artifact_result.get("vector_indexing_result_frame") or "ok")
++    return SqlPersistenceHandoffContract(
++        handoff_ref=handoff_ref,
++        sql_ref=sql_ref,
++        artifact_ref=artifact_ref,
++        artifact_kind=artifact_kind,
++        artifact_path=artifact_path,
++        artifact_contract_path=artifact_contract_path,
++        artifact_report=artifact_report,
++        artifact_json=artifact_json,
++        result_frame_path=result_frame_path,
++        point_id=point_id,
++        qdrant_rest_id=qdrant_rest_id,
++        vector_json=vector_json,
++        collection=collection,
++        dimension=dimension,
++        status=status,
++        machine_vector_handoff=_normalize_bool(
++            artifact_result.get("machine_vector_handoff", result_frame_payload.get("machine_vector_handoff", False)),
++            field_name="machine_vector_handoff",
++        ),
++        strict_vector_handoff=_normalize_bool(
++            artifact_result.get("strict_vector_handoff", result_frame_payload.get("strict_vector_handoff", False)),
++            field_name="strict_vector_handoff",
++        ),
++        payload={
++            "artifact_result_keys": sorted(str(key) for key in artifact_result.keys()),
++            "artifact_contract_keys": sorted(str(key) for key in artifact_contract.keys()),
++            "result_frame_payload_keys": sorted(str(key) for key in result_frame_payload.keys()),
++        },
++    )
++
++
++def default_handoff_ref(*, artifact_ref: str, sql_ref: str) -> str:
++    """Derive a stable SQL handoff ref from artifact and SQL refs."""
++
++    raw = f"{artifact_ref}/to/{sql_ref}"
++    safe = "".join(ch if ch.isalnum() else "-" for ch in raw).strip("-").lower()
++    while "--" in safe:
++        safe = safe.replace("--", "-")
++    return f"sql-handoff:{safe}"
++
++
++def read_json_mapping(path: str | Path) -> dict[str, Any]:
++    data = Path(path).read_text(encoding="utf-8")
++    loaded = __import__("json").loads(data)
++    if not isinstance(loaded, dict):
++        raise ValueError(f"expected JSON object in {path}")
++    return loaded
+diff --git a/tests/rules/test_sql_persistence_handoff_0148_rule.py b/tests/rules/test_sql_persistence_handoff_0148_rule.py
+new file mode 100644
+index 0000000..76ce52f
+--- /dev/null
++++ b/tests/rules/test_sql_persistence_handoff_0148_rule.py
+@@ -0,0 +1,58 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++CONTRACT = ROOT / "src" / "context" / "sql_persistence_handoff_contract.py"
++TOOL = ROOT / "tools" / "run_sql_persistence_handoff_smoke.py"
++RULE = ROOT / "doc" / "code-rules" / "0148_sql_persistence_handoff_rule.md"
++DOC = ROOT / "doc" / "architecture" / "SQL_PERSISTENCE_HANDOFF_0148.md"
++
++
++def test_0148_files_exist() -> None:
++    for path in (CONTRACT, TOOL, RULE, DOC):
++        assert path.exists(), path
++
++
++def test_0148_contract_locks_sql_authority_and_qdrant_projection() -> None:
++    text = CONTRACT.read_text(encoding="utf-8")
++    required = [
++        "SqlPersistenceHandoffContract",
++        "durable_authority",
++        "projection_recall_index",
++        "handoff_only",
++        "build_sql_persistence_handoff_contract",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0148_tool_is_handoff_only_and_has_no_backend_imports() -> None:
++    text = TOOL.read_text(encoding="utf-8")
++    required = [
++        "handoff-only",
++        "sql_persistence_handoff.json",
++        "sql_persistence_handoff_report.md",
++        "does not write to SQL in 0148",
++        "Qdrant remains projection/recall only; SQL remains durable authority",
++    ]
++    forbidden = [
++        "SQLPersistenceWorker(",
++        "SQLOrchestrator(",
++        "qdrant_client",
++        "openvino.runtime",
++        "Scheduler.run(",
++        "psycopg",
++        "sqlite3.connect",
++    ]
++    for phrase in required:
++        assert phrase in text
++    for phrase in forbidden:
++        assert phrase not in text
++
++
++def test_0148_rule_mentions_existing_sql_context_store_without_importing_it() -> None:
++    text = RULE.read_text(encoding="utf-8")
++    assert "SQLContextStore remains durable authority" in text
++    assert "0148 is handoff-only" in text
++    assert "must not create SQLPersistenceWorker" in text
+diff --git a/tests/tools/test_sql_persistence_handoff_0148.py b/tests/tools/test_sql_persistence_handoff_0148.py
+new file mode 100644
+index 0000000..59f89fb
+--- /dev/null
++++ b/tests/tools/test_sql_persistence_handoff_0148.py
+@@ -0,0 +1,145 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++import subprocess
++import sys
++
++from context.sql_persistence_handoff_contract import (
++    build_sql_persistence_handoff_contract,
++    default_handoff_ref,
++)
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "run_sql_persistence_handoff_smoke.py"
++
++
++def _write_sample_artifact_outputs(tmp_path: Path) -> tuple[Path, Path, Path]:
++    contract = {
++        "artifact_ref": "artifact:local/0148/demo",
++        "artifact_kind": "local_markdown",
++        "artifact_path": str(tmp_path / "artifact_input.md"),
++        "text_kind": "passage",
++        "sql_ref": "sql:artifact/vector-indexing/0148",
++        "collection": "autodoc_smoke_e5_384",
++        "dimension": 384,
++        "route_root": str(tmp_path / "routes"),
++        "vector_indexing_job_ref": "vector-indexing-job:artifact/0148-demo",
++        "text": "passage: demo",
++    }
++    result_frame = {
++        "payload": {
++            "status": "ok",
++            "sql_ref": "sql:artifact/vector-indexing/0148",
++            "point_id": "qdrant-point:0148demo",
++            "qdrant_rest_id": "7cc3d6a4-9c02-545f-9b83-014800000000",
++            "vector_json": str(tmp_path / "e5_vector_0148.json"),
++            "machine_vector_handoff": True,
++            "strict_vector_handoff": True,
++        }
++    }
++    artifact_result = {
++        "artifact_input": str(tmp_path / "artifact_input.md"),
++        "artifact_contract_path": str(tmp_path / "artifact_intake_contract.json"),
++        "artifact_report": str(tmp_path / "artifact_vector_indexing_report.md"),
++        "artifact_json": str(tmp_path / "artifact_vector_indexing_report.json"),
++        "sql_ref": "sql:artifact/vector-indexing/0148",
++        "scheduler_route_frame": "ok",
++        "local_vector_indexing_smoke": "ok",
++        "vector_indexing_result_frame": "ok",
++        "strict_vector_handoff": True,
++        "machine_vector_handoff": True,
++        "result_frame_path": str(tmp_path / "vector_indexing_result.json"),
++        "point_id": "qdrant-point:0148demo",
++        "qdrant_rest_id": "7cc3d6a4-9c02-545f-9b83-014800000000",
++        "vector_json": str(tmp_path / "e5_vector_0148.json"),
++    }
++    contract_path = tmp_path / "artifact_intake_contract.json"
++    frame_path = tmp_path / "vector_indexing_result.json"
++    result_path = tmp_path / "artifact_vector_indexing_report.json"
++    contract_path.write_text(json.dumps(contract), encoding="utf-8")
++    frame_path.write_text(json.dumps(result_frame), encoding="utf-8")
++    result_path.write_text(json.dumps(artifact_result), encoding="utf-8")
++    return result_path, contract_path, frame_path
++
++
++def test_default_handoff_ref_is_sql_handoff_ref() -> None:
++    ref = default_handoff_ref(
++        artifact_ref="artifact:local/0148/demo",
++        sql_ref="sql:artifact/vector-indexing/0148",
++    )
++    assert ref.startswith("sql-handoff:")
++    assert "artifact-local-0148-demo" in ref
++
++
++def test_contract_builds_handoff_only_payload(tmp_path: Path) -> None:
++    result_path, contract_path, frame_path = _write_sample_artifact_outputs(tmp_path)
++    artifact_result = json.loads(result_path.read_text(encoding="utf-8"))
++    artifact_contract = json.loads(contract_path.read_text(encoding="utf-8"))
++    frame_payload = json.loads(frame_path.read_text(encoding="utf-8"))["payload"]
++    contract = build_sql_persistence_handoff_contract(
++        handoff_ref="sql-handoff:artifact-local-0148-demo",
++        artifact_result=artifact_result,
++        artifact_contract=artifact_contract,
++        result_frame_payload=frame_payload,
++    )
++    mapping = contract.to_mapping()
++    assert mapping["durable_authority"] == "sql"
++    assert mapping["qdrant_role"] == "projection_recall_index"
++    assert mapping["persistence_mode"] == "handoff_only"
++    assert mapping["point_id"] == "qdrant-point:0148demo"
++    assert mapping["machine_vector_handoff"] is True
++
++
++def test_tool_dry_run_and_execute_write_handoff_files(tmp_path: Path) -> None:
++    result_path, contract_path, frame_path = _write_sample_artifact_outputs(tmp_path)
++    output_dir = tmp_path / "handoff"
++    dry = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            str(ROOT),
++            "--artifact-json",
++            str(result_path),
++            "--artifact-contract",
++            str(contract_path),
++            "--result-frame",
++            str(frame_path),
++            "--output-dir",
++            str(output_dir),
++        ],
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.STDOUT,
++        check=False,
++    )
++    assert dry.returncode == 0, dry.stdout
++    assert "ready_for_sql_persistence_handoff: `true`" in dry.stdout
++    assert "handoff-only envelope" in dry.stdout
++
++    live = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            str(ROOT),
++            "--artifact-json",
++            str(result_path),
++            "--artifact-contract",
++            str(contract_path),
++            "--result-frame",
++            str(frame_path),
++            "--output-dir",
++            str(output_dir),
++            "--execute",
++        ],
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.STDOUT,
++        check=False,
++    )
++    assert live.returncode == 0, live.stdout
++    payload = json.loads((output_dir / "sql_persistence_handoff.json").read_text(encoding="utf-8"))
++    assert payload["sql_ref"] == "sql:artifact/vector-indexing/0148"
++    assert payload["durable_authority"] == "sql"
++    assert payload["qdrant_role"] == "projection_recall_index"
++    assert (output_dir / "sql_persistence_handoff_report.md").exists()
+diff --git a/tools/run_sql_persistence_handoff_smoke.py b/tools/run_sql_persistence_handoff_smoke.py
+new file mode 100755
+index 0000000..82fc1b3
+--- /dev/null
++++ b/tools/run_sql_persistence_handoff_smoke.py
+@@ -0,0 +1,295 @@
++#!/usr/bin/env python3
++"""Build a SQL persistence handoff envelope from artifact vector results.
++
++0148 is handoff-only. It does not write a database row, does not create a SQL
++worker, and does not turn Qdrant into durable truth. The output is a structured
++JSON/Markdown envelope ready for the existing SQLContextStore path in a later
++patch.
++"""
++
++from __future__ import annotations
++
++import argparse
++from dataclasses import dataclass
++import json
++from pathlib import Path
++import sys
++from typing import Any, Mapping, Sequence
++
++DEFAULT_ARTIFACT_JSON = ".var/smoke/artifacts/0147/artifact_vector_indexing_report.json"
++DEFAULT_OUTPUT_DIR = ".var/smoke/artifacts/0148"
++
++
++@dataclass(frozen=True, slots=True)
++class SqlHandoffSurface:
++    key: str
++    path: Path
++    reason: str
++    required: bool = True
++
++    def to_mapping(self, *, root: Path) -> dict[str, Any]:
++        return {
++            "key": self.key,
++            "status": "present" if self.path.exists() else "missing",
++            "path": _display_path(self.path, root=root),
++            "reason": self.reason,
++            "required": self.required,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class SqlPersistenceHandoffPlan:
++    repository_root: Path
++    artifact_json: Path
++    artifact_contract_path: Path | None
++    result_frame_path: Path | None
++    output_dir: Path
++    handoff_json: Path
++    handoff_report: Path
++    handoff_ref: str
++    execute: bool
++    surfaces: tuple[SqlHandoffSurface, ...]
++
++    @property
++    def ready(self) -> bool:
++        return self.artifact_json.exists() and all(
++            surface.path.exists() for surface in self.surfaces if surface.required
++        )
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "repository_root": str(self.repository_root),
++            "artifact_json": str(self.artifact_json),
++            "artifact_contract_path": str(self.artifact_contract_path) if self.artifact_contract_path else "auto-from-artifact-json",
++            "result_frame_path": str(self.result_frame_path) if self.result_frame_path else "auto-from-artifact-json",
++            "output_dir": str(self.output_dir),
++            "handoff_json": str(self.handoff_json),
++            "handoff_report": str(self.handoff_report),
++            "handoff_ref": self.handoff_ref,
++            "ready_for_sql_persistence_handoff": self.ready,
++            "execute": self.execute,
++            "surfaces": [surface.to_mapping(root=self.repository_root) for surface in self.surfaces],
++            "boundary": "handoff-only envelope for existing SQLContextStore path; no SQL write in 0148",
++        }
++
++    def to_markdown(self) -> str:
++        lines = [
++            "# SQL persistence handoff smoke plan",
++            "",
++            f"repository_root: `{self.repository_root}`",
++            f"artifact_json: `{self.artifact_json}`",
++            f"artifact_contract_path: `{self.artifact_contract_path if self.artifact_contract_path else 'auto-from-artifact-json'}`",
++            f"result_frame_path: `{self.result_frame_path if self.result_frame_path else 'auto-from-artifact-json'}`",
++            f"output_dir: `{self.output_dir}`",
++            f"handoff_json: `{self.handoff_json}`",
++            f"handoff_report: `{self.handoff_report}`",
++            f"handoff_ref: `{self.handoff_ref}`",
++            f"ready_for_sql_persistence_handoff: `{str(self.ready).lower()}`",
++            f"execute: `{str(self.execute).lower()}`",
++            "",
++            "## Existing surfaces",
++            "",
++            "| key | status | required | path | reason |",
++            "| --- | --- | --- | --- | --- |",
++        ]
++        for surface in self.surfaces:
++            row = surface.to_mapping(root=self.repository_root)
++            lines.append(f"| {row['key']} | {row['status']} | `{str(row['required']).lower()}` | `{row['path']}` | {row['reason']} |")
++        lines.extend([
++            "",
++            "## Boundary",
++            "",
++            "- handoff-only envelope for existing SQLContextStore path",
++            "- reuses src/context/sql_persistence_handoff_contract.py as a pure contract",
++            "- consumes artifact_vector_indexing_report.json from the existing artifact runner",
++            "- can read artifact_intake_contract.json and the vector_indexing_result frame",
++            "- writes sql_persistence_handoff.json and sql_persistence_handoff_report.md only",
++            "- does not write to SQL in 0148",
++            "- does not create SQLPersistenceWorker",
++            "- does not create SQLOrchestrator",
++            "- does not import backend clients",
++            "- Qdrant remains projection/recall only; SQL remains durable authority",
++        ])
++        return "\n".join(lines) + "\n"
++
++
++def build_sql_persistence_handoff_plan(
++    root: Path,
++    *,
++    artifact_json: Path,
++    artifact_contract_path: Path | None,
++    result_frame_path: Path | None,
++    output_dir: Path,
++    handoff_ref: str | None,
++    execute: bool,
++) -> SqlPersistenceHandoffPlan:
++    root = root.resolve()
++    artifact_json = _resolve_repo_path(root, artifact_json)
++    output_dir = _resolve_repo_path(root, output_dir)
++    artifact_contract_path = _resolve_repo_path(root, artifact_contract_path) if artifact_contract_path else None
++    result_frame_path = _resolve_repo_path(root, result_frame_path) if result_frame_path else None
++    handoff_json = output_dir / "sql_persistence_handoff.json"
++    handoff_report = output_dir / "sql_persistence_handoff_report.md"
++    if handoff_ref is None and artifact_json.exists():
++        _ensure_context_import_path(root)
++        from context.sql_persistence_handoff_contract import default_handoff_ref, read_json_mapping
++        artifact_result = read_json_mapping(artifact_json)
++        contract_path_value = artifact_contract_path or artifact_result.get("artifact_contract_path")
++        artifact_contract = read_json_mapping(contract_path_value) if contract_path_value else {}
++        handoff_ref = default_handoff_ref(
++            artifact_ref=str(artifact_contract.get("artifact_ref", "artifact:unknown")),
++            sql_ref=str(artifact_result.get("sql_ref", artifact_contract.get("sql_ref", "sql:unknown"))),
++        )
++    handoff_ref = handoff_ref or "sql-handoff:pending-artifact-vector-indexing"
++    return SqlPersistenceHandoffPlan(
++        repository_root=root,
++        artifact_json=artifact_json,
++        artifact_contract_path=artifact_contract_path,
++        result_frame_path=result_frame_path,
++        output_dir=output_dir,
++        handoff_json=handoff_json,
++        handoff_report=handoff_report,
++        handoff_ref=handoff_ref,
++        execute=execute,
++        surfaces=(
++            SqlHandoffSurface(
++                key="sql_persistence_handoff_contract",
++                path=root / "src" / "context" / "sql_persistence_handoff_contract.py",
++                reason="pure handoff contract from 0148",
++                required=True,
++            ),
++            SqlHandoffSurface(
++                key="artifact_result_json",
++                path=artifact_json,
++                reason="artifact vector indexing result from 0145/0147",
++                required=True,
++            ),
++            SqlHandoffSurface(
++                key="sql_context_store",
++                path=root / "src" / "context" / "sql_context_store.py",
++                reason="existing durable SQL authority; not imported by 0148 smoke",
++                required=False,
++            ),
++        ),
++    )
++
++
++def execute_sql_persistence_handoff_plan(plan: SqlPersistenceHandoffPlan) -> int:
++    if not plan.ready:
++        for surface in plan.surfaces:
++            if surface.required and not surface.path.exists():
++                print(f"missing required surface: {surface.path}", file=sys.stderr)
++        return 2
++    _ensure_context_import_path(plan.repository_root)
++    from context.sql_persistence_handoff_contract import build_sql_persistence_handoff_contract, read_json_mapping
++
++    artifact_result = read_json_mapping(plan.artifact_json)
++    contract_path = plan.artifact_contract_path or Path(str(artifact_result.get("artifact_contract_path")))
++    artifact_contract = read_json_mapping(contract_path)
++    frame_path = plan.result_frame_path or Path(str(artifact_result.get("result_frame_path")))
++    result_frame_payload = _read_result_frame_payload(frame_path) if frame_path.exists() else {}
++    contract = build_sql_persistence_handoff_contract(
++        handoff_ref=plan.handoff_ref,
++        artifact_result=artifact_result,
++        artifact_contract=artifact_contract,
++        result_frame_payload=result_frame_payload,
++    )
++    plan.output_dir.mkdir(parents=True, exist_ok=True)
++    plan.handoff_json.write_text(json.dumps(contract.to_mapping(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    report = _handoff_report_markdown(plan, contract.to_mapping())
++    plan.handoff_report.write_text(report, encoding="utf-8")
++    print("==> sql_persistence_handoff")
++    print(report, end="")
++    return 0
++
++
++def _read_result_frame_payload(path: Path) -> dict[str, Any]:
++    loaded = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(loaded, dict):
++        return {}
++    payload = loaded.get("payload")
++    if isinstance(payload, dict):
++        return payload
++    return loaded
++
++
++def _handoff_report_markdown(plan: SqlPersistenceHandoffPlan, mapping: Mapping[str, Any]) -> str:
++    return "\n".join([
++        "# SQL persistence handoff result",
++        "",
++        f"handoff_json: `{plan.handoff_json}`",
++        f"handoff_report: `{plan.handoff_report}`",
++        f"handoff_ref: `{mapping['handoff_ref']}`",
++        f"sql_ref: `{mapping['sql_ref']}`",
++        f"artifact_ref: `{mapping['artifact_ref']}`",
++        f"status: `{mapping['status']}`",
++        f"point_id: `{mapping['point_id']}`",
++        f"qdrant_rest_id: `{mapping['qdrant_rest_id']}`",
++        f"vector_json: `{mapping['vector_json']}`",
++        f"machine_vector_handoff: `{str(mapping['machine_vector_handoff']).lower()}`",
++        f"strict_vector_handoff: `{str(mapping['strict_vector_handoff']).lower()}`",
++        f"persistence_mode: `{mapping['persistence_mode']}`",
++        f"durable_authority: `{mapping['durable_authority']}`",
++        f"qdrant_role: `{mapping['qdrant_role']}`",
++        "boundary: `handoff-only SQL envelope; no SQL write performed in 0148`",
++        "",
++    ])
++
++
++def parse_args(argv: Sequence[str]) -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description="Build a SQL persistence handoff envelope from a local artifact vector result.")
++    parser.add_argument("repository_root", type=Path)
++    parser.add_argument("--artifact-json", type=Path, default=Path(DEFAULT_ARTIFACT_JSON))
++    parser.add_argument("--artifact-contract", type=Path, default=None)
++    parser.add_argument("--result-frame", type=Path, default=None)
++    parser.add_argument("--output-dir", type=Path, default=Path(DEFAULT_OUTPUT_DIR))
++    parser.add_argument("--handoff-ref", default=None)
++    parser.add_argument("--execute", action="store_true")
++    parser.add_argument("--format", choices=("markdown", "json"), default="markdown")
++    return parser.parse_args(argv)
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = parse_args(tuple(sys.argv[1:] if argv is None else argv))
++    plan = build_sql_persistence_handoff_plan(
++        args.repository_root,
++        artifact_json=args.artifact_json,
++        artifact_contract_path=args.artifact_contract,
++        result_frame_path=args.result_frame,
++        output_dir=args.output_dir,
++        handoff_ref=args.handoff_ref,
++        execute=args.execute,
++    )
++    if args.format == "json":
++        print(json.dumps(plan.to_mapping(), indent=2, sort_keys=True))
++    else:
++        print(plan.to_markdown(), end="")
++    if not args.execute:
++        return 0 if plan.ready else 2
++    return execute_sql_persistence_handoff_plan(plan)
++
++
++def _ensure_context_import_path(root: Path) -> None:
++    src = str(root / "src")
++    if src not in sys.path:
++        sys.path.insert(0, src)
++
++
++def _resolve_repo_path(root: Path, path: Path | None) -> Path:
++    if path is None:
++        raise ValueError("path cannot be None")
++    path = path.expanduser()
++    if path.is_absolute():
++        return path
++    return root / path
++
++
++def _display_path(path: Path, *, root: Path) -> str:
++    try:
++        return str(path.relative_to(root))
++    except ValueError:
++        return str(path)
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())
