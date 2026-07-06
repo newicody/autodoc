@@ -44,6 +44,7 @@ _ALLOWED_FRAME_KINDS = (
     "specialist_opinion",
     "vector_embedding_request",
     "vector_projection_request",
+    "vector_indexing_result",
     "runtime_probe",
 )
 

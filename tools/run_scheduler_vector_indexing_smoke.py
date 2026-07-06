@@ -19,6 +19,7 @@ import argparse
 from dataclasses import dataclass
 import importlib
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -33,6 +34,7 @@ DEFAULT_SQL_REF = "sql:smoke/vector-indexing/0143"
 DEFAULT_CONTEXT_REF = "sql:smoke/vector-indexing/0143"
 DEFAULT_TEXT = "passage: Scheduler route handler writes a vector indexing request frame; existing local vector smoke executes OpenVINO E5 then Qdrant projection."
 DEFAULT_ROUTE_REF = "vector-route:smoke/0143/embedding-request"
+DEFAULT_RESULT_ROUTE_REF = "vector-route:smoke/0144/indexing-result"
 DEFAULT_ROUTE_ROOT = ".var/smoke/routeproxy-0143/routes"
 
 
@@ -129,6 +131,58 @@ class SchedulerRouteFrameWriteSummary:
 
 
 @dataclass(frozen=True, slots=True)
+class SchedulerVectorIndexingResultFrameSummary:
+    command_ref: str
+    route_root: Path
+    result_route_ref: str
+    result_frame_path: Path
+    status: str
+    sql_ref: str
+    point_id: str
+    qdrant_rest_id: str
+    machine_vector_handoff: bool
+    strict_vector_handoff: bool
+    vector_json: str
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {
+            "command_ref": self.command_ref,
+            "route_root": str(self.route_root),
+            "result_route_ref": self.result_route_ref,
+            "result_frame_path": str(self.result_frame_path),
+            "status": self.status,
+            "sql_ref": self.sql_ref,
+            "point_id": self.point_id,
+            "qdrant_rest_id": self.qdrant_rest_id,
+            "machine_vector_handoff": self.machine_vector_handoff,
+            "strict_vector_handoff": self.strict_vector_handoff,
+            "vector_json": self.vector_json,
+            "scheduler_route_handler": "existing",
+            "route_proxy_runtime": "existing",
+            "scheduler_run_modified": False,
+        }
+
+    def to_markdown(self) -> str:
+        return "\n".join([
+            "# Scheduler vector indexing result frame",
+            "",
+            f"command_ref: `{self.command_ref}`",
+            f"route_root: `{self.route_root}`",
+            f"result_route_ref: `{self.result_route_ref}`",
+            f"result_frame_path: `{self.result_frame_path}`",
+            f"status: `{self.status}`",
+            f"sql_ref: `{self.sql_ref}`",
+            f"point_id: `{self.point_id}`",
+            f"qdrant_rest_id: `{self.qdrant_rest_id}`",
+            f"machine_vector_handoff: `{str(self.machine_vector_handoff).lower()}`",
+            f"strict_vector_handoff: `{str(self.strict_vector_handoff).lower()}`",
+            f"vector_json: `{self.vector_json}`",
+            "boundary: `existing Scheduler route handler + existing RouteProxyRuntime result frame`",
+            "",
+        ])
+
+
+@dataclass(frozen=True, slots=True)
 class SchedulerVectorIndexingSmokePlan:
     repository_root: Path
     model_dir: Path
@@ -206,6 +260,7 @@ class SchedulerVectorIndexingSmokePlan:
             "- does not create VectorQdrantProjectionAdapter",
             "- does not modify the Scheduler run loop",
             "- Scheduler writes a request frame; OpenVINO and Qdrant stay behind operator tools and existing adapters",
+            "- 0144 writes a vector_indexing_result frame back through the existing RouteProxyRuntime",
         ])
         return "\n".join(lines) + "\n"
 
@@ -368,6 +423,111 @@ def write_scheduler_vector_indexing_request_frame(plan: SchedulerVectorIndexingS
     )
 
 
+def extract_vector_indexing_smoke_result(output: str) -> dict[str, Any]:
+    """Extract machine-readable smoke facts from markdown output.
+
+    This parser only reads labelled result lines emitted by existing smoke tools.
+    It does not parse human-only values_preview vectors and does not infer a vector.
+    """
+
+    keys = {
+        "point_id",
+        "qdrant_rest_id",
+        "upsert_acknowledged",
+        "machine_vector_handoff",
+        "machine_vector_available",
+        "strict_vector_handoff",
+        "vector_json",
+        "openvino_e5_smoke",
+        "qdrant_projection_smoke",
+    }
+    parsed: dict[str, Any] = {}
+    for line in output.splitlines():
+        match = re.match(r"^([a-zA-Z0-9_]+):\s+`([^`]*)`\s*$", line.strip())
+        if not match:
+            continue
+        key, value = match.groups()
+        if key not in keys:
+            continue
+        if value.lower() == "true":
+            parsed[key] = True
+        elif value.lower() == "false":
+            parsed[key] = False
+        else:
+            parsed[key] = value
+    return parsed
+
+
+def write_scheduler_vector_indexing_result_frame(
+    plan: SchedulerVectorIndexingSmokePlan,
+    *,
+    request_summary: SchedulerRouteFrameWriteSummary,
+    smoke_output: str,
+) -> SchedulerVectorIndexingResultFrameSummary:
+    """Write a vector_indexing_result frame through the existing handler/runtime."""
+
+    facts = extract_vector_indexing_smoke_result(smoke_output)
+    point_id = str(facts.get("point_id", "qdrant-point:unreported"))
+    qdrant_rest_id = str(facts.get("qdrant_rest_id", "unreported"))
+    vector_json = str(facts.get("vector_json", str(plan.repository_root / ".var" / "smoke" / "e5_vector_0142.json")))
+    machine_vector_handoff = bool(facts.get("machine_vector_handoff", facts.get("machine_vector_available", False)))
+    strict_vector_handoff = bool(facts.get("strict_vector_handoff", plan.strict_vector_handoff))
+    status = "ok" if str(facts.get("qdrant_projection_smoke", "ok")) == "ok" else "unknown"
+
+    _ensure_runtime_import_path(plan.repository_root)
+    handler_module = importlib.import_module("runtime.scheduler_route_handler_minimal")
+    route_runtime_module = importlib.import_module("runtime.route_proxy_runtime_minimal")
+    policy = route_runtime_module.RouteProxyRuntimePolicy(
+        route_root=plan.route_root,
+        require_dev_shm=False,
+        allow_test_root=True,
+        namespace="autodoc-smoke-0144",
+    )
+    payload = {
+        "frame_kind": "vector_indexing_result",
+        "request_route_ref": plan.route_frame_preview.route_ref,
+        "request_frame_paths": [str(path) for path in request_summary.frame_paths],
+        "sql_ref": plan.sql_ref,
+        "status": status,
+        "point_id": point_id,
+        "qdrant_rest_id": qdrant_rest_id,
+        "vector_json": vector_json,
+        "machine_vector_handoff": machine_vector_handoff,
+        "strict_vector_handoff": strict_vector_handoff,
+        "operator_tool": "tools/run_local_vector_indexing_live_smoke.py",
+        "scheduler_run_modified": False,
+    }
+    command = handler_module.build_single_frame_route_command(
+        command_ref="scheduler-command:vector-indexing-smoke-0144-result",
+        route_ref=DEFAULT_RESULT_ROUTE_REF,
+        owner_ref="worker:local-vector-indexing-smoke",
+        context_ref=plan.sql_ref,
+        context_generation=plan.route_frame_preview.context_generation,
+        priority=plan.route_frame_preview.priority,
+        frame_kind="vector_indexing_result",
+        payload=payload,
+        runtime_policy=policy,
+    )
+    readback = handler_module.handle_scheduler_route_command_with_readback(command)
+    if not readback.readback_frames:
+        raise RuntimeError("existing scheduler route handler did not write a readable result frame")
+    result_frame = readback.readback_frames[0]
+    result_payload = result_frame.payload
+    return SchedulerVectorIndexingResultFrameSummary(
+        command_ref=command.command_ref,
+        route_root=plan.route_root,
+        result_route_ref=DEFAULT_RESULT_ROUTE_REF,
+        result_frame_path=readback.handler_result.frame_paths[0],
+        status=str(result_payload.get("status")),
+        sql_ref=str(result_payload.get("sql_ref")),
+        point_id=str(result_payload.get("point_id")),
+        qdrant_rest_id=str(result_payload.get("qdrant_rest_id")),
+        machine_vector_handoff=bool(result_payload.get("machine_vector_handoff")),
+        strict_vector_handoff=bool(result_payload.get("strict_vector_handoff")),
+        vector_json=str(result_payload.get("vector_json")),
+    )
+
+
 def execute_scheduler_vector_indexing_smoke(plan: SchedulerVectorIndexingSmokePlan) -> int:
     """Write the Scheduler route frame, then call the existing local vector smoke."""
 
@@ -379,15 +539,34 @@ def execute_scheduler_vector_indexing_smoke(plan: SchedulerVectorIndexingSmokePl
     write_summary = write_scheduler_vector_indexing_request_frame(plan)
     print(write_summary.to_markdown(), end="")
     print("==> local_vector_indexing_live_smoke")
-    result = subprocess.run(plan.commands[0].argv, cwd=plan.repository_root, check=False)
+    result = subprocess.run(
+        plan.commands[0].argv,
+        cwd=plan.repository_root,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if result.stdout:
+        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
     if result.returncode != 0:
         return result.returncode
+    print("==> vector_indexing_result_frame")
+    result_summary = write_scheduler_vector_indexing_result_frame(
+        plan,
+        request_summary=write_summary,
+        smoke_output=result.stdout or "",
+    )
+    print(result_summary.to_markdown(), end="")
     print("# Scheduler vector indexing smoke result")
     print("")
     print("scheduler_route_frame: `ok`")
     print("local_vector_indexing_smoke: `ok`")
-    print("strict_vector_handoff: `" + str(plan.strict_vector_handoff).lower() + "`")
-    print("boundary: `existing Scheduler route handler + existing RouteProxyRuntime + existing local vector smoke tool`")
+    print("vector_indexing_result_frame: `ok`")
+    print("strict_vector_handoff: `" + str(result_summary.strict_vector_handoff).lower() + "`")
+    print("machine_vector_handoff: `" + str(result_summary.machine_vector_handoff).lower() + "`")
+    print("result_frame_path: `" + str(result_summary.result_frame_path) + "`")
+    print("boundary: `existing Scheduler route handler + existing RouteProxyRuntime + existing local vector smoke tool + result frame`")
     return 0
 
 
