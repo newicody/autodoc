@@ -14,7 +14,10 @@ from runtime.scheduler_route_handler_minimal import (
     SchedulerRouteFrameRequest,
     SchedulerRouteHandlerCommand,
     build_single_frame_route_command,
+    describe_existing_scheduler_route_handler_integration,
     handle_scheduler_route_command,
+    handle_scheduler_route_command_with_readback,
+    read_scheduler_route_handler_result_frames,
 )
 
 
@@ -151,3 +154,64 @@ def test_request_rejects_unknown_frame_kind() -> None:
             frame_kind="unknown",
             payload={},
         )
+
+
+
+def test_0133_handler_readback_extends_existing_handler_surface(tmp_path: Path) -> None:
+    policy = make_policy(tmp_path / "routes")
+    command = build_single_frame_route_command(
+        command_ref="scheduler-command:dispatch-demand-readback",
+        route_ref="route:deliberation/cycle-4/round-1/demand-thermal",
+        owner_ref="scheduler-command:dispatch-demand-readback",
+        context_ref="cycle-state:cycle-4",
+        context_generation=1,
+        priority=700,
+        frame_kind="specialist_demand",
+        payload={"specialist_ref": "specialist:thermal", "request": "analyse"},
+        runtime_policy=policy,
+    )
+
+    readback = handle_scheduler_route_command_with_readback(command)
+    mapping = readback.to_mapping()
+
+    assert mapping["extends_existing_scheduler_route_handler"] is True
+    assert mapping["creates_parallel_runtime"] is False
+    assert mapping["scheduler_is_orchestrator"] is True
+    assert mapping["readback_count"] == 1
+    assert readback.readback_frames[0].payload["specialist_ref"] == "specialist:thermal"
+
+
+def test_0133_can_read_result_frames_from_existing_runtime_state(tmp_path: Path) -> None:
+    policy = make_policy(tmp_path / "routes")
+    state = prepare_route_proxy_runtime(policy)
+    command = build_single_frame_route_command(
+        command_ref="scheduler-command:dispatch-demand-readback-2",
+        route_ref="route:deliberation/cycle-5/round-1/demand-safety",
+        owner_ref="scheduler-command:dispatch-demand-readback-2",
+        context_ref="cycle-state:cycle-5",
+        context_generation=2,
+        priority=650,
+        frame_kind="specialist_demand",
+        payload={"specialist_ref": "specialist:safety"},
+        runtime_policy=policy,
+    )
+
+    result = handle_scheduler_route_command(command, runtime_state=state)
+    frames = read_scheduler_route_handler_result_frames(state, result)
+
+    assert len(frames) == 1
+    assert frames[0].route_ref == result.written_route_refs[0]
+    assert frames[0].payload["frame_kind"] == "specialist_demand"
+
+
+def test_0133_integration_decision_reuses_existing_surfaces() -> None:
+    decision = describe_existing_scheduler_route_handler_integration()
+    mapping = decision.to_mapping()
+
+    assert mapping["decision"] == "extend_existing"
+    assert mapping["creates_parallel_runtime"] is False
+    assert mapping["scheduler_run_modified"] is False
+    assert mapping["extended_surface_path"] == "src/runtime/scheduler_route_handler_minimal.py"
+    assert "src/runtime/route_proxy_runtime_minimal.py" in mapping["reused_runtime_paths"]
+    assert "src/runtime/controlproxy_scheduler_handler.py" in mapping["reused_runtime_paths"]
+    assert "tools/audit_existing_runtime_integration.py" in mapping["audit_source_refs"]

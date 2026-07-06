@@ -19,8 +19,10 @@ from runtime.route_proxy_runtime_minimal import (
     RouteProxyRuntimeError,
     RouteProxyRuntimePolicy,
     RouteProxyRuntimeState,
+    RouteProxyRuntimeFrame,
     list_observation_facts,
     prepare_route_proxy_runtime,
+    read_route_frame,
     request_writer_permit,
     write_route_frame,
 )
@@ -28,6 +30,8 @@ from runtime.route_proxy_runtime_minimal import (
 _HANDLER_COMMAND_SCHEMA = "missipy.scheduler.route_handler_command.v1"
 _HANDLER_FRAME_SCHEMA = "missipy.scheduler.route_frame_request.v1"
 _HANDLER_RESULT_SCHEMA = "missipy.scheduler.route_handler_result.v1"
+_HANDLER_READBACK_RESULT_SCHEMA = "missipy.scheduler.route_handler_readback_result.v1"
+_HANDLER_INTEGRATION_DECISION_SCHEMA = "missipy.scheduler.route_handler_integration_decision.v1"
 
 _TYPED_REF_RE = re.compile(r"^[a-z][a-z0-9-]*:[^\s].*$")
 _ALLOWED_COMMAND_PREFIXES = ("scheduler-command:", "command:")
@@ -175,6 +179,67 @@ class SchedulerRouteHandlerResult:
         }
 
 
+
+@dataclass(frozen=True, slots=True)
+class SchedulerRouteHandlerReadbackResult:
+    """Result wrapper that proves the existing handler wrote readable route frames."""
+
+    handler_result: SchedulerRouteHandlerResult
+    readback_frames: tuple[RouteProxyRuntimeFrame, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "readback_frames", tuple(self.readback_frames))
+        if len(self.readback_frames) != len(self.handler_result.written_route_refs):
+            raise RouteProxyRuntimeError("readback_frames must match written_route_refs")
+        for frame, route_ref in zip(self.readback_frames, self.handler_result.written_route_refs, strict=True):
+            if frame.route_ref != route_ref:
+                raise RouteProxyRuntimeError("readback frame route_ref must match handler result")
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "schema": _HANDLER_READBACK_RESULT_SCHEMA,
+            "handler_result": self.handler_result.to_mapping(),
+            "readback_frames": [frame.to_mapping() for frame in self.readback_frames],
+            "readback_count": len(self.readback_frames),
+            "extends_existing_scheduler_route_handler": True,
+            "creates_parallel_runtime": False,
+            "scheduler_is_orchestrator": True,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class ExistingRouteHandlerIntegrationDecision:
+    """Documented decision to extend existing route handler/runtime surfaces."""
+
+    decision_ref: str
+    extended_surface_path: str
+    reused_runtime_paths: tuple[str, ...]
+    audit_source_refs: tuple[str, ...]
+    reason: str
+    creates_parallel_runtime: bool = False
+
+    def __post_init__(self) -> None:
+        _require_typed_ref("decision_ref", self.decision_ref, required_prefixes=("integration-decision:",))
+        _require_non_empty("extended_surface_path", self.extended_surface_path)
+        object.__setattr__(self, "reused_runtime_paths", _normalize_path_refs("reused_runtime_paths", self.reused_runtime_paths))
+        object.__setattr__(self, "audit_source_refs", _normalize_path_refs("audit_source_refs", self.audit_source_refs))
+        _require_non_empty("reason", self.reason)
+        if self.creates_parallel_runtime:
+            raise RouteProxyRuntimeError("0133 must extend existing route handler/runtime surfaces, not create a parallel runtime")
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "schema": _HANDLER_INTEGRATION_DECISION_SCHEMA,
+            "decision_ref": self.decision_ref,
+            "extended_surface_path": self.extended_surface_path,
+            "reused_runtime_paths": list(self.reused_runtime_paths),
+            "audit_source_refs": list(self.audit_source_refs),
+            "reason": self.reason,
+            "creates_parallel_runtime": self.creates_parallel_runtime,
+            "decision": "extend_existing",
+            "scheduler_run_modified": False,
+        }
+
 def handle_scheduler_route_command(
     command: SchedulerRouteHandlerCommand,
     *,
@@ -213,6 +278,58 @@ def handle_scheduler_route_command(
         observation_facts=list_observation_facts(state),
     )
 
+
+
+def read_scheduler_route_handler_result_frames(
+    runtime_state: RouteProxyRuntimeState,
+    result: SchedulerRouteHandlerResult,
+) -> tuple[RouteProxyRuntimeFrame, ...]:
+    """Read frames written by the existing handler through RouteProxyRuntime."""
+
+    frames: list[RouteProxyRuntimeFrame] = []
+    for route_ref in result.written_route_refs:
+        frames.append(read_route_frame(runtime_state, route_ref))
+    return tuple(frames)
+
+
+def handle_scheduler_route_command_with_readback(
+    command: SchedulerRouteHandlerCommand,
+    *,
+    runtime_state: RouteProxyRuntimeState | None = None,
+) -> SchedulerRouteHandlerReadbackResult:
+    """Execute the existing handler and immediately read back written frames."""
+
+    state = runtime_state or prepare_route_proxy_runtime(command.runtime_policy)
+    result = handle_scheduler_route_command(command, runtime_state=state)
+    return SchedulerRouteHandlerReadbackResult(
+        handler_result=result,
+        readback_frames=read_scheduler_route_handler_result_frames(state, result),
+    )
+
+
+def describe_existing_scheduler_route_handler_integration() -> ExistingRouteHandlerIntegrationDecision:
+    """Return the 0133 anti-duplication decision for route handler integration."""
+
+    return ExistingRouteHandlerIntegrationDecision(
+        decision_ref="integration-decision:0133-extend-existing-scheduler-route-handler",
+        extended_surface_path="src/runtime/scheduler_route_handler_minimal.py",
+        reused_runtime_paths=(
+            "src/runtime/scheduler_route_handler_minimal.py",
+            "src/runtime/route_proxy_runtime_minimal.py",
+            "src/runtime/controlproxy_scheduler_handler.py",
+            "src/runtime/controlproxy_route_runtime_handler.py",
+            "src/runtime/route_dev_shm_runtime.py",
+            "src/runtime/route_runtime_manager.py",
+            "src/runtime/scheduler_route_adapter.py",
+            "src/runtime/scheduler_route_handshake.py",
+        ),
+        audit_source_refs=(
+            "doc/architecture/EXISTING_RUNTIME_INTEGRATION_AUDIT_0132.md",
+            "doc/code-rules/0132_no_reinvent_runtime_rule.md",
+            "tools/audit_existing_runtime_integration.py",
+        ),
+        reason="0132 audit found existing route handler/runtime surfaces; 0133 extends the existing handler instead of creating a new worker/runtime module.",
+    )
 
 def build_single_frame_route_command(
     *,
@@ -287,6 +404,17 @@ def _normalize_refs(
         raise RouteProxyRuntimeError(f"{name} must not be empty")
     for ref in refs:
         _require_typed_ref(name, ref, required_prefixes=required_prefixes)
+    return refs
+
+
+def _normalize_path_refs(name: str, values: tuple[str, ...]) -> tuple[str, ...]:
+    refs = tuple(dict.fromkeys(values))
+    if not refs:
+        raise RouteProxyRuntimeError(f"{name} must not be empty")
+    for ref in refs:
+        _require_non_empty(name, ref)
+        if ref.startswith("/") or ".." in ref.split("/"):
+            raise RouteProxyRuntimeError(f"{name} must contain repository-relative safe paths")
     return refs
 
 
