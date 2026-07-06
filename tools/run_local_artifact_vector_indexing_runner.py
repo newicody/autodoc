@@ -3,12 +3,14 @@
 
 0145 turned the validated Scheduler/RouteProxy/vector smoke into a small local
 artifact runner.  0146 adds a pure artifact intake contract in
-src/context/artifact_intake_contract.py.  The runner remains an operator
+src/context/artifact_intake_contract.py. 0147 derives dynamic route refs from that
+contract instead of forwarding static 0143/0144 smoke refs.  The runner remains an operator
 surface: it does not create a new orchestrator, daemon, Scheduler loop,
 OpenVINO adapter, or Qdrant adapter.
 
 Literal reuse surface: tools/run_local_vector_indexing_live_smoke.py.
 Literal contract surface: src/context/artifact_intake_contract.py.
+Literal route ref surface: src/context/artifact_route_refs.py.
 """
 
 from __future__ import annotations
@@ -26,14 +28,14 @@ DEFAULT_MODEL_DIR = "/home/eric/model/openvino/multilingual-e5-small"
 DEFAULT_QDRANT_URL = "http://127.0.0.1:6333"
 DEFAULT_COLLECTION = "autodoc_smoke_e5_384"
 DEFAULT_DIMENSION = 384
-DEFAULT_SQL_REF = "sql:artifact/vector-indexing/0146"
-DEFAULT_ARTIFACT_REF = "artifact:local/0146/smoke"
+DEFAULT_SQL_REF = "sql:artifact/vector-indexing/0147"
+DEFAULT_ARTIFACT_REF = "artifact:local/0147/smoke"
 DEFAULT_ARTIFACT_KIND = "local_markdown"
 DEFAULT_TEXT_KIND = "passage"
-DEFAULT_VECTOR_INDEXING_JOB_REF = "vector-indexing-job:artifact/0146-smoke"
-DEFAULT_ARTIFACT_TEXT = "passage: Local artifact intake contract sends one artifact through the existing Scheduler route smoke, OpenVINO E5 full-vector handoff, and Qdrant projection."
-DEFAULT_ARTIFACT_DIR = ".var/smoke/artifacts/0146"
-DEFAULT_ROUTE_ROOT = ".var/smoke/routeproxy-0146/routes"
+DEFAULT_VECTOR_INDEXING_JOB_REF = "vector-indexing-job:artifact/0147-smoke"
+DEFAULT_ARTIFACT_TEXT = "passage: Local artifact dynamic route refs send one artifact through the existing Scheduler route smoke, OpenVINO E5 full-vector handoff, and Qdrant projection."
+DEFAULT_ARTIFACT_DIR = ".var/smoke/artifacts/0147"
+DEFAULT_ROUTE_ROOT = ".var/smoke/routeproxy-0147/routes"
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +78,7 @@ class LocalArtifactVectorIndexingPlan:
     route_root: Path
     text: str
     artifact_contract: Any
+    artifact_route_refs: Any
     execute: bool
     surfaces: tuple[LocalArtifactSurface, ...]
     commands: tuple[LocalArtifactCommand, ...]
@@ -91,6 +94,7 @@ class LocalArtifactVectorIndexingPlan:
             "artifact_input": str(self.artifact_input),
             "artifact_contract_path": str(self.artifact_contract_path),
             "artifact_contract": self.artifact_contract.to_mapping(),
+            "artifact_route_refs": self.artifact_route_refs.to_mapping(),
             "artifact_report": str(self.artifact_report),
             "artifact_json": str(self.artifact_json),
             "model_dir": str(self.model_dir),
@@ -134,6 +138,15 @@ class LocalArtifactVectorIndexingPlan:
             f"text_kind: `{self.artifact_contract.text_kind}`",
             f"vector_indexing_job_ref: `{self.artifact_contract.vector_indexing_job_ref}`",
             "",
+            "## Dynamic route refs",
+            "",
+            f"command_ref: `{self.artifact_route_refs.command_ref}`",
+            f"request_route_ref: `{self.artifact_route_refs.request_route_ref}`",
+            f"result_command_ref: `{self.artifact_route_refs.result_command_ref}`",
+            f"result_route_ref: `{self.artifact_route_refs.result_route_ref}`",
+            f"route_namespace: `{self.artifact_route_refs.route_namespace}`",
+            f"result_route_namespace: `{self.artifact_route_refs.result_route_namespace}`",
+            "",
             "## Existing surfaces",
             "",
             "| key | status | path | reason |",
@@ -167,8 +180,10 @@ class LocalArtifactVectorIndexingPlan:
             "- reuses src/runtime/scheduler_route_handler_minimal.py and src/runtime/route_proxy_runtime_minimal.py indirectly",
             "- reuses tools/embed_e5.py --format json --full-vector through the existing smoke chain",
             "- reuses tools/run_qdrant_projection_live_smoke.py --vector-json through the existing smoke chain",
-            "- writes local artifact input/contract/report files only under .var/smoke/artifacts/0146 by default",
+            "- writes local artifact input/contract/report files only under .var/smoke/artifacts/0147 by default",
             "- reuses src/context/artifact_intake_contract.py as a pure typed intake contract",
+            "- reuses src/context/artifact_route_refs.py to derive dynamic command and route refs",
+            "- does not forward static 0143/0144 smoke refs when artifact route refs are available",
             "- does not create LocalArtifactOrchestrator",
             "- does not create LocalVectorIndexingOrchestrator",
             "- does not create SchedulerOpenVINORunner",
@@ -278,6 +293,11 @@ def build_local_artifact_vector_indexing_plan(
         text=text,
     )
     text = artifact_contract.normalized_text()
+    artifact_route_refs = _build_artifact_route_refs(
+        root,
+        artifact_ref=artifact_contract.artifact_ref,
+        vector_indexing_job_ref=artifact_contract.vector_indexing_job_ref,
+    )
     scheduler_tool = root / "tools" / "run_scheduler_vector_indexing_smoke.py"
     command_args = [
         sys.executable,
@@ -295,6 +315,22 @@ def build_local_artifact_vector_indexing_plan(
         sql_ref,
         "--route-root",
         str(route_root),
+        "--command-ref",
+        artifact_route_refs.command_ref,
+        "--request-route-ref",
+        artifact_route_refs.request_route_ref,
+        "--result-command-ref",
+        artifact_route_refs.result_command_ref,
+        "--result-route-ref",
+        artifact_route_refs.result_route_ref,
+        "--result-owner-ref",
+        artifact_route_refs.result_owner_ref,
+        "--vector-indexing-job-ref",
+        artifact_route_refs.vector_indexing_job_ref,
+        "--route-namespace",
+        artifact_route_refs.route_namespace,
+        "--result-route-namespace",
+        artifact_route_refs.result_route_namespace,
         "--text",
         text,
         "--execute",
@@ -314,6 +350,7 @@ def build_local_artifact_vector_indexing_plan(
         route_root=route_root,
         text=text,
         artifact_contract=artifact_contract,
+        artifact_route_refs=artifact_route_refs,
         execute=execute,
         surfaces=(
             LocalArtifactSurface(
@@ -325,6 +362,11 @@ def build_local_artifact_vector_indexing_plan(
                 key="artifact_intake_contract",
                 path=_artifact_intake_contract_surface_path(root),
                 reason="pure typed artifact intake contract from 0146",
+            ),
+            LocalArtifactSurface(
+                key="artifact_route_refs",
+                path=_artifact_route_refs_surface_path(root),
+                reason="pure dynamic route refs from 0147",
             ),
             LocalArtifactSurface(
                 key="scheduler_route_handler",
@@ -483,6 +525,22 @@ def _artifact_intake_contract_surface_path(root: Path) -> Path:
     if candidate.exists():
         return candidate
     return Path(__file__).resolve().parents[1] / "src" / "context" / "artifact_intake_contract.py"
+
+
+def _artifact_route_refs_surface_path(root: Path) -> Path:
+    candidate = root / "src" / "context" / "artifact_route_refs.py"
+    if candidate.exists():
+        return candidate
+    return Path(__file__).resolve().parents[1] / "src" / "context" / "artifact_route_refs.py"
+
+
+def _build_artifact_route_refs(root: Path, **kwargs: Any) -> Any:
+    src = str(root / "src")
+    if src not in sys.path:
+        sys.path.insert(0, src)
+    from context.artifact_route_refs import build_artifact_route_refs
+
+    return build_artifact_route_refs(**kwargs)
 
 
 def _build_artifact_intake_contract(root: Path, **kwargs: Any) -> Any:

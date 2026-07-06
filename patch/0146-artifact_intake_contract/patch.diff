@@ -1,0 +1,810 @@
+diff --git a/PHASE0146_TEST_REPORT.md b/PHASE0146_TEST_REPORT.md
+new file mode 100644
+index 0000000..06b2c99
+--- /dev/null
++++ b/PHASE0146_TEST_REPORT.md
+@@ -0,0 +1,23 @@
++# PHASE0146_TEST_REPORT
++
++```text
++phase: 0146-artifact_intake_contract
++code_rule_review: done
++code_rule_update_required: true
++code_rule_reason: artifact inputs need a pure typed contract before dynamic route refs.
++live_path_status: contract
++live_path_uses_real_backend: false
++context_contract_version: artifact-intake-0146
++context_contract_changed: true
++search_commands_bounded: n/a
++```
++
++Validation performed in patch build:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/tools/test_artifact_intake_contract_0146.py tests/rules/test_artifact_intake_contract_0146_rule.py
++# 9 passed
++PYTHONPATH=src:. pytest -q tests/tools/test_local_artifact_vector_indexing_runner_0145.py tests/tools/test_artifact_intake_contract_0146.py tests/rules/test_local_artifact_vector_indexing_runner_0145_rule.py tests/rules/test_artifact_intake_contract_0146_rule.py
++# 17 passed
++```
+diff --git a/doc/CHANGELOG_0146_ARTIFACT_INTAKE_CONTRACT.md b/doc/CHANGELOG_0146_ARTIFACT_INTAKE_CONTRACT.md
+new file mode 100644
+index 0000000..52d02d1
+--- /dev/null
++++ b/doc/CHANGELOG_0146_ARTIFACT_INTAKE_CONTRACT.md
+@@ -0,0 +1,11 @@
++# Changelog 0146 — Artifact intake contract
++
++Added:
++
++- `src/context/artifact_intake_contract.py`
++- `artifact_intake_contract.json` emission in the local artifact runner
++- CLI fields for `--artifact-ref`, `--artifact-kind`, `--text-kind`, and `--vector-indexing-job-ref`
++- tests for typed artifact intake and runner plan output
++- architecture docs, code-rule addendum, DOT graph, manifest, and test report
++
++0146 keeps execution on the existing 0145 runner path and does not activate dynamic RouteProxy route refs yet.
+diff --git a/doc/architecture/ARTIFACT_INTAKE_CONTRACT_0146.md b/doc/architecture/ARTIFACT_INTAKE_CONTRACT_0146.md
+new file mode 100644
+index 0000000..649a65c
+--- /dev/null
++++ b/doc/architecture/ARTIFACT_INTAKE_CONTRACT_0146.md
+@@ -0,0 +1,42 @@
++# 0146 — Artifact intake contract
++
++0146 defines a typed artifact intake contract before the artifact runner derives dynamic jobs and routes.
++
++The contract is pure. It lives in `src/context/artifact_intake_contract.py` and carries only metadata:
++
++```text
++artifact_ref
++artifact_kind
++artifact_path
++text_kind
++sql_ref
++collection
++dimension
++route_root
++vector_indexing_job_ref
++text
++```
++
++The local artifact runner now writes:
++
++```text
++artifact_input.md
++artifact_intake_contract.json
++artifact_vector_indexing_report.md
++artifact_vector_indexing_report.json
++```
++
++## Boundary
++
++- 0146 reuses `tools/run_local_artifact_vector_indexing_runner.py`.
++- 0146 reuses the existing Scheduler/RouteProxy/vector smoke chain.
++- 0146 does not activate dynamic route refs.
++- 0147 will derive dynamic refs from `artifact_ref` and `vector_indexing_job_ref`.
++- The contract is pure and does not import Scheduler, RouteProxy, OpenVINO, Qdrant, or SQL clients.
++- Scheduler remains the orchestrator.
++- SQLContextStore remains durable authority.
++- Qdrant remains projection/recall only.
++
++## Why before dynamic refs
++
++The previous runner proved the local artifact path, but it still carried static smoke refs such as `0143` and `0144`. 0146 introduces the typed input envelope first. 0147 can then derive route refs and job refs from stable, explicit artifact fields instead of guessing from free text.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0146.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0146.md
+new file mode 100644
+index 0000000..25b3fcd
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0146.md
+@@ -0,0 +1,14 @@
++# 0146 operational plan — artifact intake contract
++
++0146 adds a typed input contract to the local artifact vector indexing runner.
++
++```text
++artifact text
++-> artifact_intake_contract.json
++-> existing Scheduler vector indexing smoke
++-> existing RouteProxyRuntime frames
++-> existing OpenVINO/Qdrant smoke tools
++-> local artifact report
++```
++
++The contract does not change the authority model: Scheduler stays in control, RouteProxyRuntime handles frame IO, SQL remains durable authority, and Qdrant remains projection/recall.
+diff --git a/doc/code-rules/0146_artifact_intake_contract_rule.md b/doc/code-rules/0146_artifact_intake_contract_rule.md
+new file mode 100644
+index 0000000..bcb50c6
+--- /dev/null
++++ b/doc/code-rules/0146_artifact_intake_contract_rule.md
+@@ -0,0 +1,16 @@
++# 0146 code rule — artifact intake contract first
++
++Artifact intake must be represented by src/context/artifact_intake_contract.py before route refs or job refs are dynamically derived.
++
++Rules:
++
++- the intake contract must remain pure
++- do not import OpenVINO or Qdrant clients from the artifact intake contract
++- do not import Scheduler or RouteProxy runtime objects from the artifact intake contract
++- do not derive dynamic RouteProxy refs in 0146
++- use `artifact_ref`, `artifact_kind`, `artifact_path`, `text_kind`, `sql_ref`, `collection`, `dimension`, `route_root`, and `vector_indexing_job_ref` as explicit fields
++- Scheduler remains the orchestrator
++- SQLContextStore remains durable authority
++- Qdrant remains projection/recall only
++
++0147 may derive dynamic route refs from this contract, but 0146 only defines and serializes the intake envelope.
+diff --git a/doc/docs/architecture/runtime/146_artifact_intake_contract.dot b/doc/docs/architecture/runtime/146_artifact_intake_contract.dot
+new file mode 100644
+index 0000000..8e35e41
+--- /dev/null
++++ b/doc/docs/architecture/runtime/146_artifact_intake_contract.dot
+@@ -0,0 +1,15 @@
++digraph artifact_intake_contract_0146 {
++  rankdir=LR;
++  artifact [label="local artifact"];
++  contract [label="ArtifactIntakeContract\n(pure context contract)"];
++  runner [label="existing local artifact runner"];
++  scheduler_smoke [label="existing scheduler vector smoke"];
++  routeproxy [label="existing RouteProxyRuntime frames"];
++  vector [label="existing OpenVINO/Qdrant tools"];
++
++  artifact -> contract;
++  contract -> runner;
++  runner -> scheduler_smoke;
++  scheduler_smoke -> routeproxy;
++  scheduler_smoke -> vector;
++}
+diff --git a/doc/manifests/MANIFEST_0146_CHANGED_FILES.md b/doc/manifests/MANIFEST_0146_CHANGED_FILES.md
+new file mode 100644
+index 0000000..f6f9c5d
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0146_CHANGED_FILES.md
+@@ -0,0 +1,17 @@
++# Manifest 0146 — changed files
++
++```text
++PHASE0146_TEST_REPORT.md
++doc/CHANGELOG_0146_ARTIFACT_INTAKE_CONTRACT.md
++doc/architecture/ARTIFACT_INTAKE_CONTRACT_0146.md
++doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0146.md
++doc/code-rules/0146_artifact_intake_contract_rule.md
++doc/docs/architecture/runtime/146_artifact_intake_contract.dot
++doc/manifests/MANIFEST_0146_CHANGED_FILES.md
++src/context/artifact_intake_contract.py
++tests/rules/test_artifact_intake_contract_0146_rule.py
++tests/tools/test_artifact_intake_contract_0146.py
++tools/run_local_artifact_vector_indexing_runner.py
++```
++
++No Scheduler loop, RouteProxy runtime, OpenVINO adapter, or Qdrant adapter is modified by 0146.
+diff --git a/src/context/artifact_intake_contract.py b/src/context/artifact_intake_contract.py
+new file mode 100644
+index 0000000..dde5f2e
+--- /dev/null
++++ b/src/context/artifact_intake_contract.py
+@@ -0,0 +1,128 @@
++"""Pure artifact intake contract for local vector indexing.
++
++0146 defines a typed intake envelope for local artifacts before they are passed
++through the existing Scheduler/RouteProxy/vector smoke.  This module is a pure
++contract surface: it does not import Scheduler, RouteProxy, OpenVINO, Qdrant, or
++SQL clients and it does not perform IO.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any, Mapping
++
++_ALLOWED_TEXT_KINDS = frozenset({"query", "passage"})
++_ALLOWED_ARTIFACT_KINDS = frozenset({"local_markdown", "local_text", "local_json"})
++
++
++@dataclass(frozen=True, slots=True)
++class ArtifactIntakeContract:
++    """Typed local artifact intake envelope.
++
++    The contract carries metadata needed to derive Scheduler/RouteProxy/vector
++    work later.  It is not an orchestrator and not a storage authority.
++    """
++
++    artifact_ref: str
++    artifact_kind: str
++    artifact_path: Path
++    text_kind: str
++    sql_ref: str
++    collection: str
++    dimension: int
++    route_root: Path
++    vector_indexing_job_ref: str
++    text: str
++
++    def normalized_text(self) -> str:
++        prefix = f"{self.text_kind}: "
++        if self.text.startswith(("query: ", "passage: ")):
++            return self.text
++        return prefix + self.text
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "artifact_ref": self.artifact_ref,
++            "artifact_kind": self.artifact_kind,
++            "artifact_path": str(self.artifact_path),
++            "text_kind": self.text_kind,
++            "sql_ref": self.sql_ref,
++            "collection": self.collection,
++            "dimension": self.dimension,
++            "route_root": str(self.route_root),
++            "vector_indexing_job_ref": self.vector_indexing_job_ref,
++            "text": self.normalized_text(),
++            "boundary": "pure artifact intake contract; Scheduler/RouteProxy/OpenVINO/Qdrant stay outside",
++        }
++
++    @classmethod
++    def from_mapping(cls, data: Mapping[str, Any]) -> "ArtifactIntakeContract":
++        return build_artifact_intake_contract(
++            artifact_ref=str(data["artifact_ref"]),
++            artifact_kind=str(data["artifact_kind"]),
++            artifact_path=Path(str(data["artifact_path"])),
++            text_kind=str(data["text_kind"]),
++            sql_ref=str(data["sql_ref"]),
++            collection=str(data["collection"]),
++            dimension=int(data["dimension"]),
++            route_root=Path(str(data["route_root"])),
++            vector_indexing_job_ref=str(data["vector_indexing_job_ref"]),
++            text=str(data["text"]),
++        )
++
++
++def build_artifact_intake_contract(
++    *,
++    artifact_ref: str,
++    artifact_kind: str,
++    artifact_path: Path,
++    text_kind: str,
++    sql_ref: str,
++    collection: str,
++    dimension: int,
++    route_root: Path,
++    vector_indexing_job_ref: str,
++    text: str,
++) -> ArtifactIntakeContract:
++    artifact_ref = _require_prefix("artifact_ref", artifact_ref.strip(), "artifact:")
++    artifact_kind = _require_member("artifact_kind", artifact_kind.strip(), _ALLOWED_ARTIFACT_KINDS)
++    text_kind = _require_member("text_kind", text_kind.strip(), _ALLOWED_TEXT_KINDS)
++    sql_ref = _require_prefix("sql_ref", sql_ref.strip(), "sql:")
++    collection = _require_non_empty("collection", collection.strip())
++    vector_indexing_job_ref = _require_prefix("vector_indexing_job_ref", vector_indexing_job_ref.strip(), "vector-indexing-job:")
++    text = _require_non_empty("text", text.strip())
++    if dimension <= 0:
++        raise ValueError("dimension must be positive")
++    return ArtifactIntakeContract(
++        artifact_ref=artifact_ref,
++        artifact_kind=artifact_kind,
++        artifact_path=artifact_path,
++        text_kind=text_kind,
++        sql_ref=sql_ref,
++        collection=collection,
++        dimension=dimension,
++        route_root=route_root,
++        vector_indexing_job_ref=vector_indexing_job_ref,
++        text=text,
++    )
++
++
++def _require_non_empty(field: str, value: str) -> str:
++    if not value:
++        raise ValueError(f"{field} must be non-empty")
++    return value
++
++
++def _require_prefix(field: str, value: str, prefix: str) -> str:
++    value = _require_non_empty(field, value)
++    if not value.startswith(prefix):
++        raise ValueError(f"{field} must start with {prefix!r}")
++    return value
++
++
++def _require_member(field: str, value: str, allowed: frozenset[str]) -> str:
++    value = _require_non_empty(field, value)
++    if value not in allowed:
++        raise ValueError(f"{field} must be one of {sorted(allowed)!r}")
++    return value
+diff --git a/tests/rules/test_artifact_intake_contract_0146_rule.py b/tests/rules/test_artifact_intake_contract_0146_rule.py
+new file mode 100644
+index 0000000..8316e50
+--- /dev/null
++++ b/tests/rules/test_artifact_intake_contract_0146_rule.py
+@@ -0,0 +1,108 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++CONTRACT = ROOT / "src" / "context" / "artifact_intake_contract.py"
++TOOL = ROOT / "tools" / "run_local_artifact_vector_indexing_runner.py"
++DOC = ROOT / "doc" / "architecture" / "ARTIFACT_INTAKE_CONTRACT_0146.md"
++RULE = ROOT / "doc" / "code-rules" / "0146_artifact_intake_contract_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0146_CHANGED_FILES.md"
++
++
++def test_0146_contract_is_pure_and_typed() -> None:
++    text = CONTRACT.read_text(encoding="utf-8")
++    required = [
++        "class ArtifactIntakeContract",
++        "artifact_ref",
++        "artifact_kind",
++        "artifact_path",
++        "text_kind",
++        "sql_ref",
++        "collection",
++        "dimension",
++        "route_root",
++        "vector_indexing_job_ref",
++        "pure artifact intake contract",
++    ]
++    for phrase in required:
++        assert phrase in text
++    forbidden = [
++        "qdrant_client",
++        "openvino.runtime",
++        "SchedulerRouteHandlerCommand",
++        "RouteProxyRuntime",
++        "SQLContextStore(",
++        "subprocess.run",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++
++
++def test_0146_runner_reuses_contract_without_new_orchestrator() -> None:
++    text = TOOL.read_text(encoding="utf-8")
++    required = [
++        "src/context/artifact_intake_contract.py",
++        "artifact_intake_contract.json",
++        "--artifact-ref",
++        "--artifact-kind",
++        "--text-kind",
++        "--vector-indexing-job-ref",
++        "does not create LocalArtifactOrchestrator",
++        "does not create LocalVectorIndexingOrchestrator",
++        "does not modify Scheduler.run()",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0146_docs_lock_contract_boundary() -> None:
++    text = DOC.read_text(encoding="utf-8")
++    required = [
++        "0146 defines a typed artifact intake contract",
++        "The contract is pure",
++        "artifact_ref",
++        "artifact_kind",
++        "artifact_path",
++        "text_kind",
++        "sql_ref",
++        "vector_indexing_job_ref",
++        "0146 does not activate dynamic route refs",
++        "0147 will derive dynamic refs",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0146_code_rule_addendum_for_contract_first_artifacts() -> None:
++    text = RULE.read_text(encoding="utf-8")
++    required = [
++        "Artifact intake must be represented by src/context/artifact_intake_contract.py",
++        "the intake contract must remain pure",
++        "do not import OpenVINO or Qdrant clients",
++        "do not derive dynamic RouteProxy refs in 0146",
++        "Scheduler remains the orchestrator",
++        "SQLContextStore remains durable authority",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0146_manifest_changed_files_are_limited() -> None:
++    text = MANIFEST.read_text(encoding="utf-8")
++    required = [
++        "src/context/artifact_intake_contract.py",
++        "tools/run_local_artifact_vector_indexing_runner.py",
++        "tests/tools/test_artifact_intake_contract_0146.py",
++        "tests/rules/test_artifact_intake_contract_0146_rule.py",
++    ]
++    for phrase in required:
++        assert phrase in text
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/runtime/route_proxy_runtime_minimal.py",
++        "src/inference/openvino_embedding_adapter.py",
++        "src/inference/qdrant_projection_adapter.py",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
+diff --git a/tests/tools/test_artifact_intake_contract_0146.py b/tests/tools/test_artifact_intake_contract_0146.py
+new file mode 100644
+index 0000000..130560f
+--- /dev/null
++++ b/tests/tools/test_artifact_intake_contract_0146.py
+@@ -0,0 +1,116 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++import pytest
++
++from context.artifact_intake_contract import ArtifactIntakeContract, build_artifact_intake_contract
++from tools.run_local_artifact_vector_indexing_runner import build_local_artifact_vector_indexing_plan, main
++
++
++def _make_repo(tmp_path: Path) -> Path:
++    root = tmp_path / "repo"
++    for path in [
++        "tools/run_scheduler_vector_indexing_smoke.py",
++        "tools/run_local_vector_indexing_live_smoke.py",
++        "src/runtime/scheduler_route_handler_minimal.py",
++        "src/runtime/route_proxy_runtime_minimal.py",
++        "src/context/sql_context_store.py",
++        "src/context/artifact_intake_contract.py",
++    ]:
++        full = root / path
++        full.parent.mkdir(parents=True, exist_ok=True)
++        full.write_text("# stub\n", encoding="utf-8")
++    return root
++
++
++def test_0146_artifact_intake_contract_validates_and_normalizes_text(tmp_path: Path) -> None:
++    contract = build_artifact_intake_contract(
++        artifact_ref="artifact:local/0146/demo",
++        artifact_kind="local_markdown",
++        artifact_path=tmp_path / "artifact.md",
++        text_kind="passage",
++        sql_ref="sql:artifact/vector-indexing/0146",
++        collection="autodoc_smoke_e5_384",
++        dimension=384,
++        route_root=tmp_path / "routes",
++        vector_indexing_job_ref="vector-indexing-job:artifact/0146-demo",
++        text="hello artifact",
++    )
++
++    assert isinstance(contract, ArtifactIntakeContract)
++    assert contract.normalized_text() == "passage: hello artifact"
++    mapping = contract.to_mapping()
++    assert mapping["artifact_ref"] == "artifact:local/0146/demo"
++    assert mapping["text_kind"] == "passage"
++    assert mapping["dimension"] == 384
++    assert "Scheduler/RouteProxy/OpenVINO/Qdrant stay outside" in mapping["boundary"]
++    assert ArtifactIntakeContract.from_mapping(mapping).normalized_text() == contract.normalized_text()
++
++
++def test_0146_artifact_intake_contract_rejects_bad_refs(tmp_path: Path) -> None:
++    kwargs = dict(
++        artifact_ref="local/0146/demo",
++        artifact_kind="local_markdown",
++        artifact_path=tmp_path / "artifact.md",
++        text_kind="passage",
++        sql_ref="sql:artifact/vector-indexing/0146",
++        collection="autodoc_smoke_e5_384",
++        dimension=384,
++        route_root=tmp_path / "routes",
++        vector_indexing_job_ref="vector-indexing-job:artifact/0146-demo",
++        text="hello",
++    )
++    with pytest.raises(ValueError, match="artifact_ref"):
++        build_artifact_intake_contract(**kwargs)
++    kwargs["artifact_ref"] = "artifact:local/0146/demo"
++    kwargs["sql_ref"] = "artifact/vector-indexing/0146"
++    with pytest.raises(ValueError, match="sql_ref"):
++        build_artifact_intake_contract(**kwargs)
++
++
++def test_0146_runner_plan_exposes_typed_artifact_contract(tmp_path: Path) -> None:
++    root = _make_repo(tmp_path)
++    plan = build_local_artifact_vector_indexing_plan(
++        root,
++        artifact_dir=Path(".var/smoke/artifacts/0146"),
++        artifact_ref="artifact:local/0146/demo",
++        artifact_kind="local_text",
++        text_kind="query",
++        vector_indexing_job_ref="vector-indexing-job:artifact/0146-demo",
++        model_dir=Path("/model/e5"),
++        qdrant_url="http://127.0.0.1:6333",
++        collection="autodoc_smoke_e5_384",
++        dimension=384,
++        sql_ref="sql:artifact/vector-indexing/0146",
++        route_root=Path(".var/smoke/routeproxy-0146/routes"),
++        text="find artifact",
++        execute=False,
++    )
++
++    assert plan.ready is True
++    assert plan.artifact_contract.artifact_ref == "artifact:local/0146/demo"
++    assert plan.artifact_contract.normalized_text() == "query: find artifact"
++    mapping = plan.to_mapping()
++    assert mapping["artifact_contract"]["vector_indexing_job_ref"] == "vector-indexing-job:artifact/0146-demo"
++    assert mapping["artifact_contract_path"].endswith("artifact_intake_contract.json")
++    assert "--text 'query: find artifact'" in plan.commands[0].shell_preview()
++    markdown = plan.to_markdown()
++    assert "## Artifact intake contract" in markdown
++    assert "artifact_ref: `artifact:local/0146/demo`" in markdown
++
++
++def test_0146_json_plan_output_contains_contract(tmp_path: Path, capsys) -> None:
++    root = _make_repo(tmp_path)
++    rc = main([
++        str(root),
++        "--artifact-ref", "artifact:local/0146/json",
++        "--vector-indexing-job-ref", "vector-indexing-job:artifact/0146-json",
++        "--format", "json",
++    ])
++    assert rc == 0
++    data = json.loads(capsys.readouterr().out)
++    assert data["ready_for_local_artifact_vector_indexing"] is True
++    assert data["artifact_contract"]["artifact_ref"] == "artifact:local/0146/json"
++    assert data["artifact_contract"]["vector_indexing_job_ref"] == "vector-indexing-job:artifact/0146-json"
+diff --git a/tools/run_local_artifact_vector_indexing_runner.py b/tools/run_local_artifact_vector_indexing_runner.py
+index 2eb5584..0ed5b7c 100755
+--- a/tools/run_local_artifact_vector_indexing_runner.py
++++ b/tools/run_local_artifact_vector_indexing_runner.py
+@@ -1,13 +1,14 @@
+ #!/usr/bin/env python3
+ """Local artifact to scheduler vector indexing runner using existing surfaces.
+ 
+-0145 turns the validated Scheduler/RouteProxy/vector smoke into a small local
+-artifact runner.  It does not create a new orchestrator, daemon, Scheduler loop,
+-OpenVINO adapter, or Qdrant adapter.  It writes an operator artifact input file,
+-executes the existing scheduler vector indexing smoke tool, and writes a local
+-artifact result envelope that points to the RouteProxy result frame.
++0145 turned the validated Scheduler/RouteProxy/vector smoke into a small local
++artifact runner.  0146 adds a pure artifact intake contract in
++src/context/artifact_intake_contract.py.  The runner remains an operator
++surface: it does not create a new orchestrator, daemon, Scheduler loop,
++OpenVINO adapter, or Qdrant adapter.
+ 
+ Literal reuse surface: tools/run_local_vector_indexing_live_smoke.py.
++Literal contract surface: src/context/artifact_intake_contract.py.
+ """
+ 
+ from __future__ import annotations
+@@ -25,10 +26,14 @@ DEFAULT_MODEL_DIR = "/home/eric/model/openvino/multilingual-e5-small"
+ DEFAULT_QDRANT_URL = "http://127.0.0.1:6333"
+ DEFAULT_COLLECTION = "autodoc_smoke_e5_384"
+ DEFAULT_DIMENSION = 384
+-DEFAULT_SQL_REF = "sql:artifact/vector-indexing/0145"
+-DEFAULT_ARTIFACT_TEXT = "passage: Local artifact vector indexing runner sends one artifact through the existing Scheduler route smoke, OpenVINO E5 full-vector handoff, and Qdrant projection."
+-DEFAULT_ARTIFACT_DIR = ".var/smoke/artifacts/0145"
+-DEFAULT_ROUTE_ROOT = ".var/smoke/routeproxy-0145/routes"
++DEFAULT_SQL_REF = "sql:artifact/vector-indexing/0146"
++DEFAULT_ARTIFACT_REF = "artifact:local/0146/smoke"
++DEFAULT_ARTIFACT_KIND = "local_markdown"
++DEFAULT_TEXT_KIND = "passage"
++DEFAULT_VECTOR_INDEXING_JOB_REF = "vector-indexing-job:artifact/0146-smoke"
++DEFAULT_ARTIFACT_TEXT = "passage: Local artifact intake contract sends one artifact through the existing Scheduler route smoke, OpenVINO E5 full-vector handoff, and Qdrant projection."
++DEFAULT_ARTIFACT_DIR = ".var/smoke/artifacts/0146"
++DEFAULT_ROUTE_ROOT = ".var/smoke/routeproxy-0146/routes"
+ 
+ 
+ @dataclass(frozen=True, slots=True)
+@@ -60,6 +65,7 @@ class LocalArtifactVectorIndexingPlan:
+     repository_root: Path
+     artifact_dir: Path
+     artifact_input: Path
++    artifact_contract_path: Path
+     artifact_report: Path
+     artifact_json: Path
+     model_dir: Path
+@@ -69,6 +75,7 @@ class LocalArtifactVectorIndexingPlan:
+     sql_ref: str
+     route_root: Path
+     text: str
++    artifact_contract: Any
+     execute: bool
+     surfaces: tuple[LocalArtifactSurface, ...]
+     commands: tuple[LocalArtifactCommand, ...]
+@@ -82,6 +89,8 @@ class LocalArtifactVectorIndexingPlan:
+             "repository_root": str(self.repository_root),
+             "artifact_dir": str(self.artifact_dir),
+             "artifact_input": str(self.artifact_input),
++            "artifact_contract_path": str(self.artifact_contract_path),
++            "artifact_contract": self.artifact_contract.to_mapping(),
+             "artifact_report": str(self.artifact_report),
+             "artifact_json": str(self.artifact_json),
+             "model_dir": str(self.model_dir),
+@@ -105,6 +114,7 @@ class LocalArtifactVectorIndexingPlan:
+             f"repository_root: `{self.repository_root}`",
+             f"artifact_dir: `{self.artifact_dir}`",
+             f"artifact_input: `{self.artifact_input}`",
++            f"artifact_contract_path: `{self.artifact_contract_path}`",
+             f"artifact_report: `{self.artifact_report}`",
+             f"artifact_json: `{self.artifact_json}`",
+             f"model_dir: `{self.model_dir}`",
+@@ -116,6 +126,14 @@ class LocalArtifactVectorIndexingPlan:
+             f"ready_for_local_artifact_vector_indexing: `{str(self.ready).lower()}`",
+             f"execute: `{str(self.execute).lower()}`",
+             "",
++            "## Artifact intake contract",
++            "",
++            f"artifact_ref: `{self.artifact_contract.artifact_ref}`",
++            f"artifact_kind: `{self.artifact_contract.artifact_kind}`",
++            f"artifact_path: `{self.artifact_contract.artifact_path}`",
++            f"text_kind: `{self.artifact_contract.text_kind}`",
++            f"vector_indexing_job_ref: `{self.artifact_contract.vector_indexing_job_ref}`",
++            "",
+             "## Existing surfaces",
+             "",
+             "| key | status | path | reason |",
+@@ -129,7 +147,7 @@ class LocalArtifactVectorIndexingPlan:
+             "## Artifact text",
+             "",
+             "```text",
+-            self.text,
++            self.artifact_contract.normalized_text(),
+             "```",
+             "",
+             "## Commands",
+@@ -149,7 +167,8 @@ class LocalArtifactVectorIndexingPlan:
+             "- reuses src/runtime/scheduler_route_handler_minimal.py and src/runtime/route_proxy_runtime_minimal.py indirectly",
+             "- reuses tools/embed_e5.py --format json --full-vector through the existing smoke chain",
+             "- reuses tools/run_qdrant_projection_live_smoke.py --vector-json through the existing smoke chain",
+-            "- writes local artifact input/report files only under .var/smoke/artifacts/0145 by default",
++            "- writes local artifact input/contract/report files only under .var/smoke/artifacts/0146 by default",
++            "- reuses src/context/artifact_intake_contract.py as a pure typed intake contract",
+             "- does not create LocalArtifactOrchestrator",
+             "- does not create LocalVectorIndexingOrchestrator",
+             "- does not create SchedulerOpenVINORunner",
+@@ -164,6 +183,7 @@ class LocalArtifactVectorIndexingPlan:
+ @dataclass(frozen=True, slots=True)
+ class LocalArtifactVectorIndexingResult:
+     artifact_input: Path
++    artifact_contract_path: Path
+     artifact_report: Path
+     artifact_json: Path
+     sql_ref: str
+@@ -180,6 +200,7 @@ class LocalArtifactVectorIndexingResult:
+     def to_mapping(self) -> dict[str, Any]:
+         return {
+             "artifact_input": str(self.artifact_input),
++            "artifact_contract_path": str(self.artifact_contract_path),
+             "artifact_report": str(self.artifact_report),
+             "artifact_json": str(self.artifact_json),
+             "sql_ref": self.sql_ref,
+@@ -200,6 +221,7 @@ class LocalArtifactVectorIndexingResult:
+             "# Local artifact vector indexing result",
+             "",
+             f"artifact_input: `{self.artifact_input}`",
++            f"artifact_contract_path: `{self.artifact_contract_path}`",
+             f"artifact_report: `{self.artifact_report}`",
+             f"artifact_json: `{self.artifact_json}`",
+             f"sql_ref: `{self.sql_ref}`",
+@@ -229,15 +251,33 @@ def build_local_artifact_vector_indexing_plan(
+     route_root: Path,
+     text: str,
+     execute: bool,
++    artifact_ref: str = DEFAULT_ARTIFACT_REF,
++    artifact_kind: str = DEFAULT_ARTIFACT_KIND,
++    text_kind: str = DEFAULT_TEXT_KIND,
++    vector_indexing_job_ref: str = DEFAULT_VECTOR_INDEXING_JOB_REF,
+ ) -> LocalArtifactVectorIndexingPlan:
+     root = root.resolve()
+     artifact_dir = _resolve_repo_path(root, artifact_dir)
+     route_root = _resolve_repo_path(root, route_root)
+     model_dir = model_dir.expanduser()
+-    text = _ensure_prefix(text, "passage: ")
+     artifact_input = artifact_dir / "artifact_input.md"
++    artifact_contract_path = artifact_dir / "artifact_intake_contract.json"
+     artifact_report = artifact_dir / "artifact_vector_indexing_report.md"
+     artifact_json = artifact_dir / "artifact_vector_indexing_report.json"
++    artifact_contract = _build_artifact_intake_contract(
++        root,
++        artifact_ref=artifact_ref,
++        artifact_kind=artifact_kind,
++        artifact_path=artifact_input,
++        text_kind=text_kind,
++        sql_ref=sql_ref,
++        collection=collection,
++        dimension=dimension,
++        route_root=route_root,
++        vector_indexing_job_ref=vector_indexing_job_ref,
++        text=text,
++    )
++    text = artifact_contract.normalized_text()
+     scheduler_tool = root / "tools" / "run_scheduler_vector_indexing_smoke.py"
+     command_args = [
+         sys.executable,
+@@ -263,6 +303,7 @@ def build_local_artifact_vector_indexing_plan(
+         repository_root=root,
+         artifact_dir=artifact_dir,
+         artifact_input=artifact_input,
++        artifact_contract_path=artifact_contract_path,
+         artifact_report=artifact_report,
+         artifact_json=artifact_json,
+         model_dir=model_dir,
+@@ -272,6 +313,7 @@ def build_local_artifact_vector_indexing_plan(
+         sql_ref=sql_ref,
+         route_root=route_root,
+         text=text,
++        artifact_contract=artifact_contract,
+         execute=execute,
+         surfaces=(
+             LocalArtifactSurface(
+@@ -279,6 +321,11 @@ def build_local_artifact_vector_indexing_plan(
+                 path=scheduler_tool,
+                 reason="existing Scheduler/RouteProxy/vector smoke tool from 0143/0144",
+             ),
++            LocalArtifactSurface(
++                key="artifact_intake_contract",
++                path=_artifact_intake_contract_surface_path(root),
++                reason="pure typed artifact intake contract from 0146",
++            ),
+             LocalArtifactSurface(
+                 key="scheduler_route_handler",
+                 path=root / "src" / "runtime" / "scheduler_route_handler_minimal.py",
+@@ -310,7 +357,8 @@ def execute_local_artifact_vector_indexing_plan(plan: LocalArtifactVectorIndexin
+     if not plan.ready:
+         return 2
+     plan.artifact_dir.mkdir(parents=True, exist_ok=True)
+-    plan.artifact_input.write_text(plan.text.rstrip() + "\n", encoding="utf-8")
++    plan.artifact_input.write_text(plan.artifact_contract.normalized_text().rstrip() + "\n", encoding="utf-8")
++    plan.artifact_contract_path.write_text(json.dumps(plan.artifact_contract.to_mapping(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+     command = plan.commands[0]
+     completed = subprocess.run(
+         command.argv,
+@@ -336,6 +384,7 @@ def build_local_artifact_vector_indexing_result(plan: LocalArtifactVectorIndexin
+     facts = _extract_labelled_facts(output)
+     return LocalArtifactVectorIndexingResult(
+         artifact_input=plan.artifact_input,
++        artifact_contract_path=plan.artifact_contract_path,
+         artifact_report=plan.artifact_report,
+         artifact_json=plan.artifact_json,
+         sql_ref=plan.sql_ref,
+@@ -355,6 +404,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+     parser = argparse.ArgumentParser(description="Plan or execute one local artifact through existing Scheduler vector indexing smoke surfaces.")
+     parser.add_argument("repository_root", type=Path)
+     parser.add_argument("--artifact-dir", type=Path, default=Path(DEFAULT_ARTIFACT_DIR))
++    parser.add_argument("--artifact-ref", default=DEFAULT_ARTIFACT_REF)
++    parser.add_argument("--artifact-kind", default=DEFAULT_ARTIFACT_KIND)
++    parser.add_argument("--text-kind", choices=("query", "passage"), default=DEFAULT_TEXT_KIND)
++    parser.add_argument("--vector-indexing-job-ref", default=DEFAULT_VECTOR_INDEXING_JOB_REF)
+     parser.add_argument("--model-dir", type=Path, default=Path(DEFAULT_MODEL_DIR))
+     parser.add_argument("--qdrant-url", default=DEFAULT_QDRANT_URL)
+     parser.add_argument("--collection", default=DEFAULT_COLLECTION)
+@@ -372,6 +425,10 @@ def main(argv: Sequence[str] | None = None) -> int:
+     plan = build_local_artifact_vector_indexing_plan(
+         args.repository_root,
+         artifact_dir=args.artifact_dir,
++        artifact_ref=args.artifact_ref,
++        artifact_kind=args.artifact_kind,
++        text_kind=args.text_kind,
++        vector_indexing_job_ref=args.vector_indexing_job_ref,
+         model_dir=args.model_dir,
+         qdrant_url=args.qdrant_url,
+         collection=args.collection,
+@@ -421,6 +478,22 @@ def _extract_labelled_facts(output: str) -> dict[str, Any]:
+     return facts
+ 
+ 
++def _artifact_intake_contract_surface_path(root: Path) -> Path:
++    candidate = root / "src" / "context" / "artifact_intake_contract.py"
++    if candidate.exists():
++        return candidate
++    return Path(__file__).resolve().parents[1] / "src" / "context" / "artifact_intake_contract.py"
++
++
++def _build_artifact_intake_contract(root: Path, **kwargs: Any) -> Any:
++    src = str(root / "src")
++    if src not in sys.path:
++        sys.path.insert(0, src)
++    from context.artifact_intake_contract import build_artifact_intake_contract
++
++    return build_artifact_intake_contract(**kwargs)
++
++
+ def _resolve_repo_path(root: Path, path: Path) -> Path:
+     if path.is_absolute():
+         return path

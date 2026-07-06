@@ -33,8 +33,14 @@ DEFAULT_DIMENSION = 384
 DEFAULT_SQL_REF = "sql:smoke/vector-indexing/0143"
 DEFAULT_CONTEXT_REF = "sql:smoke/vector-indexing/0143"
 DEFAULT_TEXT = "passage: Scheduler route handler writes a vector indexing request frame; existing local vector smoke executes OpenVINO E5 then Qdrant projection."
+DEFAULT_COMMAND_REF = "scheduler-command:vector-indexing-smoke-0143"
+DEFAULT_VECTOR_INDEXING_JOB_REF = "vector-indexing-job:0143-smoke"
 DEFAULT_ROUTE_REF = "vector-route:smoke/0143/embedding-request"
+DEFAULT_RESULT_COMMAND_REF = "scheduler-command:vector-indexing-smoke-0144-result"
 DEFAULT_RESULT_ROUTE_REF = "vector-route:smoke/0144/indexing-result"
+DEFAULT_RESULT_OWNER_REF = "worker:local-vector-indexing-smoke"
+DEFAULT_ROUTE_NAMESPACE = "autodoc-smoke-0143"
+DEFAULT_RESULT_ROUTE_NAMESPACE = "autodoc-smoke-0144"
 DEFAULT_ROUTE_ROOT = ".var/smoke/routeproxy-0143/routes"
 
 
@@ -191,6 +197,14 @@ class SchedulerVectorIndexingSmokePlan:
     dimension: int
     sql_ref: str
     route_root: Path
+    command_ref: str
+    request_route_ref: str
+    result_command_ref: str
+    result_route_ref: str
+    result_owner_ref: str
+    vector_indexing_job_ref: str
+    route_namespace: str
+    result_route_namespace: str
     execute: bool
     strict_vector_handoff: bool
     text: str
@@ -216,6 +230,13 @@ class SchedulerVectorIndexingSmokePlan:
             f"dimension: `{self.dimension}`",
             f"sql_ref: `{self.sql_ref}`",
             f"route_root: `{self.route_root}`",
+            f"command_ref: `{self.command_ref}`",
+            f"request_route_ref: `{self.request_route_ref}`",
+            f"result_command_ref: `{self.result_command_ref}`",
+            f"result_route_ref: `{self.result_route_ref}`",
+            f"vector_indexing_job_ref: `{self.vector_indexing_job_ref}`",
+            f"route_namespace: `{self.route_namespace}`",
+            f"result_route_namespace: `{self.result_route_namespace}`",
             f"ready_for_scheduler_vector_indexing_smoke: `{str(self.ready).lower()}`",
             f"strict_vector_handoff: `{str(self.strict_vector_handoff).lower()}`",
             f"execute: `{str(self.execute).lower()}`",
@@ -261,6 +282,8 @@ class SchedulerVectorIndexingSmokePlan:
             "- does not modify the Scheduler run loop",
             "- Scheduler writes a request frame; OpenVINO and Qdrant stay behind operator tools and existing adapters",
             "- 0144 writes a vector_indexing_result frame back through the existing RouteProxyRuntime",
+            "- 0147 derives command refs and route refs from artifact/job inputs when provided",
+            "- dynamic refs replace static 0143/0144 smoke refs without changing the Scheduler run loop",
         ])
         return "\n".join(lines) + "\n"
 
@@ -277,6 +300,14 @@ def build_scheduler_vector_indexing_smoke_plan(
     text: str,
     execute: bool,
     strict_vector_handoff: bool,
+    command_ref: str = DEFAULT_COMMAND_REF,
+    request_route_ref: str = DEFAULT_ROUTE_REF,
+    result_command_ref: str = DEFAULT_RESULT_COMMAND_REF,
+    result_route_ref: str = DEFAULT_RESULT_ROUTE_REF,
+    result_owner_ref: str = DEFAULT_RESULT_OWNER_REF,
+    vector_indexing_job_ref: str = DEFAULT_VECTOR_INDEXING_JOB_REF,
+    route_namespace: str = DEFAULT_ROUTE_NAMESPACE,
+    result_route_namespace: str = DEFAULT_RESULT_ROUTE_NAMESPACE,
     context_generation: int = 1,
     priority: int = 900,
 ) -> SchedulerVectorIndexingSmokePlan:
@@ -288,7 +319,7 @@ def build_scheduler_vector_indexing_smoke_plan(
     vector_json = root / ".var" / "smoke" / "e5_vector_0142.json"
     payload = {
         "frame_kind": "vector_embedding_request",
-        "vector_indexing_job_ref": "vector-indexing-job:0143-smoke",
+        "vector_indexing_job_ref": vector_indexing_job_ref,
         "text": text,
         "text_kind": "passage",
         "model_dir": str(model_dir),
@@ -302,8 +333,8 @@ def build_scheduler_vector_indexing_smoke_plan(
         "scheduler_run_modified": False,
     }
     route_frame_preview = SchedulerRouteFramePreview(
-        route_ref=DEFAULT_ROUTE_REF,
-        owner_ref="scheduler-command:vector-indexing-smoke-0143",
+        route_ref=request_route_ref,
+        owner_ref=command_ref,
         context_ref=sql_ref,
         context_generation=context_generation,
         priority=priority,
@@ -336,6 +367,14 @@ def build_scheduler_vector_indexing_smoke_plan(
         dimension=dimension,
         sql_ref=sql_ref,
         route_root=route_root,
+        command_ref=command_ref,
+        request_route_ref=request_route_ref,
+        result_command_ref=result_command_ref,
+        result_route_ref=result_route_ref,
+        result_owner_ref=result_owner_ref,
+        vector_indexing_job_ref=vector_indexing_job_ref,
+        route_namespace=route_namespace,
+        result_route_namespace=result_route_namespace,
         execute=execute,
         strict_vector_handoff=strict_vector_handoff,
         text=text,
@@ -391,12 +430,12 @@ def write_scheduler_vector_indexing_request_frame(plan: SchedulerVectorIndexingS
         route_root=plan.route_root,
         require_dev_shm=False,
         allow_test_root=True,
-        namespace="autodoc-smoke-0143",
+        namespace=plan.route_namespace,
     )
     if plan.route_root.exists():
         shutil.rmtree(plan.route_root)
     command = handler_module.build_single_frame_route_command(
-        command_ref="scheduler-command:vector-indexing-smoke-0143",
+        command_ref=plan.command_ref,
         route_ref=plan.route_frame_preview.route_ref,
         owner_ref=plan.route_frame_preview.owner_ref,
         context_ref=plan.route_frame_preview.context_ref,
@@ -481,7 +520,7 @@ def write_scheduler_vector_indexing_result_frame(
         route_root=plan.route_root,
         require_dev_shm=False,
         allow_test_root=True,
-        namespace="autodoc-smoke-0144",
+        namespace=plan.result_route_namespace,
     )
     payload = {
         "frame_kind": "vector_indexing_result",
@@ -498,9 +537,9 @@ def write_scheduler_vector_indexing_result_frame(
         "scheduler_run_modified": False,
     }
     command = handler_module.build_single_frame_route_command(
-        command_ref="scheduler-command:vector-indexing-smoke-0144-result",
-        route_ref=DEFAULT_RESULT_ROUTE_REF,
-        owner_ref="worker:local-vector-indexing-smoke",
+        command_ref=plan.result_command_ref,
+        route_ref=plan.result_route_ref,
+        owner_ref=plan.result_owner_ref,
         context_ref=plan.sql_ref,
         context_generation=plan.route_frame_preview.context_generation,
         priority=plan.route_frame_preview.priority,
@@ -516,7 +555,7 @@ def write_scheduler_vector_indexing_result_frame(
     return SchedulerVectorIndexingResultFrameSummary(
         command_ref=command.command_ref,
         route_root=plan.route_root,
-        result_route_ref=DEFAULT_RESULT_ROUTE_REF,
+        result_route_ref=plan.result_route_ref,
         result_frame_path=readback.handler_result.frame_paths[0],
         status=str(result_payload.get("status")),
         sql_ref=str(result_payload.get("sql_ref")),
@@ -579,6 +618,14 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--dimension", type=int, default=DEFAULT_DIMENSION)
     parser.add_argument("--sql-ref", default=DEFAULT_SQL_REF)
     parser.add_argument("--route-root", type=Path, default=Path(DEFAULT_ROUTE_ROOT))
+    parser.add_argument("--command-ref", default=DEFAULT_COMMAND_REF)
+    parser.add_argument("--request-route-ref", default=DEFAULT_ROUTE_REF)
+    parser.add_argument("--result-command-ref", default=DEFAULT_RESULT_COMMAND_REF)
+    parser.add_argument("--result-route-ref", default=DEFAULT_RESULT_ROUTE_REF)
+    parser.add_argument("--result-owner-ref", default=DEFAULT_RESULT_OWNER_REF)
+    parser.add_argument("--vector-indexing-job-ref", default=DEFAULT_VECTOR_INDEXING_JOB_REF)
+    parser.add_argument("--route-namespace", default=DEFAULT_ROUTE_NAMESPACE)
+    parser.add_argument("--result-route-namespace", default=DEFAULT_RESULT_ROUTE_NAMESPACE)
     parser.add_argument("--text", default=DEFAULT_TEXT)
     parser.add_argument("--strict-vector-handoff", action="store_true", default=True)
     parser.add_argument("--no-strict-vector-handoff", action="store_false", dest="strict_vector_handoff")
@@ -597,6 +644,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         dimension=args.dimension,
         sql_ref=args.sql_ref,
         route_root=args.route_root,
+        command_ref=args.command_ref,
+        request_route_ref=args.request_route_ref,
+        result_command_ref=args.result_command_ref,
+        result_route_ref=args.result_route_ref,
+        result_owner_ref=args.result_owner_ref,
+        vector_indexing_job_ref=args.vector_indexing_job_ref,
+        route_namespace=args.route_namespace,
+        result_route_namespace=args.result_route_namespace,
         text=args.text,
         execute=args.execute,
         strict_vector_handoff=args.strict_vector_handoff,
@@ -621,6 +676,14 @@ def _plan_to_mapping(plan: SchedulerVectorIndexingSmokePlan) -> dict[str, Any]:
         "dimension": plan.dimension,
         "sql_ref": plan.sql_ref,
         "route_root": str(plan.route_root),
+        "command_ref": plan.command_ref,
+        "request_route_ref": plan.request_route_ref,
+        "result_command_ref": plan.result_command_ref,
+        "result_route_ref": plan.result_route_ref,
+        "result_owner_ref": plan.result_owner_ref,
+        "vector_indexing_job_ref": plan.vector_indexing_job_ref,
+        "route_namespace": plan.route_namespace,
+        "result_route_namespace": plan.result_route_namespace,
         "ready_for_scheduler_vector_indexing_smoke": plan.ready,
         "strict_vector_handoff": plan.strict_vector_handoff,
         "execute": plan.execute,

@@ -1,0 +1,933 @@
+diff --git a/PHASE0147_TEST_REPORT.md b/PHASE0147_TEST_REPORT.md
+new file mode 100644
+index 0000000..bdf6367
+--- /dev/null
++++ b/PHASE0147_TEST_REPORT.md
+@@ -0,0 +1,23 @@
++# PHASE0147_TEST_REPORT
++
++```text
++phase: 0147-dynamic_artifact_route_refs
++code_rule_review: done
++code_rule_update_required: true
++code_rule_reason: artifact runner must derive Scheduler/RouteProxy refs from typed artifact inputs instead of keeping static smoke refs.
++live_path_status: dynamic_refs
++live_path_uses_real_backend: false
++context_contract_version: artifact-route-refs-0147
++context_contract_changed: true
++search_commands_bounded: n/a
++```
++
++Validation performed in patch build:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/tools/test_dynamic_artifact_route_refs_0147.py tests/rules/test_dynamic_artifact_route_refs_0147_rule.py
++# 11 passed
++PYTHONPATH=src:. pytest -q tests/tools/test_artifact_intake_contract_0146.py tests/tools/test_local_artifact_vector_indexing_runner_0145.py tests/tools/test_dynamic_artifact_route_refs_0147.py
++# 14 passed
++```
+diff --git a/doc/CHANGELOG_0147_DYNAMIC_ARTIFACT_ROUTE_REFS.md b/doc/CHANGELOG_0147_DYNAMIC_ARTIFACT_ROUTE_REFS.md
+new file mode 100644
+index 0000000..cb218c2
+--- /dev/null
++++ b/doc/CHANGELOG_0147_DYNAMIC_ARTIFACT_ROUTE_REFS.md
+@@ -0,0 +1,11 @@
++# Changelog 0147 — Dynamic artifact route refs
++
++Added:
++
++- `src/context/artifact_route_refs.py`
++- dynamic command/request/result refs derived from `artifact_ref` and `vector_indexing_job_ref`
++- CLI flags on `tools/run_scheduler_vector_indexing_smoke.py` for request/result refs and namespaces
++- propagation of dynamic refs from the local artifact runner into the existing Scheduler vector smoke tool
++- tests, docs, rule addendum, DOT graph, manifest, and test report
++
++0147 removes static 0143/0144 route refs from the artifact runner path without modifying `Scheduler.run()`.
+diff --git a/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0147.md b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0147.md
+new file mode 100644
+index 0000000..448ecc1
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0147.md
+@@ -0,0 +1,13 @@
++# 0147 operational plan — dynamic artifact route refs
++
++0147 keeps the same operator execution chain but changes the identity model:
++
++```text
++artifact_intake_contract
++-> artifact_route_refs
++-> existing Scheduler vector smoke
++-> existing RouteProxyRuntime request/result frames
++-> existing OpenVINO/Qdrant strict vector chain
++```
++
++The RouteProxy frame path now becomes artifact/job-specific instead of smoke-phase-specific. Scheduler remains the orchestrator and RouteProxy remains frame IO/data-plane.
+diff --git a/doc/architecture/DYNAMIC_ARTIFACT_ROUTE_REFS_0147.md b/doc/architecture/DYNAMIC_ARTIFACT_ROUTE_REFS_0147.md
+new file mode 100644
+index 0000000..7c1973e
+--- /dev/null
++++ b/doc/architecture/DYNAMIC_ARTIFACT_ROUTE_REFS_0147.md
+@@ -0,0 +1,46 @@
++# 0147 — Dynamic artifact route refs
++
++0147 derives Scheduler command refs, RouteProxy request refs, result refs, and route namespaces from the typed artifact intake contract introduced in 0146.
++
++The pure helper lives in:
++
++```text
++src/context/artifact_route_refs.py
++```
++
++It derives refs from:
++
++```text
++artifact_ref
++vector_indexing_job_ref
++```
++
++Example:
++
++```text
++artifact_ref: artifact:local/0147/demo
++vector_indexing_job_ref: vector-indexing-job:artifact/0147-demo
++```
++
++becomes:
++
++```text
++scheduler-command:artifact/local-0147-demo/job/artifact-0147-demo/embedding-request
++vector-route:artifact/local-0147-demo/job/artifact-0147-demo/embedding-request
++scheduler-command:artifact/local-0147-demo/job/artifact-0147-demo/indexing-result
++vector-route:artifact/local-0147-demo/job/artifact-0147-demo/indexing-result
++```
++
++## Boundary
++
++- `artifact_route_refs.py` is pure and performs no IO.
++- It does not import Scheduler, RouteProxyRuntime, OpenVINO, Qdrant, or SQL clients.
++- `tools/run_local_artifact_vector_indexing_runner.py` passes the derived refs to the existing Scheduler smoke tool.
++- `tools/run_scheduler_vector_indexing_smoke.py` accepts explicit refs and namespaces but still does not modify `Scheduler.run()`.
++- OpenVINO and Qdrant stay behind the already-existing operator tools and adapters.
++- SQLContextStore remains durable authority.
++- Qdrant remains projection/recall only.
++
++## Why
++
++0145/0146 proved the artifact path, but live logs still showed inherited refs such as `vector-route:smoke/0143/embedding-request` and `vector-route:smoke/0144/indexing-result`. 0147 removes those static smoke refs from the artifact path and makes each artifact/job traceable by its own refs.
+diff --git a/doc/code-rules/0147_dynamic_artifact_route_refs_rule.md b/doc/code-rules/0147_dynamic_artifact_route_refs_rule.md
+new file mode 100644
+index 0000000..15da35d
+--- /dev/null
++++ b/doc/code-rules/0147_dynamic_artifact_route_refs_rule.md
+@@ -0,0 +1,17 @@
++# 0147 code rule — dynamic artifact route refs
++
++Artifact vector indexing must derive command refs and RouteProxy route refs from typed artifact inputs instead of static smoke refs.
++
++Rules:
++
++- derive artifact route refs through src/context/artifact_route_refs.py
++- src/context/artifact_route_refs.py must remain pure
++- do not import Scheduler, RouteProxyRuntime, OpenVINO, Qdrant, or SQL clients from the route-ref contract
++- artifact runner must pass --command-ref, --request-route-ref, --result-command-ref, --result-route-ref, --vector-indexing-job-ref, --route-namespace, and --result-route-namespace to the existing Scheduler smoke tool
++- do not create LocalArtifactOrchestrator
++- do not create LocalVectorIndexingOrchestrator
++- do not create SchedulerOpenVINORunner
++- do not modify Scheduler.run()
++- Scheduler remains the orchestrator
++- SQLContextStore remains durable authority
++- Qdrant remains projection/recall only
+diff --git a/doc/docs/architecture/runtime/147_dynamic_artifact_route_refs.dot b/doc/docs/architecture/runtime/147_dynamic_artifact_route_refs.dot
+new file mode 100644
+index 0000000..77268be
+--- /dev/null
++++ b/doc/docs/architecture/runtime/147_dynamic_artifact_route_refs.dot
+@@ -0,0 +1,15 @@
++digraph dynamic_artifact_route_refs_0147 {
++  rankdir=LR;
++  contract [label="ArtifactIntakeContract\n0146"];
++  refs [label="ArtifactRouteRefs\n0147 pure refs"];
++  runner [label="local artifact runner"];
++  scheduler_smoke [label="existing scheduler vector smoke"];
++  routeproxy [label="RouteProxyRuntime\nrequest/result frames"];
++  vector [label="OpenVINO E5 + Qdrant"];
++
++  contract -> refs;
++  refs -> runner;
++  runner -> scheduler_smoke;
++  scheduler_smoke -> routeproxy;
++  scheduler_smoke -> vector;
++}
+diff --git a/doc/manifests/MANIFEST_0147_CHANGED_FILES.md b/doc/manifests/MANIFEST_0147_CHANGED_FILES.md
+new file mode 100644
+index 0000000..05f8c91
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0147_CHANGED_FILES.md
+@@ -0,0 +1,19 @@
++# Manifest 0147 — changed files
++
++```text
++PHASE0147_TEST_REPORT.md
++doc/CHANGELOG_0147_DYNAMIC_ARTIFACT_ROUTE_REFS.md
++doc/architecture/DYNAMIC_ARTIFACT_ROUTE_REFS_0147.md
++doc/architecture/CONTROLPROXY_OPERATIONAL_PLAN_0147.md
++doc/code-rules/0147_dynamic_artifact_route_refs_rule.md
++doc/docs/architecture/runtime/147_dynamic_artifact_route_refs.dot
++doc/manifests/MANIFEST_0147_CHANGED_FILES.md
++src/context/artifact_route_refs.py
++tests/tools/test_dynamic_artifact_route_refs_0147.py
++tests/rules/test_dynamic_artifact_route_refs_0147_rule.py
++tools/run_local_artifact_vector_indexing_runner.py
++tools/run_scheduler_vector_indexing_smoke.py
++```
++
++No Scheduler loop, RouteProxy runtime, OpenVINO adapter, or Qdrant adapter is modified by 0147.
++```
+diff --git a/src/context/artifact_route_refs.py b/src/context/artifact_route_refs.py
+new file mode 100644
+index 0000000..c007c60
+--- /dev/null
++++ b/src/context/artifact_route_refs.py
+@@ -0,0 +1,97 @@
++"""Pure dynamic route refs for local artifact vector indexing.
++
++0147 derives Scheduler/RouteProxy refs from the 0146 artifact intake contract
++instead of keeping static smoke refs from phases 0143/0144.  This module is a
++pure contract helper: it does not import Scheduler, RouteProxy, OpenVINO,
++Qdrant, or SQL clients and it performs no IO.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++import re
++from typing import Any, Mapping
++
++
++@dataclass(frozen=True, slots=True)
++class ArtifactRouteRefs:
++    """Dynamic refs derived from artifact and vector indexing job refs."""
++
++    artifact_ref: str
++    vector_indexing_job_ref: str
++    artifact_slug: str
++    job_slug: str
++    command_ref: str
++    request_route_ref: str
++    result_command_ref: str
++    result_route_ref: str
++    result_owner_ref: str
++    route_namespace: str
++    result_route_namespace: str
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "artifact_ref": self.artifact_ref,
++            "vector_indexing_job_ref": self.vector_indexing_job_ref,
++            "artifact_slug": self.artifact_slug,
++            "job_slug": self.job_slug,
++            "command_ref": self.command_ref,
++            "request_route_ref": self.request_route_ref,
++            "result_command_ref": self.result_command_ref,
++            "result_route_ref": self.result_route_ref,
++            "result_owner_ref": self.result_owner_ref,
++            "route_namespace": self.route_namespace,
++            "result_route_namespace": self.result_route_namespace,
++            "boundary": "pure artifact route refs; Scheduler/RouteProxy/OpenVINO/Qdrant stay outside",
++        }
++
++    @classmethod
++    def from_mapping(cls, data: Mapping[str, Any]) -> "ArtifactRouteRefs":
++        return build_artifact_route_refs(
++            artifact_ref=str(data["artifact_ref"]),
++            vector_indexing_job_ref=str(data["vector_indexing_job_ref"]),
++        )
++
++
++def build_artifact_route_refs(*, artifact_ref: str, vector_indexing_job_ref: str) -> ArtifactRouteRefs:
++    """Derive dynamic request/result refs from typed artifact fields."""
++
++    artifact_ref = _require_prefix("artifact_ref", artifact_ref.strip(), "artifact:")
++    vector_indexing_job_ref = _require_prefix(
++        "vector_indexing_job_ref",
++        vector_indexing_job_ref.strip(),
++        "vector-indexing-job:",
++    )
++    artifact_slug = _slug_from_ref(artifact_ref, prefix="artifact:")
++    job_slug = _slug_from_ref(vector_indexing_job_ref, prefix="vector-indexing-job:")
++    route_stem = f"artifact/{artifact_slug}/job/{job_slug}"
++    namespace_stem = f"artifact-{artifact_slug}-job-{job_slug}"
++    return ArtifactRouteRefs(
++        artifact_ref=artifact_ref,
++        vector_indexing_job_ref=vector_indexing_job_ref,
++        artifact_slug=artifact_slug,
++        job_slug=job_slug,
++        command_ref=f"scheduler-command:{route_stem}/embedding-request",
++        request_route_ref=f"vector-route:{route_stem}/embedding-request",
++        result_command_ref=f"scheduler-command:{route_stem}/indexing-result",
++        result_route_ref=f"vector-route:{route_stem}/indexing-result",
++        result_owner_ref=f"worker:local-vector-indexing-smoke/{route_stem}",
++        route_namespace=f"autodoc-{namespace_stem}-request",
++        result_route_namespace=f"autodoc-{namespace_stem}-result",
++    )
++
++
++def _slug_from_ref(value: str, *, prefix: str) -> str:
++    value = value[len(prefix):]
++    slug = re.sub(r"[^A-Za-z0-9]+", "-", value).strip("-").lower()
++    if not slug:
++        raise ValueError("ref slug must be non-empty")
++    return slug[:96]
++
++
++def _require_prefix(field: str, value: str, prefix: str) -> str:
++    if not value:
++        raise ValueError(f"{field} must be non-empty")
++    if not value.startswith(prefix):
++        raise ValueError(f"{field} must start with {prefix!r}")
++    return value
+diff --git a/tests/rules/test_dynamic_artifact_route_refs_0147_rule.py b/tests/rules/test_dynamic_artifact_route_refs_0147_rule.py
+new file mode 100644
+index 0000000..8f5d30d
+--- /dev/null
++++ b/tests/rules/test_dynamic_artifact_route_refs_0147_rule.py
+@@ -0,0 +1,114 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++REFS = ROOT / "src" / "context" / "artifact_route_refs.py"
++SCHEDULER_TOOL = ROOT / "tools" / "run_scheduler_vector_indexing_smoke.py"
++ARTIFACT_TOOL = ROOT / "tools" / "run_local_artifact_vector_indexing_runner.py"
++DOC = ROOT / "doc" / "architecture" / "DYNAMIC_ARTIFACT_ROUTE_REFS_0147.md"
++RULE = ROOT / "doc" / "code-rules" / "0147_dynamic_artifact_route_refs_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0147_CHANGED_FILES.md"
++
++
++def test_0147_route_ref_contract_is_pure() -> None:
++    text = REFS.read_text(encoding="utf-8")
++    required = [
++        "class ArtifactRouteRefs",
++        "build_artifact_route_refs",
++        "artifact_ref",
++        "vector_indexing_job_ref",
++        "request_route_ref",
++        "result_route_ref",
++        "route_namespace",
++        "pure artifact route refs",
++    ]
++    for phrase in required:
++        assert phrase in text
++    forbidden = [
++        "qdrant_client",
++        "openvino.runtime",
++        "RouteProxyRuntime",
++        "SchedulerRouteHandlerCommand",
++        "SQLContextStore(",
++        "subprocess.run",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++
++
++def test_0147_scheduler_tool_accepts_dynamic_refs_without_new_runner() -> None:
++    text = SCHEDULER_TOOL.read_text(encoding="utf-8")
++    required = [
++        "--command-ref",
++        "--request-route-ref",
++        "--result-command-ref",
++        "--result-route-ref",
++        "--vector-indexing-job-ref",
++        "--route-namespace",
++        "--result-route-namespace",
++        "dynamic refs replace static 0143/0144 smoke refs",
++    ]
++    for phrase in required:
++        assert phrase in text
++    forbidden = [
++        "class SchedulerOpenVINORunner",
++        "class LocalVectorIndexingOrchestrator",
++        "def run_scheduler_loop",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
++
++
++def test_0147_artifact_runner_derives_refs_from_contract() -> None:
++    text = ARTIFACT_TOOL.read_text(encoding="utf-8")
++    required = [
++        "src/context/artifact_route_refs.py",
++        "_build_artifact_route_refs",
++        "artifact_route_refs.command_ref",
++        "artifact_route_refs.request_route_ref",
++        "artifact_route_refs.result_route_ref",
++        "artifact_route_refs.vector_indexing_job_ref",
++        "does not forward static 0143/0144 smoke refs",
++    ]
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0147_docs_and_rule_lock_boundaries() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    rule = RULE.read_text(encoding="utf-8")
++    for phrase in [
++        "0147 derives Scheduler command refs",
++        "src/context/artifact_route_refs.py",
++        "vector-route:artifact/local-0147-demo/job/artifact-0147-demo/embedding-request",
++        "does not modify `Scheduler.run()`",
++    ]:
++        assert phrase in doc
++    for phrase in [
++        "derive command refs and RouteProxy route refs from typed artifact inputs",
++        "do not create LocalArtifactOrchestrator",
++        "do not modify Scheduler.run()",
++        "SQLContextStore remains durable authority",
++    ]:
++        assert phrase in rule
++
++
++def test_0147_manifest_changed_files_are_limited() -> None:
++    text = MANIFEST.read_text(encoding="utf-8")
++    required = [
++        "src/context/artifact_route_refs.py",
++        "tools/run_local_artifact_vector_indexing_runner.py",
++        "tools/run_scheduler_vector_indexing_smoke.py",
++        "tests/tools/test_dynamic_artifact_route_refs_0147.py",
++    ]
++    for phrase in required:
++        assert phrase in text
++    forbidden = [
++        "src/kernel/scheduler.py",
++        "src/runtime/route_proxy_runtime_minimal.py",
++        "src/inference/openvino_embedding_adapter.py",
++        "src/inference/qdrant_projection_adapter.py",
++    ]
++    for phrase in forbidden:
++        assert phrase not in text
+diff --git a/tests/tools/test_dynamic_artifact_route_refs_0147.py b/tests/tools/test_dynamic_artifact_route_refs_0147.py
+new file mode 100644
+index 0000000..9ebeef5
+--- /dev/null
++++ b/tests/tools/test_dynamic_artifact_route_refs_0147.py
+@@ -0,0 +1,157 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++import pytest
++
++from context.artifact_route_refs import ArtifactRouteRefs, build_artifact_route_refs
++from tools.run_local_artifact_vector_indexing_runner import build_local_artifact_vector_indexing_plan, main as artifact_main
++from tools.run_scheduler_vector_indexing_smoke import build_scheduler_vector_indexing_smoke_plan, main as scheduler_main
++
++
++def _make_repo(tmp_path: Path) -> Path:
++    root = tmp_path / "repo"
++    for path in [
++        "tools/run_scheduler_vector_indexing_smoke.py",
++        "tools/run_local_vector_indexing_live_smoke.py",
++        "src/runtime/scheduler_route_handler_minimal.py",
++        "src/runtime/route_proxy_runtime_minimal.py",
++        "src/context/sql_context_store.py",
++        "src/context/vector_indexing_job_plan.py",
++        "src/inference/openvino_embedding_adapter.py",
++        "src/inference/qdrant_projection_adapter.py",
++    ]:
++        full = root / path
++        full.parent.mkdir(parents=True, exist_ok=True)
++        full.write_text("# stub\n", encoding="utf-8")
++    return root
++
++
++def test_0147_artifact_route_refs_are_dynamic_and_pure() -> None:
++    refs = build_artifact_route_refs(
++        artifact_ref="artifact:local/0147/demo",
++        vector_indexing_job_ref="vector-indexing-job:artifact/0147-demo",
++    )
++
++    assert isinstance(refs, ArtifactRouteRefs)
++    assert refs.artifact_slug == "local-0147-demo"
++    assert refs.job_slug == "artifact-0147-demo"
++    assert refs.command_ref == "scheduler-command:artifact/local-0147-demo/job/artifact-0147-demo/embedding-request"
++    assert refs.request_route_ref == "vector-route:artifact/local-0147-demo/job/artifact-0147-demo/embedding-request"
++    assert refs.result_command_ref.endswith("/indexing-result")
++    assert refs.result_route_ref == "vector-route:artifact/local-0147-demo/job/artifact-0147-demo/indexing-result"
++    assert refs.route_namespace.startswith("autodoc-artifact-local-0147-demo-job-artifact-0147-demo")
++    assert ArtifactRouteRefs.from_mapping(refs.to_mapping()).request_route_ref == refs.request_route_ref
++
++
++def test_0147_artifact_route_refs_reject_bad_inputs() -> None:
++    with pytest.raises(ValueError, match="artifact_ref"):
++        build_artifact_route_refs(
++            artifact_ref="local/0147/demo",
++            vector_indexing_job_ref="vector-indexing-job:artifact/0147-demo",
++        )
++    with pytest.raises(ValueError, match="vector_indexing_job_ref"):
++        build_artifact_route_refs(
++            artifact_ref="artifact:local/0147/demo",
++            vector_indexing_job_ref="artifact/0147-demo",
++        )
++
++
++def test_0147_scheduler_smoke_accepts_dynamic_refs(tmp_path: Path) -> None:
++    root = _make_repo(tmp_path)
++    plan = build_scheduler_vector_indexing_smoke_plan(
++        root,
++        model_dir=Path("/model/e5"),
++        qdrant_url="http://127.0.0.1:6333",
++        collection="autodoc_smoke_e5_384",
++        dimension=384,
++        sql_ref="sql:artifact/vector-indexing/0147",
++        route_root=Path(".var/smoke/routeproxy-0147/routes"),
++        command_ref="scheduler-command:artifact/local-0147-demo/job/artifact-0147-demo/embedding-request",
++        request_route_ref="vector-route:artifact/local-0147-demo/job/artifact-0147-demo/embedding-request",
++        result_command_ref="scheduler-command:artifact/local-0147-demo/job/artifact-0147-demo/indexing-result",
++        result_route_ref="vector-route:artifact/local-0147-demo/job/artifact-0147-demo/indexing-result",
++        result_owner_ref="worker:local-vector-indexing-smoke/artifact/local-0147-demo/job/artifact-0147-demo",
++        vector_indexing_job_ref="vector-indexing-job:artifact/0147-demo",
++        route_namespace="autodoc-artifact-local-0147-demo-request",
++        result_route_namespace="autodoc-artifact-local-0147-demo-result",
++        text="passage: dynamic refs",
++        execute=False,
++        strict_vector_handoff=True,
++    )
++
++    assert plan.ready is True
++    assert plan.route_frame_preview.route_ref == "vector-route:artifact/local-0147-demo/job/artifact-0147-demo/embedding-request"
++    assert plan.route_frame_preview.owner_ref == "scheduler-command:artifact/local-0147-demo/job/artifact-0147-demo/embedding-request"
++    assert plan.route_frame_preview.payload["vector_indexing_job_ref"] == "vector-indexing-job:artifact/0147-demo"
++    mapping = plan.route_frame_preview.to_mapping()
++    assert "0143-smoke" not in json.dumps(mapping)
++    markdown = plan.to_markdown()
++    assert "request_route_ref: `vector-route:artifact/local-0147-demo/job/artifact-0147-demo/embedding-request`" in markdown
++    assert "dynamic refs replace static 0143/0144 smoke refs" in markdown
++
++
++def test_0147_artifact_runner_passes_dynamic_refs_to_existing_scheduler_tool(tmp_path: Path) -> None:
++    root = _make_repo(tmp_path)
++    plan = build_local_artifact_vector_indexing_plan(
++        root,
++        artifact_dir=Path(".var/smoke/artifacts/0147"),
++        artifact_ref="artifact:local/0147/demo",
++        artifact_kind="local_markdown",
++        text_kind="passage",
++        vector_indexing_job_ref="vector-indexing-job:artifact/0147-demo",
++        model_dir=Path("/model/e5"),
++        qdrant_url="http://127.0.0.1:6333",
++        collection="autodoc_smoke_e5_384",
++        dimension=384,
++        sql_ref="sql:artifact/vector-indexing/0147",
++        route_root=Path(".var/smoke/routeproxy-0147/routes"),
++        text="passage: dynamic artifact runner",
++        execute=False,
++    )
++
++    command = plan.commands[0].shell_preview()
++    assert plan.ready is True
++    assert plan.artifact_route_refs.request_route_ref == "vector-route:artifact/local-0147-demo/job/artifact-0147-demo/embedding-request"
++    assert "--request-route-ref vector-route:artifact/local-0147-demo/job/artifact-0147-demo/embedding-request" in command
++    assert "--result-route-ref vector-route:artifact/local-0147-demo/job/artifact-0147-demo/indexing-result" in command
++    assert "--vector-indexing-job-ref vector-indexing-job:artifact/0147-demo" in command
++    assert "vector-route:smoke/0143/embedding-request" not in command
++    assert "vector-route:smoke/0144/indexing-result" not in command
++    assert "## Dynamic route refs" in plan.to_markdown()
++
++
++def test_0147_scheduler_json_cli_reports_dynamic_refs(tmp_path: Path, capsys) -> None:
++    root = _make_repo(tmp_path)
++    rc = scheduler_main([
++        str(root),
++        "--command-ref", "scheduler-command:artifact/local-0147-json/job/artifact-0147-json/embedding-request",
++        "--request-route-ref", "vector-route:artifact/local-0147-json/job/artifact-0147-json/embedding-request",
++        "--result-command-ref", "scheduler-command:artifact/local-0147-json/job/artifact-0147-json/indexing-result",
++        "--result-route-ref", "vector-route:artifact/local-0147-json/job/artifact-0147-json/indexing-result",
++        "--result-owner-ref", "worker:local-vector-indexing-smoke/artifact/local-0147-json/job/artifact-0147-json",
++        "--vector-indexing-job-ref", "vector-indexing-job:artifact/0147-json",
++        "--route-namespace", "autodoc-artifact-local-0147-json-request",
++        "--result-route-namespace", "autodoc-artifact-local-0147-json-result",
++        "--format", "json",
++    ])
++    assert rc == 0
++    data = json.loads(capsys.readouterr().out)
++    assert data["request_route_ref"] == "vector-route:artifact/local-0147-json/job/artifact-0147-json/embedding-request"
++    assert data["route_frame_preview"]["payload"]["vector_indexing_job_ref"] == "vector-indexing-job:artifact/0147-json"
++
++
++def test_0147_artifact_json_cli_reports_route_refs(tmp_path: Path, capsys) -> None:
++    root = _make_repo(tmp_path)
++    rc = artifact_main([
++        str(root),
++        "--artifact-ref", "artifact:local/0147/json",
++        "--vector-indexing-job-ref", "vector-indexing-job:artifact/0147-json",
++        "--format", "json",
++    ])
++    assert rc == 0
++    data = json.loads(capsys.readouterr().out)
++    refs = data["artifact_route_refs"]
++    assert refs["request_route_ref"] == "vector-route:artifact/local-0147-json/job/artifact-0147-json/embedding-request"
++    assert refs["result_route_ref"] == "vector-route:artifact/local-0147-json/job/artifact-0147-json/indexing-result"
+diff --git a/tools/run_local_artifact_vector_indexing_runner.py b/tools/run_local_artifact_vector_indexing_runner.py
+index 0ed5b7c..2a5b722 100755
+--- a/tools/run_local_artifact_vector_indexing_runner.py
++++ b/tools/run_local_artifact_vector_indexing_runner.py
+@@ -3,12 +3,14 @@
+ 
+ 0145 turned the validated Scheduler/RouteProxy/vector smoke into a small local
+ artifact runner.  0146 adds a pure artifact intake contract in
+-src/context/artifact_intake_contract.py.  The runner remains an operator
++src/context/artifact_intake_contract.py. 0147 derives dynamic route refs from that
++contract instead of forwarding static 0143/0144 smoke refs.  The runner remains an operator
+ surface: it does not create a new orchestrator, daemon, Scheduler loop,
+ OpenVINO adapter, or Qdrant adapter.
+ 
+ Literal reuse surface: tools/run_local_vector_indexing_live_smoke.py.
+ Literal contract surface: src/context/artifact_intake_contract.py.
++Literal route ref surface: src/context/artifact_route_refs.py.
+ """
+ 
+ from __future__ import annotations
+@@ -26,14 +28,14 @@ DEFAULT_MODEL_DIR = "/home/eric/model/openvino/multilingual-e5-small"
+ DEFAULT_QDRANT_URL = "http://127.0.0.1:6333"
+ DEFAULT_COLLECTION = "autodoc_smoke_e5_384"
+ DEFAULT_DIMENSION = 384
+-DEFAULT_SQL_REF = "sql:artifact/vector-indexing/0146"
+-DEFAULT_ARTIFACT_REF = "artifact:local/0146/smoke"
++DEFAULT_SQL_REF = "sql:artifact/vector-indexing/0147"
++DEFAULT_ARTIFACT_REF = "artifact:local/0147/smoke"
+ DEFAULT_ARTIFACT_KIND = "local_markdown"
+ DEFAULT_TEXT_KIND = "passage"
+-DEFAULT_VECTOR_INDEXING_JOB_REF = "vector-indexing-job:artifact/0146-smoke"
+-DEFAULT_ARTIFACT_TEXT = "passage: Local artifact intake contract sends one artifact through the existing Scheduler route smoke, OpenVINO E5 full-vector handoff, and Qdrant projection."
+-DEFAULT_ARTIFACT_DIR = ".var/smoke/artifacts/0146"
+-DEFAULT_ROUTE_ROOT = ".var/smoke/routeproxy-0146/routes"
++DEFAULT_VECTOR_INDEXING_JOB_REF = "vector-indexing-job:artifact/0147-smoke"
++DEFAULT_ARTIFACT_TEXT = "passage: Local artifact dynamic route refs send one artifact through the existing Scheduler route smoke, OpenVINO E5 full-vector handoff, and Qdrant projection."
++DEFAULT_ARTIFACT_DIR = ".var/smoke/artifacts/0147"
++DEFAULT_ROUTE_ROOT = ".var/smoke/routeproxy-0147/routes"
+ 
+ 
+ @dataclass(frozen=True, slots=True)
+@@ -76,6 +78,7 @@ class LocalArtifactVectorIndexingPlan:
+     route_root: Path
+     text: str
+     artifact_contract: Any
++    artifact_route_refs: Any
+     execute: bool
+     surfaces: tuple[LocalArtifactSurface, ...]
+     commands: tuple[LocalArtifactCommand, ...]
+@@ -91,6 +94,7 @@ class LocalArtifactVectorIndexingPlan:
+             "artifact_input": str(self.artifact_input),
+             "artifact_contract_path": str(self.artifact_contract_path),
+             "artifact_contract": self.artifact_contract.to_mapping(),
++            "artifact_route_refs": self.artifact_route_refs.to_mapping(),
+             "artifact_report": str(self.artifact_report),
+             "artifact_json": str(self.artifact_json),
+             "model_dir": str(self.model_dir),
+@@ -134,6 +138,15 @@ class LocalArtifactVectorIndexingPlan:
+             f"text_kind: `{self.artifact_contract.text_kind}`",
+             f"vector_indexing_job_ref: `{self.artifact_contract.vector_indexing_job_ref}`",
+             "",
++            "## Dynamic route refs",
++            "",
++            f"command_ref: `{self.artifact_route_refs.command_ref}`",
++            f"request_route_ref: `{self.artifact_route_refs.request_route_ref}`",
++            f"result_command_ref: `{self.artifact_route_refs.result_command_ref}`",
++            f"result_route_ref: `{self.artifact_route_refs.result_route_ref}`",
++            f"route_namespace: `{self.artifact_route_refs.route_namespace}`",
++            f"result_route_namespace: `{self.artifact_route_refs.result_route_namespace}`",
++            "",
+             "## Existing surfaces",
+             "",
+             "| key | status | path | reason |",
+@@ -167,8 +180,10 @@ class LocalArtifactVectorIndexingPlan:
+             "- reuses src/runtime/scheduler_route_handler_minimal.py and src/runtime/route_proxy_runtime_minimal.py indirectly",
+             "- reuses tools/embed_e5.py --format json --full-vector through the existing smoke chain",
+             "- reuses tools/run_qdrant_projection_live_smoke.py --vector-json through the existing smoke chain",
+-            "- writes local artifact input/contract/report files only under .var/smoke/artifacts/0146 by default",
++            "- writes local artifact input/contract/report files only under .var/smoke/artifacts/0147 by default",
+             "- reuses src/context/artifact_intake_contract.py as a pure typed intake contract",
++            "- reuses src/context/artifact_route_refs.py to derive dynamic command and route refs",
++            "- does not forward static 0143/0144 smoke refs when artifact route refs are available",
+             "- does not create LocalArtifactOrchestrator",
+             "- does not create LocalVectorIndexingOrchestrator",
+             "- does not create SchedulerOpenVINORunner",
+@@ -278,6 +293,11 @@ def build_local_artifact_vector_indexing_plan(
+         text=text,
+     )
+     text = artifact_contract.normalized_text()
++    artifact_route_refs = _build_artifact_route_refs(
++        root,
++        artifact_ref=artifact_contract.artifact_ref,
++        vector_indexing_job_ref=artifact_contract.vector_indexing_job_ref,
++    )
+     scheduler_tool = root / "tools" / "run_scheduler_vector_indexing_smoke.py"
+     command_args = [
+         sys.executable,
+@@ -295,6 +315,22 @@ def build_local_artifact_vector_indexing_plan(
+         sql_ref,
+         "--route-root",
+         str(route_root),
++        "--command-ref",
++        artifact_route_refs.command_ref,
++        "--request-route-ref",
++        artifact_route_refs.request_route_ref,
++        "--result-command-ref",
++        artifact_route_refs.result_command_ref,
++        "--result-route-ref",
++        artifact_route_refs.result_route_ref,
++        "--result-owner-ref",
++        artifact_route_refs.result_owner_ref,
++        "--vector-indexing-job-ref",
++        artifact_route_refs.vector_indexing_job_ref,
++        "--route-namespace",
++        artifact_route_refs.route_namespace,
++        "--result-route-namespace",
++        artifact_route_refs.result_route_namespace,
+         "--text",
+         text,
+         "--execute",
+@@ -314,6 +350,7 @@ def build_local_artifact_vector_indexing_plan(
+         route_root=route_root,
+         text=text,
+         artifact_contract=artifact_contract,
++        artifact_route_refs=artifact_route_refs,
+         execute=execute,
+         surfaces=(
+             LocalArtifactSurface(
+@@ -326,6 +363,11 @@ def build_local_artifact_vector_indexing_plan(
+                 path=_artifact_intake_contract_surface_path(root),
+                 reason="pure typed artifact intake contract from 0146",
+             ),
++            LocalArtifactSurface(
++                key="artifact_route_refs",
++                path=_artifact_route_refs_surface_path(root),
++                reason="pure dynamic route refs from 0147",
++            ),
+             LocalArtifactSurface(
+                 key="scheduler_route_handler",
+                 path=root / "src" / "runtime" / "scheduler_route_handler_minimal.py",
+@@ -485,6 +527,22 @@ def _artifact_intake_contract_surface_path(root: Path) -> Path:
+     return Path(__file__).resolve().parents[1] / "src" / "context" / "artifact_intake_contract.py"
+ 
+ 
++def _artifact_route_refs_surface_path(root: Path) -> Path:
++    candidate = root / "src" / "context" / "artifact_route_refs.py"
++    if candidate.exists():
++        return candidate
++    return Path(__file__).resolve().parents[1] / "src" / "context" / "artifact_route_refs.py"
++
++
++def _build_artifact_route_refs(root: Path, **kwargs: Any) -> Any:
++    src = str(root / "src")
++    if src not in sys.path:
++        sys.path.insert(0, src)
++    from context.artifact_route_refs import build_artifact_route_refs
++
++    return build_artifact_route_refs(**kwargs)
++
++
+ def _build_artifact_intake_contract(root: Path, **kwargs: Any) -> Any:
+     src = str(root / "src")
+     if src not in sys.path:
+diff --git a/tools/run_scheduler_vector_indexing_smoke.py b/tools/run_scheduler_vector_indexing_smoke.py
+index 353f3e0..fb9d464 100755
+--- a/tools/run_scheduler_vector_indexing_smoke.py
++++ b/tools/run_scheduler_vector_indexing_smoke.py
+@@ -33,8 +33,14 @@ DEFAULT_DIMENSION = 384
+ DEFAULT_SQL_REF = "sql:smoke/vector-indexing/0143"
+ DEFAULT_CONTEXT_REF = "sql:smoke/vector-indexing/0143"
+ DEFAULT_TEXT = "passage: Scheduler route handler writes a vector indexing request frame; existing local vector smoke executes OpenVINO E5 then Qdrant projection."
++DEFAULT_COMMAND_REF = "scheduler-command:vector-indexing-smoke-0143"
++DEFAULT_VECTOR_INDEXING_JOB_REF = "vector-indexing-job:0143-smoke"
+ DEFAULT_ROUTE_REF = "vector-route:smoke/0143/embedding-request"
++DEFAULT_RESULT_COMMAND_REF = "scheduler-command:vector-indexing-smoke-0144-result"
+ DEFAULT_RESULT_ROUTE_REF = "vector-route:smoke/0144/indexing-result"
++DEFAULT_RESULT_OWNER_REF = "worker:local-vector-indexing-smoke"
++DEFAULT_ROUTE_NAMESPACE = "autodoc-smoke-0143"
++DEFAULT_RESULT_ROUTE_NAMESPACE = "autodoc-smoke-0144"
+ DEFAULT_ROUTE_ROOT = ".var/smoke/routeproxy-0143/routes"
+ 
+ 
+@@ -191,6 +197,14 @@ class SchedulerVectorIndexingSmokePlan:
+     dimension: int
+     sql_ref: str
+     route_root: Path
++    command_ref: str
++    request_route_ref: str
++    result_command_ref: str
++    result_route_ref: str
++    result_owner_ref: str
++    vector_indexing_job_ref: str
++    route_namespace: str
++    result_route_namespace: str
+     execute: bool
+     strict_vector_handoff: bool
+     text: str
+@@ -216,6 +230,13 @@ class SchedulerVectorIndexingSmokePlan:
+             f"dimension: `{self.dimension}`",
+             f"sql_ref: `{self.sql_ref}`",
+             f"route_root: `{self.route_root}`",
++            f"command_ref: `{self.command_ref}`",
++            f"request_route_ref: `{self.request_route_ref}`",
++            f"result_command_ref: `{self.result_command_ref}`",
++            f"result_route_ref: `{self.result_route_ref}`",
++            f"vector_indexing_job_ref: `{self.vector_indexing_job_ref}`",
++            f"route_namespace: `{self.route_namespace}`",
++            f"result_route_namespace: `{self.result_route_namespace}`",
+             f"ready_for_scheduler_vector_indexing_smoke: `{str(self.ready).lower()}`",
+             f"strict_vector_handoff: `{str(self.strict_vector_handoff).lower()}`",
+             f"execute: `{str(self.execute).lower()}`",
+@@ -261,6 +282,8 @@ class SchedulerVectorIndexingSmokePlan:
+             "- does not modify the Scheduler run loop",
+             "- Scheduler writes a request frame; OpenVINO and Qdrant stay behind operator tools and existing adapters",
+             "- 0144 writes a vector_indexing_result frame back through the existing RouteProxyRuntime",
++            "- 0147 derives command refs and route refs from artifact/job inputs when provided",
++            "- dynamic refs replace static 0143/0144 smoke refs without changing Scheduler.run()",
+         ])
+         return "\n".join(lines) + "\n"
+ 
+@@ -277,6 +300,14 @@ def build_scheduler_vector_indexing_smoke_plan(
+     text: str,
+     execute: bool,
+     strict_vector_handoff: bool,
++    command_ref: str = DEFAULT_COMMAND_REF,
++    request_route_ref: str = DEFAULT_ROUTE_REF,
++    result_command_ref: str = DEFAULT_RESULT_COMMAND_REF,
++    result_route_ref: str = DEFAULT_RESULT_ROUTE_REF,
++    result_owner_ref: str = DEFAULT_RESULT_OWNER_REF,
++    vector_indexing_job_ref: str = DEFAULT_VECTOR_INDEXING_JOB_REF,
++    route_namespace: str = DEFAULT_ROUTE_NAMESPACE,
++    result_route_namespace: str = DEFAULT_RESULT_ROUTE_NAMESPACE,
+     context_generation: int = 1,
+     priority: int = 900,
+ ) -> SchedulerVectorIndexingSmokePlan:
+@@ -288,7 +319,7 @@ def build_scheduler_vector_indexing_smoke_plan(
+     vector_json = root / ".var" / "smoke" / "e5_vector_0142.json"
+     payload = {
+         "frame_kind": "vector_embedding_request",
+-        "vector_indexing_job_ref": "vector-indexing-job:0143-smoke",
++        "vector_indexing_job_ref": vector_indexing_job_ref,
+         "text": text,
+         "text_kind": "passage",
+         "model_dir": str(model_dir),
+@@ -302,8 +333,8 @@ def build_scheduler_vector_indexing_smoke_plan(
+         "scheduler_run_modified": False,
+     }
+     route_frame_preview = SchedulerRouteFramePreview(
+-        route_ref=DEFAULT_ROUTE_REF,
+-        owner_ref="scheduler-command:vector-indexing-smoke-0143",
++        route_ref=request_route_ref,
++        owner_ref=command_ref,
+         context_ref=sql_ref,
+         context_generation=context_generation,
+         priority=priority,
+@@ -336,6 +367,14 @@ def build_scheduler_vector_indexing_smoke_plan(
+         dimension=dimension,
+         sql_ref=sql_ref,
+         route_root=route_root,
++        command_ref=command_ref,
++        request_route_ref=request_route_ref,
++        result_command_ref=result_command_ref,
++        result_route_ref=result_route_ref,
++        result_owner_ref=result_owner_ref,
++        vector_indexing_job_ref=vector_indexing_job_ref,
++        route_namespace=route_namespace,
++        result_route_namespace=result_route_namespace,
+         execute=execute,
+         strict_vector_handoff=strict_vector_handoff,
+         text=text,
+@@ -391,12 +430,12 @@ def write_scheduler_vector_indexing_request_frame(plan: SchedulerVectorIndexingS
+         route_root=plan.route_root,
+         require_dev_shm=False,
+         allow_test_root=True,
+-        namespace="autodoc-smoke-0143",
++        namespace=plan.route_namespace,
+     )
+     if plan.route_root.exists():
+         shutil.rmtree(plan.route_root)
+     command = handler_module.build_single_frame_route_command(
+-        command_ref="scheduler-command:vector-indexing-smoke-0143",
++        command_ref=plan.command_ref,
+         route_ref=plan.route_frame_preview.route_ref,
+         owner_ref=plan.route_frame_preview.owner_ref,
+         context_ref=plan.route_frame_preview.context_ref,
+@@ -481,7 +520,7 @@ def write_scheduler_vector_indexing_result_frame(
+         route_root=plan.route_root,
+         require_dev_shm=False,
+         allow_test_root=True,
+-        namespace="autodoc-smoke-0144",
++        namespace=plan.result_route_namespace,
+     )
+     payload = {
+         "frame_kind": "vector_indexing_result",
+@@ -498,9 +537,9 @@ def write_scheduler_vector_indexing_result_frame(
+         "scheduler_run_modified": False,
+     }
+     command = handler_module.build_single_frame_route_command(
+-        command_ref="scheduler-command:vector-indexing-smoke-0144-result",
+-        route_ref=DEFAULT_RESULT_ROUTE_REF,
+-        owner_ref="worker:local-vector-indexing-smoke",
++        command_ref=plan.result_command_ref,
++        route_ref=plan.result_route_ref,
++        owner_ref=plan.result_owner_ref,
+         context_ref=plan.sql_ref,
+         context_generation=plan.route_frame_preview.context_generation,
+         priority=plan.route_frame_preview.priority,
+@@ -516,7 +555,7 @@ def write_scheduler_vector_indexing_result_frame(
+     return SchedulerVectorIndexingResultFrameSummary(
+         command_ref=command.command_ref,
+         route_root=plan.route_root,
+-        result_route_ref=DEFAULT_RESULT_ROUTE_REF,
++        result_route_ref=plan.result_route_ref,
+         result_frame_path=readback.handler_result.frame_paths[0],
+         status=str(result_payload.get("status")),
+         sql_ref=str(result_payload.get("sql_ref")),
+@@ -579,6 +618,14 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+     parser.add_argument("--dimension", type=int, default=DEFAULT_DIMENSION)
+     parser.add_argument("--sql-ref", default=DEFAULT_SQL_REF)
+     parser.add_argument("--route-root", type=Path, default=Path(DEFAULT_ROUTE_ROOT))
++    parser.add_argument("--command-ref", default=DEFAULT_COMMAND_REF)
++    parser.add_argument("--request-route-ref", default=DEFAULT_ROUTE_REF)
++    parser.add_argument("--result-command-ref", default=DEFAULT_RESULT_COMMAND_REF)
++    parser.add_argument("--result-route-ref", default=DEFAULT_RESULT_ROUTE_REF)
++    parser.add_argument("--result-owner-ref", default=DEFAULT_RESULT_OWNER_REF)
++    parser.add_argument("--vector-indexing-job-ref", default=DEFAULT_VECTOR_INDEXING_JOB_REF)
++    parser.add_argument("--route-namespace", default=DEFAULT_ROUTE_NAMESPACE)
++    parser.add_argument("--result-route-namespace", default=DEFAULT_RESULT_ROUTE_NAMESPACE)
+     parser.add_argument("--text", default=DEFAULT_TEXT)
+     parser.add_argument("--strict-vector-handoff", action="store_true", default=True)
+     parser.add_argument("--no-strict-vector-handoff", action="store_false", dest="strict_vector_handoff")
+@@ -597,6 +644,14 @@ def main(argv: Sequence[str] | None = None) -> int:
+         dimension=args.dimension,
+         sql_ref=args.sql_ref,
+         route_root=args.route_root,
++        command_ref=args.command_ref,
++        request_route_ref=args.request_route_ref,
++        result_command_ref=args.result_command_ref,
++        result_route_ref=args.result_route_ref,
++        result_owner_ref=args.result_owner_ref,
++        vector_indexing_job_ref=args.vector_indexing_job_ref,
++        route_namespace=args.route_namespace,
++        result_route_namespace=args.result_route_namespace,
+         text=args.text,
+         execute=args.execute,
+         strict_vector_handoff=args.strict_vector_handoff,
+@@ -621,6 +676,14 @@ def _plan_to_mapping(plan: SchedulerVectorIndexingSmokePlan) -> dict[str, Any]:
+         "dimension": plan.dimension,
+         "sql_ref": plan.sql_ref,
+         "route_root": str(plan.route_root),
++        "command_ref": plan.command_ref,
++        "request_route_ref": plan.request_route_ref,
++        "result_command_ref": plan.result_command_ref,
++        "result_route_ref": plan.result_route_ref,
++        "result_owner_ref": plan.result_owner_ref,
++        "vector_indexing_job_ref": plan.vector_indexing_job_ref,
++        "route_namespace": plan.route_namespace,
++        "result_route_namespace": plan.result_route_namespace,
+         "ready_for_scheduler_vector_indexing_smoke": plan.ready,
+         "strict_vector_handoff": plan.strict_vector_handoff,
+         "execute": plan.execute,
