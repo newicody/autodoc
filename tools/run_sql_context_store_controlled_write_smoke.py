@@ -13,10 +13,15 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 import sqlite3
 import sys
 from typing import Any, Mapping, Sequence
+
+
+_SQL_CONTEXT_DB_ENV = "AUTODOC_SQL_CONTEXT_DB"
+_DEFAULT_CONFIGURED_DB_PATH = Path(".var/local/sql_context_store.sqlite3")
 
 
 def _ensure_context_import_path(root: Path) -> None:
@@ -46,6 +51,23 @@ def _read_json_mapping(path: Path) -> dict[str, Any]:
     return loaded
 
 
+def resolve_configured_sql_context_db_path(
+    root: Path,
+    db_path: str | Path | None = None,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> tuple[Path, str]:
+    """Resolve the DB path without changing the DbApiSqlContextStore API."""
+
+    if db_path is not None:
+        return _resolve_repo_path(root, Path(db_path)).resolve(), "explicit"
+    env = os.environ if environ is None else environ
+    configured = env.get(_SQL_CONTEXT_DB_ENV, "").strip()
+    if configured:
+        return _resolve_repo_path(root, Path(configured)).resolve(), f"env:{_SQL_CONTEXT_DB_ENV}"
+    return _resolve_repo_path(root, _DEFAULT_CONFIGURED_DB_PATH).resolve(), "default:.var/local/sql_context_store.sqlite3"
+
+
 @dataclass(frozen=True, slots=True)
 class ExistingSurface:
     key: str
@@ -69,6 +91,7 @@ class SqlContextStoreControlledWritePlan:
     persistence_json: Path
     output_dir: Path
     db_path: Path
+    db_path_source: str
     write_json: Path
     write_report: Path
     execute: bool
@@ -84,6 +107,8 @@ class SqlContextStoreControlledWritePlan:
             "persistence_json": str(self.persistence_json),
             "output_dir": str(self.output_dir),
             "db_path": str(self.db_path),
+            "db_path_source": self.db_path_source,
+            "sql_context_db_env": _SQL_CONTEXT_DB_ENV,
             "write_json": str(self.write_json),
             "write_report": str(self.write_report),
             "selected_store_class": "DbApiSqlContextStore",
@@ -96,7 +121,8 @@ class SqlContextStoreControlledWritePlan:
                 "consumes sql_context_store_persistence_record.json from 0149",
                 "uses DbApiSqlContextStore.upsert_record from src/context/sql_context_store.py",
                 "builds an existing SqlContextRecord before writing",
-                "uses a DB-API SQLite smoke database injected into DbApiSqlContextStore",
+                "uses a configured DB-API SQLite database injected into DbApiSqlContextStore",
+                "resolves the database from --db-path, AUTODOC_SQL_CONTEXT_DB, then .var/local/sql_context_store.sqlite3",
                 "writes sql_context_store_controlled_write_result.json and report markdown",
                 "does not create a SQL worker or SQL orchestrator",
                 "does not import OpenVINO or Qdrant backends",
@@ -114,6 +140,8 @@ class SqlContextStoreControlledWritePlan:
             f"persistence_json: `{mapping['persistence_json']}`",
             f"output_dir: `{mapping['output_dir']}`",
             f"db_path: `{mapping['db_path']}`",
+            f"db_path_source: `{mapping['db_path_source']}`",
+            f"sql_context_db_env: `{mapping['sql_context_db_env']}`",
             f"write_json: `{mapping['write_json']}`",
             f"write_report: `{mapping['write_report']}`",
             f"selected_store_class: `{mapping['selected_store_class']}`",
@@ -141,19 +169,20 @@ def build_sql_context_store_controlled_write_plan(
     repository_root: str | Path,
     *,
     persistence_json: str | Path = ".var/smoke/artifacts/0149/sql_context_store_persistence_record.json",
-    output_dir: str | Path = ".var/smoke/artifacts/0151",
+    output_dir: str | Path = ".var/smoke/artifacts/0152",
     db_path: str | Path | None = None,
     execute: bool = False,
 ) -> SqlContextStoreControlledWritePlan:
     root = Path(repository_root).resolve()
     persistence_path = _resolve_repo_path(root, Path(persistence_json)).resolve()
     out = _resolve_repo_path(root, Path(output_dir)).resolve()
-    database = _resolve_repo_path(root, Path(db_path)).resolve() if db_path is not None else out / "sql_context_store.sqlite3"
+    database, db_source = resolve_configured_sql_context_db_path(root, db_path)
     return SqlContextStoreControlledWritePlan(
         repository_root=root,
         persistence_json=persistence_path,
         output_dir=out,
         db_path=database,
+        db_path_source=db_source,
         write_json=out / "sql_context_store_controlled_write_result.json",
         write_report=out / "sql_context_store_controlled_write_report.md",
         execute=execute,
@@ -229,6 +258,7 @@ def _write_report_markdown(*, plan: SqlContextStoreControlledWritePlan, result: 
         f"sql_ref: `{result.get('sql_ref')}`",
         f"artifact_ref: `{result.get('artifact_ref')}`",
         f"db_path: `{plan.db_path}`",
+        f"db_path_source: `{plan.db_path_source}`",
         f"selected_store_class: `{result.get('selected_store_class')}`",
         f"selected_write_method: `{result.get('selected_write_method')}`",
         f"inserted: `{str(result.get('inserted')).lower()}`",
@@ -248,6 +278,7 @@ def _result_markdown(*, plan: SqlContextStoreControlledWritePlan, result: Mappin
         f"write_json: `{plan.write_json}`",
         f"write_report: `{plan.write_report}`",
         f"db_path: `{plan.db_path}`",
+        f"db_path_source: `{plan.db_path_source}`",
         f"write_status: `{result.get('write_status')}`",
         f"readback_ok: `{str(result.get('readback_ok')).lower()}`",
         f"selected_store_class: `{result.get('selected_store_class')}`",
@@ -276,13 +307,13 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default=".var/smoke/artifacts/0151",
-        help="Directory for 0151 output artifacts.",
+        default=".var/smoke/artifacts/0152",
+        help="Directory for 0152 output artifacts.",
     )
     parser.add_argument(
         "--db-path",
         default=None,
-        help="SQLite smoke database path injected into DbApiSqlContextStore.",
+        help="SQLite database path injected into DbApiSqlContextStore; overrides AUTODOC_SQL_CONTEXT_DB.",
     )
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--format", choices=("markdown", "json"), default="markdown")
