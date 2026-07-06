@@ -1,0 +1,382 @@
+diff --git a/doc/docs/architecture/runtime/116_github_publication_review.dot b/doc/docs/architecture/runtime/116_github_publication_review.dot
+index 0000000..0000000 100644
+--- a/doc/docs/architecture/runtime/116_github_publication_review.dot
++++ b/doc/docs/architecture/runtime/116_github_publication_review.dot
+@@ -3,14 +3,14 @@ digraph github_publication_review_0123 {
+    node [shape=box];
+ 
+    publication [label="GitHubProjectPublication"];
+-   graph [label="ContextGraphSnapshot"];
++   context_graph [label="ContextGraphSnapshot"];
+    dot [label="DotGraphExport"];
+    review [label="GitHubPublicationReviewPacket\nlocal review only"];
+    markdown [label="Review Markdown"];
+    future [label="future GitHub adapter posts after approval"];
+ 
+    publication -> review [label="candidate refs + target refs"];
+-   graph -> review [label="graph snapshot ref"];
++   context_graph -> review [label="graph snapshot ref"];
+    dot -> review [label="bounded digest"];
+    review -> markdown [label="render for human review"];
+    review -> future [label="No GitHub API call in 0123"];
+diff --git a/doc/docs/architecture/00_global.dot b/doc/docs/architecture/00_global.dot
+index 0000000..0000000 100644
+--- a/doc/docs/architecture/00_global.dot
++++ b/doc/docs/architecture/00_global.dot
+@@ -132,6 +132,16 @@ digraph Global {
+     // réseau, Scheduler vivant, Qdrant ou LLM.
+ 
++    // ROADMAP_NOTE[phase0155]:
++    // Mise à jour canonique du graphe global après les phases 0138-0152.
++    // Le chemin P1 local courant est maintenant visible depuis 00_global.dot :
++    // artifact intake contract -> dynamic route refs -> Scheduler/RouteProxy
++    // request/result frames -> OpenVINO E5 full-vector JSON -> Qdrant projection
++    // -> SQL handoff -> DbApiSqlContextStore.upsert_record() -> SQL readback.
++    // Les graphes de phase restent historiques; ce cluster expose l'état courant
++    // sans supprimer la hiérarchie context/inference/runtime/scheduler/services.
++    // Les changelogs de phase deviennent obligatoires quand une étape est ajoutée.
++
+     subgraph cluster_L0 {
+         label="Layer 0 — Hardware target";
+         color="#c62828";
+@@ -234,6 +244,53 @@ digraph Global {
+         SourceCandidateIntakeLivePath [label="SourceCandidate intake live path\nPhase 6.1-r1", URL="context/44_source_candidate_intake_live_path.svg"];
+     }
+ 
++    subgraph cluster_P1_CURRENT {
++        label="Current P1 — local artifact/vector/SQL pipeline (0138-0152)";
++        color="#2e7d32";
++        bgcolor="#e8f5e9";
++        node [fillcolor="#e8f5e9", color="#2e7d32"];
++
++        P1ArtifactInput [label="artifact_input.md\nhuman/local surface", URL="runtime/145_local_artifact_vector_indexing_runner.svg"];
++        P1ArtifactContract [label="ArtifactIntakeContract\nartifact_ref + sql_ref", URL="runtime/146_artifact_intake_contract.svg"];
++        P1DynamicRefs [label="ArtifactRouteRefs\ndynamic command/route refs", URL="runtime/147_dynamic_artifact_route_refs.svg"];
++        P1RequestFrame [label="vector_embedding_request\nRouteProxy frame", URL="runtime/143_scheduler_vector_indexing_smoke.svg"];
++        P1OpenVINOE5 [label="OpenVINO/E5\nfull vector JSON", URL="runtime/142_machine_vector_handoff.svg"];
++        P1QdrantProjection [label="Qdrant projection\nvector + sql_ref payload", URL="runtime/140_qdrant_projection_operator_rest_smoke.svg"];
++        P1ResultFrame [label="vector_indexing_result\nRouteProxy frame", URL="runtime/144_scheduler_vector_indexing_result_frame.svg"];
++        P1SqlHandoff [label="SQL persistence handoff\nrecord envelope", URL="runtime/148_sql_persistence_handoff.svg"];
++        P1SqlRecord [label="SQLContextStore record\nprepared for authority", URL="runtime/149_sql_context_store_persistence_smoke.svg"];
++        P1SqlAudit [label="SQL write surface audit\nDbApiSqlContextStore.upsert_record", URL="runtime/150_sql_context_store_write_surface_audit.svg"];
++        P1SqlWrite [label="DbApiSqlContextStore.upsert_record\nreal DB-API write + readback", URL="runtime/151_sql_context_store_controlled_write.svg"];
++        P1SqlConfiguredDb [label="configured SQL DB path\nAUTODOC_SQL_CONTEXT_DB", URL="runtime/152_sql_context_store_configured_db_path.svg"];
++        P1DocsAudit [label="architecture/docs surface audit\n0153", URL="runtime/153_architecture_docs_surface_audit.svg"];
++    }
++
++    P1ArtifactInput -> P1ArtifactContract [label="typed intake"];
++    P1ArtifactContract -> P1DynamicRefs [label="derive refs"];
++    P1DynamicRefs -> P1RequestFrame [label="Scheduler-shaped command"];
++    P1RequestFrame -> P1OpenVINOE5 [label="operator tool boundary"];
++    P1OpenVINOE5 -> P1QdrantProjection [label="--vector-json"];
++    P1QdrantProjection -> P1ResultFrame [label="point_id + qdrant_rest_id"];
++    P1ResultFrame -> P1SqlHandoff [label="handoff"];
++    P1SqlHandoff -> P1SqlRecord [label="persistence record"];
++    P1SqlRecord -> P1SqlAudit [label="select existing write surface"];
++    P1SqlAudit -> P1SqlWrite [label="upsert_record"];
++    P1SqlWrite -> P1SqlConfiguredDb [label="stable local DB"];
++    P1SqlConfiguredDb -> P1DocsAudit [style=dashed, label="document current state"];
++
++    ArtifactIntakeContract0155 [label="CHANGELOG policy\nevery phase must add changelog", shape=note, fillcolor="#fffde7", color="#f9a825", URL="../../architecture/CHANGELOG_POLICY_0155.svg"];
++    P1DocsAudit -> ArtifactIntakeContract0155 [style=dashed, label="documentation discipline"];
++
+     E5ContextEngineIntake -> E5ContextEngineStatus [label="status projection"];
+     E5ContextEngineCLI -> E5ContextEngineIntake [label="manual artifact-dir intake"];
+     E5ContextEngineCLI -> E5ContextEngineStatus [label="renders status"];
+diff --git a/doc/architecture/GLOBAL_ARCHITECTURE_CANONICAL_REFRESH_0155.md b/doc/architecture/GLOBAL_ARCHITECTURE_CANONICAL_REFRESH_0155.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/architecture/GLOBAL_ARCHITECTURE_CANONICAL_REFRESH_0155.md
+@@ -0,0 +1,92 @@
++# 0155 — Global architecture canonical refresh
++
++0155 corrects the documentation direction after the architecture refresh audit.
++The canonical graph is `doc/docs/architecture/00_global.dot`; summary graphs may
++exist, but they must not replace the master graph or hide the established graph
++hierarchy.
++
++## Canonical graph policy
++
++- `doc/docs/architecture/00_global.dot` remains the global entry point.
++- Historical phase graphs under `doc/docs/architecture/runtime/` remain history.
++- Current-state clusters are added to `00_global.dot` when the real architecture
++  crosses a major boundary.
++- DOT files must compile with Graphviz before being considered valid.
++- A phase that changes code, contracts, runtime behavior, or architecture docs
++  must include a corresponding changelog.
++
++## Current P1 path exposed in 00_global.dot
++
++The current local P1 path is now visible from the global graph:
++
++```text
++artifact_input.md
++-> ArtifactIntakeContract
++-> ArtifactRouteRefs
++-> vector_embedding_request frame
++-> OpenVINO/E5 full vector JSON
++-> Qdrant projection with sql_ref payload
++-> vector_indexing_result frame
++-> SQL persistence handoff
++-> SQLContextStore persistence record
++-> DbApiSqlContextStore.upsert_record
++-> configured SQL DB path + readback
++```
++
++This path must remain aligned with the existing phase graphs:
++
++- `runtime/145_local_artifact_vector_indexing_runner.dot`
++- `runtime/146_artifact_intake_contract.dot`
++- `runtime/147_dynamic_artifact_route_refs.dot`
++- `runtime/148_sql_persistence_handoff.dot`
++- `runtime/149_sql_context_store_persistence_smoke.dot`
++- `runtime/150_sql_context_store_write_surface_audit.dot`
++- `runtime/151_sql_context_store_controlled_write.dot`
++- `runtime/152_sql_context_store_configured_db_path.dot`
++
++## Fixed DOT syntax issue
++
++`runtime/116_github_publication_review.dot` used `graph` as a node identifier.
++`graph` is a DOT keyword, so Graphviz failed on the edge from that node. 0155
++renames the node to `context_graph` and keeps the original meaning.
++
++## What 0155 does not do
++
++- It does not delete historical graphs.
++- It does not create a new runtime.
++- It does not change Scheduler behavior.
++- It does not add an OpenVINO, Qdrant, or SQL worker.
++- It does not choose a GitHub or VisPy implementation.
++
++## Next documentation work
++
++The next documentation pass should follow graph links from `00_global.dot` and
++update the real subgraphs in place:
++
++1. Runtime P1 subgraph alignment.
++2. Context graph current-state alignment.
++3. Inference graph current OpenVINO/E5 boundary alignment.
++4. Services graph SQL/Qdrant role alignment.
++5. Scheduler graph status alignment.
++6. Observability and GitHub graph marking as future/missing unless implemented.
++
++This must be done incrementally and backed by Graphviz compilation checks.
+diff --git a/doc/architecture/CHANGELOG_POLICY_0155.md b/doc/architecture/CHANGELOG_POLICY_0155.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/architecture/CHANGELOG_POLICY_0155.md
+@@ -0,0 +1,56 @@
++# 0155 — Changelog policy
++
++From 0155 onward, every development phase that adds or changes a meaningful
++surface must include a changelog file.
++
++## Required naming
++
++Use the existing style:
++
++```text
++doc/CHANGELOG_<PHASE>_<TITLE>.md
++```
++
++Examples:
++
++```text
++doc/CHANGELOG_0151_SQL_CONTEXT_STORE_CONTROLLED_WRITE.md
++doc/CHANGELOG_0152_SQL_CONTEXT_STORE_CONFIGURED_DB_PATH.md
++doc/CHANGELOG_0155_GLOBAL_ARCHITECTURE_CANONICAL_REFRESH.md
++```
++
++## Required content
++
++Each changelog should list:
++
++- changed files
++- new contracts
++- changed runtime boundaries
++- unchanged boundaries
++- validation commands
++- known limitations
++- next recommended phase
++
++## Rule
++
++If a phase touches any of these areas, it needs a changelog:
++
++- `src/`
++- `tools/`
++- `tests/`
++- `doc/docs/architecture/**/*.dot`
++- `doc/architecture/*.md`
++- `doc/code-rules/*.md`
++- `apply_patch_queue.py`
++
++Documentation-only phases also need changelogs when they update canonical
++architecture, Graphviz structure, code rules, or phase reports.
++
++## Reason
++
++The architecture has a long phase history. Changelogs are now the stable trail
++that links implementation, tests, graphs, and future work.
+diff --git a/doc/CHANGELOG_0155_GLOBAL_ARCHITECTURE_CANONICAL_REFRESH.md b/doc/CHANGELOG_0155_GLOBAL_ARCHITECTURE_CANONICAL_REFRESH.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/CHANGELOG_0155_GLOBAL_ARCHITECTURE_CANONICAL_REFRESH.md
+@@ -0,0 +1,45 @@
++# Changelog — 0155 Global architecture canonical refresh
++
++## Changed
++
++- Fixed `doc/docs/architecture/runtime/116_github_publication_review.dot` by
++  replacing the DOT keyword node identifier `graph` with `context_graph`.
++- Updated `doc/docs/architecture/00_global.dot` with a current P1 pipeline
++  cluster that links to the real runtime phase graphs from 0145 through 0153.
++- Added a changelog policy requiring changelogs for future meaningful phases.
++
++## Added
++
++- `doc/architecture/GLOBAL_ARCHITECTURE_CANONICAL_REFRESH_0155.md`
++- `doc/architecture/CHANGELOG_POLICY_0155.md`
++- `doc/docs/architecture/runtime/155_global_architecture_canonical_refresh.dot`
++- `doc/code-rules/0155_global_architecture_canonical_refresh_rule.md`
++- `doc/manifests/MANIFEST_0155_CHANGED_FILES.md`
++- `PHASE0155_TEST_REPORT.md`
++
++## Boundary
++
++- Keeps `00_global.dot` as the canonical architecture entry point.
++- Keeps historical phase graphs.
++- Does not add runtime orchestration.
++- Does not modify Scheduler behavior.
++- Does not introduce a new OpenVINO, Qdrant, SQL, GitHub, or VisPy component.
++
++## Validation
++
++Recommended validation:
++
++```bash
++dot -Tsvg doc/docs/architecture/00_global.dot -o /tmp/00_global.svg
++dot -Tsvg doc/docs/architecture/runtime/116_github_publication_review.dot -o /tmp/116.svg
++dot -Tsvg doc/docs/architecture/runtime/155_global_architecture_canonical_refresh.dot -o /tmp/155.svg
++PYTHONPATH=src:. pytest -q tests/rules/test_global_architecture_canonical_refresh_0155_rule.py
++```
++
++## Next
++
++0156 should update linked subgraphs in place, starting from runtime, context,
++inference, services, and scheduler graph families.
+diff --git a/doc/docs/architecture/runtime/155_global_architecture_canonical_refresh.dot b/doc/docs/architecture/runtime/155_global_architecture_canonical_refresh.dot
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/docs/architecture/runtime/155_global_architecture_canonical_refresh.dot
+@@ -0,0 +1,54 @@
++digraph global_architecture_canonical_refresh_0155 {
++    rankdir=LR;
++    compound=true;
++    node [shape=box, style="rounded,filled", fontname="Arial"];
++    edge [fontname="Arial"];
++
++    subgraph cluster_canonical {
++        label="Canonical architecture graph";
++        color="#2e7d32";
++        bgcolor="#e8f5e9";
++        global [label="00_global.dot\ncanonical entry point", fillcolor="#e8f5e9"];
++        historical [label="phase DOT graphs\nhistorical + linked", fillcolor="#e8f5e9"];
++        changelog [label="phase changelogs\nmandatory from 0155", fillcolor="#fffde7"];
++    }
++
++    subgraph cluster_p1 {
++        label="Current P1 path";
++        color="#1565c0";
++        bgcolor="#e3f2fd";
++        artifact [label="artifact input", fillcolor="#e3f2fd"];
++        contract [label="ArtifactIntakeContract", fillcolor="#e3f2fd"];
++        refs [label="ArtifactRouteRefs", fillcolor="#e3f2fd"];
++        route_request [label="RouteProxy request frame", fillcolor="#e3f2fd"];
++        embedding [label="OpenVINO/E5 full vector JSON", fillcolor="#e3f2fd"];
++        qdrant [label="Qdrant projection\nsql_ref payload", fillcolor="#e3f2fd"];
++        route_result [label="RouteProxy result frame", fillcolor="#e3f2fd"];
++        sql [label="DbApiSqlContextStore.upsert_record\nSQL readback", fillcolor="#e3f2fd"];
++    }
++
++    global -> historical [label="keeps hierarchy"];
++    global -> changelog [label="phase trail"];
++    global -> artifact [label="exposes current path"];
++    artifact -> contract;
++    contract -> refs;
++    refs -> route_request;
++    route_request -> embedding;
++    embedding -> qdrant;
++    qdrant -> route_result;
++    route_result -> sql;
++}
+diff --git a/doc/code-rules/0155_global_architecture_canonical_refresh_rule.md b/doc/code-rules/0155_global_architecture_canonical_refresh_rule.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/code-rules/0155_global_architecture_canonical_refresh_rule.md
+@@ -0,0 +1,44 @@
++# Code rule — 0155 Global architecture canonical refresh
++
++`doc/docs/architecture/00_global.dot` is the canonical architecture entry point.
++
++Summary graphs may exist, but they must not replace the master graph. When the
++project crosses a major boundary, the current state must be reflected in the
++master graph and linked to relevant subgraphs.
++
++Future phase patches must include a changelog when they change code, contracts,
++tools, tests, DOT graphs, or architecture documents.
++
++DOT files must not use reserved Graphviz keywords as unquoted node identifiers.
++Use names such as `context_graph` instead of `graph`.
++
++0155 does not create any runtime orchestrator, SQL worker, OpenVINO adapter,
++Qdrant adapter, GitHub adapter, or VisPy observer.
+diff --git a/doc/manifests/MANIFEST_0155_CHANGED_FILES.md b/doc/manifests/MANIFEST_0155_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0155_CHANGED_FILES.md
+@@ -0,0 +1,12 @@
++# Manifest — 0155 Global architecture canonical refresh
++
++- `doc/docs/architecture/00_global.dot`
++- `doc/docs/architecture/runtime/116_github_publication_review.dot`
++- `doc/docs/architecture/runtime/155_global_architecture_canonical_refresh.dot`
++- `doc/architecture/GLOBAL_ARCHITECTURE_CANONICAL_REFRESH_0155.md`
++- `doc/architecture/CHANGELOG_POLICY_0155.md`
++- `doc/CHANGELOG_0155_GLOBAL_ARCHITECTURE_CANONICAL_REFRESH.md`
++- `doc/code-rules/0155_global_architecture_canonical_refresh_rule.md`
++- `PHASE0155_TEST_REPORT.md`
+diff --git a/PHASE0155_TEST_REPORT.md b/PHASE0155_TEST_REPORT.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/PHASE0155_TEST_REPORT.md
+@@ -0,0 +1,25 @@
++# Phase 0155 test report
++
++## Scope
++
++0155 refreshes the canonical architecture documentation and DOT graph entry
++point. It also fixes one Graphviz keyword issue in a historical runtime graph.
++
++## Suggested validation
++
++```bash
++dot -Tsvg doc/docs/architecture/runtime/116_github_publication_review.dot -o /tmp/116.svg
++dot -Tsvg doc/docs/architecture/runtime/155_global_architecture_canonical_refresh.dot -o /tmp/155.svg
++dot -Tsvg doc/docs/architecture/00_global.dot -o /tmp/00_global.svg
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. pytest -q tests/rules
++```
++
++## Notes
++
++This phase is documentation-only. It does not modify runtime behavior.
++Historical graphs remain in place.
++Future phases should include changelogs.
