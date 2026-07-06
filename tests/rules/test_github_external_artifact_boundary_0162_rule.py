@@ -26,13 +26,13 @@ def test_0162_tool_locks_external_github_boundary() -> None:
         "artifact exchange only",
         "publish_to_github",
         "external_call_performed",
-        "no_sql_write",
-        "no_qdrant_write",
-        "no_github_api_call",
-        "no_external_network",
-        "no_scheduler_execution",
-        "no_llm_execution",
-        "no_openvino_execution",
+        "sql_write",
+        "qdrant_write",
+        "github_api_call",
+        "external_network",
+        "scheduler_execution",
+        "llm_execution",
+        "openvino_execution",
         "github_project_scenario.py",
         "server_oriented_deliberation_cycle.py",
         "github_publication_review.py",
@@ -44,8 +44,8 @@ def test_0162_tool_locks_external_github_boundary() -> None:
     for forbidden in [
         "DbApiSqlContextStore(",
         "request.urlopen(",
-        "subprocess.run(",
         "QdrantClient",
+        "subprocess.run(",
     ]:
         assert forbidden not in text
 
