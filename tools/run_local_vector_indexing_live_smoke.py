@@ -9,11 +9,10 @@ operator surfaces:
 * tools/run_qdrant_projection_live_smoke.py for Qdrant REST projection smoke
 
 The default execution mode proves the local chain can run in one operator
-command.  A strict full-vector handoff can be requested with
-``--strict-vector-handoff``; in that mode the tool requires a machine-readable
-384-dimensional vector file because the existing ``tools/embed_e5.py`` operator
-currently reports previews for humans.  That keeps the boundary honest: no
-parallel embedding implementation is invented just to extract vectors.
+command.  0142 adds strict full-vector handoff by reusing the existing
+``tools/embed_e5.py --format json --full-vector`` output and feeding that
+machine-readable vector into the existing Qdrant smoke tool via ``--vector-json``.
+No parallel embedding implementation is invented just to extract vectors.
 """
 
 from __future__ import annotations
@@ -31,8 +30,9 @@ DEFAULT_MODEL_DIR = "/home/eric/model/openvino/multilingual-e5-small"
 DEFAULT_QDRANT_URL = "http://127.0.0.1:6333"
 DEFAULT_COLLECTION = "autodoc_smoke_e5_384"
 DEFAULT_DIMENSION = 384
-DEFAULT_SQL_REF = "sql:smoke/vector-indexing/0141"
+DEFAULT_SQL_REF = "sql:smoke/vector-indexing/0142"
 DEFAULT_TEXT = "passage: Local vector indexing smoke runs OpenVINO E5 then Qdrant projection while SQL remains authority."
+DEFAULT_VECTOR_JSON = ".var/smoke/e5_vector_0142.json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +85,7 @@ class LocalVectorIndexingSmokePlan:
     execute: bool
     strict_vector_handoff: bool
     vector_json: Path | None
+    auto_vector_json: bool
     surfaces: tuple[LocalVectorSmokeSurface, ...]
     commands: tuple[LocalVectorSmokeCommand, ...]
     machine_vector_probe: MachineVectorProbe
@@ -114,6 +115,7 @@ class LocalVectorIndexingSmokePlan:
             f"strict_vector_handoff: `{str(self.strict_vector_handoff).lower()}`",
             f"ready_for_strict_vector_handoff: `{str(self.ready_for_strict_vector_handoff).lower()}`",
             f"execute: `{str(self.execute).lower()}`",
+            f"auto_vector_json: `{str(self.auto_vector_json).lower()}`",
             "",
             "## Existing surfaces",
             "",
@@ -128,6 +130,7 @@ class LocalVectorIndexingSmokePlan:
             "## Machine vector handoff",
             "",
             self.machine_vector_probe.to_markdown_line(),
+            f"vector_json: `{self.vector_json or 'none'}`",
             "",
             "## Commands",
             "",
@@ -152,7 +155,8 @@ class LocalVectorIndexingSmokePlan:
             "- Scheduler remains outside OpenVINO and Qdrant",
             "- RouteProxy remains outside OpenVINO and Qdrant",
             "- SQLContextStore remains durable authority; Qdrant stores projection/recall only",
-            "- strict full-vector handoff requires machine-readable vector output instead of parsing human previews",
+            "- strict full-vector handoff reuses tools/embed_e5.py --format json --full-vector",
+            "- strict full-vector handoff does not parse human-only previews",
         ])
         return "\n".join(lines) + "\n"
 
@@ -169,10 +173,13 @@ def build_local_vector_indexing_smoke_plan(
     execute: bool,
     strict_vector_handoff: bool,
     vector_json: Path | None,
+    auto_vector_json: bool = True,
 ) -> LocalVectorIndexingSmokePlan:
     root = root.resolve()
     model_dir = model_dir.expanduser()
     vector_json = vector_json.expanduser() if vector_json is not None else None
+    if vector_json is None and auto_vector_json:
+        vector_json = root / DEFAULT_VECTOR_JSON
     text = _ensure_prefix(text, "passage: ")
     surfaces = (
         LocalVectorSmokeSurface(
@@ -233,19 +240,13 @@ def build_local_vector_indexing_smoke_plan(
         ),
         LocalVectorSmokeCommand(
             role="qdrant_projection_live_smoke",
-            argv=(
-                sys.executable,
-                str(root / "tools" / "run_qdrant_projection_live_smoke.py"),
-                str(root),
-                "--qdrant-url",
-                qdrant_url,
-                "--collection",
-                collection,
-                "--dimension",
-                str(dimension),
-                "--sql-ref",
-                sql_ref,
-                "--execute",
+            argv=_qdrant_command_argv(
+                root=root,
+                qdrant_url=qdrant_url,
+                collection=collection,
+                dimension=dimension,
+                sql_ref=sql_ref,
+                vector_json=vector_json,
             ),
         ),
     )
@@ -260,10 +261,94 @@ def build_local_vector_indexing_smoke_plan(
         execute=execute,
         strict_vector_handoff=strict_vector_handoff,
         vector_json=vector_json,
+        auto_vector_json=auto_vector_json,
         surfaces=surfaces,
         commands=commands,
         machine_vector_probe=machine_vector_probe,
     )
+
+
+def _qdrant_command_argv(
+    *,
+    root: Path,
+    qdrant_url: str,
+    collection: str,
+    dimension: int,
+    sql_ref: str,
+    vector_json: Path | None,
+) -> tuple[str, ...]:
+    argv = [
+        sys.executable,
+        str(root / "tools" / "run_qdrant_projection_live_smoke.py"),
+        str(root),
+        "--qdrant-url",
+        qdrant_url,
+        "--collection",
+        collection,
+        "--dimension",
+        str(dimension),
+        "--sql-ref",
+        sql_ref,
+    ]
+    if vector_json is not None:
+        argv.extend(("--vector-json", str(vector_json)))
+    argv.append("--execute")
+    return tuple(argv)
+
+
+def generate_machine_vector_json(plan: LocalVectorIndexingSmokePlan) -> int:
+    if plan.vector_json is None:
+        return 0
+    plan.vector_json.parent.mkdir(parents=True, exist_ok=True)
+    command = (
+        sys.executable,
+        str(plan.repository_root / "tools" / "embed_e5.py"),
+        "--model-dir",
+        str(plan.model_dir),
+        "--format",
+        "json",
+        "--full-vector",
+        plan.text,
+    )
+    completed = subprocess.run(
+        command,
+        cwd=plan.repository_root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if completed.stderr:
+        print(completed.stderr, end="", file=sys.stderr)
+    if completed.returncode != 0:
+        print("machine vector generation failed", file=sys.stderr)
+        return completed.returncode or 6
+    try:
+        payload = json.loads(completed.stdout)
+        vector = _extract_vector_from_payload(payload)
+        validate_vector(vector, expected_dimension=plan.dimension)
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        print(f"machine vector generation produced invalid JSON/vector: {exc}", file=sys.stderr)
+        return 6
+    plan.vector_json.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    print(f"==> machine_vector_json\nwritten: `{plan.vector_json}`")
+    return 0
+
+
+def _extract_vector_from_payload(payload: object) -> tuple[float, ...]:
+    if isinstance(payload, dict):
+        value = payload.get("vector") or payload.get("values")
+        if value is None:
+            embedding = payload.get("embedding")
+            if isinstance(embedding, dict):
+                value = embedding.get("vector") or embedding.get("values")
+            elif isinstance(embedding, list):
+                value = embedding
+    else:
+        value = payload
+    if not isinstance(value, list):
+        raise ValueError("payload must contain vector/values/embedding list")
+    return tuple(float(item) for item in value)
 
 
 def inspect_machine_vector_source(vector_json: Path | None, *, expected_dimension: int) -> MachineVectorProbe:
@@ -271,7 +356,7 @@ def inspect_machine_vector_source(vector_json: Path | None, *, expected_dimensio
         return MachineVectorProbe(
             available=False,
             source="none",
-            reason="no --vector-json file provided; existing embed_e5.py currently exposes human previews, not a full machine vector handoff",
+            reason="no --vector-json file provided and auto vector generation is disabled",
         )
     if not vector_json.exists():
         return MachineVectorProbe(
@@ -296,11 +381,7 @@ def inspect_machine_vector_source(vector_json: Path | None, *, expected_dimensio
 
 def load_vector_json(path: Path) -> tuple[float, ...]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(payload, dict):
-        payload = payload.get("vector") or payload.get("values")
-    if not isinstance(payload, list):
-        raise ValueError("vector json must be a list or an object with vector/values")
-    return tuple(float(value) for value in payload)
+    return _extract_vector_from_payload(payload)
 
 
 def validate_vector(vector: Sequence[float], *, expected_dimension: int) -> None:
@@ -316,20 +397,38 @@ def run_local_vector_indexing_smoke(plan: LocalVectorIndexingSmokePlan) -> int:
         for surface in plan.missing_surfaces():
             print(f"missing surface: {surface.key} -> {surface.path}", file=sys.stderr)
         return 2
-    if plan.strict_vector_handoff and not plan.machine_vector_probe.available:
+    active_plan = plan
+    if plan.execute and plan.auto_vector_json and plan.vector_json is not None:
+        rc = generate_machine_vector_json(plan)
+        if rc != 0:
+            return rc
+        active_plan = build_local_vector_indexing_smoke_plan(
+            plan.repository_root,
+            model_dir=plan.model_dir,
+            qdrant_url=plan.qdrant_url,
+            collection=plan.collection,
+            dimension=plan.dimension,
+            sql_ref=plan.sql_ref,
+            text=plan.text,
+            execute=plan.execute,
+            strict_vector_handoff=plan.strict_vector_handoff,
+            vector_json=plan.vector_json,
+            auto_vector_json=plan.auto_vector_json,
+        )
+    if active_plan.strict_vector_handoff and not active_plan.machine_vector_probe.available:
         print(
             "strict vector handoff requested but no machine-readable vector is available; "
-            "next step should extend tools/embed_e5.py or the existing OpenVINO membrane to emit full vectors",
+            "run with --auto-vector-json or provide --vector-json from tools/embed_e5.py --format json --full-vector",
             file=sys.stderr,
         )
         return 4
 
     failures = 0
-    for command in plan.commands:
+    for command in active_plan.commands:
         print(f"==> {command.role}")
         completed = subprocess.run(
             command.argv,
-            cwd=plan.repository_root,
+            cwd=active_plan.repository_root,
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -348,11 +447,14 @@ def run_local_vector_indexing_smoke(plan: LocalVectorIndexingSmokePlan) -> int:
     print("")
     print("openvino_e5_smoke: `ok`")
     print("qdrant_projection_smoke: `ok`")
-    print(f"strict_vector_handoff: `{str(plan.strict_vector_handoff).lower()}`")
-    print(f"machine_vector_available: `{str(plan.machine_vector_probe.available).lower()}`")
+    print(f"strict_vector_handoff: `{str(active_plan.strict_vector_handoff).lower()}`")
+    print(f"machine_vector_available: `{str(active_plan.machine_vector_probe.available).lower()}`")
     print("boundary: `existing OpenVINO smoke tool + existing Qdrant smoke tool`")
-    if not plan.machine_vector_probe.available:
-        print("note: `0141 validates the live operator chain; full vector handoff needs machine-readable E5 output`")
+    if active_plan.machine_vector_probe.available:
+        print(f"vector_json: `{active_plan.vector_json}`")
+        print("note: `0142 validates strict machine-vector handoff into Qdrant`")
+    else:
+        print("note: `operator chain ran without strict machine-vector handoff`")
     return 0
 
 
@@ -366,7 +468,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--sql-ref", default=DEFAULT_SQL_REF)
     parser.add_argument("--text", default=DEFAULT_TEXT)
     parser.add_argument("--vector-json", type=Path, default=None, help="Optional machine-readable vector file for strict handoff validation")
-    parser.add_argument("--strict-vector-handoff", action="store_true", help="Fail unless --vector-json supplies a validated full vector")
+    parser.add_argument("--auto-vector-json", action=argparse.BooleanOptionalAction, default=True, help="Generate vector JSON through tools/embed_e5.py --format json --full-vector during --execute")
+    parser.add_argument("--strict-vector-handoff", action="store_true", help="Fail unless a validated full vector is available")
     parser.add_argument("--format", choices=("markdown", "shell"), default="markdown")
     parser.add_argument("--execute", action="store_true", help="Run both existing live smoke tools")
     args = parser.parse_args(argv)
@@ -382,11 +485,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         execute=bool(args.execute),
         strict_vector_handoff=bool(args.strict_vector_handoff),
         vector_json=args.vector_json,
+        auto_vector_json=bool(args.auto_vector_json),
     )
     if args.format == "markdown":
         print(plan.to_markdown(), end="")
     else:
-        for command in plan.commands:
+        for command in active_plan.commands:
             print(command.shell_preview())
     if args.execute:
         return run_local_vector_indexing_smoke(plan)

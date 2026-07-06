@@ -76,6 +76,7 @@ class QdrantProjectionSmokePlan:
     dimension: int
     sql_ref: str
     execute: bool
+    vector_json: Path | None
     surfaces: tuple[QdrantSmokeSurface, ...]
     adapter_inventory: QdrantAdapterInventory | None
 
@@ -97,6 +98,8 @@ class QdrantProjectionSmokePlan:
             f"sql_ref: `{self.sql_ref}`",
             f"ready_for_qdrant_projection_smoke: `{str(self.ready).lower()}`",
             f"execute: `{str(self.execute).lower()}`",
+            f"vector_json: `{self.vector_json or 'none'}`",
+            f"machine_vector_handoff: `{str(self.vector_json is not None).lower()}`",
             "",
             "## Existing surfaces",
             "",
@@ -125,7 +128,7 @@ class QdrantProjectionSmokePlan:
             f"dimension={self.dimension}",
             f"sql_ref={self.sql_ref}",
             f"text={DEFAULT_PAYLOAD_TEXT}",
-            "vector=[deterministic 384-dim smoke vector]",
+            "vector=[machine vector from --vector-json if provided, otherwise deterministic 384-dim smoke vector]",
             "```",
             "",
             "## Boundary",
@@ -135,6 +138,7 @@ class QdrantProjectionSmokePlan:
             "- reuses src/context/vector_indexing_job_plan.py as projection job contract",
             "- 0140 uses the existing QdrantProjectionExecutor injection seam instead of a new adapter",
             "- operator REST execution lives in tools/run_qdrant_projection_live_smoke.py only",
+            "- --vector-json enables strict machine-vector handoff without creating a new adapter",
             "- HTTP 409 while ensuring a collection is treated as idempotent collection-already-exists",
             "- does not create VectorQdrantProjectionAdapter",
             "- does not import Qdrant from Scheduler, RouteProxy, PolicyEngine, Dispatcher, or context contracts",
@@ -152,8 +156,10 @@ def build_qdrant_projection_smoke_plan(
     dimension: int,
     sql_ref: str,
     execute: bool,
+    vector_json: Path | None = None,
 ) -> QdrantProjectionSmokePlan:
     root = root.resolve()
+    vector_json = vector_json.expanduser() if vector_json is not None else None
     adapter_path = root / "src" / "inference" / "qdrant_projection_adapter.py"
     surfaces = (
         QdrantSmokeSurface(
@@ -180,6 +186,7 @@ def build_qdrant_projection_smoke_plan(
         dimension=dimension,
         sql_ref=sql_ref,
         execute=execute,
+        vector_json=vector_json,
         surfaces=surfaces,
         adapter_inventory=inventory,
     )
@@ -258,6 +265,7 @@ def run_operator_rest_smoke(plan: QdrantProjectionSmokePlan) -> int:
     print(f"qdrant_rest_id: `{rest_point['id']}`")
     print("upsert_acknowledged: `true`")
     print(f"search_result_keys: `{', '.join(sorted(search_response.keys()))}`")
+    print(f"machine_vector_handoff: `{str(plan.vector_json is not None).lower()}`")
     print("boundary: `existing qdrant_projection_adapter contracts + operator REST executor`")
     return 0
 
@@ -287,9 +295,33 @@ def build_smoke_projection_point(plan: QdrantProjectionSmokePlan):
             ("smoke", "0140-qdrant-operator-rest"),
         ),
     )
-    embedding = build_embedding_vector(text, deterministic_normalized_vector(plan.dimension), target, policy)
+    vector = load_machine_vector_json(plan.vector_json, expected_dimension=plan.dimension) if plan.vector_json is not None else deterministic_normalized_vector(plan.dimension)
+    embedding = build_embedding_vector(text, vector, target, policy)
     projection_target = local_qdrant_projection_target(collection_name=plan.collection, vector_dimension=plan.dimension)
     return build_qdrant_projection_point(embedding, projection_target, QdrantProjectionPolicy())
+
+
+def load_machine_vector_json(path: Path, *, expected_dimension: int) -> tuple[float, ...]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    vector: object
+    if isinstance(payload, dict):
+        vector = payload.get("vector")
+        if vector is None:
+            vector = payload.get("values")
+        if vector is None:
+            embedding = payload.get("embedding")
+            if isinstance(embedding, dict):
+                vector = embedding.get("vector") or embedding.get("values")
+            elif isinstance(embedding, list):
+                vector = embedding
+    else:
+        vector = payload
+    if not isinstance(vector, list):
+        raise ValueError("machine vector JSON must be a list or object with vector/values/embedding")
+    values = tuple(float(value) for value in vector)
+    if len(values) != expected_dimension:
+        raise ValueError(f"machine vector dimension must be {expected_dimension}, got {len(values)}")
+    return values
 
 
 def deterministic_normalized_vector(dimension: int) -> tuple[float, ...]:
@@ -416,6 +448,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--collection", default=DEFAULT_COLLECTION)
     parser.add_argument("--dimension", type=int, default=DEFAULT_DIMENSION)
     parser.add_argument("--sql-ref", default=DEFAULT_SQL_REF)
+    parser.add_argument("--vector-json", type=Path, default=None, help="Optional machine-readable vector JSON from tools/embed_e5.py --format json --full-vector")
     parser.add_argument("--format", choices=("markdown", "jsonish"), default="markdown")
     parser.add_argument("--execute", action="store_true", help="Run a live operator smoke through existing adapter contracts")
     args = parser.parse_args(argv)
@@ -427,6 +460,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         dimension=args.dimension,
         sql_ref=args.sql_ref,
         execute=bool(args.execute),
+        vector_json=args.vector_json,
     )
     if args.format == "markdown":
         print(plan.to_markdown(), end="")
