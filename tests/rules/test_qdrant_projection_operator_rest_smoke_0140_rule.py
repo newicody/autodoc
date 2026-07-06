@@ -18,6 +18,8 @@ def test_0140_tool_extends_existing_qdrant_smoke_without_new_adapter() -> None:
         "run_operator_rest_smoke",
         "build_smoke_projection_point",
         "qdrant_rest_point_from_projection",
+        "allow_http_statuses=(409,)",
+        "idempotent_conflict",
         "urllib.request",
         "does not create VectorQdrantProjectionAdapter",
     ]

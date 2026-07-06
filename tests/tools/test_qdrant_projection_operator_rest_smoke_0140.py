@@ -5,12 +5,15 @@ import math
 from pathlib import Path
 
 from tools.run_qdrant_projection_live_smoke import (
+    _qdrant_request,
     build_qdrant_projection_smoke_plan,
     deterministic_normalized_vector,
     qdrant_put_collection_payload,
     qdrant_rest_point_from_projection,
     qdrant_search_payload,
 )
+
+import urllib.error
 
 
 def _write(path: Path, text: str) -> None:
@@ -67,3 +70,28 @@ def test_0140_builds_qdrant_rest_payloads_without_qdrant_client() -> None:
     assert search_payload["limit"] == 1
     assert search_payload["with_payload"] is True
     assert search_payload["with_vector"] is False
+
+
+def test_0140_qdrant_collection_conflict_is_idempotent(monkeypatch) -> None:
+    def raise_conflict(*args, **kwargs):
+        raise urllib.error.HTTPError(
+            url="http://127.0.0.1:6333/collections/autodoc_smoke_e5_384",
+            code=409,
+            msg="Conflict",
+            hdrs=None,
+            fp=None,
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", raise_conflict)
+
+    result = _qdrant_request(
+        "PUT",
+        "http://127.0.0.1:6333/collections/autodoc_smoke_e5_384",
+        qdrant_put_collection_payload(384),
+        allow_http_statuses=(409,),
+    )
+
+    assert result["status"] == "ok"
+    assert result["http_status"] == 409
+    assert result["already_exists"] is True
+    assert result["idempotent_conflict"] is True

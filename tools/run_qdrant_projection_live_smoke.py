@@ -135,6 +135,7 @@ class QdrantProjectionSmokePlan:
             "- reuses src/context/vector_indexing_job_plan.py as projection job contract",
             "- 0140 uses the existing QdrantProjectionExecutor injection seam instead of a new adapter",
             "- operator REST execution lives in tools/run_qdrant_projection_live_smoke.py only",
+            "- HTTP 409 while ensuring a collection is treated as idempotent collection-already-exists",
             "- does not create VectorQdrantProjectionAdapter",
             "- does not import Qdrant from Scheduler, RouteProxy, PolicyEngine, Dispatcher, or context contracts",
             "- Qdrant stores projection/recall indexes, not durable truth",
@@ -232,7 +233,12 @@ def run_operator_rest_smoke(plan: QdrantProjectionSmokePlan) -> int:
         upsert_payload = {"points": [rest_point]}
         search_payload = qdrant_search_payload(point.vector, limit=1)
 
-        _qdrant_request("PUT", _qdrant_url(plan, f"/collections/{plan.collection}"), put_collection)
+        _qdrant_request(
+            "PUT",
+            _qdrant_url(plan, f"/collections/{plan.collection}"),
+            put_collection,
+            allow_http_statuses=(409,),
+        )
         _qdrant_request("PUT", _qdrant_url(plan, f"/collections/{plan.collection}/points?wait=true"), upsert_payload)
         search_response = _qdrant_request(
             "POST",
@@ -352,7 +358,14 @@ def _delegate_to_adapter_entrypoint(plan: QdrantProjectionSmokePlan) -> int:
     return completed.returncode
 
 
-def _qdrant_request(method: str, url: str, payload: dict[str, object], *, timeout: float = 5.0) -> dict[str, Any]:
+def _qdrant_request(
+    method: str,
+    url: str,
+    payload: dict[str, object],
+    *,
+    timeout: float = 5.0,
+    allow_http_statuses: tuple[int, ...] = (),
+) -> dict[str, Any]:
     data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         url,
@@ -360,8 +373,18 @@ def _qdrant_request(method: str, url: str, payload: dict[str, object], *, timeou
         headers={"Content-Type": "application/json"},
         method=method,
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - operator local smoke URL is explicit.
-        raw = response.read().decode("utf-8")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - operator local smoke URL is explicit.
+            raw = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        if exc.code in allow_http_statuses:
+            return {
+                "status": "ok",
+                "http_status": exc.code,
+                "already_exists": True,
+                "idempotent_conflict": True,
+            }
+        raise
     if not raw:
         return {}
     decoded = json.loads(raw)
