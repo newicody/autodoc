@@ -1,6 +1,6 @@
 # Code rule 0150 — SQLContextStore write surface audit
 
-0150 may audit the existing SQLContextStore source and prepare a write-surface decision.
+0150 may audit the existing SQLContextStore-compatible source and prepare a write-surface decision.
 
 Required boundary:
 
@@ -21,3 +21,6 @@ Forbidden in 0150:
 - must not modify the Scheduler run loop.
 
 If no explicit SQLContextStore write method is present, 0150 must report `blocked_no_explicit_sql_context_store_write_method` rather than guessing an API.
+
+
+0150-r1 also recognizes `DbApiSqlContextStore.upsert_record` as the existing explicit write surface when the repository exposes that name instead of a class named exactly `SQLContextStore`.

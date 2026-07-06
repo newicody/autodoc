@@ -19,3 +19,5 @@ PYTHONPATH=src:. python -m compileall -q src tests tools
 PYTHONPATH=src:. pytest -q tests/tools/test_sql_context_store_write_surface_audit_0150.py tests/rules/test_sql_context_store_write_surface_audit_0150_rule.py
 # expected: 8 passed
 ```
+
+0150-r1: recognizes DbApiSqlContextStore.upsert_record as the existing explicit write surface.

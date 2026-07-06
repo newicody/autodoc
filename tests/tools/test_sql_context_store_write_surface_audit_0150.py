@@ -57,6 +57,29 @@ def test_0150_inspects_existing_sql_context_store_write_method(tmp_path: Path) -
     assert audit.ready_for_controlled_write_patch is True
 
 
+def test_0150_detects_dbapi_sql_context_store_upsert_record(tmp_path: Path) -> None:
+    store = tmp_path / "src" / "context" / "sql_context_store.py"
+    store.parent.mkdir(parents=True)
+    store.write_text(
+        "class SqlContextRecord:\n"
+        "    pass\n"
+        "class DbApiSqlContextStore:\n"
+        "    def initialize_schema(self):\n"
+        "        pass\n"
+        "    def upsert_record(self, record):\n"
+        "        return record\n",
+        encoding="utf-8",
+    )
+
+    audit = inspect_sql_context_store_write_surface(tmp_path)
+
+    assert audit.exists is True
+    assert audit.has_sql_context_store_class is True
+    assert audit.selected_write_method == "upsert_record"
+    assert audit.write_status == "ready_for_controlled_write_patch"
+    assert audit.payload["selected_sql_context_store_class"] == "DbApiSqlContextStore"
+
+
 def test_0150_reports_gap_when_no_explicit_write_method(tmp_path: Path) -> None:
     store = tmp_path / "src" / "context" / "sql_context_store.py"
     store.parent.mkdir(parents=True)

@@ -17,6 +17,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 _DEFAULT_CANDIDATE_WRITE_METHODS = (
     "persist_context_record",
+    "upsert_record",
     "persist_context",
     "upsert_context",
     "save_context",
@@ -179,7 +180,7 @@ def inspect_sql_context_store_write_surface(
     requested_write_method: str | None = None,
     candidate_write_methods: Sequence[str] = _DEFAULT_CANDIDATE_WRITE_METHODS,
 ) -> SqlContextStoreWriteSurfaceAudit:
-    """Inspect SQLContextStore source through AST without importing any backend."""
+    """Inspect SQLContextStore-compatible source through AST without importing any backend."""
 
     path = Path(root) / "src" / "context" / "sql_context_store.py"
     if not path.exists():
@@ -203,7 +204,7 @@ def inspect_sql_context_store_write_surface(
         return SqlContextStoreWriteSurfaceAudit(
             sql_context_store_path=str(path),
             exists=True,
-            has_sql_context_store_class="SQLContextStore" in source,
+            has_sql_context_store_class=_source_mentions_sql_context_store_surface(source),
             method_signatures=(),
             candidate_write_methods=(),
             selected_write_method=None,
@@ -213,7 +214,7 @@ def inspect_sql_context_store_write_surface(
             payload={"candidate_write_methods_checked": list(candidate_write_methods)},
         )
 
-    sql_store_classes = [node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "SQLContextStore"]
+    sql_store_classes = tuple(_sql_context_store_classes(tree, candidate_write_methods=candidate_write_methods))
     if not sql_store_classes:
         return SqlContextStoreWriteSurfaceAudit(
             sql_context_store_path=str(path),
@@ -224,11 +225,12 @@ def inspect_sql_context_store_write_surface(
             selected_write_method=None,
             requested_write_method=requested_write_method,
             write_status=_WRITE_STATUS_BLOCKED,
-            gap_reason="SQLContextStore class not found",
+            gap_reason="SQLContextStore-compatible class not found",
             payload={"candidate_write_methods_checked": list(candidate_write_methods)},
         )
 
-    signatures = tuple(_method_signature(node) for node in _class_methods(sql_store_classes[0]))
+    selected_store_class = sql_store_classes[0]
+    signatures = tuple(_method_signature(node) for node in _class_methods(selected_store_class))
     method_names = {signature.name for signature in signatures}
     candidates = tuple(method for method in candidate_write_methods if method in method_names)
     selected = _select_write_method(
@@ -260,6 +262,8 @@ def inspect_sql_context_store_write_surface(
         payload={
             "candidate_write_methods_checked": list(candidate_write_methods),
             "all_method_names": sorted(method_names),
+            "selected_sql_context_store_class": selected_store_class.name,
+            "sql_context_store_class_names": [node.name for node in sql_store_classes],
             "audit_only": True,
         },
     )
@@ -292,6 +296,35 @@ def read_json_mapping(path: str | Path) -> dict[str, Any]:
     if not isinstance(loaded, dict):
         raise ValueError(f"expected JSON object in {path}")
     return loaded
+
+
+def _source_mentions_sql_context_store_surface(source: str) -> bool:
+    return "SQLContextStore" in source or "SqlContextStore" in source
+
+
+def _is_sql_context_store_class_name(name: str) -> bool:
+    return name == "SQLContextStore" or name.endswith("SqlContextStore") or name.endswith("SQLContextStore")
+
+
+def _sql_context_store_classes(
+    tree: ast.Module,
+    *,
+    candidate_write_methods: Sequence[str],
+) -> tuple[ast.ClassDef, ...]:
+    classes = tuple(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and _is_sql_context_store_class_name(node.name)
+    )
+
+    def rank(node: ast.ClassDef) -> tuple[int, int, str]:
+        method_names = {method.name for method in _class_methods(node)}
+        has_candidate = any(method in method_names for method in candidate_write_methods)
+        exact_rank = 0 if node.name == "SQLContextStore" else 1
+        candidate_rank = 0 if has_candidate else 1
+        return (candidate_rank, exact_rank, node.name)
+
+    return tuple(sorted(classes, key=rank))
 
 
 def _class_methods(class_node: ast.ClassDef) -> Iterable[ast.FunctionDef | ast.AsyncFunctionDef]:
