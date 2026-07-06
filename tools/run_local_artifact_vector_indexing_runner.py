@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Local artifact to scheduler vector indexing runner using existing surfaces.
 
-0145 turns the validated Scheduler/RouteProxy/vector smoke into a small local
-artifact runner.  It does not create a new orchestrator, daemon, Scheduler loop,
-OpenVINO adapter, or Qdrant adapter.  It writes an operator artifact input file,
-executes the existing scheduler vector indexing smoke tool, and writes a local
-artifact result envelope that points to the RouteProxy result frame.
+0145 turned the validated Scheduler/RouteProxy/vector smoke into a small local
+artifact runner.  0146 adds a pure artifact intake contract in
+src/context/artifact_intake_contract.py.  The runner remains an operator
+surface: it does not create a new orchestrator, daemon, Scheduler loop,
+OpenVINO adapter, or Qdrant adapter.
 
 Literal reuse surface: tools/run_local_vector_indexing_live_smoke.py.
+Literal contract surface: src/context/artifact_intake_contract.py.
 """
 
 from __future__ import annotations
@@ -25,10 +26,14 @@ DEFAULT_MODEL_DIR = "/home/eric/model/openvino/multilingual-e5-small"
 DEFAULT_QDRANT_URL = "http://127.0.0.1:6333"
 DEFAULT_COLLECTION = "autodoc_smoke_e5_384"
 DEFAULT_DIMENSION = 384
-DEFAULT_SQL_REF = "sql:artifact/vector-indexing/0145"
-DEFAULT_ARTIFACT_TEXT = "passage: Local artifact vector indexing runner sends one artifact through the existing Scheduler route smoke, OpenVINO E5 full-vector handoff, and Qdrant projection."
-DEFAULT_ARTIFACT_DIR = ".var/smoke/artifacts/0145"
-DEFAULT_ROUTE_ROOT = ".var/smoke/routeproxy-0145/routes"
+DEFAULT_SQL_REF = "sql:artifact/vector-indexing/0146"
+DEFAULT_ARTIFACT_REF = "artifact:local/0146/smoke"
+DEFAULT_ARTIFACT_KIND = "local_markdown"
+DEFAULT_TEXT_KIND = "passage"
+DEFAULT_VECTOR_INDEXING_JOB_REF = "vector-indexing-job:artifact/0146-smoke"
+DEFAULT_ARTIFACT_TEXT = "passage: Local artifact intake contract sends one artifact through the existing Scheduler route smoke, OpenVINO E5 full-vector handoff, and Qdrant projection."
+DEFAULT_ARTIFACT_DIR = ".var/smoke/artifacts/0146"
+DEFAULT_ROUTE_ROOT = ".var/smoke/routeproxy-0146/routes"
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +65,7 @@ class LocalArtifactVectorIndexingPlan:
     repository_root: Path
     artifact_dir: Path
     artifact_input: Path
+    artifact_contract_path: Path
     artifact_report: Path
     artifact_json: Path
     model_dir: Path
@@ -69,6 +75,7 @@ class LocalArtifactVectorIndexingPlan:
     sql_ref: str
     route_root: Path
     text: str
+    artifact_contract: Any
     execute: bool
     surfaces: tuple[LocalArtifactSurface, ...]
     commands: tuple[LocalArtifactCommand, ...]
@@ -82,6 +89,8 @@ class LocalArtifactVectorIndexingPlan:
             "repository_root": str(self.repository_root),
             "artifact_dir": str(self.artifact_dir),
             "artifact_input": str(self.artifact_input),
+            "artifact_contract_path": str(self.artifact_contract_path),
+            "artifact_contract": self.artifact_contract.to_mapping(),
             "artifact_report": str(self.artifact_report),
             "artifact_json": str(self.artifact_json),
             "model_dir": str(self.model_dir),
@@ -105,6 +114,7 @@ class LocalArtifactVectorIndexingPlan:
             f"repository_root: `{self.repository_root}`",
             f"artifact_dir: `{self.artifact_dir}`",
             f"artifact_input: `{self.artifact_input}`",
+            f"artifact_contract_path: `{self.artifact_contract_path}`",
             f"artifact_report: `{self.artifact_report}`",
             f"artifact_json: `{self.artifact_json}`",
             f"model_dir: `{self.model_dir}`",
@@ -115,6 +125,14 @@ class LocalArtifactVectorIndexingPlan:
             f"route_root: `{self.route_root}`",
             f"ready_for_local_artifact_vector_indexing: `{str(self.ready).lower()}`",
             f"execute: `{str(self.execute).lower()}`",
+            "",
+            "## Artifact intake contract",
+            "",
+            f"artifact_ref: `{self.artifact_contract.artifact_ref}`",
+            f"artifact_kind: `{self.artifact_contract.artifact_kind}`",
+            f"artifact_path: `{self.artifact_contract.artifact_path}`",
+            f"text_kind: `{self.artifact_contract.text_kind}`",
+            f"vector_indexing_job_ref: `{self.artifact_contract.vector_indexing_job_ref}`",
             "",
             "## Existing surfaces",
             "",
@@ -129,7 +147,7 @@ class LocalArtifactVectorIndexingPlan:
             "## Artifact text",
             "",
             "```text",
-            self.text,
+            self.artifact_contract.normalized_text(),
             "```",
             "",
             "## Commands",
@@ -149,7 +167,8 @@ class LocalArtifactVectorIndexingPlan:
             "- reuses src/runtime/scheduler_route_handler_minimal.py and src/runtime/route_proxy_runtime_minimal.py indirectly",
             "- reuses tools/embed_e5.py --format json --full-vector through the existing smoke chain",
             "- reuses tools/run_qdrant_projection_live_smoke.py --vector-json through the existing smoke chain",
-            "- writes local artifact input/report files only under .var/smoke/artifacts/0145 by default",
+            "- writes local artifact input/contract/report files only under .var/smoke/artifacts/0146 by default",
+            "- reuses src/context/artifact_intake_contract.py as a pure typed intake contract",
             "- does not create LocalArtifactOrchestrator",
             "- does not create LocalVectorIndexingOrchestrator",
             "- does not create SchedulerOpenVINORunner",
@@ -164,6 +183,7 @@ class LocalArtifactVectorIndexingPlan:
 @dataclass(frozen=True, slots=True)
 class LocalArtifactVectorIndexingResult:
     artifact_input: Path
+    artifact_contract_path: Path
     artifact_report: Path
     artifact_json: Path
     sql_ref: str
@@ -180,6 +200,7 @@ class LocalArtifactVectorIndexingResult:
     def to_mapping(self) -> dict[str, Any]:
         return {
             "artifact_input": str(self.artifact_input),
+            "artifact_contract_path": str(self.artifact_contract_path),
             "artifact_report": str(self.artifact_report),
             "artifact_json": str(self.artifact_json),
             "sql_ref": self.sql_ref,
@@ -200,6 +221,7 @@ class LocalArtifactVectorIndexingResult:
             "# Local artifact vector indexing result",
             "",
             f"artifact_input: `{self.artifact_input}`",
+            f"artifact_contract_path: `{self.artifact_contract_path}`",
             f"artifact_report: `{self.artifact_report}`",
             f"artifact_json: `{self.artifact_json}`",
             f"sql_ref: `{self.sql_ref}`",
@@ -229,15 +251,33 @@ def build_local_artifact_vector_indexing_plan(
     route_root: Path,
     text: str,
     execute: bool,
+    artifact_ref: str = DEFAULT_ARTIFACT_REF,
+    artifact_kind: str = DEFAULT_ARTIFACT_KIND,
+    text_kind: str = DEFAULT_TEXT_KIND,
+    vector_indexing_job_ref: str = DEFAULT_VECTOR_INDEXING_JOB_REF,
 ) -> LocalArtifactVectorIndexingPlan:
     root = root.resolve()
     artifact_dir = _resolve_repo_path(root, artifact_dir)
     route_root = _resolve_repo_path(root, route_root)
     model_dir = model_dir.expanduser()
-    text = _ensure_prefix(text, "passage: ")
     artifact_input = artifact_dir / "artifact_input.md"
+    artifact_contract_path = artifact_dir / "artifact_intake_contract.json"
     artifact_report = artifact_dir / "artifact_vector_indexing_report.md"
     artifact_json = artifact_dir / "artifact_vector_indexing_report.json"
+    artifact_contract = _build_artifact_intake_contract(
+        root,
+        artifact_ref=artifact_ref,
+        artifact_kind=artifact_kind,
+        artifact_path=artifact_input,
+        text_kind=text_kind,
+        sql_ref=sql_ref,
+        collection=collection,
+        dimension=dimension,
+        route_root=route_root,
+        vector_indexing_job_ref=vector_indexing_job_ref,
+        text=text,
+    )
+    text = artifact_contract.normalized_text()
     scheduler_tool = root / "tools" / "run_scheduler_vector_indexing_smoke.py"
     command_args = [
         sys.executable,
@@ -263,6 +303,7 @@ def build_local_artifact_vector_indexing_plan(
         repository_root=root,
         artifact_dir=artifact_dir,
         artifact_input=artifact_input,
+        artifact_contract_path=artifact_contract_path,
         artifact_report=artifact_report,
         artifact_json=artifact_json,
         model_dir=model_dir,
@@ -272,12 +313,18 @@ def build_local_artifact_vector_indexing_plan(
         sql_ref=sql_ref,
         route_root=route_root,
         text=text,
+        artifact_contract=artifact_contract,
         execute=execute,
         surfaces=(
             LocalArtifactSurface(
                 key="scheduler_vector_indexing_smoke_tool",
                 path=scheduler_tool,
                 reason="existing Scheduler/RouteProxy/vector smoke tool from 0143/0144",
+            ),
+            LocalArtifactSurface(
+                key="artifact_intake_contract",
+                path=_artifact_intake_contract_surface_path(root),
+                reason="pure typed artifact intake contract from 0146",
             ),
             LocalArtifactSurface(
                 key="scheduler_route_handler",
@@ -310,7 +357,8 @@ def execute_local_artifact_vector_indexing_plan(plan: LocalArtifactVectorIndexin
     if not plan.ready:
         return 2
     plan.artifact_dir.mkdir(parents=True, exist_ok=True)
-    plan.artifact_input.write_text(plan.text.rstrip() + "\n", encoding="utf-8")
+    plan.artifact_input.write_text(plan.artifact_contract.normalized_text().rstrip() + "\n", encoding="utf-8")
+    plan.artifact_contract_path.write_text(json.dumps(plan.artifact_contract.to_mapping(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
     command = plan.commands[0]
     completed = subprocess.run(
         command.argv,
@@ -336,6 +384,7 @@ def build_local_artifact_vector_indexing_result(plan: LocalArtifactVectorIndexin
     facts = _extract_labelled_facts(output)
     return LocalArtifactVectorIndexingResult(
         artifact_input=plan.artifact_input,
+        artifact_contract_path=plan.artifact_contract_path,
         artifact_report=plan.artifact_report,
         artifact_json=plan.artifact_json,
         sql_ref=plan.sql_ref,
@@ -355,6 +404,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Plan or execute one local artifact through existing Scheduler vector indexing smoke surfaces.")
     parser.add_argument("repository_root", type=Path)
     parser.add_argument("--artifact-dir", type=Path, default=Path(DEFAULT_ARTIFACT_DIR))
+    parser.add_argument("--artifact-ref", default=DEFAULT_ARTIFACT_REF)
+    parser.add_argument("--artifact-kind", default=DEFAULT_ARTIFACT_KIND)
+    parser.add_argument("--text-kind", choices=("query", "passage"), default=DEFAULT_TEXT_KIND)
+    parser.add_argument("--vector-indexing-job-ref", default=DEFAULT_VECTOR_INDEXING_JOB_REF)
     parser.add_argument("--model-dir", type=Path, default=Path(DEFAULT_MODEL_DIR))
     parser.add_argument("--qdrant-url", default=DEFAULT_QDRANT_URL)
     parser.add_argument("--collection", default=DEFAULT_COLLECTION)
@@ -372,6 +425,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     plan = build_local_artifact_vector_indexing_plan(
         args.repository_root,
         artifact_dir=args.artifact_dir,
+        artifact_ref=args.artifact_ref,
+        artifact_kind=args.artifact_kind,
+        text_kind=args.text_kind,
+        vector_indexing_job_ref=args.vector_indexing_job_ref,
         model_dir=args.model_dir,
         qdrant_url=args.qdrant_url,
         collection=args.collection,
@@ -419,6 +476,22 @@ def _extract_labelled_facts(output: str) -> dict[str, Any]:
         else:
             facts[key] = value
     return facts
+
+
+def _artifact_intake_contract_surface_path(root: Path) -> Path:
+    candidate = root / "src" / "context" / "artifact_intake_contract.py"
+    if candidate.exists():
+        return candidate
+    return Path(__file__).resolve().parents[1] / "src" / "context" / "artifact_intake_contract.py"
+
+
+def _build_artifact_intake_contract(root: Path, **kwargs: Any) -> Any:
+    src = str(root / "src")
+    if src not in sys.path:
+        sys.path.insert(0, src)
+    from context.artifact_intake_contract import build_artifact_intake_contract
+
+    return build_artifact_intake_contract(**kwargs)
 
 
 def _resolve_repo_path(root: Path, path: Path) -> Path:
