@@ -59,13 +59,8 @@ qdrant_rest_id: 3184c5b1-037c-5468-92bb-f65ced471985
 - `VectorOpenVINOEmbeddingAdapter`
 - `VectorQdrantProjectionAdapter`
 
-0158 does not modify:
-
-- Scheduler runtime
-- RouteProxy runtime
-- OpenVINO backend
-- Qdrant adapter
-- SQL context store authority
+0158 does not modify Scheduler runtime, RouteProxy runtime, OpenVINO backend,
+Qdrant adapter or SQL context store authority.
 
 ## Operator command
 
@@ -78,9 +73,7 @@ python tools/run_p1_closed_loop_operator_smoke.py . --format markdown
 Execute:
 
 ```bash
-python tools/run_p1_closed_loop_operator_smoke.py . \
-  --execute \
-  --format json
+python tools/run_p1_closed_loop_operator_smoke.py . --execute --format json
 ```
 
 The final output artifacts are:

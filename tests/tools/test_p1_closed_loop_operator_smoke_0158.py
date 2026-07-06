@@ -53,11 +53,11 @@ def test_0158_plan_composes_existing_p1_tools_without_new_backend(tmp_path: Path
     ]
 
     preview = "\n".join(command.shell_preview() for command in plan.commands)
-    assert "tools/run_local_artifact_vector_indexing_runner.py" in preview
-    assert "tools/run_sql_persistence_handoff_smoke.py" in preview
-    assert "tools/run_sql_context_store_persistence_smoke.py" in preview
-    assert "tools/run_sql_context_store_write_surface_audit.py" in preview
-    assert "tools/run_sql_context_store_controlled_write_smoke.py" in preview
+    assert "run_local_artifact_vector_indexing_runner.py" in preview
+    assert "run_sql_persistence_handoff_smoke.py" in preview
+    assert "run_sql_context_store_persistence_smoke.py" in preview
+    assert "run_sql_context_store_write_surface_audit.py" in preview
+    assert "run_sql_context_store_controlled_write_smoke.py" in preview
     assert "--handoff-ref sql-handoff:sql-persistence/0158" in preview
     assert "--db-path" in preview
 

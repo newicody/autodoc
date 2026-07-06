@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Compose the existing P1 artifact/vector/SQL surfaces into one operator smoke.
 
-0158 is an operator composition layer. It calls the existing tools from 0145,
-0148, 0149, 0150 and 0151/0152 in sequence and writes a final closed-loop
-report. It does not create a Scheduler runner, SQL worker, orchestrator,
-OpenVINO adapter, Qdrant adapter or durable database backend.
+0158-r1 is an operator composition layer. It calls the existing tools from
+0145, 0148, 0149, 0150 and 0151/0152 in sequence and writes a final
+closed-loop report. It does not create a Scheduler runner, SQL worker,
+orchestrator, OpenVINO adapter, Qdrant adapter or durable database backend.
 """
 
 from __future__ import annotations
@@ -55,7 +55,6 @@ _FORBIDDEN_PARALLEL_SURFACES = (
 _SELECTED_WRITE_SURFACE = "DbApiSqlContextStore.upsert_record"
 
 
-
 @dataclass(frozen=True, slots=True)
 class P1ClosedLoopSurface:
     key: str
@@ -89,6 +88,7 @@ class P1ClosedLoopPlan:
     route_root: Path
     artifact_json: Path
     artifact_contract: Path
+    result_frame: Path
     handoff_json: Path
     persistence_json: Path
     write_json: Path
@@ -118,6 +118,7 @@ class P1ClosedLoopPlan:
             "route_root": str(self.route_root),
             "artifact_json": str(self.artifact_json),
             "artifact_contract": str(self.artifact_contract),
+            "result_frame": str(self.result_frame),
             "handoff_json": str(self.handoff_json),
             "persistence_json": str(self.persistence_json),
             "write_json": str(self.write_json),
@@ -163,6 +164,7 @@ class P1ClosedLoopPlan:
             f"route_root: `{self.route_root}`",
             f"artifact_json: `{self.artifact_json}`",
             f"artifact_contract: `{self.artifact_contract}`",
+            f"result_frame: `{self.result_frame}`",
             f"handoff_json: `{self.handoff_json}`",
             f"persistence_json: `{self.persistence_json}`",
             f"write_json: `{self.write_json}`",
@@ -290,6 +292,7 @@ def build_p1_closed_loop_plan(
 
     artifact_json = output_dir / "artifact_vector_indexing_report.json"
     artifact_contract = output_dir / "artifact_intake_contract.json"
+    result_frame = route_root / "frames" / "vector-route-artifact-local-0158-smoke-job-artifact-0158-smoke-indexing-result.json"
     handoff_json = output_dir / "sql_persistence_handoff.json"
     persistence_json = output_dir / "sql_context_store_persistence_record.json"
     write_json = output_dir / "sql_context_store_controlled_write_result.json"
@@ -404,6 +407,7 @@ def build_p1_closed_loop_plan(
         route_root=route_root,
         artifact_json=artifact_json,
         artifact_contract=artifact_contract,
+        result_frame=result_frame,
         handoff_json=handoff_json,
         persistence_json=persistence_json,
         write_json=write_json,

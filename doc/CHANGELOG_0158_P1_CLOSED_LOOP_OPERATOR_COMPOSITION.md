@@ -1,6 +1,6 @@
-# Changelog — 0158 P1 closed-loop operator composition
+# Changelog — 0158-r1 P1 closed-loop operator composition
 
-0158 adds a single operator composition command for the validated P1 chain.
+0158-r1 adds a single operator composition command for the validated P1 chain.
 
 ## Added
 

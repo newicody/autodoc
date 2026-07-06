@@ -27,17 +27,13 @@ qdrant_rest_id: 3184c5b1-037c-5468-92bb-f65ced471985
 ## Target tests
 
 ```bash
-env -u AUTODOC_SQL_CONTEXT_DB PYTHONPATH=src:. pytest -q \
-  tests/tools/test_p1_closed_loop_operator_smoke_0158.py \
-  tests/rules/test_p1_closed_loop_operator_smoke_0158_rule.py
+env -u AUTODOC_SQL_CONTEXT_DB PYTHONPATH=src:. pytest -q   tests/tools/test_p1_closed_loop_operator_smoke_0158.py   tests/rules/test_p1_closed_loop_operator_smoke_0158_rule.py
 ```
 
 ## Target operator execution
 
 ```bash
-python tools/run_p1_closed_loop_operator_smoke.py . \
-  --execute \
-  --format json
+python tools/run_p1_closed_loop_operator_smoke.py . --execute --format json
 ```
 
 ## Boundary
