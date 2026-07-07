@@ -1,0 +1,665 @@
+diff --git a/PHASE0179_TEST_REPORT.md b/PHASE0179_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0179_TEST_REPORT.md
+@@ -0,0 +1,27 @@
++# Phase 0179 Test Report — Authorized route request queue handoff
++
++Status: prepared.
++
++Scope:
++- Reads `context.bus.jsonl` through 0178.
++- Builds authorized scheduler intake plans.
++- Validates every item with `SchedulerRouteRequest.from_mapping`.
++- Writes `scheduler.route_requests.jsonl`.
++- No Scheduler modification.
++- No route handler call.
++- No EventBus instantiation.
++- No ControlProxy/RouteProxy frame write.
++- No GitHub API/network.
++- No conversion/inference/SQL/Qdrant/VisPy writes.
++
++Validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/context/test_authorized_route_request_queue_handoff_0179.py \
++  tests/tools/test_append_authorized_route_requests_from_context_bus_0179.py \
++  tests/rules/test_authorized_route_request_queue_handoff_0179_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
+diff --git a/src/context/authorized_route_request_queue.py b/src/context/authorized_route_request_queue.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/context/authorized_route_request_queue.py
+@@ -0,0 +1,163 @@
++"""Authorized route request queue handoff.
++
++0179 takes authorized scheduler intake plans produced from context.bus facts and
++materializes them as a local JSONL handoff queue.
++
++Path:
++
++    context.bus.jsonl
++    -> 0178 context bus scheduler intake reader
++    -> authorized SchedulerRouteRequest mapping
++    -> SchedulerRouteRequest.from_mapping(...)
++    -> scheduler.route_requests.jsonl
++
++Boundary:
++
++- This module requires an explicit policy_decision_id.
++- This module validates each queued item with SchedulerRouteRequest.from_mapping.
++- This module does not call handle_scheduler_route_request.
++- This module does not instantiate Scheduler.
++- This module does not modify Scheduler.run().
++- This module does not instantiate EventBus.
++- This module does not write ControlProxy/RouteProxy frames.
++- This module does not write to VisPy.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++import json
++from pathlib import Path
++from typing import Any, Iterable, Mapping
++
++from context.github_artifact_context_bus_scheduler_intake import (
++    read_github_artifact_scheduler_intake_plans_from_context_bus_jsonl,
++)
++from runtime.scheduler_route_adapter import SchedulerRouteRequest
++
++
++AUTHORIZED_ROUTE_REQUEST_QUEUE_SCHEMA = "missipy.scheduler.authorized_route_request_queue.v1"
++DEFAULT_ROUTE_REQUEST_QUEUE_NAME = "scheduler.route_requests.jsonl"
++
++
++class AuthorizedRouteRequestQueueError(ValueError):
++    """Raised when authorized route request handoff is unsafe."""
++
++
++@dataclass(frozen=True, slots=True)
++class AuthorizedRouteRequestQueueReport:
++    """Result of appending authorized route requests to a local handoff queue."""
++
++    schema: str
++    queue_path: str
++    queued_count: int
++    policy_decision_id: str
++    authorized_only: bool
++    scheduler_modified: bool
++    handler_called: bool
++    frames_written: bool
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "queue_path": self.queue_path,
++            "queued_count": self.queued_count,
++            "policy_decision_id": self.policy_decision_id,
++            "authorized_only": self.authorized_only,
++            "scheduler_modified": self.scheduler_modified,
++            "handler_called": self.handler_called,
++            "frames_written": self.frames_written,
++        }
++
++
++def append_authorized_route_requests_from_context_bus(
++    *,
++    context_bus_path: Path | str,
++    runtime_root: Path | str,
++    policy_decision_id: str,
++    priority: int = 50,
++    queue_name: str = DEFAULT_ROUTE_REQUEST_QUEUE_NAME,
++) -> AuthorizedRouteRequestQueueReport:
++    """Append authorized SchedulerRouteRequest mappings to a local JSONL queue.
++
++    This is a handoff queue only. The function validates and appends authorized
++    route requests. It does not execute them.
++    """
++
++    policy = _require_policy_decision_id(policy_decision_id)
++    root = Path(runtime_root)
++    queue_path = _resolve_queue_path(root, queue_name)
++    plans = read_github_artifact_scheduler_intake_plans_from_context_bus_jsonl(
++        Path(context_bus_path),
++        policy_decision_id=policy,
++        authorized=True,
++        priority=priority,
++    )
++
++    queued_count = 0
++    queue_path.parent.mkdir(parents=True, exist_ok=True)
++    with queue_path.open("a", encoding="utf-8") as handle:
++        for plan in plans:
++            if plan.scheduler_route_request is None:
++                raise AuthorizedRouteRequestQueueError("authorized intake plan did not contain SchedulerRouteRequest")
++            request = SchedulerRouteRequest.from_mapping(plan.scheduler_route_request)
++            if not request.authorized:
++                raise AuthorizedRouteRequestQueueError("only authorized SchedulerRouteRequest items may be queued")
++            if request.policy_decision_id != policy:
++                raise AuthorizedRouteRequestQueueError("queued policy_decision_id mismatch")
++            handle.write(json.dumps(request.to_mapping(), sort_keys=True, separators=(",", ":")) + "\n")
++            queued_count += 1
++
++    return AuthorizedRouteRequestQueueReport(
++        schema=AUTHORIZED_ROUTE_REQUEST_QUEUE_SCHEMA,
++        queue_path=str(queue_path),
++        queued_count=queued_count,
++        policy_decision_id=policy,
++        authorized_only=True,
++        scheduler_modified=False,
++        handler_called=False,
++        frames_written=False,
++    )
++
++
++def iter_authorized_route_request_queue(path: Path | str) -> Iterable[SchedulerRouteRequest]:
++    """Read queued SchedulerRouteRequest objects from a JSONL handoff queue."""
++
++    queue_path = Path(path)
++    with queue_path.open("r", encoding="utf-8") as handle:
++        for line_number, line in enumerate(handle, start=1):
++            raw = line.strip()
++            if not raw:
++                continue
++            try:
++                item = json.loads(raw)
++            except json.JSONDecodeError as exc:
++                raise AuthorizedRouteRequestQueueError(
++                    f"invalid route request queue JSON at {queue_path}:{line_number}"
++                ) from exc
++            if not isinstance(item, Mapping):
++                raise AuthorizedRouteRequestQueueError(
++                    f"route request queue line must be an object at {queue_path}:{line_number}"
++                )
++            request = SchedulerRouteRequest.from_mapping(item)
++            if not request.authorized:
++                raise AuthorizedRouteRequestQueueError("route request queue contains unauthorized item")
++            yield request
++
++
++def _resolve_queue_path(runtime_root: Path, queue_name: str) -> Path:
++    if not queue_name or "/" in queue_name or "\\" in queue_name or ".." in queue_name:
++        raise AuthorizedRouteRequestQueueError("queue_name must be a local filename")
++    if not queue_name.endswith(".jsonl"):
++        raise AuthorizedRouteRequestQueueError("queue_name must end with .jsonl")
++    return runtime_root / queue_name
++
++
++def _require_policy_decision_id(value: str) -> str:
++    if not isinstance(value, str) or not value.strip():
++        raise AuthorizedRouteRequestQueueError("policy_decision_id is required")
++    stripped = value.strip()
++    allowed = stripped.replace("_", "").replace(".", "").replace(":", "").replace("-", "")
++    if not allowed.isalnum():
++        raise AuthorizedRouteRequestQueueError("policy_decision_id contains invalid characters")
++    return stripped
+diff --git a/tools/append_authorized_route_requests_from_context_bus.py b/tools/append_authorized_route_requests_from_context_bus.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/append_authorized_route_requests_from_context_bus.py
+@@ -0,0 +1,53 @@
++#!/usr/bin/env python3
++"""Append authorized scheduler route entries from context.bus JSONL to a handoff queue."""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import sys
++
++ROOT = Path(__file__).resolve().parents[1]
++SRC = ROOT / "src"
++if str(SRC) not in sys.path:
++    sys.path.insert(0, str(SRC))
++
++from context.authorized_route_request_queue import (  # noqa: E402
++    append_authorized_route_requests_from_context_bus,
++)
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(
++        description="Append authorized route entries from context.bus JSONL to scheduler.route_requests.jsonl."
++    )
++    parser.add_argument("--context-bus", required=True, help="Path to context.bus.jsonl.")
++    parser.add_argument("--runtime-root", required=True, help="Runtime root where the handoff queue is written.")
++    parser.add_argument("--policy-decision-id", required=True, help="Explicit policy decision id.")
++    parser.add_argument("--priority", type=int, default=50, help="Scheduler candidate priority, 0..100.")
++    parser.add_argument("--queue-name", default="scheduler.route_requests.jsonl", help="Local JSONL queue filename.")
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    args = parser.parse_args(argv)
++
++    report = append_authorized_route_requests_from_context_bus(
++        context_bus_path=Path(args.context_bus),
++        runtime_root=Path(args.runtime_root),
++        policy_decision_id=args.policy_decision_id,
++        priority=args.priority,
++        queue_name=args.queue_name,
++    )
++
++    if args.format == "json":
++        print(json.dumps(report.to_mapping(), indent=2, sort_keys=True))
++    else:
++        print(f"queued_count: {report.queued_count}")
++        print(f"queue_path: {report.queue_path}")
++        print("authorized_only: True")
++        print("scheduler_modified: False")
++        print("handler_called: False")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/context/test_authorized_route_request_queue_handoff_0179.py b/tests/context/test_authorized_route_request_queue_handoff_0179.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/context/test_authorized_route_request_queue_handoff_0179.py
+@@ -0,0 +1,83 @@
++from pathlib import Path
++import json
++
++import pytest
++
++from context.authorized_route_request_queue import (
++    AuthorizedRouteRequestQueueError,
++    append_authorized_route_requests_from_context_bus,
++    iter_authorized_route_request_queue,
++)
++from context.github_artifact_dataset_bus_observation import append_github_artifact_dataset_bus_observation
++from runtime.scheduler_route_adapter import SchedulerRouteRequest
++
++
++def _observation(run_id: str = "run0179") -> dict[str, object]:
++    return {
++        "report_ref": f"report:github-artifact:{run_id}",
++        "repository": "newicody/autodoc-ideas",
++        "run_id": run_id,
++        "artifact_id": f"artifact-{run_id}",
++        "status": "queued",
++        "dataset_root_ref": "server-dataset:github-artifacts",
++        "raw_count": 1,
++        "queued_count": 1,
++        "failed_count": 0,
++        "occurred_at": "2026-07-07T00:00:00Z",
++    }
++
++
++def test_0179_appends_authorized_route_request_queue_from_context_bus(tmp_path: Path) -> None:
++    append_github_artifact_dataset_bus_observation(runtime_root=tmp_path, raw=_observation())
++
++    report = append_authorized_route_requests_from_context_bus(
++        context_bus_path=tmp_path / "context.bus.jsonl",
++        runtime_root=tmp_path,
++        policy_decision_id="policy:allow:github-artifact:0179",
++    )
++
++    assert report.queued_count == 1
++    assert report.authorized_only is True
++    assert report.scheduler_modified is False
++    assert report.handler_called is False
++    queue_path = Path(report.queue_path)
++    assert queue_path.name == "scheduler.route_requests.jsonl"
++    line = queue_path.read_text(encoding="utf-8").strip()
++    request = SchedulerRouteRequest.from_mapping(json.loads(line))
++    assert request.authorized is True
++    assert request.policy_decision_id == "policy:allow:github-artifact:0179"
++
++
++def test_0179_queue_reader_yields_authorized_requests(tmp_path: Path) -> None:
++    append_github_artifact_dataset_bus_observation(runtime_root=tmp_path, raw=_observation("run0179reader"))
++    report = append_authorized_route_requests_from_context_bus(
++        context_bus_path=tmp_path / "context.bus.jsonl",
++        runtime_root=tmp_path,
++        policy_decision_id="policy:allow:github-artifact:reader0179",
++    )
++
++    requests = list(iter_authorized_route_request_queue(report.queue_path))
++    assert len(requests) == 1
++    assert requests[0].authorized is True
++    assert requests[0].route_id.startswith("route-")
++
++
++def test_0179_requires_policy_decision_id(tmp_path: Path) -> None:
++    append_github_artifact_dataset_bus_observation(runtime_root=tmp_path, raw=_observation("run0179missingpolicy"))
++    with pytest.raises(AuthorizedRouteRequestQueueError, match="policy_decision_id is required"):
++        append_authorized_route_requests_from_context_bus(
++            context_bus_path=tmp_path / "context.bus.jsonl",
++            runtime_root=tmp_path,
++            policy_decision_id="",
++        )
++
++
++def test_0179_rejects_unsafe_queue_name(tmp_path: Path) -> None:
++    append_github_artifact_dataset_bus_observation(runtime_root=tmp_path, raw=_observation("run0179unsafequeue"))
++    with pytest.raises(AuthorizedRouteRequestQueueError, match="local filename"):
++        append_authorized_route_requests_from_context_bus(
++            context_bus_path=tmp_path / "context.bus.jsonl",
++            runtime_root=tmp_path,
++            policy_decision_id="policy:allow:github-artifact:unsafequeue",
++            queue_name="../bad.jsonl",
++        )
+diff --git a/tests/tools/test_append_authorized_route_requests_from_context_bus_0179.py b/tests/tools/test_append_authorized_route_requests_from_context_bus_0179.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_append_authorized_route_requests_from_context_bus_0179.py
+@@ -0,0 +1,53 @@
++from pathlib import Path
++import json
++import subprocess
++import sys
++
++from context.github_artifact_dataset_bus_observation import append_github_artifact_dataset_bus_observation
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "append_authorized_route_requests_from_context_bus.py"
++
++
++def test_0179_tool_writes_authorized_handoff_queue(tmp_path: Path) -> None:
++    append_github_artifact_dataset_bus_observation(
++        runtime_root=tmp_path,
++        raw={
++            "report_ref": "report:github-artifact:tool0179",
++            "repository": "newicody/autodoc-ideas",
++            "run_id": "run0179tool",
++            "artifact_id": "artifact0179tool",
++            "status": "queued",
++            "dataset_root_ref": "server-dataset:github-artifacts",
++            "raw_count": 1,
++            "queued_count": 1,
++            "failed_count": 0,
++            "occurred_at": "2026-07-07T00:00:00Z",
++        },
++    )
++
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--context-bus",
++            str(tmp_path / "context.bus.jsonl"),
++            "--runtime-root",
++            str(tmp_path),
++            "--policy-decision-id",
++            "policy:allow:github-artifact:tool0179",
++            "--format",
++            "json",
++        ],
++        cwd=ROOT,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=True,
++    )
++    report = json.loads(completed.stdout)
++    assert report["queued_count"] == 1
++    assert report["authorized_only"] is True
++    assert report["handler_called"] is False
++    assert Path(report["queue_path"]).exists()
+diff --git a/tests/rules/test_authorized_route_request_queue_handoff_0179_rule.py b/tests/rules/test_authorized_route_request_queue_handoff_0179_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_authorized_route_request_queue_handoff_0179_rule.py
+@@ -0,0 +1,79 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "context" / "authorized_route_request_queue.py"
++TOOL = ROOT / "tools" / "append_authorized_route_requests_from_context_bus.py"
++DOC = ROOT / "doc" / "architecture" / "AUTHORIZED_ROUTE_REQUEST_QUEUE_HANDOFF_0179.md"
++RULE = ROOT / "doc" / "code-rules" / "0179_authorized_route_request_queue_handoff_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0179_CHANGED_FILES.md"
++
++
++def test_0179_module_materializes_authorized_queue_without_execution() -> None:
++    source = MODULE.read_text(encoding="utf-8")
++    for token in [
++        "context.bus.jsonl",
++        "read_github_artifact_scheduler_intake_plans_from_context_bus_jsonl",
++        "SchedulerRouteRequest.from_mapping",
++        "scheduler.route_requests.jsonl",
++        "This module requires an explicit policy_decision_id",
++        "This module does not call handle_scheduler_route_request",
++        "This module does not instantiate Scheduler",
++        "This module does not modify Scheduler.run()",
++        "This module does not instantiate EventBus",
++    ]:
++        assert token in source
++    assert "handle_scheduler_route_request(" not in source
++    assert "from kernel.scheduler import Scheduler" not in source
++    assert "from kernel.event_bus import EventBus" not in source
++
++
++def test_0179_doc_locks_handoff_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    for token in [
++        "0179 is a handoff queue, not route execution",
++        "The handoff source is context.bus.jsonl",
++        "The output is scheduler.route_requests.jsonl",
++        "Every queued item is validated with SchedulerRouteRequest.from_mapping",
++        "Only authorized SchedulerRouteRequest mappings are queued",
++        "handle_scheduler_route_request is not called",
++        "Scheduler.run() is not modified",
++    ]:
++        assert token in doc
++
++
++def test_0179_rule_blocks_execution_and_frame_writes() -> None:
++    rule = RULE.read_text(encoding="utf-8")
++    for token in [
++        "Read from context.bus.jsonl through the 0178 reader",
++        "Write only scheduler.route_requests.jsonl handoff entries",
++        "Require explicit policy_decision_id",
++        "Validate queued items with SchedulerRouteRequest.from_mapping",
++        "Do not call handle_scheduler_route_request",
++        "Do not modify Scheduler.run()",
++        "Do not write ControlProxy or RouteProxy frames",
++        "Do not instantiate EventBus",
++    ]:
++        assert token in rule
++
++
++def test_0179_tool_is_local_queue_writer_only() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    assert "--context-bus" in source
++    assert "--runtime-root" in source
++    assert "--policy-decision-id" in source
++    assert "append_authorized_route_requests_from_context_bus" in source
++    assert "requests" not in source
++    assert "urllib" not in source
++
++
++def test_0179_manifest_lists_handoff_files() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    for token in [
++        "src/context/authorized_route_request_queue.py",
++        "tools/append_authorized_route_requests_from_context_bus.py",
++        "tests/context/test_authorized_route_request_queue_handoff_0179.py",
++        "tests/tools/test_append_authorized_route_requests_from_context_bus_0179.py",
++        "tests/rules/test_authorized_route_request_queue_handoff_0179_rule.py",
++    ]:
++        assert token in manifest
+diff --git a/doc/architecture/AUTHORIZED_ROUTE_REQUEST_QUEUE_HANDOFF_0179.md b/doc/architecture/AUTHORIZED_ROUTE_REQUEST_QUEUE_HANDOFF_0179.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/AUTHORIZED_ROUTE_REQUEST_QUEUE_HANDOFF_0179.md
+@@ -0,0 +1,65 @@
++# 0179 — Authorized route request queue handoff
++
++## Decision
++
++0179 is a handoff queue, not route execution.
++
++The handoff source is context.bus.jsonl. The output is
++scheduler.route_requests.jsonl.
++
++Every queued item is validated with SchedulerRouteRequest.from_mapping.
++Only authorized SchedulerRouteRequest mappings are queued. An explicit
++policy_decision_id is required.
++
++handle_scheduler_route_request is not called.
++Scheduler.run() is not modified.
++
++## Why this exists
++
++0176 writes GitHub artifact dataset observations to the existing bus files.
++0178 reads context.bus.jsonl and builds scheduler intake plans.
++0179 materializes the authorized result into a local handoff queue.
++
++This gives a clear next boundary:
++
++```text
++context.bus.jsonl
++-> 0178 reader
++-> authorized SchedulerRouteRequest
++-> scheduler.route_requests.jsonl
++```
++
++The queue is not execution. It is a staging/handoff file for a later patch that
++can integrate with the existing route handler under Scheduler/policy/zone
++authority.
++
++## Boundary
++
++0179:
++
++- reads from `context.bus.jsonl` through the 0178 reader,
++- requires explicit `policy_decision_id`,
++- validates every item with `SchedulerRouteRequest.from_mapping(...)`,
++- appends JSONL into `scheduler.route_requests.jsonl`,
++- reports count and queue path.
++
++0179 does not:
++
++- instantiate Scheduler,
++- modify Scheduler.run(),
++- call handle_scheduler_route_request,
++- instantiate EventBus,
++- create a parallel bus,
++- write ControlProxy or RouteProxy frames,
++- call GitHub API,
++- use network,
++- execute conversion,
++- execute inference,
++- write SQL,
++- write Qdrant,
++- write directly to VisPy.
++
++## Authority
++
++Scheduler/policy/zone remain the authority.
++The queue contains authorized route request data, but it does not execute it.
+diff --git a/doc/code-rules/0179_authorized_route_request_queue_handoff_rule.md b/doc/code-rules/0179_authorized_route_request_queue_handoff_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0179_authorized_route_request_queue_handoff_rule.md
+@@ -0,0 +1,25 @@
++# 0179 authorized route request queue handoff rule
++
++0179 materializes authorized SchedulerRouteRequest mappings into a local JSONL
++handoff queue.
++
++Rules:
++
++- Read from context.bus.jsonl through the 0178 reader.
++- Write only scheduler.route_requests.jsonl handoff entries.
++- Require explicit policy_decision_id.
++- Validate queued items with SchedulerRouteRequest.from_mapping.
++- Queue only authorized SchedulerRouteRequest mappings.
++- Do not call handle_scheduler_route_request.
++- Do not modify Scheduler.run().
++- Do not instantiate Scheduler.
++- Do not instantiate EventBus.
++- Do not create a parallel bus.
++- Do not write ControlProxy or RouteProxy frames.
++- Do not call GitHub API.
++- Do not use network.
++- Do not execute conversion.
++- Do not execute inference.
++- Do not write SQL.
++- Do not write Qdrant.
++- Do not write directly to VisPy.
+diff --git a/doc/docs/architecture/runtime/179_authorized_route_request_queue_handoff.dot b/doc/docs/architecture/runtime/179_authorized_route_request_queue_handoff.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/179_authorized_route_request_queue_handoff.dot
+@@ -0,0 +1,21 @@
++digraph authorized_route_request_queue_handoff_0179 {
++  rankdir=LR;
++  label="0179 Authorized route request queue handoff";
++  labelloc=t;
++
++  context_bus [label="context.bus.jsonl"];
++  reader0178 [label="0178 context bus scheduler intake reader"];
++  request [label="authorized SchedulerRouteRequest\npolicy_decision_id required"];
++  validate [label="SchedulerRouteRequest.from_mapping"];
++  queue [label="scheduler.route_requests.jsonl"];
++  future_handler [label="future route handler handoff"];
++
++  context_bus -> reader0178;
++  reader0178 -> request;
++  request -> validate;
++  validate -> queue;
++  queue -> future_handler [label="later patch"];
++
++  queue -> future_handler [label="not executed in 0179", style=dashed];
++  reader0178 -> future_handler [label="forbidden direct handler call", style=dashed];
++}
+diff --git a/doc/CHANGELOG_0179_AUTHORIZED_ROUTE_REQUEST_QUEUE_HANDOFF.md b/doc/CHANGELOG_0179_AUTHORIZED_ROUTE_REQUEST_QUEUE_HANDOFF.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0179_AUTHORIZED_ROUTE_REQUEST_QUEUE_HANDOFF.md
+@@ -0,0 +1,17 @@
++# Changelog — 0179 Authorized route request queue handoff
++
++## Added
++
++- Local JSONL handoff queue for authorized SchedulerRouteRequest mappings.
++- Queue writer from context.bus via the 0178 reader.
++- Validation of every queued item with SchedulerRouteRequest.from_mapping.
++- CLI for writing scheduler.route_requests.jsonl.
++- Tests and rules locking that no route execution, Scheduler modification,
++  EventBus instantiation, frame write, GitHub API, network, conversion,
++  inference, SQL, Qdrant, or VisPy write is introduced.
++
++## Not changed
++
++- No Scheduler.run modification.
++- No route handler call.
++- No ControlProxy/RouteProxy frame write.
+diff --git a/doc/manifests/MANIFEST_0179_CHANGED_FILES.md b/doc/manifests/MANIFEST_0179_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0179_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest — 0179 Authorized route request queue handoff
++
++- PHASE0179_TEST_REPORT.md
++- src/context/authorized_route_request_queue.py
++- tools/append_authorized_route_requests_from_context_bus.py
++- tests/context/test_authorized_route_request_queue_handoff_0179.py
++- tests/tools/test_append_authorized_route_requests_from_context_bus_0179.py
++- tests/rules/test_authorized_route_request_queue_handoff_0179_rule.py
++- doc/architecture/AUTHORIZED_ROUTE_REQUEST_QUEUE_HANDOFF_0179.md
++- doc/code-rules/0179_authorized_route_request_queue_handoff_rule.md
++- doc/docs/architecture/runtime/179_authorized_route_request_queue_handoff.dot
++- doc/CHANGELOG_0179_AUTHORIZED_ROUTE_REQUEST_QUEUE_HANDOFF.md
++- doc/manifests/MANIFEST_0179_CHANGED_FILES.md
