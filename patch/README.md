@@ -13,6 +13,7 @@ Important rule:
 - A `patch.diff` may not always be replayable after manual fixes.
 - When a patch was corrected manually, the final tracked source files and the
   corresponding Git commit take precedence.
+- A patch directory may be marked `SUPERSEDED.md` when it was intentionally not applied.
 - Do not treat generated patch snapshots as runtime data.
 - Do not store user artifacts, fetched GitHub artifacts, photos, audio, video,
   PDFs, archives, or dataset contents here.
@@ -21,9 +22,8 @@ Important rule:
 Recommended reading order for AI agents:
 
 1. Read `doc/code-rules/code_rule.md`.
-2. Read relevant `doc/code-rules/016x_*.md`.
+2. Read relevant `doc/code-rules/016x_*.md` / `017x_*.md`.
 3. Read `doc/architecture/*.md`.
 4. Read `doc/CHANGELOG_*.md`.
-5. Inspect the corresponding `patch/016x-*` directory as historical context.
-6. Prefer tracked source files and Git history when patch snapshots disagree
-   with final code.
+5. Inspect the corresponding `patch/016x-*` or `patch/017x-*` directory as historical context.
+6. Prefer tracked source files and Git history when patch snapshots disagree with final code.
