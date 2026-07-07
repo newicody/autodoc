@@ -1,0 +1,652 @@
+diff --git a/PHASE0181_TEST_REPORT.md b/PHASE0181_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0181_TEST_REPORT.md
+@@ -0,0 +1,25 @@
++# Phase 0181 Test Report — Route handler surface audit
++
++Status: prepared.
++
++Scope:
++- Read-only audit.
++- No new runtime handler.
++- No handler import.
++- No route handler call.
++- No Scheduler modification.
++- No EventBus instantiation.
++- No ControlProxy/RouteProxy frame write.
++- No GitHub API/network.
++- No conversion/inference/SQL/Qdrant/VisPy writes.
++
++Validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/tools/test_audit_route_handler_surfaces_0181.py \
++  tests/rules/test_route_handler_surface_audit_0181_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
+diff --git a/tools/audit_route_handler_surfaces.py b/tools/audit_route_handler_surfaces.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/audit_route_handler_surfaces.py
+@@ -0,0 +1,240 @@
++#!/usr/bin/env python3
++"""Audit existing route handler surfaces without executing them.
++
++0181 is an audit tool only. It reads Python files as text/AST and reports the
++surface symbols that a later route handoff patch may reuse.
++
++It deliberately does not import runtime handler modules, does not call
++handle_scheduler_route_request, does not instantiate Scheduler, does not modify
++Scheduler.run, does not instantiate EventBus, and does not write RouteProxy or
++ControlProxy frames.
++"""
++
++from __future__ import annotations
++
++import argparse
++import ast
++from dataclasses import dataclass
++import hashlib
++import json
++from pathlib import Path
++from typing import Any, Iterable, Mapping
++
++
++ROUTE_HANDLER_SURFACE_AUDIT_SCHEMA = "missipy.route_handler.surface_audit.v1"
++
++EXPECTED_SURFACES: tuple[tuple[str, tuple[str, ...]], ...] = (
++    (
++        "src/runtime/scheduler_route_adapter.py",
++        (
++            "SCHEDULER_ROUTE_REQUEST_SCHEMA",
++            "SchedulerRouteRequest",
++            "scheduler_route_request_mapping",
++        ),
++    ),
++    (
++        "src/runtime/scheduler_route_handler_minimal.py",
++        (
++            "SchedulerRouteHandlerCommand",
++            "handle_scheduler_route_request",
++        ),
++    ),
++    (
++        "src/runtime/scheduler_route_handshake.py",
++        (
++            "prepare_route_for_scheduler",
++            "policy_decision_id",
++        ),
++    ),
++    (
++        "src/runtime/controlproxy_scheduler_handler.py",
++        (
++            "ControlProxy",
++            "SchedulerRouteRequest",
++        ),
++    ),
++)
++
++
++@dataclass(frozen=True, slots=True)
++class RouteHandlerSurfaceFileAudit:
++    """Audit result for one expected handler surface file."""
++
++    path: str
++    exists: bool
++    sha256: str | None
++    ast_parse_ok: bool
++    symbols_found: tuple[str, ...]
++    symbols_missing: tuple[str, ...]
++    imports_detected: tuple[str, ...]
++
++    @property
++    def ready_for_review(self) -> bool:
++        return self.exists and self.ast_parse_ok and not self.symbols_missing
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "path": self.path,
++            "exists": self.exists,
++            "sha256": self.sha256,
++            "ast_parse_ok": self.ast_parse_ok,
++            "symbols_found": list(self.symbols_found),
++            "symbols_missing": list(self.symbols_missing),
++            "imports_detected": list(self.imports_detected),
++            "ready_for_review": self.ready_for_review,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class RouteHandlerSurfaceAuditReport:
++    """Read-only audit report for route handler surfaces."""
++
++    schema: str
++    repo_root: str
++    file_count: int
++    ready_count: int
++    missing_count: int
++    files: tuple[RouteHandlerSurfaceFileAudit, ...]
++    dry_run_only: bool
++    runtime_imports_executed: bool
++    handler_called: bool
++    scheduler_modified: bool
++    frames_written: bool
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "repo_root": self.repo_root,
++            "file_count": self.file_count,
++            "ready_count": self.ready_count,
++            "missing_count": self.missing_count,
++            "files": [item.to_mapping() for item in self.files],
++            "dry_run_only": self.dry_run_only,
++            "runtime_imports_executed": self.runtime_imports_executed,
++            "handler_called": self.handler_called,
++            "scheduler_modified": self.scheduler_modified,
++            "frames_written": self.frames_written,
++        }
++
++
++def audit_route_handler_surfaces(
++    repo_root: Path | str,
++    *,
++    expected_surfaces: Iterable[tuple[str, Iterable[str]]] = EXPECTED_SURFACES,
++) -> RouteHandlerSurfaceAuditReport:
++    """Read expected handler surface files and report discovered symbols.
++
++    The audit uses Path.read_text and ast.parse only. It does not import the
++    audited runtime files and therefore cannot execute handler code.
++    """
++
++    root = Path(repo_root)
++    files = tuple(_audit_file(root, relative, tuple(symbols)) for relative, symbols in expected_surfaces)
++    ready_count = sum(1 for item in files if item.ready_for_review)
++    missing_count = sum(1 for item in files if not item.exists)
++    return RouteHandlerSurfaceAuditReport(
++        schema=ROUTE_HANDLER_SURFACE_AUDIT_SCHEMA,
++        repo_root=str(root),
++        file_count=len(files),
++        ready_count=ready_count,
++        missing_count=missing_count,
++        files=files,
++        dry_run_only=True,
++        runtime_imports_executed=False,
++        handler_called=False,
++        scheduler_modified=False,
++        frames_written=False,
++    )
++
++
++def _audit_file(repo_root: Path, relative: str, expected_symbols: tuple[str, ...]) -> RouteHandlerSurfaceFileAudit:
++    path = repo_root / relative
++    if not path.exists():
++        return RouteHandlerSurfaceFileAudit(
++            path=relative,
++            exists=False,
++            sha256=None,
++            ast_parse_ok=False,
++            symbols_found=(),
++            symbols_missing=expected_symbols,
++            imports_detected=(),
++        )
++
++    text = path.read_text(encoding="utf-8")
++    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
++    symbols = set(_text_symbol_hits(text, expected_symbols))
++    imports: tuple[str, ...] = ()
++    ast_parse_ok = False
++    try:
++        tree = ast.parse(text, filename=str(path))
++    except SyntaxError:
++        tree = None
++    if tree is not None:
++        ast_parse_ok = True
++        symbols.update(_ast_defined_symbols(tree, expected_symbols))
++        imports = tuple(sorted(_ast_imports(tree)))
++
++    found = tuple(symbol for symbol in expected_symbols if symbol in symbols)
++    missing = tuple(symbol for symbol in expected_symbols if symbol not in symbols)
++    return RouteHandlerSurfaceFileAudit(
++        path=relative,
++        exists=True,
++        sha256=digest,
++        ast_parse_ok=ast_parse_ok,
++        symbols_found=found,
++        symbols_missing=missing,
++        imports_detected=imports,
++    )
++
++
++def _text_symbol_hits(text: str, expected_symbols: tuple[str, ...]) -> tuple[str, ...]:
++    return tuple(symbol for symbol in expected_symbols if symbol in text)
++
++
++def _ast_defined_symbols(tree: ast.AST, expected_symbols: tuple[str, ...]) -> set[str]:
++    expected = set(expected_symbols)
++    found: set[str] = set()
++    for node in ast.walk(tree):
++        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name in expected:
++            found.add(node.name)
++        elif isinstance(node, ast.Assign):
++            for target in node.targets:
++                if isinstance(target, ast.Name) and target.id in expected:
++                    found.add(target.id)
++        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id in expected:
++            found.add(node.target.id)
++    return found
++
++
++def _ast_imports(tree: ast.AST) -> set[str]:
++    imports: set[str] = set()
++    for node in ast.walk(tree):
++        if isinstance(node, ast.Import):
++            imports.update(alias.name for alias in node.names)
++        elif isinstance(node, ast.ImportFrom):
++            module = node.module or ""
++            imports.add(module)
++    return imports
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Read-only audit of route handler surface files.")
++    parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    args = parser.parse_args(argv)
++
++    report = audit_route_handler_surfaces(Path(args.repo_root))
++    if args.format == "json":
++        print(json.dumps(report.to_mapping(), indent=2, sort_keys=True))
++    else:
++        print(f"file_count: {report.file_count}")
++        print(f"ready_count: {report.ready_count}")
++        print(f"missing_count: {report.missing_count}")
++        print("dry_run_only: True")
++        print("runtime_imports_executed: False")
++        print("handler_called: False")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_audit_route_handler_surfaces_0181.py b/tests/tools/test_audit_route_handler_surfaces_0181.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_audit_route_handler_surfaces_0181.py
+@@ -0,0 +1,124 @@
++from pathlib import Path
++import importlib.util
++import json
++import subprocess
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "audit_route_handler_surfaces.py"
++
++
++def _load_tool_module():
++    spec = importlib.util.spec_from_file_location("audit_route_handler_surfaces_tool", TOOL)
++    assert spec is not None
++    module = importlib.util.module_from_spec(spec)
++    assert spec.loader is not None
++    spec.loader.exec_module(module)
++    return module
++
++
++def _write_surface(root: Path, relative: str, content: str) -> None:
++    path = root / relative
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(content, encoding="utf-8")
++
++
++def test_0181_audits_fake_handler_surfaces_without_importing_runtime(tmp_path: Path) -> None:
++    module = _load_tool_module()
++
++    _write_surface(
++        tmp_path,
++        "src/runtime/scheduler_route_adapter.py",
++        "SCHEDULER_ROUTE_REQUEST_SCHEMA='x'
++class SchedulerRouteRequest: pass
++def scheduler_route_request_mapping(): pass
++",
++    )
++    _write_surface(
++        tmp_path,
++        "src/runtime/scheduler_route_handler_minimal.py",
++        "class SchedulerRouteHandlerCommand: pass
++def handle_scheduler_route_request(): pass
++",
++    )
++
++    report = module.audit_route_handler_surfaces(
++        tmp_path,
++        expected_surfaces=(
++            (
++                "src/runtime/scheduler_route_adapter.py",
++                (
++                    "SCHEDULER_ROUTE_REQUEST_SCHEMA",
++                    "SchedulerRouteRequest",
++                    "scheduler_route_request_mapping",
++                ),
++            ),
++            (
++                "src/runtime/scheduler_route_handler_minimal.py",
++                (
++                    "SchedulerRouteHandlerCommand",
++                    "handle_scheduler_route_request",
++                ),
++            ),
++        ),
++    )
++
++    assert report.file_count == 2
++    assert report.ready_count == 2
++    assert report.runtime_imports_executed is False
++    assert report.handler_called is False
++    assert report.scheduler_modified is False
++    assert report.frames_written is False
++
++
++def test_0181_reports_missing_symbols_and_files(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    _write_surface(tmp_path, "src/runtime/scheduler_route_adapter.py", "class SchedulerRouteRequest: pass
++")
++
++    report = module.audit_route_handler_surfaces(
++        tmp_path,
++        expected_surfaces=(
++            ("src/runtime/scheduler_route_adapter.py", ("SchedulerRouteRequest", "scheduler_route_request_mapping")),
++            ("src/runtime/missing.py", ("missing_symbol",)),
++        ),
++    )
++
++    assert report.file_count == 2
++    assert report.ready_count == 0
++    assert report.missing_count == 1
++    assert report.files[0].symbols_missing == ("scheduler_route_request_mapping",)
++    assert report.files[1].exists is False
++
++
++def test_0181_cli_outputs_json(tmp_path: Path) -> None:
++    _write_surface(
++        tmp_path,
++        "src/runtime/scheduler_route_adapter.py",
++        "SCHEDULER_ROUTE_REQUEST_SCHEMA='x'
++class SchedulerRouteRequest: pass
++def scheduler_route_request_mapping(): pass
++",
++    )
++
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--repo-root",
++            str(tmp_path),
++            "--format",
++            "json",
++        ],
++        cwd=ROOT,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=True,
++    )
++    report = json.loads(completed.stdout)
++    assert report["schema"] == "missipy.route_handler.surface_audit.v1"
++    assert report["dry_run_only"] is True
++    assert report["runtime_imports_executed"] is False
++    assert report["handler_called"] is False
+diff --git a/tests/rules/test_route_handler_surface_audit_0181_rule.py b/tests/rules/test_route_handler_surface_audit_0181_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_route_handler_surface_audit_0181_rule.py
+@@ -0,0 +1,68 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "audit_route_handler_surfaces.py"
++DOC = ROOT / "doc" / "architecture" / "ROUTE_HANDLER_SURFACE_AUDIT_0181.md"
++RULE = ROOT / "doc" / "code-rules" / "0181_route_handler_surface_audit_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0181_CHANGED_FILES.md"
++
++
++def test_0181_tool_is_read_only_ast_audit() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    for token in [
++        "0181 is an audit tool only",
++        "reads Python files as text/AST",
++        "does not import runtime handler modules",
++        "does not call handle_scheduler_route_request",
++        "does not instantiate Scheduler",
++        "does not modify Scheduler.run",
++        "does not instantiate EventBus",
++        "does not write RouteProxy or ControlProxy frames",
++        "ast.parse",
++        "Path.read_text",
++    ]:
++        assert token in source
++    assert "handle_scheduler_route_request(" not in source
++    assert "from runtime.scheduler_route_handler_minimal import" not in source
++    assert "from kernel.scheduler import Scheduler" not in source
++    assert "from kernel.event_bus import EventBus" not in source
++
++
++def test_0181_doc_locks_audit_before_execution() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    for token in [
++        "0181 audits existing route handler surfaces before execution",
++        "It does not execute the route handler",
++        "It does not import handler modules",
++        "It reads files as text and AST only",
++        "0181 must run before any patch attempts a real handler handoff",
++        "Scheduler/policy/zone remain the authority",
++    ]:
++        assert token in doc
++
++
++def test_0181_rule_blocks_new_handler_or_runtime_bypass() -> None:
++    rule = RULE.read_text(encoding="utf-8")
++    for token in [
++        "Audit existing route handler surfaces before adding or changing handler code",
++        "Do not add a new runtime handler in 0181",
++        "Do not import handler modules for execution",
++        "Do not call handle_scheduler_route_request",
++        "Do not modify Scheduler.run",
++        "Do not instantiate EventBus",
++        "Do not write ControlProxy or RouteProxy frames",
++    ]:
++        assert token in rule
++
++
++def test_0181_manifest_lists_audit_files() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    for token in [
++        "tools/audit_route_handler_surfaces.py",
++        "tests/tools/test_audit_route_handler_surfaces_0181.py",
++        "tests/rules/test_route_handler_surface_audit_0181_rule.py",
++        "doc/architecture/ROUTE_HANDLER_SURFACE_AUDIT_0181.md",
++        "doc/code-rules/0181_route_handler_surface_audit_rule.md",
++    ]:
++        assert token in manifest
+diff --git a/doc/architecture/ROUTE_HANDLER_SURFACE_AUDIT_0181.md b/doc/architecture/ROUTE_HANDLER_SURFACE_AUDIT_0181.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/ROUTE_HANDLER_SURFACE_AUDIT_0181.md
+@@ -0,0 +1,70 @@
++# 0181 — Route handler surface audit
++
++## Decision
++
++0181 audits existing route handler surfaces before execution.
++
++It does not execute the route handler.
++It does not import handler modules.
++It reads files as text and AST only.
++
++0181 must run before any patch attempts a real handler handoff.
++
++## Why this exists
++
++0179 creates `scheduler.route_requests.jsonl`.
++0180 audits that queue as structurally ready.
++
++Before a future patch calls any existing route handler surface, we need an exact
++read-only inventory of the local files and symbols that already exist. This
++respects the main code rule: audit existing code and reuse/extend it before
++creating any new runtime handler.
++
++## Audited surfaces
++
++The audit tracks these existing surfaces:
++
++```text
++src/runtime/scheduler_route_adapter.py
++src/runtime/scheduler_route_handler_minimal.py
++src/runtime/scheduler_route_handshake.py
++src/runtime/controlproxy_scheduler_handler.py
++```
++
++The report includes:
++
++- file presence,
++- SHA256 of the local file content,
++- AST parse status,
++- expected symbols found/missing,
++- imports detected by AST.
++
++## Boundary
++
++0181:
++
++- reads source files,
++- parses AST,
++- writes a report to stdout through the CLI.
++
++0181 does not:
++
++- import runtime handler modules,
++- call handle_scheduler_route_request,
++- instantiate Scheduler,
++- modify Scheduler.run,
++- instantiate EventBus,
++- create a parallel bus,
++- write ControlProxy or RouteProxy frames,
++- call GitHub API,
++- use network,
++- execute conversion,
++- execute inference,
++- write SQL,
++- write Qdrant,
++- write directly to VisPy.
++
++## Authority
++
++Scheduler/policy/zone remain the authority.
++The audit report does not grant execution.
+diff --git a/doc/code-rules/0181_route_handler_surface_audit_rule.md b/doc/code-rules/0181_route_handler_surface_audit_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0181_route_handler_surface_audit_rule.md
+@@ -0,0 +1,23 @@
++# 0181 route handler surface audit rule
++
++0181 is a read-only audit before handler execution.
++
++Rules:
++
++- Audit existing route handler surfaces before adding or changing handler code.
++- Do not add a new runtime handler in 0181.
++- Do not import handler modules for execution.
++- Read route handler files as text and AST only.
++- Do not call handle_scheduler_route_request.
++- Do not modify Scheduler.run.
++- Do not instantiate Scheduler.
++- Do not instantiate EventBus.
++- Do not create a parallel bus.
++- Do not write ControlProxy or RouteProxy frames.
++- Do not call GitHub API.
++- Do not use network.
++- Do not execute conversion.
++- Do not execute inference.
++- Do not write SQL.
++- Do not write Qdrant.
++- Do not write directly to VisPy.
+diff --git a/doc/docs/architecture/runtime/181_route_handler_surface_audit.dot b/doc/docs/architecture/runtime/181_route_handler_surface_audit.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/181_route_handler_surface_audit.dot
+@@ -0,0 +1,19 @@
++digraph route_handler_surface_audit_0181 {
++  rankdir=LR;
++  label="0181 Route handler surface audit";
++  labelloc=t;
++
++  queue_audit [label="0180 dry-run queue audit"];
++  source_files [label="existing handler source files"];
++  ast_text [label="text + AST read-only inspection"];
++  report [label="surface audit report"];
++  future_handoff [label="future handler handoff"];
++
++  queue_audit -> source_files;
++  source_files -> ast_text;
++  ast_text -> report;
++  report -> future_handoff [label="later patch only"];
++
++  ast_text -> future_handoff [label="forbidden execution", style=dashed];
++  report -> future_handoff [label="does not grant execution", style=dashed];
++}
+diff --git a/doc/CHANGELOG_0181_ROUTE_HANDLER_SURFACE_AUDIT.md b/doc/CHANGELOG_0181_ROUTE_HANDLER_SURFACE_AUDIT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0181_ROUTE_HANDLER_SURFACE_AUDIT.md
+@@ -0,0 +1,18 @@
++# Changelog — 0181 Route handler surface audit
++
++## Added
++
++- Read-only route handler surface audit CLI.
++- AST/text inspection of existing handler-related files.
++- Report with file presence, SHA256, AST parse status, expected symbols, and
++  detected imports.
++- Tests/rules locking that no handler import, handler call, Scheduler
++  modification, EventBus instantiation, frame write, GitHub API, network,
++  conversion, inference, SQL, Qdrant, or VisPy write is introduced.
++
++## Not changed
++
++- No new runtime handler.
++- No Scheduler.run modification.
++- No route handler execution.
++- No ControlProxy/RouteProxy frame write.
+diff --git a/doc/manifests/MANIFEST_0181_CHANGED_FILES.md b/doc/manifests/MANIFEST_0181_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0181_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest — 0181 Route handler surface audit
++
++- PHASE0181_TEST_REPORT.md
++- tools/audit_route_handler_surfaces.py
++- tests/tools/test_audit_route_handler_surfaces_0181.py
++- tests/rules/test_route_handler_surface_audit_0181_rule.py
++- doc/architecture/ROUTE_HANDLER_SURFACE_AUDIT_0181.md
++- doc/code-rules/0181_route_handler_surface_audit_rule.md
++- doc/docs/architecture/runtime/181_route_handler_surface_audit.dot
++- doc/CHANGELOG_0181_ROUTE_HANDLER_SURFACE_AUDIT.md
++- doc/manifests/MANIFEST_0181_CHANGED_FILES.md
