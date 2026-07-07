@@ -13,7 +13,7 @@ Reason:
 
 Canonical next step:
 
-- Replace this attempt with a runtime bus/scheduler integration audit patch.
+- Replace this attempt with 0171-runtime_bus_scheduler_artifact_audit.
 - Reuse or extend existing surfaces instead of creating a parallel path:
   - src/runtime/bus_visualization_adapter.py
   - src/runtime/scheduler_route_adapter.py
