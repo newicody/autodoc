@@ -1,0 +1,761 @@
+diff --git a/PHASE0177_TEST_REPORT.md b/PHASE0177_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0177_TEST_REPORT.md
+@@ -0,0 +1,24 @@
++# Phase 0177 Test Report — GitHub artifact scheduler intake contract
++
++Status: prepared.
++
++Scope:
++- Scheduler intake data contract only.
++- Reuses existing `scheduler_route_request_mapping(...)`.
++- No Scheduler.run modification.
++- No Scheduler/Dispatcher/EventBus/PriorityQueue instantiation.
++- No `handle_scheduler_route_request(...)` call.
++- No GitHub API/network.
++- No conversion/inference/SQL/Qdrant/VisPy writes.
++
++Validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/context/test_github_artifact_scheduler_intake_0177.py \
++  tests/tools/test_build_github_artifact_scheduler_intake_0177.py \
++  tests/rules/test_github_artifact_scheduler_intake_contract_0177_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
+diff --git a/src/context/github_artifact_scheduler_intake.py b/src/context/github_artifact_scheduler_intake.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/context/github_artifact_scheduler_intake.py
+@@ -0,0 +1,286 @@
++"""GitHub artifact scheduler intake contract.
++
++0177 turns GitHub artifact/server dataset observations into scheduler-addressable
++intake candidates without executing Scheduler, without modifying Scheduler.run(),
++and without bypassing policy.
++
++The module reuses the existing scheduler route adapter constructor:
++scheduler_route_request_mapping(...).
++
++Important boundary:
++
++- A candidate is not authorized work.
++- A SchedulerRouteRequest is produced only when an explicit policy_decision_id is
++  supplied.
++- This module does not call handle_scheduler_route_request().
++- This module does not instantiate Scheduler, Dispatcher, PriorityQueue,
++  EventBus, ControlProxy, RouteProxyRuntime, VisPy, GitHub, SQL, Qdrant,
++  OpenVINO, or network clients.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++import re
++from typing import Any, Mapping
++
++from runtime.scheduler_route_adapter import (
++    SCHEDULER_ROUTE_REQUEST_SCHEMA,
++    scheduler_route_request_mapping,
++)
++
++
++GITHUB_ARTIFACT_SCHEDULER_INTAKE_CANDIDATE_SCHEMA = "missipy.github_artifact.scheduler_intake_candidate.v1"
++GITHUB_ARTIFACT_SCHEDULER_INTAKE_PLAN_SCHEMA = "missipy.github_artifact.scheduler_intake_plan.v1"
++
++_ALLOWED_STATUS = {
++    "planned",
++    "born",
++    "discovered",
++    "fetched",
++    "synced",
++    "validated",
++    "queued",
++    "running",
++    "succeeded",
++    "failed",
++    "blocked",
++    "dead",
++    "superseded",
++    "retrying",
++    "stale",
++    "partial",
++}
++_SAFE_RE = re.compile(r"[^a-z0-9_.:-]+")
++
++
++class GithubArtifactSchedulerIntakeError(ValueError):
++    """Raised when scheduler intake cannot be built safely."""
++
++
++@dataclass(frozen=True, slots=True)
++class GithubArtifactSchedulerIntakeCandidate:
++    """Scheduler-addressable candidate derived from a dataset observation.
++
++    This is not a command. It is not authorized. It is a compact planning object
++    that can later become a SchedulerRouteRequest through the existing adapter
++    constructor after policy has produced a policy_decision_id.
++    """
++
++    schema: str
++    candidate_ref: str
++    observation_ref: str
++    repository: str
++    run_id: str
++    artifact_id: str
++    dataset_root_ref: str
++    route_id: str
++    task_id: str
++    status: str
++    priority: int
++    requested_at: str
++    authorized: bool = False
++    policy_decision_id: str | None = None
++    scheduler_modified: bool = False
++    scheduler_route_request_ready: bool = False
++    observation_only_source: bool = True
++
++    @classmethod
++    def from_mapping(cls, raw: Mapping[str, Any]) -> "GithubArtifactSchedulerIntakeCandidate":
++        required = {
++            "observation_ref",
++            "repository",
++            "run_id",
++            "artifact_id",
++            "dataset_root_ref",
++            "status",
++            "requested_at",
++        }
++        missing = sorted(required.difference(raw))
++        if missing:
++            raise GithubArtifactSchedulerIntakeError(
++                "scheduler intake candidate missing required fields: " + ", ".join(missing)
++            )
++
++        repository = _require_text(raw, "repository")
++        run_id = _require_text(raw, "run_id")
++        artifact_id = _require_text(raw, "artifact_id")
++        route_id = _safe_id(str(raw.get("route_id") or f"github-artifact-{repository}-{run_id}-{artifact_id}"), prefix="route")
++        task_id = _safe_id(str(raw.get("task_id") or f"task:github-artifact:{repository}:{run_id}:{artifact_id}"), prefix="task")
++        candidate_ref = _safe_id(str(raw.get("candidate_ref") or f"scheduler-candidate:{repository}:{run_id}:{artifact_id}"), prefix="scheduler-candidate")
++        policy_decision_id = raw.get("policy_decision_id")
++        if policy_decision_id is not None:
++            policy_decision_id = _require_id_value("policy_decision_id", policy_decision_id)
++        authorized = bool(raw.get("authorized", False))
++        if authorized and not policy_decision_id:
++            raise GithubArtifactSchedulerIntakeError("authorized candidate requires policy_decision_id")
++
++        return cls(
++            schema=str(raw.get("schema", GITHUB_ARTIFACT_SCHEDULER_INTAKE_CANDIDATE_SCHEMA)),
++            candidate_ref=candidate_ref,
++            observation_ref=_require_text(raw, "observation_ref"),
++            repository=repository,
++            run_id=run_id,
++            artifact_id=artifact_id,
++            dataset_root_ref=_require_text(raw, "dataset_root_ref"),
++            route_id=route_id,
++            task_id=task_id,
++            status=_require_status(raw["status"]),
++            priority=_require_priority(raw.get("priority", 50)),
++            requested_at=_require_timestamp(raw, "requested_at"),
++            authorized=authorized,
++            policy_decision_id=policy_decision_id,
++            scheduler_route_request_ready=authorized and policy_decision_id is not None,
++        )
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "candidate_ref": self.candidate_ref,
++            "observation_ref": self.observation_ref,
++            "repository": self.repository,
++            "run_id": self.run_id,
++            "artifact_id": self.artifact_id,
++            "dataset_root_ref": self.dataset_root_ref,
++            "route_id": self.route_id,
++            "task_id": self.task_id,
++            "status": self.status,
++            "priority": self.priority,
++            "requested_at": self.requested_at,
++            "authorized": self.authorized,
++            "policy_decision_id": self.policy_decision_id,
++            "scheduler_modified": self.scheduler_modified,
++            "scheduler_route_request_ready": self.scheduler_route_request_ready,
++            "observation_only_source": self.observation_only_source,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class GithubArtifactSchedulerIntakePlan:
++    """Pure planning result for scheduler intake."""
++
++    schema: str
++    candidate: GithubArtifactSchedulerIntakeCandidate
++    scheduler_route_request: Mapping[str, Any] | None
++
++    @property
++    def authorized(self) -> bool:
++        return self.scheduler_route_request is not None
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "candidate": self.candidate.to_mapping(),
++            "authorized": self.authorized,
++            "scheduler_route_request": dict(self.scheduler_route_request) if self.scheduler_route_request else None,
++            "uses_existing_scheduler_route_adapter": True,
++            "scheduler_modified": False,
++            "calls_handle_scheduler_route_request": False,
++            "creates_parallel_scheduler": False,
++            "creates_parallel_bus": False,
++        }
++
++
++def build_github_artifact_scheduler_intake_candidate(
++    raw: Mapping[str, Any],
++) -> GithubArtifactSchedulerIntakeCandidate:
++    """Build an unauthorized scheduler-addressable intake candidate."""
++
++    candidate = GithubArtifactSchedulerIntakeCandidate.from_mapping(raw)
++    if candidate.schema != GITHUB_ARTIFACT_SCHEDULER_INTAKE_CANDIDATE_SCHEMA:
++        raise GithubArtifactSchedulerIntakeError("unsupported scheduler intake candidate schema")
++    return candidate
++
++
++def build_github_artifact_scheduler_intake_plan(
++    raw: Mapping[str, Any],
++    *,
++    policy_decision_id: str | None = None,
++    authorized: bool = False,
++) -> GithubArtifactSchedulerIntakePlan:
++    """Build an intake plan, optionally using the existing route request mapping.
++
++    If authorized is false, no SchedulerRouteRequest is produced. If authorized is
++    true, policy_decision_id is mandatory and the existing
++    scheduler_route_request_mapping(...) constructor is used.
++    """
++
++    merged = dict(raw)
++    if policy_decision_id is not None:
++        merged["policy_decision_id"] = policy_decision_id
++    if authorized:
++        merged["authorized"] = True
++    candidate = build_github_artifact_scheduler_intake_candidate(merged)
++
++    route_request: Mapping[str, Any] | None = None
++    if authorized:
++        if not candidate.policy_decision_id:
++            raise GithubArtifactSchedulerIntakeError("policy_decision_id is required for authorized scheduler route request")
++        route_request = scheduler_route_request_mapping(
++            request_id=_safe_id(f"request:{candidate.candidate_ref}", prefix="request"),
++            route_id=candidate.route_id,
++            task_id=candidate.task_id,
++            holder="scheduler",
++            scope="route.write",
++            policy_decision_id=candidate.policy_decision_id,
++            ttl_seconds=300,
++            activate=True,
++            requested_at=candidate.requested_at,
++        )
++        if route_request.get("schema") != SCHEDULER_ROUTE_REQUEST_SCHEMA:
++            raise GithubArtifactSchedulerIntakeError("existing scheduler route adapter returned unexpected schema")
++
++    return GithubArtifactSchedulerIntakePlan(
++        schema=GITHUB_ARTIFACT_SCHEDULER_INTAKE_PLAN_SCHEMA,
++        candidate=candidate,
++        scheduler_route_request=route_request,
++    )
++
++
++def _require_text(raw: Mapping[str, Any], field: str) -> str:
++    value = raw[field]
++    if not isinstance(value, str) or not value.strip():
++        raise GithubArtifactSchedulerIntakeError(f"{field} must be a non-empty string")
++    if "\x00" in value:
++        raise GithubArtifactSchedulerIntakeError(f"{field} must not contain NUL bytes")
++    return value.strip()
++
++
++def _require_id_value(field: str, value: Any) -> str:
++    if not isinstance(value, str) or not value.strip():
++        raise GithubArtifactSchedulerIntakeError(f"{field} must be a non-empty string")
++    if not value.replace("_", "").replace(".", "").replace(":", "").replace("-", "").isalnum():
++        raise GithubArtifactSchedulerIntakeError(f"{field} contains invalid characters")
++    return value
++
++
++def _require_status(value: Any) -> str:
++    if not isinstance(value, str) or value not in _ALLOWED_STATUS:
++        raise GithubArtifactSchedulerIntakeError("status must be in the locked activity vocabulary")
++    return value
++
++
++def _require_priority(value: Any) -> int:
++    if not isinstance(value, int) or isinstance(value, bool) or value < 0 or value > 100:
++        raise GithubArtifactSchedulerIntakeError("priority must be an integer between 0 and 100")
++    return value
++
++
++def _require_timestamp(raw: Mapping[str, Any], field: str) -> str:
++    value = _require_text(raw, field)
++    if "T" not in value or not value.endswith("Z"):
++        raise GithubArtifactSchedulerIntakeError(f"{field} must be a UTC timestamp ending with Z")
++    return value
++
++
++def _safe_id(value: str, *, prefix: str) -> str:
++    candidate = _SAFE_RE.sub(":", value.lower()).strip(":._-")
++    while "::" in candidate:
++        candidate = candidate.replace("::", ":")
++    if not candidate:
++        candidate = prefix
++    if not candidate.startswith(prefix):
++        candidate = f"{prefix}:{candidate}"
++    if len(candidate) > 128:
++        candidate = candidate[:128].rstrip(":._-")
++    return candidate
+diff --git a/tools/build_github_artifact_scheduler_intake.py b/tools/build_github_artifact_scheduler_intake.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/build_github_artifact_scheduler_intake.py
+@@ -0,0 +1,52 @@
++#!/usr/bin/env python3
++"""Build a GitHub artifact scheduler intake candidate or authorized route request."""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import sys
++
++ROOT = Path(__file__).resolve().parents[1]
++SRC = ROOT / "src"
++if str(SRC) not in sys.path:
++    sys.path.insert(0, str(SRC))
++
++from context.github_artifact_scheduler_intake import build_github_artifact_scheduler_intake_plan  # noqa: E402
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(
++        description="Build scheduler intake candidate from GitHub artifact dataset observation."
++    )
++    parser.add_argument("--input", required=True, help="JSON mapping with scheduler intake fields.")
++    parser.add_argument("--policy-decision-id", help="Policy decision id required to emit an authorized route request.")
++    parser.add_argument("--authorized", action="store_true", help="Emit authorized SchedulerRouteRequest mapping.")
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    args = parser.parse_args(argv)
++
++    raw = json.loads(Path(args.input).read_text(encoding="utf-8"))
++    if not isinstance(raw, dict):
++        raise SystemExit("--input JSON must contain an object")
++
++    plan = build_github_artifact_scheduler_intake_plan(
++        raw,
++        policy_decision_id=args.policy_decision_id,
++        authorized=args.authorized,
++    )
++
++    if args.format == "json":
++        print(json.dumps(plan.to_mapping(), indent=2, sort_keys=True))
++    else:
++        print(f"authorized: {plan.authorized}")
++        print(f"candidate_ref: {plan.candidate.candidate_ref}")
++        print(f"route_id: {plan.candidate.route_id}")
++        print(f"task_id: {plan.candidate.task_id}")
++        print("scheduler_modified: False")
++        print("creates_parallel_scheduler: False")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/context/test_github_artifact_scheduler_intake_0177.py b/tests/context/test_github_artifact_scheduler_intake_0177.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/context/test_github_artifact_scheduler_intake_0177.py
+@@ -0,0 +1,63 @@
++import pytest
++
++from context.github_artifact_scheduler_intake import (
++    GITHUB_ARTIFACT_SCHEDULER_INTAKE_CANDIDATE_SCHEMA,
++    GithubArtifactSchedulerIntakeError,
++    build_github_artifact_scheduler_intake_candidate,
++    build_github_artifact_scheduler_intake_plan,
++)
++from runtime.scheduler_route_adapter import SCHEDULER_ROUTE_REQUEST_SCHEMA, SchedulerRouteRequest
++
++
++def _raw() -> dict[str, object]:
++    return {
++        "observation_ref": "event:github-artifact-dataset:newicody:run0177",
++        "repository": "newicody/autodoc-ideas",
++        "run_id": "run0177",
++        "artifact_id": "artifact0177",
++        "dataset_root_ref": "server-dataset:github-artifacts",
++        "status": "queued",
++        "priority": 55,
++        "requested_at": "2026-07-07T00:00:00Z",
++    }
++
++
++def test_0177_builds_unauthorized_scheduler_intake_candidate() -> None:
++    candidate = build_github_artifact_scheduler_intake_candidate(_raw())
++
++    assert candidate.schema == GITHUB_ARTIFACT_SCHEDULER_INTAKE_CANDIDATE_SCHEMA
++    assert candidate.authorized is False
++    assert candidate.policy_decision_id is None
++    assert candidate.scheduler_route_request_ready is False
++    assert candidate.scheduler_modified is False
++    assert candidate.route_id.startswith("route:")
++
++
++def test_0177_plan_without_policy_does_not_emit_scheduler_route_request() -> None:
++    plan = build_github_artifact_scheduler_intake_plan(_raw())
++
++    mapping = plan.to_mapping()
++    assert mapping["authorized"] is False
++    assert mapping["scheduler_route_request"] is None
++    assert mapping["uses_existing_scheduler_route_adapter"] is True
++    assert mapping["calls_handle_scheduler_route_request"] is False
++
++
++def test_0177_authorized_plan_uses_existing_scheduler_route_request_mapping() -> None:
++    plan = build_github_artifact_scheduler_intake_plan(
++        _raw(),
++        policy_decision_id="policy:allow:github-artifact:0177",
++        authorized=True,
++    )
++
++    assert plan.authorized is True
++    assert plan.scheduler_route_request is not None
++    assert plan.scheduler_route_request["schema"] == SCHEDULER_ROUTE_REQUEST_SCHEMA
++    parsed = SchedulerRouteRequest.from_mapping(plan.scheduler_route_request)
++    assert parsed.authorized is True
++    assert parsed.policy_decision_id == "policy:allow:github-artifact:0177"
++
++
++def test_0177_rejects_authorized_candidate_without_policy() -> None:
++    with pytest.raises(GithubArtifactSchedulerIntakeError, match="policy_decision_id"):
++        build_github_artifact_scheduler_intake_plan(_raw(), authorized=True)
+diff --git a/tests/tools/test_build_github_artifact_scheduler_intake_0177.py b/tests/tools/test_build_github_artifact_scheduler_intake_0177.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_build_github_artifact_scheduler_intake_0177.py
+@@ -0,0 +1,72 @@
++from pathlib import Path
++import json
++import subprocess
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "build_github_artifact_scheduler_intake.py"
++
++
++def _write_input(path: Path) -> None:
++    path.write_text(
++        json.dumps(
++            {
++                "observation_ref": "event:github-artifact-dataset:tool",
++                "repository": "newicody/autodoc-ideas",
++                "run_id": "run0177tool",
++                "artifact_id": "artifact0177tool",
++                "dataset_root_ref": "server-dataset:github-artifacts",
++                "status": "queued",
++                "priority": 50,
++                "requested_at": "2026-07-07T00:00:00Z",
++            }
++        ),
++        encoding="utf-8",
++    )
++
++
++def test_0177_tool_builds_unauthorized_candidate(tmp_path: Path) -> None:
++    input_path = tmp_path / "intake.json"
++    _write_input(input_path)
++
++    completed = subprocess.run(
++        [sys.executable, str(TOOL), "--input", str(input_path), "--format", "json"],
++        cwd=ROOT,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=True,
++    )
++    report = json.loads(completed.stdout)
++    assert report["authorized"] is False
++    assert report["scheduler_route_request"] is None
++    assert report["scheduler_modified"] is False
++
++
++def test_0177_tool_builds_authorized_route_request_only_with_policy(tmp_path: Path) -> None:
++    input_path = tmp_path / "intake.json"
++    _write_input(input_path)
++
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--input",
++            str(input_path),
++            "--authorized",
++            "--policy-decision-id",
++            "policy:allow:github-artifact:tool",
++            "--format",
++            "json",
++        ],
++        cwd=ROOT,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=True,
++    )
++    report = json.loads(completed.stdout)
++    assert report["authorized"] is True
++    assert report["scheduler_route_request"]["authorized"] is True
++    assert report["scheduler_route_request"]["policy_decision_id"] == "policy:allow:github-artifact:tool"
+diff --git a/tests/rules/test_github_artifact_scheduler_intake_contract_0177_rule.py b/tests/rules/test_github_artifact_scheduler_intake_contract_0177_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_github_artifact_scheduler_intake_contract_0177_rule.py
+@@ -0,0 +1,76 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "context" / "github_artifact_scheduler_intake.py"
++TOOL = ROOT / "tools" / "build_github_artifact_scheduler_intake.py"
++DOC = ROOT / "doc" / "architecture" / "GITHUB_ARTIFACT_SCHEDULER_INTAKE_CONTRACT_0177.md"
++RULE = ROOT / "doc" / "code-rules" / "0177_github_artifact_scheduler_intake_contract_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0177_CHANGED_FILES.md"
++
++
++def test_0177_module_reuses_existing_scheduler_route_adapter() -> None:
++    source = MODULE.read_text(encoding="utf-8")
++    for token in [
++        "from runtime.scheduler_route_adapter import",
++        "scheduler_route_request_mapping",
++        "SCHEDULER_ROUTE_REQUEST_SCHEMA",
++        "A candidate is not authorized work",
++        "policy_decision_id",
++        "This module does not call handle_scheduler_route_request()",
++        "without modifying Scheduler.run()",
++        "without bypassing policy",
++    ]:
++        assert token in source
++    assert "handle_scheduler_route_request(" not in source
++    assert "from kernel.scheduler import Scheduler" not in source
++    assert "from kernel.event_bus import EventBus" not in source
++
++
++def test_0177_doc_locks_scheduler_intake_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    for token in [
++        "0177 is a scheduler intake contract, not a Scheduler implementation",
++        "It reuses scheduler_route_request_mapping",
++        "It does not call handle_scheduler_route_request",
++        "It does not modify Scheduler.run()",
++        "A candidate is not authorized work",
++        "A SchedulerRouteRequest is emitted only with an explicit policy_decision_id",
++        "Scheduler/policy/zone remain the authority",
++    ]:
++        assert token in doc
++
++
++def test_0177_rule_blocks_scheduler_bypass() -> None:
++    rule = RULE.read_text(encoding="utf-8")
++    for token in [
++        "Reuse runtime.scheduler_route_adapter.scheduler_route_request_mapping",
++        "Do not call handle_scheduler_route_request",
++        "Do not modify Scheduler.run()",
++        "Do not instantiate Scheduler",
++        "Do not instantiate EventBus",
++        "Do not bypass Scheduler/policy/zone",
++        "Do not emit authorized SchedulerRouteRequest without policy_decision_id",
++    ]:
++        assert token in rule
++
++
++def test_0177_tool_is_local_builder_only() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    assert "--policy-decision-id" in source
++    assert "--authorized" in source
++    assert "requests" not in source
++    assert "urllib" not in source
++    assert "handle_scheduler_route_request" not in source
++
++
++def test_0177_manifest_lists_intake_files() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    for token in [
++        "src/context/github_artifact_scheduler_intake.py",
++        "tools/build_github_artifact_scheduler_intake.py",
++        "tests/context/test_github_artifact_scheduler_intake_0177.py",
++        "tests/tools/test_build_github_artifact_scheduler_intake_0177.py",
++        "tests/rules/test_github_artifact_scheduler_intake_contract_0177_rule.py",
++    ]:
++        assert token in manifest
+diff --git a/doc/architecture/GITHUB_ARTIFACT_SCHEDULER_INTAKE_CONTRACT_0177.md b/doc/architecture/GITHUB_ARTIFACT_SCHEDULER_INTAKE_CONTRACT_0177.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/GITHUB_ARTIFACT_SCHEDULER_INTAKE_CONTRACT_0177.md
+@@ -0,0 +1,47 @@
++# 0177 — GitHub artifact scheduler intake contract
++
++## Decision
++
++0177 is a scheduler intake contract, not a Scheduler implementation.
++
++It reuses scheduler_route_request_mapping from the existing scheduler route
++adapter. It does not call handle_scheduler_route_request, does not modify
++Scheduler.run(), does not instantiate Scheduler, and does not bypass
++Scheduler/policy/zone.
++
++A candidate is not authorized work. A SchedulerRouteRequest is emitted only with
++an explicit policy_decision_id.
++
++## Why this exists
++
++0176 turns GitHub artifact/server dataset outcomes into existing bus observation
++facts.
++
++0177 prepares the next boundary: a local scheduler-addressable candidate that
++can later become an authorized SchedulerRouteRequest, but only after policy has
++decided and provided a policy_decision_id.
++
++## Boundary
++
++The intake contract:
++
++- builds an unauthorized scheduler intake candidate from dataset/bus observation
++  metadata,
++- optionally builds an authorized SchedulerRouteRequest mapping through
++  `scheduler_route_request_mapping(...)`,
++- requires explicit `policy_decision_id` for authorized route requests,
++- does not call the route handler or handshake,
++- does not write frames,
++- does not publish bus facts,
++- does not execute Scheduler,
++- does not call GitHub,
++- does not use network,
++- does not run conversion,
++- does not run inference.
++
++## Authority
++
++Scheduler/policy/zone remain the authority.
++
++The contract only prepares data at the boundary. It does not decide security,
++priority policy, route eligibility, or execution.
+diff --git a/doc/code-rules/0177_github_artifact_scheduler_intake_contract_rule.md b/doc/code-rules/0177_github_artifact_scheduler_intake_contract_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0177_github_artifact_scheduler_intake_contract_rule.md
+@@ -0,0 +1,23 @@
++# 0177 GitHub artifact scheduler intake contract rule
++
++0177 prepares scheduler-addressable intake data without becoming the Scheduler.
++
++Rules:
++
++- Reuse runtime.scheduler_route_adapter.scheduler_route_request_mapping.
++- Do not call handle_scheduler_route_request.
++- Do not modify Scheduler.run().
++- Do not instantiate Scheduler.
++- Do not instantiate EventBus.
++- Do not instantiate Dispatcher.
++- Do not instantiate PriorityQueue.
++- Do not bypass Scheduler/policy/zone.
++- Do not emit authorized SchedulerRouteRequest without policy_decision_id.
++- A candidate is not authorized work.
++- Do not call GitHub API.
++- Do not use network.
++- Do not execute conversion.
++- Do not execute inference.
++- Do not write SQL.
++- Do not write Qdrant.
++- Do not write directly to VisPy.
+diff --git a/doc/docs/architecture/runtime/177_github_artifact_scheduler_intake_contract.dot b/doc/docs/architecture/runtime/177_github_artifact_scheduler_intake_contract.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/177_github_artifact_scheduler_intake_contract.dot
+@@ -0,0 +1,21 @@
++digraph github_artifact_scheduler_intake_contract_0177 {
++  rankdir=LR;
++  label="0177 GitHub artifact scheduler intake contract";
++  labelloc=t;
++
++  observation [label="GitHub artifact dataset observation"];
++  candidate [label="scheduler intake candidate\nnot authorized work"];
++  policy [label="policy decision\npolicy_decision_id"];
++  mapping [label="scheduler_route_request_mapping(...)\nexisting adapter"];
++  route_request [label="SchedulerRouteRequest\nauthorized=True"];
++  scheduler [label="Scheduler / policy / zone\nauthority"];
++
++  observation -> candidate;
++  candidate -> mapping [label="only with explicit policy_decision_id"];
++  policy -> mapping;
++  mapping -> route_request;
++  route_request -> scheduler [label="future authorized path"];
++
++  candidate -> scheduler [label="forbidden direct execution", style=dashed];
++  mapping -> scheduler [label="forbidden Scheduler.run modification", style=dashed];
++}
+diff --git a/doc/CHANGELOG_0177_GITHUB_ARTIFACT_SCHEDULER_INTAKE_CONTRACT.md b/doc/CHANGELOG_0177_GITHUB_ARTIFACT_SCHEDULER_INTAKE_CONTRACT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0177_GITHUB_ARTIFACT_SCHEDULER_INTAKE_CONTRACT.md
+@@ -0,0 +1,18 @@
++# Changelog — 0177 GitHub artifact scheduler intake contract
++
++## Added
++
++- Pure scheduler intake candidate contract for GitHub artifact/server dataset
++  observations.
++- Optional authorized route request mapping using existing
++  `scheduler_route_request_mapping(...)`.
++- Tests and rules locking that no Scheduler, EventBus, Dispatcher, PriorityQueue,
++  GitHub API, network, conversion, inference, SQL, Qdrant, VisPy, or route
++  handler execution is introduced.
++
++## Not changed
++
++- No Scheduler modification.
++- No route execution.
++- No bus publication.
++- No GitHub API.
+diff --git a/doc/manifests/MANIFEST_0177_CHANGED_FILES.md b/doc/manifests/MANIFEST_0177_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0177_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest — 0177 GitHub artifact scheduler intake contract
++
++- PHASE0177_TEST_REPORT.md
++- src/context/github_artifact_scheduler_intake.py
++- tools/build_github_artifact_scheduler_intake.py
++- tests/context/test_github_artifact_scheduler_intake_0177.py
++- tests/tools/test_build_github_artifact_scheduler_intake_0177.py
++- tests/rules/test_github_artifact_scheduler_intake_contract_0177_rule.py
++- doc/architecture/GITHUB_ARTIFACT_SCHEDULER_INTAKE_CONTRACT_0177.md
++- doc/code-rules/0177_github_artifact_scheduler_intake_contract_rule.md
++- doc/docs/architecture/runtime/177_github_artifact_scheduler_intake_contract.dot
++- doc/CHANGELOG_0177_GITHUB_ARTIFACT_SCHEDULER_INTAKE_CONTRACT.md
++- doc/manifests/MANIFEST_0177_CHANGED_FILES.md
