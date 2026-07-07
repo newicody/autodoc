@@ -1,12 +1,23 @@
-# Phase 0171 test report
+# Phase 0171 Test Report — Runtime bus/scheduler artifact audit
 
-Planned validation:
+Status: prepared.
 
+Scope:
+- Audit-only guard for GitHub artifact/dataset integration.
+- No new runtime bus.
+- No direct VisPy writer.
+- No Scheduler loop modification.
+- Reuse existing `event.bus` / `context.bus` observation surfaces.
+- Reuse existing scheduler route adapter and handler surfaces.
+
+Targeted tests:
 ```bash
 python -m compileall -q src tests tools
-python -m pytest -q tests/context/test_github_attachment_reference_fetch_contract_0171.py tests/tools/test_run_github_attachment_reference_fetch_once_0171.py tests/rules/test_github_attachment_reference_fetch_0171_rule.py
+python -m pytest -q tests/rules/test_runtime_bus_scheduler_artifact_audit_0171_rule.py
 python -m pytest -q tests/rules
 python -m pytest -q
 ```
 
-Expected status: local fixture attachment fetch passes; no live GitHub dependency.
+Expected result:
+- rules pass
+- full suite remains green
