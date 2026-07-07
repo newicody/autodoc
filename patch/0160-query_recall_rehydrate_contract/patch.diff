@@ -1,0 +1,856 @@
+diff --git a/PHASE0160_TEST_REPORT.md b/PHASE0160_TEST_REPORT.md
+new file mode 100644
+index 0000000..fc17b4a
+--- /dev/null
++++ b/PHASE0160_TEST_REPORT.md
+@@ -0,0 +1,35 @@
++# Phase 0160 test report — query recall rehydrate contract
++
++## Audit
++
++The 0160 audit found existing surfaces for query embedding, Qdrant recall
++payload handling, and SQL rehydrate. The patch therefore adds a contract smoke
++only and does not add a new adapter/backend/orchestrator.
++
++## Target tests
++
++```bash
++env -u AUTODOC_SQL_CONTEXT_DB PYTHONPATH=src:. pytest -q   tests/tools/test_query_recall_rehydrate_contract_0160.py   tests/rules/test_query_recall_rehydrate_contract_0160_rule.py
++```
++
++## Target operator execution
++
++```bash
++python tools/run_query_recall_rehydrate_contract_smoke.py .   --query-text "P1 closed loop artifact vector indexing SQL persistence"   --recall-json .var/smoke/artifacts/0158/p1_closed_loop_operator_result.json   --db-path .var/local/sql_context_store.sqlite3   --execute   --format json
++```
++
++## Expected result
++
++```text
++status: ok
++query_text starts with query:
++rehydrate_status: ok
++hydrated_count >= 1
++missing_count: 0
++sql_refs contains sql:artifact/vector-indexing/0158
++```
++
++## Boundary
++
++0160 is an operator smoke only. It does not create a SQL worker, query
++orchestrator, Scheduler runner, OpenVINO adapter or Qdrant adapter.
+diff --git a/doc/CHANGELOG_0160_QUERY_RECALL_REHYDRATE_CONTRACT.md b/doc/CHANGELOG_0160_QUERY_RECALL_REHYDRATE_CONTRACT.md
+new file mode 100644
+index 0000000..79ce3d1
+--- /dev/null
++++ b/doc/CHANGELOG_0160_QUERY_RECALL_REHYDRATE_CONTRACT.md
+@@ -0,0 +1,25 @@
++# Changelog — 0160 query recall rehydrate contract
++
++0160 adds a conservative contract smoke for the user-query side of the recall
++path.
++
++## Added
++
++- `tools/run_query_recall_rehydrate_contract_smoke.py`
++- tests for query-role normalization and dry-run plan
++- 0160 code rule
++- 0160 architecture document
++- 0160 runtime DOT
++- manifest and test report
++
++## Decision
++
++A user query enters the recall path as E5 `query:` text. Qdrant recall returns
++`sql_ref` pointers. SQL rehydrate is delegated to 0159.
++
++## Boundary
++
++No runtime Python under `src/` is modified.
++
++No OpenVINO adapter, Qdrant adapter, SQL worker, Scheduler runner or query
++orchestrator is introduced.
+diff --git a/doc/architecture/QUERY_RECALL_REHYDRATE_CONTRACT_0160.md b/doc/architecture/QUERY_RECALL_REHYDRATE_CONTRACT_0160.md
+new file mode 100644
+index 0000000..aaeb395
+--- /dev/null
++++ b/doc/architecture/QUERY_RECALL_REHYDRATE_CONTRACT_0160.md
+@@ -0,0 +1,91 @@
++# 0160 — Query recall rehydrate contract
++
++## Decision
++
++0160 locks the boundary for a user query entering the recall side of P1:
++
++```text
++query text
++-> E5 query-role text
++-> existing query embedding surface
++-> Qdrant recall payload carrying sql_ref
++-> 0159 SQL rehydrate
++-> hydrated context
++```
++
++This phase does not introduce a new adapter, worker, runner, orchestrator or
++backend client. It adds only one operator smoke:
++
++```text
++tools/run_query_recall_rehydrate_contract_smoke.py
++```
++
++## Audit result
++
++The 0160 audit found existing surfaces:
++
++| Surface | Role |
++| --- | --- |
++| `tools/embed_e5.py` | existing E5/OpenVINO query embedding CLI |
++| `tools/run_qdrant_projection_live_smoke.py` | existing Qdrant live projection smoke |
++| `tools/run_qdrant_recall_sql_rehydrate_smoke.py` | existing 0159 recall payload -> SQL rehydrate operator |
++| `tools/search_e5_corpus.py` | existing local E5 search CLI |
++| `src/inference/e5_pipeline.py` | existing E5/OpenVINO pipeline |
++| `src/inference/qdrant_projection_adapter.py` | existing projection/recall helper vocabulary, including `unique_sql_context_refs_from_recall` |
++| `src/context/sql_context_store.py` | existing durable SQL authority, including `DbApiSqlContextStore.get_record` |
++
++## Contract
++
++0160 requires:
++
++```text
++query_text starts with query:
++recall payload contains sql_ref
++0159 returns hydrated_count >= 1
++0159 returns missing_count = 0
++```
++
++## Boundary
++
++0160 does not create:
++
++- `SQLPersistenceWorker`
++- `SQLOrchestrator`
++- `LocalArtifactOrchestrator`
++- `LocalVectorIndexingOrchestrator`
++- `SchedulerOpenVINORunner`
++- `VectorOpenVINOEmbeddingAdapter`
++- `VectorQdrantProjectionAdapter`
++- `QdrantRecallOrchestrator`
++- `QueryRecallOrchestrator`
++
++0160 does not modify runtime Python under `src/`.
++
++## Operator command
++
++Dry-run:
++
++```bash
++python tools/run_query_recall_rehydrate_contract_smoke.py . --format markdown
++```
++
++Execute against the 0158/0159 validated path:
++
++```bash
++python tools/run_query_recall_rehydrate_contract_smoke.py .   --query-text "P1 closed loop artifact vector indexing SQL persistence"   --recall-json .var/smoke/artifacts/0158/p1_closed_loop_operator_result.json   --db-path .var/local/sql_context_store.sqlite3   --execute   --format json
++```
++
++## Closure definition
++
++0160 is validated when the result reports:
++
++```text
++status: ok
++query_text starts with query:
++rehydrate_status: ok
++hydrated_count >= 1
++missing_count: 0
++sql_refs contains sql:artifact/vector-indexing/0158
++```
++
++SQL remains durable authority. Qdrant remains projection/recall metadata.
+diff --git a/doc/code-rules/0160_query_recall_rehydrate_contract_rule.md b/doc/code-rules/0160_query_recall_rehydrate_contract_rule.md
+new file mode 100644
+index 0000000..4728643
+--- /dev/null
++++ b/doc/code-rules/0160_query_recall_rehydrate_contract_rule.md
+@@ -0,0 +1,54 @@
++# Code rule — 0160 query recall rehydrate contract
++
++0160 may add one operator smoke tool:
++
++```text
++tools/run_query_recall_rehydrate_contract_smoke.py
++```
++
++## Required behavior
++
++The tool may:
++
++- normalize user query text to the E5 `query:` role;
++- accept an optional query embedding artifact produced by an existing E5/OpenVINO surface;
++- accept a Qdrant recall payload carrying `sql_ref` pointers;
++- delegate SQL rehydration to the existing 0159 tool;
++- write local JSON/Markdown reports under `.var/smoke/artifacts/0160`.
++
++## Required reuse
++
++The tool must document and reuse existing surfaces:
++
++- `tools/embed_e5.py`
++- `tools/run_qdrant_recall_sql_rehydrate_smoke.py`
++- `tools/run_qdrant_projection_live_smoke.py`
++- `tools/search_e5_corpus.py`
++- `src/inference/e5_pipeline.py`
++- `src/inference/qdrant_projection_adapter.py`
++- `src/context/sql_context_store.py`
++- `DbApiSqlContextStore.get_record`
++- `unique_sql_context_refs_from_recall`
++
++## Forbidden
++
++Do not create:
++
++- `SQLPersistenceWorker`
++- `SQLOrchestrator`
++- `LocalArtifactOrchestrator`
++- `LocalVectorIndexingOrchestrator`
++- `SchedulerOpenVINORunner`
++- `VectorOpenVINOEmbeddingAdapter`
++- `VectorQdrantProjectionAdapter`
++- `QdrantRecallOrchestrator`
++- `QueryRecallOrchestrator`
++
++Do not modify Scheduler, RouteProxy, OpenVINO, Qdrant adapter or SQL authority
++runtime code for this phase.
++
++## Boundary
++
++0160 is a contract/operator smoke only. It is not a new query runtime.
++
++SQL remains durable authority. Qdrant remains projection/recall metadata.
+diff --git a/doc/docs/architecture/runtime/160_query_recall_rehydrate_contract.dot b/doc/docs/architecture/runtime/160_query_recall_rehydrate_contract.dot
+new file mode 100644
+index 0000000..4102e1d
+--- /dev/null
++++ b/doc/docs/architecture/runtime/160_query_recall_rehydrate_contract.dot
+@@ -0,0 +1,32 @@
++digraph QueryRecallRehydrateContract0160 {
++    rankdir=LR;
++    compound=true;
++
++    graph [fontname="Arial", fontsize=11, label="0160 — Query recall rehydrate contract", labelloc=t];
++    node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10];
++    edge [fontname="Arial", fontsize=9, arrowsize=0.7];
++
++    query [label="user query
++E5 role: query:", fillcolor="#e3f2fd", color="#1565c0"];
++    embed [label="existing E5/OpenVINO surface
++tools/embed_e5.py", fillcolor="#e8f5e9", color="#2e7d32"];
++    recall [label="Qdrant recall payload
++sql_ref pointers", fillcolor="#e8f5e9", color="#2e7d32"];
++    rehydrate [label="0159 existing rehydrate operator
++run_qdrant_recall_sql_rehydrate_smoke.py", fillcolor="#fff8e1", color="#f9a825"];
++    sql [label="DbApiSqlContextStore.get_record
++SQL durable authority", fillcolor="#fff8e1", color="#f9a825"];
++    result [label="hydrated query context
++JSON + Markdown", fillcolor="#ede7f6", color="#512da8"];
++    forbidden [label="forbidden parallel surfaces
++new adapters / worker / orchestrator", fillcolor="#ffebee", color="#c62828"];
++
++    query -> embed [label="query text"];
++    embed -> recall [label="query vector boundary"];
++    recall -> rehydrate [label="sql_ref payload"];
++    rehydrate -> sql [label="get_record"];
++    sql -> result [label="hydrated context"];
++    forbidden -> embed [style=dashed, label="do not replace"];
++    forbidden -> recall [style=dashed, label="do not replace"];
++    forbidden -> rehydrate [style=dashed, label="reuse 0159"];
++}
+diff --git a/doc/manifests/MANIFEST_0160_CHANGED_FILES.md b/doc/manifests/MANIFEST_0160_CHANGED_FILES.md
+new file mode 100644
+index 0000000..de5cd79
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0160_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest — 0160 changed files
++
++- `tools/run_query_recall_rehydrate_contract_smoke.py`
++- `tests/tools/test_query_recall_rehydrate_contract_0160.py`
++- `tests/rules/test_query_recall_rehydrate_contract_0160_rule.py`
++- `doc/architecture/QUERY_RECALL_REHYDRATE_CONTRACT_0160.md`
++- `doc/code-rules/0160_query_recall_rehydrate_contract_rule.md`
++- `doc/docs/architecture/runtime/160_query_recall_rehydrate_contract.dot`
++- `doc/CHANGELOG_0160_QUERY_RECALL_REHYDRATE_CONTRACT.md`
++- `doc/manifests/MANIFEST_0160_CHANGED_FILES.md`
++- `PHASE0160_TEST_REPORT.md`
++
++Boundary: operator smoke only. No runtime Python under `src/` is modified.
+diff --git a/tests/rules/test_query_recall_rehydrate_contract_0160_rule.py b/tests/rules/test_query_recall_rehydrate_contract_0160_rule.py
+new file mode 100644
+index 0000000..58e85a5
+--- /dev/null
++++ b/tests/rules/test_query_recall_rehydrate_contract_0160_rule.py
+@@ -0,0 +1,83 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "run_query_recall_rehydrate_contract_smoke.py"
++DOC = ROOT / "doc" / "architecture" / "QUERY_RECALL_REHYDRATE_CONTRACT_0160.md"
++RULE = ROOT / "doc" / "code-rules" / "0160_query_recall_rehydrate_contract_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0160_CHANGED_FILES.md"
++
++
++def test_0160_files_exist() -> None:
++    assert TOOL.exists()
++    assert DOC.exists()
++    assert RULE.exists()
++    assert MANIFEST.exists()
++
++
++def test_0160_tool_locks_existing_surface_reuse() -> None:
++    text = TOOL.read_text(encoding="utf-8")
++    for token in [
++        "tools/embed_e5.py",
++        "tools/run_qdrant_recall_sql_rehydrate_smoke.py",
++        "tools/run_qdrant_projection_live_smoke.py",
++        "tools/search_e5_corpus.py",
++        "src/inference/e5_pipeline.py",
++        "src/inference/qdrant_projection_adapter.py",
++        "src/context/sql_context_store.py",
++        "DbApiSqlContextStore.get_record",
++        "unique_sql_context_refs_from_recall",
++        "query:",
++        "SQL remains durable authority",
++        "Qdrant remains projection/recall metadata",
++        "SQLPersistenceWorker",
++        "SQLOrchestrator",
++        "LocalArtifactOrchestrator",
++        "LocalVectorIndexingOrchestrator",
++        "SchedulerOpenVINORunner",
++        "VectorOpenVINOEmbeddingAdapter",
++        "VectorQdrantProjectionAdapter",
++        "QdrantRecallOrchestrator",
++        "QueryRecallOrchestrator",
++    ]:
++        assert token in text
++    for forbidden_class in [
++        "class SQLPersistenceWorker",
++        "class SQLOrchestrator",
++        "class LocalArtifactOrchestrator",
++        "class LocalVectorIndexingOrchestrator",
++        "class SchedulerOpenVINORunner",
++        "class VectorOpenVINOEmbeddingAdapter",
++        "class VectorQdrantProjectionAdapter",
++        "class QdrantRecallOrchestrator",
++        "class QueryRecallOrchestrator",
++    ]:
++        assert forbidden_class not in text
++
++
++def test_0160_docs_define_query_recall_rehydrate_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    rule = RULE.read_text(encoding="utf-8")
++    for token in ["query text", "query:", "Qdrant recall", "sql_ref", "0159", "SQL remains durable authority", "Qdrant remains projection/recall metadata"]:
++        assert token in doc
++    for token in ["Do not create", "VectorOpenVINOEmbeddingAdapter", "VectorQdrantProjectionAdapter", "QueryRecallOrchestrator"]:
++        assert token in rule
++
++
++def test_0160_manifest_changed_files_are_limited() -> None:
++    text = MANIFEST.read_text(encoding="utf-8")
++    for path in [
++        "tools/run_query_recall_rehydrate_contract_smoke.py",
++        "tests/tools/test_query_recall_rehydrate_contract_0160.py",
++        "tests/rules/test_query_recall_rehydrate_contract_0160_rule.py",
++        "doc/architecture/QUERY_RECALL_REHYDRATE_CONTRACT_0160.md",
++        "doc/code-rules/0160_query_recall_rehydrate_contract_rule.md",
++        "doc/docs/architecture/runtime/160_query_recall_rehydrate_contract.dot",
++        "doc/CHANGELOG_0160_QUERY_RECALL_REHYDRATE_CONTRACT.md",
++        "doc/manifests/MANIFEST_0160_CHANGED_FILES.md",
++        "PHASE0160_TEST_REPORT.md",
++    ]:
++        assert path in text
++    assert "src/inference/e5_pipeline.py" not in text
++    assert "src/inference/qdrant_projection_adapter.py" not in text
++    assert "src/context/sql_context_store.py" not in text
+diff --git a/tests/tools/test_query_recall_rehydrate_contract_0160.py b/tests/tools/test_query_recall_rehydrate_contract_0160.py
+new file mode 100644
+index 0000000..5d42e8f
+--- /dev/null
++++ b/tests/tools/test_query_recall_rehydrate_contract_0160.py
+@@ -0,0 +1,87 @@
++from __future__ import annotations
++
++import importlib.util
++import json
++from pathlib import Path
++import subprocess
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "run_query_recall_rehydrate_contract_smoke.py"
++
++
++def _load_module():
++    spec = importlib.util.spec_from_file_location("run_query_recall_rehydrate_contract_smoke", TOOL)
++    assert spec is not None
++    assert spec.loader is not None
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    spec.loader.exec_module(module)
++    return module
++
++
++def test_0160_normalizes_query_text_and_rejects_passage_role() -> None:
++    module = _load_module()
++    assert module._normalize_query_text("hello") == "query: hello"
++    assert module._normalize_query_text("query: hello") == "query: hello"
++    try:
++        module._normalize_query_text("passage: hello")
++    except ValueError as exc:
++        assert "query role" in str(exc)
++    else:
++        raise AssertionError("passage role should be rejected")
++
++
++def test_0160_plan_reuses_existing_surfaces_without_new_backend(tmp_path: Path) -> None:
++    module = _load_module()
++    recall_json = tmp_path / "recall.json"
++    recall_json.write_text(json.dumps({"sql_ref": "sql:artifact/vector-indexing/0158"}), encoding="utf-8")
++    plan = module.build_query_recall_rehydrate_contract_plan(
++        ROOT,
++        output_dir=tmp_path / "out",
++        recall_json=recall_json,
++        query_embedding_json=None,
++        db_path=tmp_path / "sql.sqlite3",
++        query_text="P1 closed loop",
++        execute=False,
++    )
++    assert plan.ready
++    payload = plan.to_mapping()
++    assert payload["ready_for_query_recall_rehydrate_contract"] is True
++    assert payload["query_text"] == "query: P1 closed loop"
++    assert "tools/embed_e5.py" in " ".join(payload["commands"]["optional_query_embedding"])
++    assert "tools/run_qdrant_recall_sql_rehydrate_smoke.py" in " ".join(payload["commands"]["0159_rehydrate"])
++    assert "does not create VectorQdrantProjectionAdapter" in payload["boundary"]
++    assert "does not create QueryRecallOrchestrator" in payload["boundary"]
++
++
++def test_0160_cli_json_dry_run_is_machine_readable(tmp_path: Path) -> None:
++    recall_json = tmp_path / "recall.json"
++    recall_json.write_text(json.dumps({"sql_ref": "sql:artifact/vector-indexing/0158"}), encoding="utf-8")
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            str(ROOT),
++            "--recall-json",
++            str(recall_json),
++            "--output-dir",
++            str(tmp_path / "out"),
++            "--db-path",
++            str(tmp_path / "sql.sqlite3"),
++            "--query-text",
++            "P1 closed loop",
++            "--format",
++            "json",
++        ],
++        cwd=ROOT,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=True,
++    )
++    payload = json.loads(completed.stdout)
++    assert payload["ready_for_query_recall_rehydrate_contract"] is True
++    assert payload["query_text"] == "query: P1 closed loop"
++    assert payload["commands"]["0159_rehydrate"]
+diff --git a/tools/run_query_recall_rehydrate_contract_smoke.py b/tools/run_query_recall_rehydrate_contract_smoke.py
+new file mode 100644
+index 0000000..4f7ae34
+--- /dev/null
++++ b/tools/run_query_recall_rehydrate_contract_smoke.py
+@@ -0,0 +1,382 @@
++#!/usr/bin/env python3
++"""Query -> Qdrant-style recall payload -> SQL rehydrate contract smoke.
++
++0160 locks the user-query boundary before the existing 0159 SQL rehydrate
++operator. It does not add a new OpenVINO adapter, Qdrant adapter, SQL worker,
++Scheduler runner, or orchestrator.
++"""
++
++from __future__ import annotations
++
++import argparse
++from dataclasses import dataclass
++import json
++from pathlib import Path
++import subprocess
++import sys
++from typing import Any, Mapping, Sequence
++
++
++DEFAULT_OUTPUT_DIR = ".var/smoke/artifacts/0160"
++DEFAULT_RECALL_JSON = ".var/smoke/artifacts/0158/p1_closed_loop_operator_result.json"
++DEFAULT_DB_PATH = ".var/local/sql_context_store.sqlite3"
++DEFAULT_QUERY_TEXT = "query: P1 closed loop artifact vector indexing SQL persistence"
++
++_REUSED_SURFACES = (
++    "tools/embed_e5.py",
++    "tools/run_qdrant_recall_sql_rehydrate_smoke.py",
++    "tools/run_qdrant_projection_live_smoke.py",
++    "tools/search_e5_corpus.py",
++    "src/inference/e5_pipeline.py",
++    "src/inference/qdrant_projection_adapter.py",
++    "src/context/sql_context_store.py",
++    "DbApiSqlContextStore.get_record",
++    "unique_sql_context_refs_from_recall",
++)
++
++_FORBIDDEN_PARALLEL_SURFACES = (
++    "SQLPersistenceWorker",
++    "SQLOrchestrator",
++    "LocalArtifactOrchestrator",
++    "LocalVectorIndexingOrchestrator",
++    "SchedulerOpenVINORunner",
++    "VectorOpenVINOEmbeddingAdapter",
++    "VectorQdrantProjectionAdapter",
++    "QdrantRecallOrchestrator",
++    "QueryRecallOrchestrator",
++)
++
++
++@dataclass(frozen=True, slots=True)
++class QueryRecallSurface:
++    key: str
++    path: Path
++    reason: str
++    required: bool = True
++
++    def to_mapping(self, *, root: Path) -> dict[str, Any]:
++        return {
++            "key": self.key,
++            "status": "present" if self.path.exists() else "missing",
++            "path": _display_path(self.path, root=root),
++            "reason": self.reason,
++            "required": self.required,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class QueryRecallContractPlan:
++    repository_root: Path
++    output_dir: Path
++    rehydrate_output_dir: Path
++    recall_json: Path
++    query_embedding_json: Path | None
++    db_path: Path
++    query_text: str
++    result_json: Path
++    result_md: Path
++    execute: bool
++    surfaces: tuple[QueryRecallSurface, ...]
++
++    @property
++    def ready(self) -> bool:
++        return all(surface.path.exists() for surface in self.surfaces if surface.required)
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "repository_root": str(self.repository_root),
++            "output_dir": str(self.output_dir),
++            "rehydrate_output_dir": str(self.rehydrate_output_dir),
++            "recall_json": str(self.recall_json),
++            "query_embedding_json": str(self.query_embedding_json) if self.query_embedding_json is not None else None,
++            "db_path": str(self.db_path),
++            "query_text": self.query_text,
++            "query_text_role": "query",
++            "result_json": str(self.result_json),
++            "result_md": str(self.result_md),
++            "execute": self.execute,
++            "ready_for_query_recall_rehydrate_contract": self.ready,
++            "surfaces": [surface.to_mapping(root=self.repository_root) for surface in self.surfaces],
++            "commands": {
++                "optional_query_embedding": [sys.executable, str(self.repository_root / "tools" / "embed_e5.py"), self.query_text],
++                "0159_rehydrate": _rehydrate_command(self),
++            },
++            "boundary": [
++                "normalizes user query to the E5 query role",
++                "accepts an existing query embedding artifact when provided",
++                "accepts a Qdrant-style recall payload carrying sql_ref pointers",
++                "delegates durable rehydrate to existing 0159 tool",
++                "does not create SQLPersistenceWorker",
++                "does not create SQLOrchestrator",
++                "does not create LocalArtifactOrchestrator",
++                "does not create LocalVectorIndexingOrchestrator",
++                "does not create SchedulerOpenVINORunner",
++                "does not create VectorOpenVINOEmbeddingAdapter",
++                "does not create VectorQdrantProjectionAdapter",
++                "does not create QdrantRecallOrchestrator",
++                "does not create QueryRecallOrchestrator",
++                "SQL remains durable authority",
++                "Qdrant remains projection/recall metadata",
++            ],
++        }
++
++    def to_markdown(self) -> str:
++        rows = [
++            "# Query recall rehydrate contract plan",
++            "",
++            f"repository_root: `{self.repository_root}`",
++            f"output_dir: `{self.output_dir}`",
++            f"rehydrate_output_dir: `{self.rehydrate_output_dir}`",
++            f"recall_json: `{self.recall_json}`",
++            f"query_embedding_json: `{self.query_embedding_json}`",
++            f"db_path: `{self.db_path}`",
++            f"query_text: `{self.query_text}`",
++            f"ready_for_query_recall_rehydrate_contract: `{str(self.ready).lower()}`",
++            f"execute: `{str(self.execute).lower()}`",
++            "",
++            "## Existing surfaces",
++            "",
++            "| key | status | required | path | reason |",
++            "| --- | --- | --- | --- | --- |",
++        ]
++        for surface in self.surfaces:
++            row = surface.to_mapping(root=self.repository_root)
++            rows.append(f"| {row['key']} | {row['status']} | `{str(row['required']).lower()}` | `{row['path']}` | {row['reason']} |")
++        rows.extend([
++            "",
++            "## Boundary",
++            "",
++            "- query text must use the E5 `query:` role",
++            "- recall payload must carry `sql_ref` pointers",
++            "- durable rehydrate is delegated to 0159",
++            "- no new OpenVINO adapter, Qdrant adapter, Scheduler runner, SQL worker, or orchestrator",
++            "",
++        ])
++        return "\n".join(rows)
++
++
++@dataclass(frozen=True, slots=True)
++class QueryRecallContractResult:
++    result_json: Path
++    result_md: Path
++    query_text: str
++    recall_json: Path
++    query_embedding_json: Path | None
++    db_path: Path
++    rehydrate_result_json: Path
++    rehydrate_status: str
++    sql_refs: tuple[str, ...]
++    hydrated_count: int
++    missing_count: int
++    status: str
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "result_json": str(self.result_json),
++            "result_md": str(self.result_md),
++            "query_text": self.query_text,
++            "query_text_role": "query",
++            "recall_json": str(self.recall_json),
++            "query_embedding_json": str(self.query_embedding_json) if self.query_embedding_json is not None else None,
++            "db_path": str(self.db_path),
++            "rehydrate_result_json": str(self.rehydrate_result_json),
++            "rehydrate_status": self.rehydrate_status,
++            "sql_refs": list(self.sql_refs),
++            "hydrated_count": self.hydrated_count,
++            "missing_count": self.missing_count,
++            "status": self.status,
++            "boundary": "query recall contract delegates authority retrieval to 0159; SQL remains durable authority",
++        }
++
++    def to_markdown(self) -> str:
++        rows = [
++            "# Query recall rehydrate contract result",
++            "",
++            f"status: `{self.status}`",
++            f"query_text: `{self.query_text}`",
++            f"recall_json: `{self.recall_json}`",
++            f"query_embedding_json: `{self.query_embedding_json}`",
++            f"db_path: `{self.db_path}`",
++            f"rehydrate_result_json: `{self.rehydrate_result_json}`",
++            f"rehydrate_status: `{self.rehydrate_status}`",
++            f"sql_ref_count: `{len(self.sql_refs)}`",
++            f"hydrated_count: `{self.hydrated_count}`",
++            f"missing_count: `{self.missing_count}`",
++            "",
++            "## SQL refs",
++            "",
++        ]
++        rows.extend(f"- `{ref}`" for ref in self.sql_refs)
++        rows.extend(["", "boundary: `SQL remains durable authority; Qdrant remains projection/recall metadata`", ""])
++        return "\n".join(rows)
++
++
++def build_query_recall_rehydrate_contract_plan(
++    root: Path,
++    *,
++    output_dir: Path,
++    recall_json: Path,
++    query_embedding_json: Path | None,
++    db_path: Path,
++    query_text: str,
++    execute: bool,
++) -> QueryRecallContractPlan:
++    root = root.resolve()
++    output_dir = _resolve_repo_path(root, output_dir)
++    rehydrate_output_dir = output_dir / "rehydrate-0159"
++    recall_json = _resolve_repo_path(root, recall_json)
++    query_embedding_json = _resolve_repo_path(root, query_embedding_json) if query_embedding_json is not None else None
++    db_path = _resolve_repo_path(root, db_path)
++    surfaces = [
++        QueryRecallSurface("embed_e5_cli", root / "tools" / "embed_e5.py", "existing E5/OpenVINO query embedding CLI"),
++        QueryRecallSurface("qdrant_projection_adapter", root / "src" / "inference" / "qdrant_projection_adapter.py", "existing Qdrant projection/recall helper vocabulary"),
++        QueryRecallSurface("qdrant_projection_live_smoke", root / "tools" / "run_qdrant_projection_live_smoke.py", "existing live Qdrant projection smoke surface", required=False),
++        QueryRecallSurface("search_e5_corpus", root / "tools" / "search_e5_corpus.py", "existing local E5 search CLI surface", required=False),
++        QueryRecallSurface("rehydrate_0159_tool", root / "tools" / "run_qdrant_recall_sql_rehydrate_smoke.py", "existing 0159 recall payload to SQL rehydrate operator"),
++        QueryRecallSurface("sql_context_store", root / "src" / "context" / "sql_context_store.py", "existing durable SQL authority"),
++        QueryRecallSurface("recall_json", recall_json, "Qdrant-style recall payload carrying sql_ref pointers"),
++    ]
++    if query_embedding_json is not None:
++        surfaces.append(QueryRecallSurface("query_embedding_json", query_embedding_json, "optional existing query embedding artifact"))
++    return QueryRecallContractPlan(
++        repository_root=root,
++        output_dir=output_dir,
++        rehydrate_output_dir=rehydrate_output_dir,
++        recall_json=recall_json,
++        query_embedding_json=query_embedding_json,
++        db_path=db_path,
++        query_text=_normalize_query_text(query_text),
++        result_json=output_dir / "query_recall_rehydrate_contract_result.json",
++        result_md=output_dir / "query_recall_rehydrate_contract_report.md",
++        execute=execute,
++        surfaces=tuple(surfaces),
++    )
++
++
++def execute_query_recall_rehydrate_contract_plan(plan: QueryRecallContractPlan) -> int:
++    if not plan.ready:
++        for surface in plan.surfaces:
++            if surface.required and not surface.path.exists():
++                print(f"missing required surface: {surface.path}", file=sys.stderr)
++        return 2
++    plan.output_dir.mkdir(parents=True, exist_ok=True)
++    plan.rehydrate_output_dir.mkdir(parents=True, exist_ok=True)
++    completed = subprocess.run(_rehydrate_command(plan), cwd=plan.repository_root, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
++    (plan.output_dir / "0160_0159_rehydrate.log").write_text(completed.stdout or "", encoding="utf-8")
++    if completed.stdout:
++        print(completed.stdout, end="" if completed.stdout.endswith("\n") else "\n")
++    if completed.returncode != 0:
++        return completed.returncode
++    rehydrate_result_json = plan.rehydrate_output_dir / "qdrant_recall_sql_rehydrate_result.json"
++    rehydrate = _read_json_mapping(rehydrate_result_json)
++    sql_refs = tuple(str(item) for item in rehydrate.get("sql_refs", []) if str(item).startswith("sql:"))
++    hydrated_count = int(rehydrate.get("hydrated_count", 0))
++    missing_count = int(rehydrate.get("missing_count", 0))
++    rehydrate_status = str(rehydrate.get("status", "unknown"))
++    status = "ok" if rehydrate_status == "ok" and hydrated_count > 0 and missing_count == 0 and sql_refs else "partial"
++    result = QueryRecallContractResult(
++        result_json=plan.result_json,
++        result_md=plan.result_md,
++        query_text=plan.query_text,
++        recall_json=plan.recall_json,
++        query_embedding_json=plan.query_embedding_json,
++        db_path=plan.db_path,
++        rehydrate_result_json=rehydrate_result_json,
++        rehydrate_status=rehydrate_status,
++        sql_refs=sql_refs,
++        hydrated_count=hydrated_count,
++        missing_count=missing_count,
++        status=status,
++    )
++    plan.result_json.write_text(json.dumps(result.to_mapping(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    plan.result_md.write_text(result.to_markdown(), encoding="utf-8")
++    print("==> query_recall_rehydrate_contract")
++    print(result.to_markdown(), end="")
++    return 0 if status == "ok" else 1
++
++
++def parse_args(argv: Sequence[str]) -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description="Lock the query -> recall payload -> SQL rehydrate contract boundary.")
++    parser.add_argument("repository_root", type=Path)
++    parser.add_argument("--output-dir", type=Path, default=Path(DEFAULT_OUTPUT_DIR))
++    parser.add_argument("--recall-json", type=Path, default=Path(DEFAULT_RECALL_JSON))
++    parser.add_argument("--query-embedding-json", type=Path, default=None)
++    parser.add_argument("--db-path", type=Path, default=Path(DEFAULT_DB_PATH))
++    parser.add_argument("--query-text", default=DEFAULT_QUERY_TEXT)
++    parser.add_argument("--execute", action="store_true")
++    parser.add_argument("--format", choices=("markdown", "json"), default="markdown")
++    return parser.parse_args(argv)
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = parse_args(tuple(sys.argv[1:] if argv is None else argv))
++    plan = build_query_recall_rehydrate_contract_plan(
++        args.repository_root,
++        output_dir=args.output_dir,
++        recall_json=args.recall_json,
++        query_embedding_json=args.query_embedding_json,
++        db_path=args.db_path,
++        query_text=args.query_text,
++        execute=args.execute,
++    )
++    if args.format == "json":
++        print(json.dumps(plan.to_mapping(), indent=2, sort_keys=True))
++    else:
++        print(plan.to_markdown(), end="")
++    if not args.execute:
++        return 0 if plan.ready else 2
++    return execute_query_recall_rehydrate_contract_plan(plan)
++
++
++def _rehydrate_command(plan: QueryRecallContractPlan) -> list[str]:
++    return [
++        sys.executable,
++        str(plan.repository_root / "tools" / "run_qdrant_recall_sql_rehydrate_smoke.py"),
++        str(plan.repository_root),
++        "--recall-json",
++        str(plan.recall_json),
++        "--output-dir",
++        str(plan.rehydrate_output_dir),
++        "--db-path",
++        str(plan.db_path),
++        "--query-text",
++        plan.query_text,
++        "--execute",
++        "--format",
++        "json",
++    ]
++
++
++def _read_json_mapping(path: Path) -> Mapping[str, Any]:
++    loaded = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(loaded, Mapping):
++        raise ValueError(f"expected JSON object in {path}")
++    return loaded
++
++
++def _resolve_repo_path(root: Path, path: Path | None) -> Path:
++    if path is None:
++        raise ValueError("path must not be None")
++    path = path.expanduser()
++    if path.is_absolute():
++        return path
++    return root / path
++
++
++def _normalize_query_text(text: str) -> str:
++    if text.startswith("query: "):
++        return text
++    if text.startswith("passage: "):
++        raise ValueError("0160 query contract requires an E5 query role, not passage")
++    return f"query: {text}"
++
++
++def _display_path(path: Path, *, root: Path) -> str:
++    try:
++        return str(path.relative_to(root))
++    except ValueError:
++        return str(path)
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())

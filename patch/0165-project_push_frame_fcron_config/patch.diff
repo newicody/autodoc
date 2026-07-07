@@ -1,0 +1,1294 @@
+diff --git a/PHASE0165_TEST_REPORT.md b/PHASE0165_TEST_REPORT.md
+new file mode 100644
+index 0000000..aa2dc9a
+--- /dev/null
++++ b/PHASE0165_TEST_REPORT.md
+@@ -0,0 +1,30 @@
++# Phase 0165 test report — project push frame and fcron ConfigObj
++
++## Target tests
++
++```text
++PYTHONPATH=src:. pytest -q tests/context/test_github_project_push_frame_config_0165.py tests/tools/test_github_project_push_frame_config_check_0165.py tests/rules/test_github_project_push_frame_fcron_config_0165_rule.py
++```
++
++## Target config check
++
++```text
++python tools/run_github_project_push_frame_config_check.py --config config/github_project_push_frame.example.ini --format json
++```
++
++## Expected behavior
++
++```text
++status: ok
++scan mode: fcron
++interval: 10 minutes
++fcron table candidate written
++started_fcron: false
++openrc_touched: false
++idempotent: true
++```
++
++## Boundary
++
++0165 does not call GitHub, does not start fcron, does not manage OpenRC, does not
++write SQL/Qdrant, and does not run Scheduler/LLM/OpenVINO.
+diff --git a/config/github_project_push_frame.example.ini b/config/github_project_push_frame.example.ini
+new file mode 100644
+index 0000000..7a471ff
+--- /dev/null
++++ b/config/github_project_push_frame.example.ini
+@@ -0,0 +1,40 @@
++[github]
++token_env = GITHUB_TOKEN
++api_url = https://api.github.com
++
++[project]
++url = https://github.com/users/newicody/projects/2
++owner = newicody
++number = 2
++kind = user_project_v2
++
++[artifact_source]
++repositories = newicody/autodoc-ideas
++workflow_name = autodoc-ticket-artifact.yml
++artifact_name_prefix = autodoc-ticket-artifact-
++trigger_source = github_action_on_ticket_event
++
++[scan]
++mode = fcron
++interval_minutes = 10
++working_directory = /home/eric/projet/git/autodoc
++python_executable = /home/eric/python/bin/python
++scan_command = tools/run_github_artifact_scan_once.py
++state_path = .var/github/artifacts/state/index.json
++inbox_dir = .var/github/artifacts/inbox
++fcron_table_path = .var/fcron/autodoc-github-artifact-scan.fcrontab
++
++[safety]
++development_repository = newicody/autodoc
++allowed_repositories = newicody/autodoc-ideas
++read_only_scan = true
++allow_workflow_dispatch = false
++allow_remote_mutation = false
++allow_sql_write = false
++allow_qdrant_write = false
++
++[pipeline]
++context_option_names = include_current_ticket, include_total_project, include_repository_context, include_linked_tickets, include_recent_artifacts
++copilot_preliminary_opinion = true
++copilot_opinion_policy = advisory_only
++history_mode = append_only
+diff --git a/doc/CHANGELOG_0165_PROJECT_PUSH_FRAME_FCRON_CONFIG.md b/doc/CHANGELOG_0165_PROJECT_PUSH_FRAME_FCRON_CONFIG.md
+new file mode 100644
+index 0000000..43a1317
+--- /dev/null
++++ b/doc/CHANGELOG_0165_PROJECT_PUSH_FRAME_FCRON_CONFIG.md
+@@ -0,0 +1,22 @@
++# Changelog — 0165 Project push frame and fcron ConfigObj
++
++0165 adds the project push frame contracts and ConfigObj/fcron table contract.
++
++## Added
++
++- ConfigObj-style example config
++- project push frame artifact-family contracts
++- config validation and idempotent fcron table rendering
++- config-check tool
++- tests
++- rule tests
++- architecture doc
++- code rule
++- runtime DOT source
++- manifest
++- phase test report
++
++## Boundary
++
++No GitHub API call, no fcron start, no OpenRC management, no SQL/Qdrant write,
++no Scheduler/LLM/OpenVINO execution.
+diff --git a/doc/architecture/GITHUB_PROJECT_PUSH_FRAME_FCRON_CONFIG_0165.md b/doc/architecture/GITHUB_PROJECT_PUSH_FRAME_FCRON_CONFIG_0165.md
+new file mode 100644
+index 0000000..238c644
+--- /dev/null
++++ b/doc/architecture/GITHUB_PROJECT_PUSH_FRAME_FCRON_CONFIG_0165.md
+@@ -0,0 +1,102 @@
++# 0165 — Project push frame and fcron ConfigObj contract
++
++## Decision
++
++0165 locks the corrected model:
++
++```text
++ticket push / ticket move
++-> GitHub Action immediately creates artifacts
++-> local server is called by fcron every 10 minutes
++-> local scan-once downloads/processes new artifacts later
++```
++
++Autodoc does not start fcron. Autodoc does not manage OpenRC. The operator edits
++the concerned fcron table through an idempotent text update without duplicates.
++
++## Scope
++
++0165 adds contracts and a config check only. It does not call GitHub.
++
++The config is ConfigObj-style and describes:
++
++- external project URL
++- external repository
++- ticket artifact workflow
++- artifact name prefix
++- fcron interval
++- fcron table path
++- token environment variable name
++- context options attached to tickets
++- Copilot preliminary opinion policy
++- append-only history
++
++## Ticket artifact payload
++
++The GitHub Action artifact stays minimal:
++
++```text
++ticket + column name + options
++```
++
++Options are intent flags, not already-expanded context:
++
++- include current ticket
++- include total project
++- include repository context
++- include linked tickets
++- include recent artifacts
++
++## Copilot artifact
++
++Copilot preliminary opinion is advisory only. It may be attached as an additional
++artifact under the same project push frame. The local server may use it as a hint
++only if local validation judges it receivable.
++
++It is never authority.
++
++## Artifact family
++
++A project push frame groups:
++
++- ticket snapshots
++- column/status revisions
++- Copilot preliminary opinions
++- local inference responses
++- user decisions: keep, detach, delete/tombstone, lock, rate, supersede
++
++History is append-only. Changes create new artifacts/revisions instead of
++silently mutating older artifacts.
++
++## fcron
++
++The fcron entry is rendered from ConfigObj config and inserted between stable
++markers. Re-running the tool updates the same block and avoids duplicates.
++
++The tool does not install the table into the system fcrontab command. It writes
++only the configured table file when explicitly called with `--write-fcrontab`.
++
++## Reuse
++
++0165 does not create a new GitHub adapter. Later phases must continue to reuse existing builders:
++
++- source_candidate_read_only_external_probe
++- source_candidate_external_probe_bundle
++- source_candidate_github_projection_payload
++- source_candidate_remote_mutation_gate
++- github_project_scenario
++- github_publication_review
++
++## Boundary
++
++- do not start fcron
++- do not manage OpenRC
++- edit the concerned fcron table without duplicates
++- scan-once command only
++- no GitHub API call
++- no GitHub mutation
++- no SQL write
++- no Qdrant write
++- no Scheduler execution
++- no LLM execution
++- no OpenVINO execution
+diff --git a/doc/code-rules/0165_project_push_frame_fcron_config_rule.md b/doc/code-rules/0165_project_push_frame_fcron_config_rule.md
+new file mode 100644
+index 0000000..2fdfee4
+--- /dev/null
++++ b/doc/code-rules/0165_project_push_frame_fcron_config_rule.md
+@@ -0,0 +1,48 @@
++# Code rule — 0165 project push frame and fcron config
++
++## Rule
++
++Do not start fcron.
++
++Do not manage OpenRC.
++
++Use ConfigObj-style config as the source of scheduling intent and write only an
++idempotent fcron table block for the concerned table. No duplicate fcron entry is
++allowed.
++
++## Required behavior
++
++- Use ConfigObj for the operator config surface, with a fallback parser only for
++  tests or minimal environments.
++- Require `github.token_env`; never store the actual token in config.
++- Require one explicit external repository.
++- Reject the Autodoc/MissiPy development repository as an artifact source.
++- Lock the initial scan interval to 10 minutes.
++- Keep the command as scan-once and exit.
++- Keep history append-only.
++- Treat Copilot opinion as advisory only.
++- Use ticket + column name + options as the first artifact payload boundary.
++
++## Forbidden behavior
++
++- Do not create a new GitHub adapter.
++- Do not call GitHub API in 0165.
++- Do not start fcron.
++- Do not run fcrontab commands.
++- Do not manage OpenRC.
++- Do not write SQL.
++- Do not write Qdrant.
++- Do not run Scheduler.
++- Do not run LLM or OpenVINO.
++- Do not use the Autodoc/MissiPy development repository as a business artifact source.
++
++## Reuse
++
++Later phases must continue to reuse existing builders and gates:
++
++- `source_candidate_read_only_external_probe`
++- `source_candidate_external_probe_bundle`
++- `source_candidate_github_projection_payload`
++- `source_candidate_remote_mutation_gate`
++- `github_project_scenario`
++- `github_publication_review`
+diff --git a/doc/docs/architecture/runtime/165_project_push_frame_fcron_config.dot b/doc/docs/architecture/runtime/165_project_push_frame_fcron_config.dot
+new file mode 100644
+index 0000000..b13b701
+--- /dev/null
++++ b/doc/docs/architecture/runtime/165_project_push_frame_fcron_config.dot
+@@ -0,0 +1,24 @@
++digraph ProjectPushFrameFcronConfig0165 {
++    rankdir=LR;
++    graph [fontname="Arial", fontsize=11, label="0165 — Project push frame + fcron ConfigObj", labelloc=t];
++    node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10];
++    edge [fontname="Arial", fontsize=9, arrowsize=0.7];
++
++    ticket [label="ticket push / move\nexternal repo", fillcolor="#e3f2fd", color="#1565c0"];
++    action [label="GitHub Action\nimmediate artifact", fillcolor="#e3f2fd", color="#1565c0"];
++    copilot [label="Copilot preliminary opinion\nadvisory artifact", fillcolor="#fff8e1", color="#f9a825"];
++    frame [label="ProjectPushFrame\nartifact family", fillcolor="#e8f5e9", color="#2e7d32"];
++    config [label="ConfigObj config\n10 min fcron intent", fillcolor="#ede7f6", color="#512da8"];
++    fcron [label="concerned fcron table\nidempotent block", fillcolor="#ede7f6", color="#512da8"];
++    scan [label="scan-once command\nthen exit", fillcolor="#e8f5e9", color="#2e7d32"];
++    history [label="append-only history\nlocal server later", fillcolor="#e8f5e9", color="#2e7d32"];
++
++    ticket -> action;
++    action -> frame;
++    action -> copilot;
++    copilot -> frame [label="hint only"];
++    config -> fcron [label="render/update no duplicates"];
++    fcron -> scan [label="every 10 min"];
++    scan -> history;
++    frame -> history;
++}
+diff --git a/doc/manifests/MANIFEST_0165_CHANGED_FILES.md b/doc/manifests/MANIFEST_0165_CHANGED_FILES.md
+new file mode 100644
+index 0000000..e255482
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0165_CHANGED_FILES.md
+@@ -0,0 +1,18 @@
++# Manifest — 0165 changed files
++
++- `config/github_project_push_frame.example.ini`
++- `src/context/github_project_push_frame.py`
++- `src/context/github_project_push_frame_config.py`
++- `tools/run_github_project_push_frame_config_check.py`
++- `tests/context/test_github_project_push_frame_config_0165.py`
++- `tests/tools/test_github_project_push_frame_config_check_0165.py`
++- `tests/rules/test_github_project_push_frame_fcron_config_0165_rule.py`
++- `doc/architecture/GITHUB_PROJECT_PUSH_FRAME_FCRON_CONFIG_0165.md`
++- `doc/code-rules/0165_project_push_frame_fcron_config_rule.md`
++- `doc/docs/architecture/runtime/165_project_push_frame_fcron_config.dot`
++- `doc/CHANGELOG_0165_PROJECT_PUSH_FRAME_FCRON_CONFIG.md`
++- `doc/manifests/MANIFEST_0165_CHANGED_FILES.md`
++- `PHASE0165_TEST_REPORT.md`
++
++Boundary: config and contracts only. No GitHub API call, no fcron start, no
++OpenRC management, no SQL/Qdrant write.
+diff --git a/src/context/github_project_push_frame.py b/src/context/github_project_push_frame.py
+new file mode 100644
+index 0000000..6f6ee30
+--- /dev/null
++++ b/src/context/github_project_push_frame.py
+@@ -0,0 +1,231 @@
++"""Project push frame contracts for external GitHub task artifacts.
++
++These are data-only contracts. They do not call GitHub, fcron, SQL, qdrant,
++openvino, an LLM, OpenRC, or the MissiPy Scheduler.
++
++A project push frame groups artifacts produced from the same external ticket:
++ticket snapshots, column/status changes, optional Copilot preliminary opinions,
++local inference responses, and user decisions. History is append-only: changes
++are represented as new revisions/decision artifacts rather than silent mutation.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++import hashlib
++from typing import Any, Mapping
++
++
++_FRAME_SCHEMA = "missipy.github_project.project_push_frame.v1"
++_REVISION_SCHEMA = "missipy.github_project.project_push_frame_revision.v1"
++_COPILOT_SCHEMA = "missipy.github_project.copilot_preliminary_opinion.v1"
++_LOCAL_RESPONSE_SCHEMA = "missipy.github_project.local_inference_response.v1"
++_USER_DECISION_SCHEMA = "missipy.github_project.user_artifact_decision.v1"
++
++
++@dataclass(frozen=True, slots=True)
++class ProjectPushContextOptions:
++    include_total_project: bool = False
++    include_current_ticket: bool = True
++    include_repository_context: bool = False
++    include_linked_tickets: bool = False
++    include_recent_artifacts: bool = False
++    requested_depth: str = "normal"
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "include_total_project": self.include_total_project,
++            "include_current_ticket": self.include_current_ticket,
++            "include_repository_context": self.include_repository_context,
++            "include_linked_tickets": self.include_linked_tickets,
++            "include_recent_artifacts": self.include_recent_artifacts,
++            "requested_depth": self.requested_depth,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class ProjectPushFrame:
++    origin_frame_id: str
++    repository: str
++    project_url: str
++    ticket_kind: str
++    ticket_number: int
++    ticket_title: str
++    ticket_url: str
++    column_name: str
++    context_options: ProjectPushContextOptions = field(default_factory=ProjectPushContextOptions)
++    metadata: tuple[tuple[str, str], ...] = ()
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "schema": _FRAME_SCHEMA,
++            "origin_frame_id": self.origin_frame_id,
++            "repository": self.repository,
++            "project_url": self.project_url,
++            "ticket": {
++                "kind": self.ticket_kind,
++                "number": self.ticket_number,
++                "title": self.ticket_title,
++                "url": self.ticket_url,
++            },
++            "workflow": {"column_name": self.column_name},
++            "context_options": self.context_options.to_json_dict(),
++            "metadata": dict(self.metadata),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class ProjectPushFrameRevision:
++    origin_frame_id: str
++    ticket_revision_id: str
++    event_kind: str
++    column_name: str
++    previous_column_name: str | None = None
++    artifact_refs: tuple[str, ...] = ()
++    metadata: tuple[tuple[str, str], ...] = ()
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "schema": _REVISION_SCHEMA,
++            "origin_frame_id": self.origin_frame_id,
++            "ticket_revision_id": self.ticket_revision_id,
++            "event_kind": self.event_kind,
++            "previous_column_name": self.previous_column_name,
++            "column_name": self.column_name,
++            "artifact_refs": list(self.artifact_refs),
++            "metadata": dict(self.metadata),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class CopilotPreliminaryOpinionArtifact:
++    origin_frame_id: str
++    ticket_revision_id: str
++    artifact_ref: str
++    summary: str
++    suggested_route: str
++    confidence: float = 0.0
++    risks: tuple[str, ...] = ()
++    trusted: bool = False
++    usable_as_hint: bool = True
++    usable_as_authority: bool = False
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "schema": _COPILOT_SCHEMA,
++            "origin_frame_id": self.origin_frame_id,
++            "ticket_revision_id": self.ticket_revision_id,
++            "artifact_ref": self.artifact_ref,
++            "producer": {"kind": "github_action_copilot", "trusted": self.trusted},
++            "opinion": {
++                "summary": self.summary,
++                "suggested_route": self.suggested_route,
++                "risks": list(self.risks),
++                "confidence": self.confidence,
++            },
++            "server_use_policy": {
++                "usable_as_hint": self.usable_as_hint,
++                "usable_as_authority": self.usable_as_authority,
++                "requires_local_validation": True,
++            },
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class LocalInferenceResponseArtifact:
++    origin_frame_id: str
++    ticket_revision_id: str
++    artifact_ref: str
++    title: str
++    summary: str
++    source_artifact_refs: tuple[str, ...]
++    status: str = "current"
++    metadata: tuple[tuple[str, str], ...] = ()
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "schema": _LOCAL_RESPONSE_SCHEMA,
++            "origin_frame_id": self.origin_frame_id,
++            "ticket_revision_id": self.ticket_revision_id,
++            "artifact_ref": self.artifact_ref,
++            "title": self.title,
++            "summary": self.summary,
++            "source_artifact_refs": list(self.source_artifact_refs),
++            "status": self.status,
++            "metadata": dict(self.metadata),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class UserArtifactDecision:
++    origin_frame_id: str
++    target_artifact_ref: str
++    decision: str
++    rating: int | None = None
++    locked: bool = False
++    detached: bool = False
++    deleted: bool = False
++    comment: str = ""
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "schema": _USER_DECISION_SCHEMA,
++            "origin_frame_id": self.origin_frame_id,
++            "target_artifact_ref": self.target_artifact_ref,
++            "decision": self.decision,
++            "rating": self.rating,
++            "locked": self.locked,
++            "detached": self.detached,
++            "deleted": self.deleted,
++            "comment": self.comment,
++        }
++
++
++def build_project_push_frame_from_ticket_payload(payload: Mapping[str, Any]) -> ProjectPushFrame:
++    repository = str(payload.get("repository", ""))
++    ticket = payload.get("ticket") if isinstance(payload.get("ticket"), Mapping) else {}
++    project = payload.get("project") if isinstance(payload.get("project"), Mapping) else {}
++    workflow = payload.get("workflow") if isinstance(payload.get("workflow"), Mapping) else {}
++    options = payload.get("context_options") if isinstance(payload.get("context_options"), Mapping) else {}
++
++    ticket_number = int(ticket.get("number", 0))
++    origin_frame_id = str(payload.get("origin_frame_id") or build_origin_frame_id(repository, ticket_number))
++
++    return ProjectPushFrame(
++        origin_frame_id=origin_frame_id,
++        repository=repository,
++        project_url=str(project.get("url", payload.get("project_url", ""))),
++        ticket_kind=str(ticket.get("kind", "issue")),
++        ticket_number=ticket_number,
++        ticket_title=str(ticket.get("title", "")),
++        ticket_url=str(ticket.get("url", "")),
++        column_name=str(workflow.get("column_name", workflow.get("column", ""))),
++        context_options=ProjectPushContextOptions(
++            include_total_project=bool(options.get("include_total_project", False)),
++            include_current_ticket=bool(options.get("include_current_ticket", True)),
++            include_repository_context=bool(options.get("include_repository_context", False)),
++            include_linked_tickets=bool(options.get("include_linked_tickets", False)),
++            include_recent_artifacts=bool(options.get("include_recent_artifacts", False)),
++            requested_depth=str(options.get("requested_depth", "normal")),
++        ),
++    )
++
++
++def build_origin_frame_id(repository: str, ticket_number: int) -> str:
++    return f"github-frame:{repository}/issues/{ticket_number}"
++
++
++def build_ticket_revision_id(origin_frame_id: str, event_kind: str, revision_token: str) -> str:
++    digest = hashlib.sha256(f"{origin_frame_id}\0{event_kind}\0{revision_token}".encode("utf-8")).hexdigest()[:16]
++    return f"github-ticket-revision:{digest}"
++
++
++def validate_copilot_preliminary_opinion(opinion: CopilotPreliminaryOpinionArtifact) -> dict[str, Any]:
++    issues: list[dict[str, str]] = []
++    if opinion.usable_as_authority:
++        issues.append({"code": "copilot_authority_forbidden", "message": "Copilot preliminary opinion must not be authority"})
++    if opinion.trusted:
++        issues.append({"code": "copilot_trusted_forbidden", "message": "Copilot preliminary opinion is advisory and untrusted by default"})
++    if not opinion.usable_as_hint:
++        issues.append({"code": "copilot_hint_disabled", "message": "Copilot opinion should be usable only as a hint"})
++    return {"allowed": not issues, "issues": issues}
+diff --git a/src/context/github_project_push_frame_config.py b/src/context/github_project_push_frame_config.py
+new file mode 100644
+index 0000000..6c18f9e
+--- /dev/null
++++ b/src/context/github_project_push_frame_config.py
+@@ -0,0 +1,291 @@
++"""ConfigObj-backed project push frame and fcron table contract.
++
++This module reads non-secret config, validates the external repository boundary,
++and renders an idempotent fcron table block. It does not install or start fcron;
++it only edits the target table text when an operator explicitly asks the tool to
++write a file.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++import hashlib
++from pathlib import Path
++from typing import Any, Mapping
++
++
++_CONFIG_SCHEMA = "missipy.github_project.project_push_frame_fcron_config.v1"
++_DEFAULT_SCAN_COMMAND = "tools/run_github_artifact_scan_once.py"
++_DEFAULT_ARTIFACT_PREFIX = "autodoc-ticket-artifact-"
++_MARKER_PREFIX = "AUTODOC-GITHUB-ARTIFACT-SCAN"
++
++
++@dataclass(frozen=True, slots=True)
++class GithubArtifactScanConfig:
++    config_path: Path
++    token_env: str
++    api_url: str
++    project_url: str
++    project_owner: str
++    project_number: int
++    external_repository: str
++    development_repository: str
++    workflow_name: str
++    artifact_name_prefix: str
++    trigger_source: str
++    scan_mode: str
++    interval_minutes: int
++    working_directory: Path
++    python_executable: str
++    scan_command: str
++    state_path: Path
++    inbox_dir: Path
++    fcron_table_path: Path
++    allowed_repositories: tuple[str, ...]
++    context_option_names: tuple[str, ...]
++    copilot_preliminary_opinion: bool
++    history_mode: str
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "schema": _CONFIG_SCHEMA,
++            "config_path": str(self.config_path),
++            "github": {"token_env": self.token_env, "api_url": self.api_url},
++            "project": {"url": self.project_url, "owner": self.project_owner, "number": self.project_number},
++            "artifact_source": {
++                "repository": self.external_repository,
++                "workflow_name": self.workflow_name,
++                "artifact_name_prefix": self.artifact_name_prefix,
++                "trigger_source": self.trigger_source,
++            },
++            "scan": {
++                "mode": self.scan_mode,
++                "interval_minutes": self.interval_minutes,
++                "working_directory": str(self.working_directory),
++                "python_executable": self.python_executable,
++                "scan_command": self.scan_command,
++                "state_path": str(self.state_path),
++                "inbox_dir": str(self.inbox_dir),
++                "fcron_table_path": str(self.fcron_table_path),
++            },
++            "safety": {
++                "development_repository": self.development_repository,
++                "allowed_repositories": list(self.allowed_repositories),
++                "read_only_scan": True,
++                "allow_workflow_dispatch": False,
++                "allow_remote_mutation": False,
++                "allow_sql_write": False,
++                "allow_qdrant_write": False,
++            },
++            "pipeline": {
++                "context_option_names": list(self.context_option_names),
++                "copilot_preliminary_opinion": self.copilot_preliminary_opinion,
++                "history_mode": self.history_mode,
++            },
++        }
++
++
++def load_github_artifact_scan_config(path: Path) -> GithubArtifactScanConfig:
++    payload = _load_configobj_mapping(path)
++    return build_github_artifact_scan_config(path, payload)
++
++
++def build_github_artifact_scan_config(path: Path, payload: Mapping[str, Any]) -> GithubArtifactScanConfig:
++    github = _section(payload, "github")
++    project = _section(payload, "project")
++    artifact = _section(payload, "artifact_source")
++    scan = _section(payload, "scan")
++    safety = _section(payload, "safety")
++    pipeline = _section(payload, "pipeline")
++
++    repositories = _list_value(artifact.get("repositories") or artifact.get("repository"))
++    allowed_repositories = tuple(_list_value(safety.get("allowed_repositories")) or repositories)
++    if len(repositories) != 1:
++        raise ValueError("0165 expects exactly one external repository in artifact_source.repositories")
++    external_repository = repositories[0]
++
++    config = GithubArtifactScanConfig(
++        config_path=path,
++        token_env=str(github.get("token_env", "")).strip(),
++        api_url=str(github.get("api_url", "https://api.github.com")).strip(),
++        project_url=str(project.get("url", "")).strip(),
++        project_owner=str(project.get("owner", "")).strip(),
++        project_number=int(project.get("number", 0)),
++        external_repository=external_repository,
++        development_repository=str(safety.get("development_repository", "")).strip(),
++        workflow_name=str(artifact.get("workflow_name", "")).strip(),
++        artifact_name_prefix=str(artifact.get("artifact_name_prefix", _DEFAULT_ARTIFACT_PREFIX)).strip(),
++        trigger_source=str(artifact.get("trigger_source", "github_action_on_ticket_event")).strip(),
++        scan_mode=str(scan.get("mode", "fcron")).strip(),
++        interval_minutes=int(scan.get("interval_minutes", 10)),
++        working_directory=Path(str(scan.get("working_directory", "."))).expanduser(),
++        python_executable=str(scan.get("python_executable", "python")).strip(),
++        scan_command=str(scan.get("scan_command", _DEFAULT_SCAN_COMMAND)).strip(),
++        state_path=Path(str(scan.get("state_path", ".var/github/artifacts/state/index.json"))),
++        inbox_dir=Path(str(scan.get("inbox_dir", ".var/github/artifacts/inbox"))),
++        fcron_table_path=Path(str(scan.get("fcron_table_path", ".var/fcron/autodoc-github-artifact-scan.fcrontab"))),
++        allowed_repositories=allowed_repositories,
++        context_option_names=tuple(_list_value(pipeline.get("context_option_names")) or ("include_current_ticket",)),
++        copilot_preliminary_opinion=_bool_value(pipeline.get("copilot_preliminary_opinion", True)),
++        history_mode=str(pipeline.get("history_mode", "append_only")).strip(),
++    )
++    validation = validate_github_artifact_scan_config(config, raw_payload=payload)
++    if not validation["allowed"]:
++        details = ", ".join(issue["code"] for issue in validation["issues"])
++        raise ValueError(f"github artifact scan config rejected: {details}")
++    return config
++
++
++def validate_github_artifact_scan_config(config: GithubArtifactScanConfig, *, raw_payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
++    issues: list[dict[str, str]] = []
++    if not config.token_env:
++        issues.append(_issue("token_env_missing", "github.token_env is required"))
++    if config.token_env.lower() in {"token", "github_token", "gh_token"}:
++        issues.append(_issue("token_env_ambiguous", "token_env must be an environment variable name, not a token key"))
++    if raw_payload is not None and _contains_forbidden_secret_key(raw_payload):
++        issues.append(_issue("secret_literal_forbidden", "config must not contain token, secret, authorization or credential keys"))
++    if not _is_owner_name(config.external_repository):
++        issues.append(_issue("external_repository_format", "external repository must use owner/name form"))
++    if not _is_owner_name(config.development_repository):
++        issues.append(_issue("development_repository_format", "development repository must use owner/name form"))
++    if config.external_repository == config.development_repository:
++        issues.append(_issue("development_repo_ingestion", "external repository must not equal development repository"))
++    if config.external_repository not in config.allowed_repositories:
++        issues.append(_issue("repository_allowlist", "external repository must appear in safety.allowed_repositories"))
++    if config.scan_mode != "fcron":
++        issues.append(_issue("scan_mode", "scan.mode must be fcron for 0165"))
++    if config.interval_minutes <= 0:
++        issues.append(_issue("interval_minutes", "scan.interval_minutes must be positive"))
++    if config.interval_minutes != 10:
++        issues.append(_issue("interval_not_10", "0165 locks default scan interval to 10 minutes"))
++    if config.trigger_source != "github_action_on_ticket_event":
++        issues.append(_issue("trigger_source", "artifact_source.trigger_source must be github_action_on_ticket_event"))
++    if config.history_mode != "append_only":
++        issues.append(_issue("history_mode", "pipeline.history_mode must be append_only"))
++    return {"allowed": not issues, "issues": issues}
++
++
++def build_fcron_entry(config: GithubArtifactScanConfig) -> str:
++    marker = build_fcron_marker(config)
++    schedule = f"*/{config.interval_minutes} * * * *"
++    command = f"cd {config.working_directory} && {config.python_executable} {config.scan_command} --config {config.config_path}"
++    return "\n".join([f"# BEGIN {marker}", "# managed by Autodoc; edit configobj config, not this block", schedule + " " + command, f"# END {marker}", ""])
++
++
++def build_fcron_marker(config: GithubArtifactScanConfig) -> str:
++    digest = hashlib.sha256(f"{config.project_url}\0{config.external_repository}\0{config.scan_command}".encode("utf-8")).hexdigest()[:16]
++    return f"{_MARKER_PREFIX} {digest}"
++
++
++def upsert_fcron_table(existing_text: str, entry_block: str, marker: str) -> str:
++    begin = f"# BEGIN {marker}"
++    end = f"# END {marker}"
++    output: list[str] = []
++    in_block = False
++    for line in existing_text.splitlines():
++        stripped = line.strip()
++        if stripped == begin:
++            in_block = True
++            continue
++        if stripped == end:
++            in_block = False
++            continue
++        if in_block or marker in line:
++            continue
++        output.append(line)
++    while output and not output[-1].strip():
++        output.pop()
++    if output:
++        output.append("")
++    output.extend(entry_block.rstrip("\n").splitlines())
++    return "\n".join(output).rstrip() + "\n"
++
++
++def render_config_check(config: GithubArtifactScanConfig) -> str:
++    validation = validate_github_artifact_scan_config(config)
++    lines = [
++        "# GitHub artifact scan config check",
++        "",
++        f"status: `{'ok' if validation['allowed'] else 'blocked'}`",
++        f"project_url: `{config.project_url}`",
++        f"external_repository: `{config.external_repository}`",
++        f"development_repository: `{config.development_repository}`",
++        f"scan_mode: `{config.scan_mode}`",
++        f"interval_minutes: `{config.interval_minutes}`",
++        f"fcron_table_path: `{config.fcron_table_path}`",
++        f"copilot_preliminary_opinion: `{config.copilot_preliminary_opinion}`",
++        f"history_mode: `{config.history_mode}`",
++        "",
++        "## Issues",
++        "",
++    ]
++    if validation["issues"]:
++        lines.extend(f"- `{issue['code']}`: {issue['message']}" for issue in validation["issues"])
++    else:
++        lines.append("- none")
++    lines.append("")
++    return "\n".join(lines)
++
++
++def _load_configobj_mapping(path: Path) -> Mapping[str, Any]:
++    try:
++        from configobj import ConfigObj  # type: ignore
++    except ModuleNotFoundError:
++        return _load_ini_fallback(path)
++    return ConfigObj(str(path), interpolation=False)
++
++
++def _load_ini_fallback(path: Path) -> dict[str, dict[str, str]]:
++    current: str | None = None
++    result: dict[str, dict[str, str]] = {}
++    for raw_line in path.read_text(encoding="utf-8").splitlines():
++        line = raw_line.strip()
++        if not line or line.startswith("#") or line.startswith(";"):
++            continue
++        if line.startswith("[") and line.endswith("]"):
++            current = line[1:-1].strip()
++            result.setdefault(current, {})
++            continue
++        if "=" in line and current:
++            key, value = line.split("=", 1)
++            result[current][key.strip()] = value.strip()
++    return result
++
++
++def _section(payload: Mapping[str, Any], key: str) -> Mapping[str, Any]:
++    value = payload.get(key)
++    return value if isinstance(value, Mapping) else {}
++
++
++def _list_value(value: Any) -> list[str]:
++    if value is None:
++        return []
++    if isinstance(value, (tuple, list)):
++        return [str(item).strip() for item in value if str(item).strip()]
++    return [item.strip() for item in str(value).replace("\n", ",").split(",") if item.strip()]
++
++
++def _bool_value(value: Any) -> bool:
++    return str(value).strip().lower() in {"1", "yes", "true", "on"}
++
++
++def _contains_forbidden_secret_key(payload: Mapping[str, Any]) -> bool:
++    forbidden = ("token", "secret", "authorization", "credential", "password")
++    for key, value in payload.items():
++        key_lower = str(key).lower()
++        if any(part in key_lower for part in forbidden) and key_lower != "token_env":
++            return True
++        if isinstance(value, Mapping) and _contains_forbidden_secret_key(value):
++            return True
++    return False
++
++
++def _is_owner_name(repository: str) -> bool:
++    if repository.count("/") != 1:
++        return False
++    owner, name = repository.split("/", 1)
++    return bool(owner.strip()) and bool(name.strip())
++
++
++def _issue(code: str, message: str) -> dict[str, str]:
++    return {"code": code, "message": message}
+diff --git a/tests/context/test_github_project_push_frame_config_0165.py b/tests/context/test_github_project_push_frame_config_0165.py
+new file mode 100644
+index 0000000..4844a49
+--- /dev/null
++++ b/tests/context/test_github_project_push_frame_config_0165.py
+@@ -0,0 +1,137 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++import pytest
++
++from context.github_project_push_frame import (
++    CopilotPreliminaryOpinionArtifact,
++    ProjectPushContextOptions,
++    build_project_push_frame_from_ticket_payload,
++    validate_copilot_preliminary_opinion,
++)
++from context.github_project_push_frame_config import (
++    build_fcron_entry,
++    build_fcron_marker,
++    load_github_artifact_scan_config,
++    upsert_fcron_table,
++)
++
++
++def _config_text() -> str:
++    return """[github]
++token_env = GITHUB_TOKEN
++api_url = https://api.github.com
++
++[project]
++url = https://github.com/users/newicody/projects/2
++owner = newicody
++number = 2
++
++[artifact_source]
++repositories = newicody/autodoc-ideas
++workflow_name = autodoc-ticket-artifact.yml
++artifact_name_prefix = autodoc-ticket-artifact-
++trigger_source = github_action_on_ticket_event
++
++[scan]
++mode = fcron
++interval_minutes = 10
++working_directory = /home/eric/projet/git/autodoc
++python_executable = /home/eric/python/bin/python
++scan_command = tools/run_github_artifact_scan_once.py
++state_path = .var/github/artifacts/state/index.json
++inbox_dir = .var/github/artifacts/inbox
++fcron_table_path = .var/fcron/autodoc-github-artifact-scan.fcrontab
++
++[safety]
++development_repository = newicody/autodoc
++allowed_repositories = newicody/autodoc-ideas
++
++[pipeline]
++context_option_names = include_current_ticket, include_total_project, include_repository_context
++copilot_preliminary_opinion = true
++history_mode = append_only
++"""
++
++
++def test_0165_loads_configobj_style_config_without_secret_literal(tmp_path: Path) -> None:
++    path = tmp_path / "github_project_push_frame.ini"
++    path.write_text(_config_text(), encoding="utf-8")
++    config = load_github_artifact_scan_config(path)
++    assert config.token_env == "GITHUB_TOKEN"
++    assert config.external_repository == "newicody/autodoc-ideas"
++    assert config.development_repository == "newicody/autodoc"
++    assert config.scan_mode == "fcron"
++    assert config.interval_minutes == 10
++    assert config.copilot_preliminary_opinion is True
++    assert "include_repository_context" in config.context_option_names
++
++
++def test_0165_rejects_development_repository_as_external_source(tmp_path: Path) -> None:
++    path = tmp_path / "bad.ini"
++    path.write_text(_config_text().replace("repositories = newicody/autodoc-ideas", "repositories = newicody/autodoc"), encoding="utf-8")
++    with pytest.raises(ValueError, match="development_repo_ingestion"):
++        load_github_artifact_scan_config(path)
++
++
++def test_0165_rejects_secret_keys_in_config(tmp_path: Path) -> None:
++    path = tmp_path / "bad_secret.ini"
++    path.write_text(_config_text() + "\n[bad]\nsecret = ghp_not_allowed\n", encoding="utf-8")
++    with pytest.raises(ValueError, match="secret_literal_forbidden"):
++        load_github_artifact_scan_config(path)
++
++
++def test_0165_fcron_entry_upsert_is_idempotent_and_has_no_duplicate(tmp_path: Path) -> None:
++    path = tmp_path / "github_project_push_frame.ini"
++    path.write_text(_config_text(), encoding="utf-8")
++    config = load_github_artifact_scan_config(path)
++    entry = build_fcron_entry(config)
++    marker = build_fcron_marker(config)
++    first = upsert_fcron_table("MAILTO=eric\n", entry, marker)
++    second = upsert_fcron_table(first, entry, marker)
++    assert first == second
++    assert second.count(f"# BEGIN {marker}") == 1
++    assert second.count(f"# END {marker}") == 1
++    assert "*/10 * * * * cd /home/eric/projet/git/autodoc" in second
++    assert "tools/run_github_artifact_scan_once.py --config" in second
++
++
++def test_0165_project_push_frame_from_ticket_payload_is_minimal() -> None:
++    frame = build_project_push_frame_from_ticket_payload(
++        {
++            "repository": "newicody/autodoc-ideas",
++            "project": {"url": "https://github.com/users/newicody/projects/2"},
++            "ticket": {"kind": "issue", "number": 42, "title": "Investigate idea", "url": "https://github.com/newicody/autodoc-ideas/issues/42"},
++            "workflow": {"column_name": "Backlog"},
++            "context_options": {"include_current_ticket": True, "include_total_project": True, "include_repository_context": True},
++        }
++    )
++    payload = frame.to_json_dict()
++    assert payload["origin_frame_id"] == "github-frame:newicody/autodoc-ideas/issues/42"
++    assert payload["workflow"]["column_name"] == "Backlog"
++    assert payload["context_options"]["include_total_project"] is True
++    assert payload["context_options"]["include_repository_context"] is True
++
++
++def test_0165_copilot_preliminary_opinion_is_advisory_only() -> None:
++    opinion = CopilotPreliminaryOpinionArtifact(
++        origin_frame_id="github-frame:newicody/autodoc-ideas/issues/42",
++        ticket_revision_id="github-ticket-revision:abc",
++        artifact_ref="github-artifact:copilot:abc",
++        summary="first orientation",
++        suggested_route="architecture_review",
++        confidence=0.25,
++        risks=("needs local validation",),
++    )
++    validation = validate_copilot_preliminary_opinion(opinion)
++    payload = opinion.to_json_dict()
++    assert validation["allowed"] is True
++    assert payload["server_use_policy"]["usable_as_hint"] is True
++    assert payload["server_use_policy"]["usable_as_authority"] is False
++
++
++def test_0165_context_options_default_to_current_ticket_only() -> None:
++    options = ProjectPushContextOptions()
++    assert options.to_json_dict()["include_current_ticket"] is True
++    assert options.to_json_dict()["include_total_project"] is False
+diff --git a/tests/rules/test_github_project_push_frame_fcron_config_0165_rule.py b/tests/rules/test_github_project_push_frame_fcron_config_0165_rule.py
+new file mode 100644
+index 0000000..3ccd180
+--- /dev/null
++++ b/tests/rules/test_github_project_push_frame_fcron_config_0165_rule.py
+@@ -0,0 +1,69 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++CONFIG = ROOT / "config" / "github_project_push_frame.example.ini"
++FRAME = ROOT / "src" / "context" / "github_project_push_frame.py"
++CONFIG_MODULE = ROOT / "src" / "context" / "github_project_push_frame_config.py"
++TOOL = ROOT / "tools" / "run_github_project_push_frame_config_check.py"
++DOC = ROOT / "doc" / "architecture" / "GITHUB_PROJECT_PUSH_FRAME_FCRON_CONFIG_0165.md"
++RULE = ROOT / "doc" / "code-rules" / "0165_project_push_frame_fcron_config_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0165_CHANGED_FILES.md"
++
++
++def test_0165_files_exist() -> None:
++    for path in [CONFIG, FRAME, CONFIG_MODULE, TOOL, DOC, RULE, MANIFEST]:
++        assert path.exists()
++
++
++def test_0165_config_module_uses_configobj_and_idempotent_fcron_text() -> None:
++    text = CONFIG_MODULE.read_text(encoding="utf-8")
++    for token in ["ConfigObj", "token_env", "upsert_fcron_table", "build_fcron_entry", "development_repo_ingestion", "interval_minutes != 10", "history_mode", "append_only"]:
++        assert token in text
++    for forbidden in ["requests.", "urllib.", "http.client", "subprocess", "rc-service", "rc-update", "fcron start", "rc-update add fcron", "DbApiSqlContextStore(", "Qdrant", "OpenVINO"]:
++        assert forbidden not in text
++
++
++def test_0165_project_push_frame_contracts_group_artifact_family() -> None:
++    text = FRAME.read_text(encoding="utf-8")
++    for token in ["ProjectPushFrame", "ProjectPushFrameRevision", "CopilotPreliminaryOpinionArtifact", "LocalInferenceResponseArtifact", "UserArtifactDecision", "usable_as_hint", "usable_as_authority", "append-only", "build_origin_frame_id"]:
++        assert token in text
++    for forbidden in ["requests.", "urllib.", "http.client", "subprocess", "DbApiSqlContextStore(", "Qdrant", "OpenVINO"]:
++        assert forbidden not in text
++
++
++def test_0165_tool_does_not_manage_openrc_or_start_fcron() -> None:
++    text = TOOL.read_text(encoding="utf-8")
++    for token in ["load_github_artifact_scan_config", "upsert_fcron_table", "write_fcrontab", "started_fcron", "openrc_touched"]:
++        assert token in text
++    for forbidden in ["subprocess", "rc-service", "rc-update", "fcrontab ", "service fcron", "OpenRC"]:
++        assert forbidden not in text
++
++
++def test_0165_docs_lock_user_corrections() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    rule = RULE.read_text(encoding="utf-8")
++    for token in ["do not start fcron", "edit the concerned fcron table", "without duplicates", "ConfigObj", "10 minutes", "ticket + column name + options", "Copilot preliminary opinion is advisory only", "append-only history", "reuse existing builders"]:
++        assert token in doc
++    for token in ["Do not start fcron", "Do not manage OpenRC", "Use ConfigObj", "No duplicate fcron entry", "Do not create a new GitHub adapter", "Copilot opinion is advisory only"]:
++        assert token in rule
++
++
++def test_0165_manifest_lists_limited_changes() -> None:
++    text = MANIFEST.read_text(encoding="utf-8")
++    for path in [
++        "config/github_project_push_frame.example.ini",
++        "src/context/github_project_push_frame.py",
++        "src/context/github_project_push_frame_config.py",
++        "tools/run_github_project_push_frame_config_check.py",
++        "tests/context/test_github_project_push_frame_config_0165.py",
++        "tests/tools/test_github_project_push_frame_config_check_0165.py",
++        "tests/rules/test_github_project_push_frame_fcron_config_0165_rule.py",
++        "doc/architecture/GITHUB_PROJECT_PUSH_FRAME_FCRON_CONFIG_0165.md",
++        "doc/code-rules/0165_project_push_frame_fcron_config_rule.md",
++        "doc/docs/architecture/runtime/165_project_push_frame_fcron_config.dot",
++        "doc/CHANGELOG_0165_PROJECT_PUSH_FRAME_FCRON_CONFIG.md",
++        "doc/manifests/MANIFEST_0165_CHANGED_FILES.md",
++        "PHASE0165_TEST_REPORT.md",
++    ]:
++        assert path in text
+diff --git a/tests/tools/test_github_project_push_frame_config_check_0165.py b/tests/tools/test_github_project_push_frame_config_check_0165.py
+new file mode 100644
+index 0000000..712a21d
+--- /dev/null
++++ b/tests/tools/test_github_project_push_frame_config_check_0165.py
+@@ -0,0 +1,105 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++import subprocess
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "run_github_project_push_frame_config_check.py"
++
++
++def _config_text(tmp_path: Path) -> str:
++    return f"""[github]
++token_env = GITHUB_TOKEN
++api_url = https://api.github.com
++
++[project]
++url = https://github.com/users/newicody/projects/2
++owner = newicody
++number = 2
++
++[artifact_source]
++repositories = newicody/autodoc-ideas
++workflow_name = autodoc-ticket-artifact.yml
++artifact_name_prefix = autodoc-ticket-artifact-
++trigger_source = github_action_on_ticket_event
++
++[scan]
++mode = fcron
++interval_minutes = 10
++working_directory = {tmp_path}
++python_executable = {sys.executable}
++scan_command = tools/run_github_artifact_scan_once.py
++state_path = .var/github/artifacts/state/index.json
++inbox_dir = .var/github/artifacts/inbox
++fcron_table_path = {tmp_path / 'autodoc.fcrontab'}
++
++[safety]
++development_repository = newicody/autodoc
++allowed_repositories = newicody/autodoc-ideas
++
++[pipeline]
++context_option_names = include_current_ticket, include_total_project, include_repository_context
++copilot_preliminary_opinion = true
++history_mode = append_only
++"""
++
++
++def test_0165_config_check_writes_candidate_without_touching_system_scheduler(tmp_path: Path) -> None:
++    config_path = tmp_path / "github_project_push_frame.ini"
++    config_path.write_text(_config_text(tmp_path), encoding="utf-8")
++    fcrontab_path = tmp_path / "user.fcrontab"
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--config",
++            str(config_path),
++            "--output-dir",
++            str(tmp_path / "out"),
++            "--fcrontab-path",
++            str(fcrontab_path),
++            "--write-fcrontab",
++            "--format",
++            "json",
++        ],
++        cwd=ROOT,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=True,
++    )
++    report = json.loads(completed.stdout)
++    table = fcrontab_path.read_text(encoding="utf-8")
++    assert report["status"] == "ok"
++    assert report["fcron"]["started_fcron"] is False
++    assert report["fcron"]["openrc_touched"] is False
++    assert report["fcron"]["idempotent"] is True
++    assert table.count("AUTODOC-GITHUB-ARTIFACT-SCAN") == 2
++    assert "*/10 * * * *" in table
++    assert "tools/run_github_artifact_scan_once.py --config" in table
++    completed_again = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--config",
++            str(config_path),
++            "--output-dir",
++            str(tmp_path / "out2"),
++            "--fcrontab-path",
++            str(fcrontab_path),
++            "--write-fcrontab",
++            "--format",
++            "json",
++        ],
++        cwd=ROOT,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=True,
++    )
++    report_again = json.loads(completed_again.stdout)
++    assert report_again["fcron"]["idempotent"] is True
++    assert fcrontab_path.read_text(encoding="utf-8").count("AUTODOC-GITHUB-ARTIFACT-SCAN") == 2
+diff --git a/tools/run_github_project_push_frame_config_check.py b/tools/run_github_project_push_frame_config_check.py
+new file mode 100644
+index 0000000..be5ee41
+--- /dev/null
++++ b/tools/run_github_project_push_frame_config_check.py
+@@ -0,0 +1,99 @@
++#!/usr/bin/env python3
++"""Check GitHub project push frame config and render/update fcron table text."""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import sys
++from typing import Sequence
++
++
++_REPO_ROOT = Path(__file__).resolve().parents[1]
++_SRC_ROOT = _REPO_ROOT / "src"
++if str(_SRC_ROOT) not in sys.path:
++    sys.path.insert(0, str(_SRC_ROOT))
++
++
++from context.github_project_push_frame_config import (  # noqa: E402
++    build_fcron_entry,
++    build_fcron_marker,
++    load_github_artifact_scan_config,
++    render_config_check,
++    upsert_fcron_table,
++    validate_github_artifact_scan_config,
++)
++
++
++def parse_args(argv: Sequence[str]) -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description="Validate project push frame ConfigObj config and fcron table block.")
++    parser.add_argument("--config", type=Path, default=Path("config/github_project_push_frame.example.ini"))
++    parser.add_argument("--output-dir", type=Path, default=Path(".var/smoke/artifacts/0165"))
++    parser.add_argument("--fcrontab-path", type=Path, default=None)
++    parser.add_argument("--write-fcrontab", action="store_true")
++    parser.add_argument("--format", choices=("json", "markdown"), default="markdown")
++    return parser.parse_args(argv)
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = parse_args(tuple(sys.argv[1:] if argv is None else argv))
++    config = load_github_artifact_scan_config(args.config)
++    validation = validate_github_artifact_scan_config(config)
++    marker = build_fcron_marker(config)
++    entry = build_fcron_entry(config)
++
++    output_dir = args.output_dir
++    output_dir.mkdir(parents=True, exist_ok=True)
++    target_fcrontab = args.fcrontab_path or config.fcron_table_path
++    existing = target_fcrontab.read_text(encoding="utf-8") if target_fcrontab.exists() else ""
++    updated = upsert_fcron_table(existing, entry, marker)
++
++    candidate_path = output_dir / "fcrontab_candidate.txt"
++    report_json_path = output_dir / "github_project_push_frame_config_check.json"
++    report_md_path = output_dir / "github_project_push_frame_config_check.md"
++    candidate_path.write_text(updated, encoding="utf-8")
++    if args.write_fcrontab:
++        target_fcrontab.parent.mkdir(parents=True, exist_ok=True)
++        target_fcrontab.write_text(updated, encoding="utf-8")
++
++    report = {
++        "schema": "missipy.github_project.project_push_frame_fcron_config_check.v1",
++        "status": "ok" if validation["allowed"] else "blocked",
++        "config": config.to_json_dict(),
++        "validation": validation,
++        "fcron": {
++            "marker": marker,
++            "entry": entry,
++            "target_fcrontab": str(target_fcrontab),
++            "candidate_path": str(candidate_path),
++            "write_fcrontab": bool(args.write_fcrontab),
++            "started_fcron": False,
++            "openrc_touched": False,
++            "idempotent": updated == upsert_fcron_table(updated, entry, marker),
++        },
++        "boundary": [
++            "ConfigObj config is the source of scheduling intent",
++            "fcron table text is updated idempotently without duplicates",
++            "fcron service is not started or managed here",
++            "scan command is scan-once and then exit",
++            "no GitHub API call",
++            "no SQL write",
++            "no qdrant write",
++            "no remote mutation",
++        ],
++    }
++    report_json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    report_md_path.write_text(render_config_check(config), encoding="utf-8")
++
++    if args.format == "json":
++        print(json.dumps(report, indent=2, sort_keys=True))
++    else:
++        print(render_config_check(config), end="")
++        print(f"fcron_candidate: `{candidate_path}`")
++        print(f"idempotent: `{report['fcron']['idempotent']}`")
++    return 0 if validation["allowed"] else 1
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())

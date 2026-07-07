@@ -1,0 +1,1237 @@
+diff --git a/PHASE0167_TEST_REPORT.md b/PHASE0167_TEST_REPORT.md
+new file mode 100644
+index 0000000..4c8f74d
+--- /dev/null
++++ b/PHASE0167_TEST_REPORT.md
+@@ -0,0 +1,16 @@
++# Phase 0167 test report — GitHub artifact server dataset sync
++
++## Target tests
++
++```text
++PYTHONPATH=src:. pytest -q tests/context/test_github_artifact_server_dataset_0167.py tests/tools/test_github_artifact_server_sync_once_0167.py tests/rules/test_github_artifact_server_dataset_sync_0167_rule.py
++```
++
++## Expected behavior
++
++- fetched local artifact directory is copied into configured server dataset
++- attachments are detected by kind
++- conversion queue is written after raw sync
++- VisPy observation event is written
++- no GitHub API call
++- no user artifacts are stored in Git
+diff --git a/config/github_artifact_server_fetch.example.ini b/config/github_artifact_server_fetch.example.ini
+new file mode 100644
+index 0000000..313663f
+--- /dev/null
++++ b/config/github_artifact_server_fetch.example.ini
+@@ -0,0 +1,41 @@
++[github]
++token_env = GITHUB_TOKEN
++api_url = https://api.github.com
++
++[project]
++url = https://github.com/users/newicody/projects/2
++owner = newicody
++number = 2
++
++[artifact_source]
++repositories = newicody/autodoc-ideas
++workflow_name = autodoc-ticket-artifact.yml
++artifact_name_prefix = autodoc-ticket-artifact-
++trigger_source = github_action_on_ticket_event
++
++[server_dataset]
++root = .var/server_datasets/github_artifacts
++raw_dir = raw
++index_dir = index
++history_dir = history
++conversion_queue_dir = conversion_queue
++converted_dir = converted
++vispy_events_dir = vispy_events
++state_file = index/fetch_state.json
++
++[attachments]
++allowed_kinds = image, audio, video, pdf, archive, text, binary
++max_attachment_bytes = 524288000
++
++[conversion]
++queue_after_complete_sync = true
++skip_already_processed = true
++
++[safety]
++development_repository = newicody/autodoc
++allowed_repositories = newicody/autodoc-ideas
++read_only_fetch = true
++allow_workflow_dispatch = false
++allow_remote_mutation = false
++allow_sql_write = false
++allow_qdrant_write = false
+diff --git a/doc/CHANGELOG_0167_GITHUB_ARTIFACT_SERVER_DATASET_SYNC.md b/doc/CHANGELOG_0167_GITHUB_ARTIFACT_SERVER_DATASET_SYNC.md
+new file mode 100644
+index 0000000..97e9169
+--- /dev/null
++++ b/doc/CHANGELOG_0167_GITHUB_ARTIFACT_SERVER_DATASET_SYNC.md
+@@ -0,0 +1,20 @@
++# Changelog — 0167 GitHub artifact server dataset sync
++
++0167 adds a server-side dataset sync contract for fetched GitHub Actions
++artifacts and attachments.
++
++## Added
++
++- server dataset layout contract
++- fetched artifact record
++- attachment record
++- conversion queue record
++- ConfigObj-style server fetch config
++- sync-once tool for already-fetched local artifact directories
++- VisPy observation event output
++- tests, rules, docs and manifest
++
++## Boundary
++
++No GitHub API call, no remote mutation, no SQL/qdrant write, no inference
++execution, no user artifact storage in Git.
+diff --git a/doc/architecture/GITHUB_ARTIFACT_SERVER_DATASET_SYNC_0167.md b/doc/architecture/GITHUB_ARTIFACT_SERVER_DATASET_SYNC_0167.md
+new file mode 100644
+index 0000000..3e64883
+--- /dev/null
++++ b/doc/architecture/GITHUB_ARTIFACT_SERVER_DATASET_SYNC_0167.md
+@@ -0,0 +1,46 @@
++# 0167 — GitHub artifact server dataset sync
++
++## Decision
++
++GitHub Actions artifacts remain the source system. Autodoc does not create a
++parallel artifact system inside the development repository.
++
++The server fetches/synchronizes GitHub Actions artifacts into the server dataset
++configured by ConfigObj. Raw sync completes before conversion starts.
++
++## Server dataset
++
++The dataset contains:
++
++- raw artifacts and attachments
++- index records
++- append-only history
++- conversion queue
++- converted outputs
++- VisPy observation event files
++
++This is server data, not Git repository data.
++
++## Attachment support
++
++Attachments can be photo/image, audio, video, PDF, archive, text or binary. They
++are stored under the raw dataset first, with provenance, hash, size and kind.
++Only after the raw sync is complete are unprocessed attachments queued for
++conversion.
++
++## VisPy
++
++The sync step emits a VisPy observation event with counts and status so the UI can
++show how many artifacts and files were recovered, queued and prepared.
++
++## Boundary
++
++- GitHub Actions artifacts remain the source system
++- server dataset configured by ConfigObj
++- raw sync completes before conversion
++- VisPy observation event emitted
++- do not store user artifacts in the development repository
++- no GitHub API call in this phase
++- no remote mutation
++- no SQL/qdrant write
++- no inference execution
+diff --git a/doc/code-rules/0167_github_artifact_server_dataset_sync_rule.md b/doc/code-rules/0167_github_artifact_server_dataset_sync_rule.md
+new file mode 100644
+index 0000000..773352f
+--- /dev/null
++++ b/doc/code-rules/0167_github_artifact_server_dataset_sync_rule.md
+@@ -0,0 +1,29 @@
++# Code rule — 0167 GitHub artifact server dataset sync
++
++## Rule
++
++Do not store user artifacts in Git.
++
++Use the server dataset configured by ConfigObj.
++
++Queue conversion only after complete raw sync.
++
++Do not create a parallel artifact system.
++
++## Required behavior
++
++- Treat GitHub Actions artifacts as the source artifact system.
++- Copy fetched artifacts and attachments into the configured server dataset.
++- Record provenance, hash, size and raw dataset reference.
++- Emit a VisPy observation event for sync status.
++- Queue only unprocessed items after raw sync completes.
++
++## Forbidden behavior
++
++- Do not store photos, audio, video, PDFs, archives or user text artifacts in the development repository.
++- Do not call GitHub API in 0167.
++- Do not perform remote mutation.
++- Do not write SQL.
++- Do not write Qdrant.
++- Do not run inference.
++- Do not manage fcron or OpenRC.
+diff --git a/doc/docs/architecture/runtime/167_github_artifact_server_dataset_sync.dot b/doc/docs/architecture/runtime/167_github_artifact_server_dataset_sync.dot
+new file mode 100644
+index 0000000..e27495c
+--- /dev/null
++++ b/doc/docs/architecture/runtime/167_github_artifact_server_dataset_sync.dot
+@@ -0,0 +1,25 @@
++digraph GithubArtifactServerDatasetSync0167 {
++    rankdir=LR;
++    graph [fontname="Arial", fontsize=11, label="0167 — GitHub artifact server dataset sync", labelloc=t];
++    node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10];
++    edge [fontname="Arial", fontsize=9, arrowsize=0.7];
++
++    github [label="GitHub Actions artifacts
++source system", fillcolor="#e3f2fd", color="#1565c0"];
++    fetched [label="server fetch result
++local artifact dir", fillcolor="#e3f2fd", color="#1565c0"];
++    raw [label="configured server dataset
++raw artifacts + attachments", fillcolor="#e8f5e9", color="#2e7d32"];
++    index [label="index + history
++provenance/hash/status", fillcolor="#e8f5e9", color="#2e7d32"];
++    queue [label="conversion queue
++after complete sync", fillcolor="#fff8e1", color="#f9a825"];
++    vispy [label="VisPy observation event
++stats/status", fillcolor="#ede7f6", color="#512da8"];
++
++    github -> fetched [label="future 0168 fetch"];
++    fetched -> raw [label="0167 sync"];
++    raw -> index;
++    raw -> queue [label="only after raw sync"];
++    index -> vispy;
++}
+diff --git a/doc/manifests/MANIFEST_0167_CHANGED_FILES.md b/doc/manifests/MANIFEST_0167_CHANGED_FILES.md
+new file mode 100644
+index 0000000..8a3f71b
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0167_CHANGED_FILES.md
+@@ -0,0 +1,17 @@
++# Manifest — 0167 changed files
++
++- `config/github_artifact_server_fetch.example.ini`
++- `src/context/github_artifact_server_dataset.py`
++- `src/context/github_artifact_server_fetch_config.py`
++- `tools/run_github_artifact_server_sync_once.py`
++- `tests/context/test_github_artifact_server_dataset_0167.py`
++- `tests/tools/test_github_artifact_server_sync_once_0167.py`
++- `tests/rules/test_github_artifact_server_dataset_sync_0167_rule.py`
++- `doc/architecture/GITHUB_ARTIFACT_SERVER_DATASET_SYNC_0167.md`
++- `doc/code-rules/0167_github_artifact_server_dataset_sync_rule.md`
++- `doc/docs/architecture/runtime/167_github_artifact_server_dataset_sync.dot`
++- `doc/CHANGELOG_0167_GITHUB_ARTIFACT_SERVER_DATASET_SYNC.md`
++- `doc/manifests/MANIFEST_0167_CHANGED_FILES.md`
++- `PHASE0167_TEST_REPORT.md`
++
++Boundary: server dataset sync only. No GitHub API call in this phase.
+diff --git a/src/context/github_artifact_server_dataset.py b/src/context/github_artifact_server_dataset.py
+new file mode 100644
+index 0000000..c367c90
+--- /dev/null
++++ b/src/context/github_artifact_server_dataset.py
+@@ -0,0 +1,227 @@
++"""Server dataset contracts for GitHub Actions artifact fetch/sync.
++
++0167 keeps user data out of the Autodoc development repository. GitHub Actions
++artifacts and their attachments are synchronized by the server into a configured
++server dataset. Conversion is queued only after the raw artifact sync is complete.
++
++This module is data-only and stdlib-only. It does not call GitHub, does not
++mutate remote state, and does not write SQL or qdrant.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++import hashlib
++from pathlib import Path
++from typing import Any, Mapping
++
++
++_DATASET_CONFIG_SCHEMA = "missipy.github_artifact.server_dataset_config.v1"
++_FETCH_RECORD_SCHEMA = "missipy.github_artifact.server_fetch_record.v1"
++_ATTACHMENT_RECORD_SCHEMA = "missipy.github_artifact.attachment_record.v1"
++_SYNC_REPORT_SCHEMA = "missipy.github_artifact.server_dataset_sync_report.v1"
++_QUEUE_RECORD_SCHEMA = "missipy.github_artifact.conversion_queue_record.v1"
++
++
++@dataclass(frozen=True, slots=True)
++class ServerDatasetLayout:
++    root: Path
++    raw_dir: str = "raw"
++    index_dir: str = "index"
++    history_dir: str = "history"
++    conversion_queue_dir: str = "conversion_queue"
++    converted_dir: str = "converted"
++    vispy_events_dir: str = "vispy_events"
++    state_file: str = "index/fetch_state.json"
++
++    @property
++    def raw_path(self) -> Path:
++        return self.root / self.raw_dir
++
++    @property
++    def index_path(self) -> Path:
++        return self.root / self.index_dir
++
++    @property
++    def history_path(self) -> Path:
++        return self.root / self.history_dir
++
++    @property
++    def conversion_queue_path(self) -> Path:
++        return self.root / self.conversion_queue_dir
++
++    @property
++    def converted_path(self) -> Path:
++        return self.root / self.converted_dir
++
++    @property
++    def vispy_events_path(self) -> Path:
++        return self.root / self.vispy_events_dir
++
++    @property
++    def state_path(self) -> Path:
++        return self.root / self.state_file
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "schema": _DATASET_CONFIG_SCHEMA,
++            "root": str(self.root),
++            "raw_dir": self.raw_dir,
++            "index_dir": self.index_dir,
++            "history_dir": self.history_dir,
++            "conversion_queue_dir": self.conversion_queue_dir,
++            "converted_dir": self.converted_dir,
++            "vispy_events_dir": self.vispy_events_dir,
++            "state_file": self.state_file,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubFetchedArtifactRecord:
++    repository: str
++    artifact_name: str
++    artifact_id: str
++    run_id: str
++    origin_frame_id: str
++    ticket_revision_id: str
++    raw_dataset_ref: str
++    sha256: str
++    byte_count: int
++    files: tuple[str, ...]
++    status: str = "synced"
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "schema": _FETCH_RECORD_SCHEMA,
++            "repository": self.repository,
++            "artifact_name": self.artifact_name,
++            "artifact_id": self.artifact_id,
++            "run_id": self.run_id,
++            "origin_frame_id": self.origin_frame_id,
++            "ticket_revision_id": self.ticket_revision_id,
++            "raw_dataset_ref": self.raw_dataset_ref,
++            "sha256": self.sha256,
++            "byte_count": self.byte_count,
++            "files": list(self.files),
++            "status": self.status,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class AttachmentRecord:
++    filename: str
++    kind: str
++    source: str
++    raw_dataset_ref: str
++    sha256: str
++    byte_count: int
++    processed: bool = False
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "schema": _ATTACHMENT_RECORD_SCHEMA,
++            "filename": self.filename,
++            "kind": self.kind,
++            "source": self.source,
++            "raw_dataset_ref": self.raw_dataset_ref,
++            "sha256": self.sha256,
++            "byte_count": self.byte_count,
++            "processed": self.processed,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class ConversionQueueRecord:
++    queue_ref: str
++    origin_frame_id: str
++    ticket_revision_id: str
++    raw_dataset_ref: str
++    kind: str
++    sha256: str
++    status: str = "pending"
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "schema": _QUEUE_RECORD_SCHEMA,
++            "queue_ref": self.queue_ref,
++            "origin_frame_id": self.origin_frame_id,
++            "ticket_revision_id": self.ticket_revision_id,
++            "raw_dataset_ref": self.raw_dataset_ref,
++            "kind": self.kind,
++            "sha256": self.sha256,
++            "status": self.status,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class ServerDatasetSyncReport:
++    repository: str
++    origin_frame_id: str
++    ticket_revision_id: str
++    artifact_record: GitHubFetchedArtifactRecord
++    attachments: tuple[AttachmentRecord, ...] = field(default_factory=tuple)
++    queue_records: tuple[ConversionQueueRecord, ...] = field(default_factory=tuple)
++    vispy_event_path: str = ""
++    status: str = "ok"
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "schema": _SYNC_REPORT_SCHEMA,
++            "status": self.status,
++            "repository": self.repository,
++            "origin_frame_id": self.origin_frame_id,
++            "ticket_revision_id": self.ticket_revision_id,
++            "artifact_record": self.artifact_record.to_json_dict(),
++            "attachments": [attachment.to_json_dict() for attachment in self.attachments],
++            "queue_records": [record.to_json_dict() for record in self.queue_records],
++            "counts": {
++                "attachment_count": len(self.attachments),
++                "queued_count": len(self.queue_records),
++            },
++            "vispy_event_path": self.vispy_event_path,
++            "boundary": [
++                "GitHub Actions artifacts remain the source system",
++                "raw files are stored in the configured server dataset",
++                "conversion is queued only after complete raw sync",
++                "no repository user-data storage",
++                "no remote mutation",
++            ],
++        }
++
++
++def infer_attachment_kind(path: Path) -> str:
++    suffix = path.suffix.lower().lstrip(".")
++    if suffix in {"jpg", "jpeg", "png", "gif", "webp", "heic", "tif", "tiff"}:
++        return "image"
++    if suffix in {"mp3", "wav", "flac", "ogg", "m4a"}:
++        return "audio"
++    if suffix in {"mp4", "mov", "mkv", "webm", "avi"}:
++        return "video"
++    if suffix == "pdf":
++        return "pdf"
++    if suffix in {"zip", "tar", "gz", "xz", "7z", "rar"}:
++        return "archive"
++    if suffix in {"txt", "md", "rst", "json", "yaml", "yml", "csv"}:
++        return "text"
++    return "binary"
++
++
++def build_raw_dataset_ref(repository: str, run_id: str, artifact_id: str, relative_path: str) -> str:
++    normalized_repo = repository.replace("/", "__")
++    return f"server-dataset:github-artifacts/raw/{normalized_repo}/{run_id}/{artifact_id}/{relative_path}"
++
++
++def build_conversion_queue_ref(raw_dataset_ref: str, sha256: str) -> str:
++    return f"server-dataset:github-artifacts/conversion-queue/{_digest(raw_dataset_ref + ':' + sha256)}"
++
++
++def hash_file(path: Path) -> str:
++    digest = hashlib.sha256()
++    with path.open("rb") as handle:
++        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
++            digest.update(chunk)
++    return digest.hexdigest()
++
++
++def _digest(value: str) -> str:
++    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+diff --git a/src/context/github_artifact_server_fetch_config.py b/src/context/github_artifact_server_fetch_config.py
+new file mode 100644
+index 0000000..882385d
+--- /dev/null
++++ b/src/context/github_artifact_server_fetch_config.py
+@@ -0,0 +1,195 @@
++"""Config loader for server-side GitHub artifact dataset sync.
++
++The config is ConfigObj-style but loaded with a small stdlib parser to satisfy
++core code rules. The actual token value is never stored here; only token_env is
++kept for the future fetch client boundary.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any, Mapping
++
++from .github_artifact_server_dataset import ServerDatasetLayout
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubArtifactServerFetchConfig:
++    config_path: Path
++    token_env: str
++    api_url: str
++    project_url: str
++    external_repository: str
++    development_repository: str
++    workflow_name: str
++    artifact_name_prefix: str
++    dataset: ServerDatasetLayout
++    allowed_repositories: tuple[str, ...]
++    allowed_attachment_kinds: tuple[str, ...]
++    max_attachment_bytes: int
++    queue_after_complete_sync: bool
++    skip_already_processed: bool
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "schema": "missipy.github_artifact.server_fetch_config.v1",
++            "config_path": str(self.config_path),
++            "github": {"token_env": self.token_env, "api_url": self.api_url},
++            "project": {"url": self.project_url},
++            "artifact_source": {
++                "repository": self.external_repository,
++                "workflow_name": self.workflow_name,
++                "artifact_name_prefix": self.artifact_name_prefix,
++            },
++            "server_dataset": self.dataset.to_json_dict(),
++            "attachments": {
++                "allowed_kinds": list(self.allowed_attachment_kinds),
++                "max_attachment_bytes": self.max_attachment_bytes,
++            },
++            "conversion": {
++                "queue_after_complete_sync": self.queue_after_complete_sync,
++                "skip_already_processed": self.skip_already_processed,
++            },
++            "safety": {
++                "development_repository": self.development_repository,
++                "allowed_repositories": list(self.allowed_repositories),
++                "read_only_fetch": True,
++                "allow_remote_mutation": False,
++                "allow_sql_write": False,
++                "allow_qdrant_write": False,
++            },
++        }
++
++
++def load_github_artifact_server_fetch_config(path: Path) -> GitHubArtifactServerFetchConfig:
++    payload = _load_ini(path)
++    return build_github_artifact_server_fetch_config(path, payload)
++
++
++def build_github_artifact_server_fetch_config(path: Path, payload: Mapping[str, Any]) -> GitHubArtifactServerFetchConfig:
++    github = _section(payload, "github")
++    project = _section(payload, "project")
++    artifact = _section(payload, "artifact_source")
++    dataset_section = _section(payload, "server_dataset")
++    attachments = _section(payload, "attachments")
++    conversion = _section(payload, "conversion")
++    safety = _section(payload, "safety")
++
++    repositories = _list_value(artifact.get("repositories") or artifact.get("repository"))
++    if len(repositories) != 1:
++        raise ValueError("0167 expects exactly one external repository")
++    external_repository = repositories[0]
++    allowed_repositories = tuple(_list_value(safety.get("allowed_repositories")) or repositories)
++
++    dataset = ServerDatasetLayout(
++        root=Path(str(dataset_section.get("root", ".var/server_datasets/github_artifacts"))).expanduser(),
++        raw_dir=str(dataset_section.get("raw_dir", "raw")),
++        index_dir=str(dataset_section.get("index_dir", "index")),
++        history_dir=str(dataset_section.get("history_dir", "history")),
++        conversion_queue_dir=str(dataset_section.get("conversion_queue_dir", "conversion_queue")),
++        converted_dir=str(dataset_section.get("converted_dir", "converted")),
++        vispy_events_dir=str(dataset_section.get("vispy_events_dir", "vispy_events")),
++        state_file=str(dataset_section.get("state_file", "index/fetch_state.json")),
++    )
++
++    config = GitHubArtifactServerFetchConfig(
++        config_path=path,
++        token_env=str(github.get("token_env", "")).strip(),
++        api_url=str(github.get("api_url", "https://api.github.com")).strip(),
++        project_url=str(project.get("url", "")).strip(),
++        external_repository=external_repository,
++        development_repository=str(safety.get("development_repository", "")).strip(),
++        workflow_name=str(artifact.get("workflow_name", "")).strip(),
++        artifact_name_prefix=str(artifact.get("artifact_name_prefix", "autodoc-ticket-artifact-")).strip(),
++        dataset=dataset,
++        allowed_repositories=allowed_repositories,
++        allowed_attachment_kinds=tuple(_list_value(attachments.get("allowed_kinds")) or ("image", "audio", "video", "pdf", "archive", "text", "binary")),
++        max_attachment_bytes=int(attachments.get("max_attachment_bytes", 524288000)),
++        queue_after_complete_sync=_bool_value(conversion.get("queue_after_complete_sync", True)),
++        skip_already_processed=_bool_value(conversion.get("skip_already_processed", True)),
++    )
++    validation = validate_github_artifact_server_fetch_config(config, raw_payload=payload)
++    if not validation["allowed"]:
++        details = ", ".join(issue["code"] for issue in validation["issues"])
++        raise ValueError(f"github artifact server fetch config rejected: {details}")
++    return config
++
++
++def validate_github_artifact_server_fetch_config(config: GitHubArtifactServerFetchConfig, *, raw_payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
++    issues: list[dict[str, str]] = []
++    if not config.token_env:
++        issues.append(_issue("token_env_missing", "github.token_env is required"))
++    if _looks_like_secret_value(config.token_env):
++        issues.append(_issue("token_env_secret_value", "token_env must name an environment variable, not contain a token value"))
++    if raw_payload is not None and _contains_forbidden_secret_key(raw_payload):
++        issues.append(_issue("secret_literal_forbidden", "config must not contain token, secret, authorization or credential keys"))
++    if config.external_repository == config.development_repository:
++        issues.append(_issue("development_repo_ingestion", "external repository must not equal development repository"))
++    if config.external_repository not in config.allowed_repositories:
++        issues.append(_issue("repository_allowlist", "external repository must appear in safety.allowed_repositories"))
++    if not str(config.dataset.root):
++        issues.append(_issue("dataset_root_missing", "server_dataset.root is required"))
++    if not config.queue_after_complete_sync:
++        issues.append(_issue("conversion_gate", "conversion must be queued only after complete sync"))
++    return {"allowed": not issues, "issues": issues}
++
++
++def _load_ini(path: Path) -> dict[str, dict[str, str]]:
++    current: str | None = None
++    result: dict[str, dict[str, str]] = {}
++    for raw_line in path.read_text(encoding="utf-8").splitlines():
++        line = raw_line.strip()
++        if not line or line.startswith("#") or line.startswith(";"):
++            continue
++        if line.startswith("[") and line.endswith("]"):
++            current = line[1:-1].strip()
++            result.setdefault(current, {})
++            continue
++        if "=" in line and current:
++            key, value = line.split("=", 1)
++            result[current][key.strip()] = value.strip()
++    return result
++
++
++def _section(payload: Mapping[str, Any], key: str) -> Mapping[str, Any]:
++    value = payload.get(key)
++    return value if isinstance(value, Mapping) else {}
++
++
++def _list_value(value: Any) -> list[str]:
++    if value is None:
++        return []
++    if isinstance(value, (tuple, list)):
++        return [str(item).strip() for item in value if str(item).strip()]
++    return [item.strip() for item in str(value).replace("
++", ",").split(",") if item.strip()]
++
++
++def _bool_value(value: Any) -> bool:
++    return str(value).strip().lower() in {"1", "yes", "true", "on"}
++
++
++def _looks_like_secret_value(value: str) -> bool:
++    stripped = value.strip()
++    lowered = stripped.lower()
++    if lowered.startswith(("ghp_", "github_pat_", "gho_", "ghu_", "ghs_", "ghr_")):
++        return True
++    if len(stripped) >= 40 and "_" not in stripped and stripped.upper() != stripped:
++        return True
++    return False
++
++
++def _contains_forbidden_secret_key(payload: Mapping[str, Any]) -> bool:
++    forbidden = ("token", "secret", "authorization", "credential", "password")
++    for key, value in payload.items():
++        key_lower = str(key).lower()
++        if key_lower != "token_env" and any(part in key_lower for part in forbidden):
++            return True
++        if isinstance(value, Mapping) and _contains_forbidden_secret_key(value):
++            return True
++    return False
++
++
++def _issue(code: str, message: str) -> dict[str, str]:
++    return {"code": code, "message": message}
+diff --git a/tests/context/test_github_artifact_server_dataset_0167.py b/tests/context/test_github_artifact_server_dataset_0167.py
+new file mode 100644
+index 0000000..68e2eea
+--- /dev/null
++++ b/tests/context/test_github_artifact_server_dataset_0167.py
+@@ -0,0 +1,86 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++from context.github_artifact_server_dataset import (
++    ServerDatasetLayout,
++    build_conversion_queue_ref,
++    build_raw_dataset_ref,
++    infer_attachment_kind,
++)
++from context.github_artifact_server_fetch_config import load_github_artifact_server_fetch_config
++
++
++def _config_text(root: Path) -> str:
++    return f"""[github]
++token_env = GITHUB_TOKEN
++api_url = https://api.github.com
++
++[project]
++url = https://github.com/users/newicody/projects/2
++
++[artifact_source]
++repositories = newicody/autodoc-ideas
++workflow_name = autodoc-ticket-artifact.yml
++artifact_name_prefix = autodoc-ticket-artifact-
++
++[server_dataset]
++root = {root}
++raw_dir = raw
++index_dir = index
++history_dir = history
++conversion_queue_dir = conversion_queue
++converted_dir = converted
++vispy_events_dir = vispy_events
++state_file = index/fetch_state.json
++
++[attachments]
++allowed_kinds = image, audio, video, pdf, archive, text, binary
++max_attachment_bytes = 524288000
++
++[conversion]
++queue_after_complete_sync = true
++skip_already_processed = true
++
++[safety]
++development_repository = newicody/autodoc
++allowed_repositories = newicody/autodoc-ideas
++"""
++
++
++def test_0167_config_loads_server_dataset_boundary(tmp_path: Path) -> None:
++    path = tmp_path / "fetch.ini"
++    path.write_text(_config_text(tmp_path / "dataset"), encoding="utf-8")
++    config = load_github_artifact_server_fetch_config(path)
++
++    assert config.external_repository == "newicody/autodoc-ideas"
++    assert config.development_repository == "newicody/autodoc"
++    assert config.dataset.root == tmp_path / "dataset"
++    assert config.queue_after_complete_sync is True
++    assert "image" in config.allowed_attachment_kinds
++
++
++def test_0167_dataset_layout_paths_are_under_root(tmp_path: Path) -> None:
++    layout = ServerDatasetLayout(root=tmp_path / "dataset")
++
++    assert layout.raw_path == tmp_path / "dataset" / "raw"
++    assert layout.conversion_queue_path == tmp_path / "dataset" / "conversion_queue"
++    assert layout.vispy_events_path == tmp_path / "dataset" / "vispy_events"
++
++
++def test_0167_attachment_kind_detection() -> None:
++    assert infer_attachment_kind(Path("photo.jpg")) == "image"
++    assert infer_attachment_kind(Path("music.mp3")) == "audio"
++    assert infer_attachment_kind(Path("clip.mp4")) == "video"
++    assert infer_attachment_kind(Path("document.pdf")) == "pdf"
++    assert infer_attachment_kind(Path("archive.zip")) == "archive"
++    assert infer_attachment_kind(Path("notes.txt")) == "text"
++    assert infer_attachment_kind(Path("blob.bin")) == "binary"
++
++
++def test_0167_dataset_refs_are_stable() -> None:
++    raw_ref = build_raw_dataset_ref("newicody/autodoc-ideas", "run1", "artifact1", "attachments/photo.jpg")
++    queue_ref = build_conversion_queue_ref(raw_ref, "abc")
++
++    assert raw_ref.startswith("server-dataset:github-artifacts/raw/newicody__autodoc-ideas/run1/artifact1")
++    assert queue_ref.startswith("server-dataset:github-artifacts/conversion-queue/")
+diff --git a/tests/rules/test_github_artifact_server_dataset_sync_0167_rule.py b/tests/rules/test_github_artifact_server_dataset_sync_0167_rule.py
+new file mode 100644
+index 0000000..6198420
+--- /dev/null
++++ b/tests/rules/test_github_artifact_server_dataset_sync_0167_rule.py
+@@ -0,0 +1,112 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++CONFIG = ROOT / "config" / "github_artifact_server_fetch.example.ini"
++DATASET = ROOT / "src" / "context" / "github_artifact_server_dataset.py"
++CONFIG_MODULE = ROOT / "src" / "context" / "github_artifact_server_fetch_config.py"
++TOOL = ROOT / "tools" / "run_github_artifact_server_sync_once.py"
++DOC = ROOT / "doc" / "architecture" / "GITHUB_ARTIFACT_SERVER_DATASET_SYNC_0167.md"
++RULE = ROOT / "doc" / "code-rules" / "0167_github_artifact_server_dataset_sync_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0167_CHANGED_FILES.md"
++
++
++def test_0167_files_exist() -> None:
++    for path in [CONFIG, DATASET, CONFIG_MODULE, TOOL, DOC, RULE, MANIFEST]:
++        assert path.exists()
++
++
++def test_0167_context_is_server_dataset_contract_not_network_client() -> None:
++    text = DATASET.read_text(encoding="utf-8") + CONFIG_MODULE.read_text(encoding="utf-8")
++
++    for token in [
++        "ServerDatasetLayout",
++        "GitHubFetchedArtifactRecord",
++        "AttachmentRecord",
++        "ConversionQueueRecord",
++        "conversion is queued only after complete sync",
++        "server dataset",
++    ]:
++        assert token in text
++
++    for forbidden in [
++        "requests.",
++        "urllib.",
++        "http.client",
++        "subprocess",
++        "DbApiSqlContextStore(",
++        "Qdrant",
++        "OpenVINO",
++        "fcrontab",
++        "rc-service",
++        "rc-update",
++    ]:
++        assert forbidden not in text
++
++
++def test_0167_tool_syncs_local_artifact_only() -> None:
++    text = TOOL.read_text(encoding="utf-8")
++
++    for token in [
++        "already fetched from GitHub Actions",
++        "No GitHub API call",
++        "vispy",
++        "conversion_queue",
++        "sync_artifact_directory",
++    ]:
++        assert token in text
++
++    for forbidden in [
++        "requests.",
++        "urllib.",
++        "http.client",
++        "rc-service",
++        "rc-update",
++        "fcrontab",
++        "DbApiSqlContextStore(",
++        "Qdrant",
++        "OpenVINO",
++    ]:
++        assert forbidden not in text
++
++
++def test_0167_docs_lock_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    rule = RULE.read_text(encoding="utf-8")
++
++    for token in [
++        "GitHub Actions artifacts remain the source system",
++        "server dataset configured by ConfigObj",
++        "raw sync completes before conversion",
++        "VisPy observation event",
++        "do not store user artifacts in the development repository",
++    ]:
++        assert token in doc
++
++    for token in [
++        "Do not store user artifacts in Git",
++        "Use the server dataset configured by ConfigObj",
++        "Queue conversion only after complete raw sync",
++        "Do not create a parallel artifact system",
++    ]:
++        assert token in rule
++
++
++def test_0167_manifest_lists_limited_changes() -> None:
++    text = MANIFEST.read_text(encoding="utf-8")
++    for path in [
++        "config/github_artifact_server_fetch.example.ini",
++        "src/context/github_artifact_server_dataset.py",
++        "src/context/github_artifact_server_fetch_config.py",
++        "tools/run_github_artifact_server_sync_once.py",
++        "tests/context/test_github_artifact_server_dataset_0167.py",
++        "tests/tools/test_github_artifact_server_sync_once_0167.py",
++        "tests/rules/test_github_artifact_server_dataset_sync_0167_rule.py",
++        "doc/architecture/GITHUB_ARTIFACT_SERVER_DATASET_SYNC_0167.md",
++        "doc/code-rules/0167_github_artifact_server_dataset_sync_rule.md",
++        "doc/docs/architecture/runtime/167_github_artifact_server_dataset_sync.dot",
++        "doc/CHANGELOG_0167_GITHUB_ARTIFACT_SERVER_DATASET_SYNC.md",
++        "doc/manifests/MANIFEST_0167_CHANGED_FILES.md",
++        "PHASE0167_TEST_REPORT.md",
++    ]:
++        assert path in text
+diff --git a/tests/tools/test_github_artifact_server_sync_once_0167.py b/tests/tools/test_github_artifact_server_sync_once_0167.py
+new file mode 100644
+index 0000000..d7be8ce
+--- /dev/null
++++ b/tests/tools/test_github_artifact_server_sync_once_0167.py
+@@ -0,0 +1,109 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++import subprocess
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "run_github_artifact_server_sync_once.py"
++
++
++def _config_text(root: Path) -> str:
++    return f"""[github]
++token_env = GITHUB_TOKEN
++api_url = https://api.github.com
++
++[project]
++url = https://github.com/users/newicody/projects/2
++
++[artifact_source]
++repositories = newicody/autodoc-ideas
++workflow_name = autodoc-ticket-artifact.yml
++artifact_name_prefix = autodoc-ticket-artifact-
++
++[server_dataset]
++root = {root}
++raw_dir = raw
++index_dir = index
++history_dir = history
++conversion_queue_dir = conversion_queue
++converted_dir = converted
++vispy_events_dir = vispy_events
++state_file = index/fetch_state.json
++
++[attachments]
++allowed_kinds = image, audio, video, pdf, archive, text, binary
++max_attachment_bytes = 524288000
++
++[conversion]
++queue_after_complete_sync = true
++skip_already_processed = true
++
++[safety]
++development_repository = newicody/autodoc
++allowed_repositories = newicody/autodoc-ideas
++"""
++
++
++def test_0167_sync_copies_raw_artifact_then_queues_attachments(tmp_path: Path) -> None:
++    config_path = tmp_path / "fetch.ini"
++    dataset_root = tmp_path / "dataset"
++    config_path.write_text(_config_text(dataset_root), encoding="utf-8")
++
++    artifact_dir = tmp_path / "downloaded"
++    attachments = artifact_dir / "attachments"
++    attachments.mkdir(parents=True)
++    (artifact_dir / "artifact_bundle.json").write_text(
++        json.dumps(
++            {
++                "schema": "missipy.github_action.ticket_artifact_bundle.v1",
++                "origin_frame_id": "github-frame:newicody/autodoc-ideas/issues/42",
++                "ticket_revision_id": "github-ticket-revision:0167demo",
++            }
++        )
++        + "
++",
++        encoding="utf-8",
++    )
++    (artifact_dir / "ticket_artifact.json").write_text('{"ticket": 42}
++', encoding="utf-8")
++    (attachments / "photo.jpg").write_bytes(b"fake image")
++    (attachments / "notes.txt").write_text("notes
++", encoding="utf-8")
++
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--config",
++            str(config_path),
++            "--artifact-dir",
++            str(artifact_dir),
++            "--run-id",
++            "run0167",
++            "--artifact-id",
++            "artifact0167",
++            "--format",
++            "json",
++        ],
++        cwd=ROOT,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=True,
++    )
++
++    report = json.loads(completed.stdout)
++
++    assert report["status"] == "ok"
++    assert report["counts"]["attachment_count"] == 2
++    assert report["counts"]["queued_count"] == 2
++    assert (dataset_root / "raw" / "newicody__autodoc-ideas" / "run0167" / "artifact0167" / "artifact_bundle.json").exists()
++    assert (dataset_root / "index" / "run0167-artifact0167.json").exists()
++    assert (dataset_root / "conversion_queue" / "run0167-artifact0167.jsonl").exists()
++    assert (dataset_root / "vispy_events" / "run0167-artifact0167.json").exists()
++
++    queue_lines = (dataset_root / "conversion_queue" / "run0167-artifact0167.jsonl").read_text(encoding="utf-8").splitlines()
++    assert len(queue_lines) == 2
+diff --git a/tools/run_github_artifact_server_sync_once.py b/tools/run_github_artifact_server_sync_once.py
+new file mode 100644
+index 0000000..9a36b19
+--- /dev/null
++++ b/tools/run_github_artifact_server_sync_once.py
+@@ -0,0 +1,236 @@
++#!/usr/bin/env python3
++"""Synchronize a downloaded GitHub Actions artifact into the server dataset.
++
++This is a server-side sync step. It expects a local artifact directory that was
++already fetched from GitHub Actions. It writes raw data to the configured server
++dataset, emits an index/history record, emits a VisPy observation event, and
++queues conversion only after raw sync is complete.
++
++No GitHub API call is performed here.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import shutil
++import sys
++from typing import Any, Mapping, Sequence
++
++
++_REPO_ROOT = Path(__file__).resolve().parents[1]
++_SRC_ROOT = _REPO_ROOT / "src"
++if str(_SRC_ROOT) not in sys.path:
++    sys.path.insert(0, str(_SRC_ROOT))
++
++
++from context.github_artifact_server_dataset import (  # noqa: E402
++    AttachmentRecord,
++    ConversionQueueRecord,
++    GitHubFetchedArtifactRecord,
++    ServerDatasetSyncReport,
++    build_conversion_queue_ref,
++    build_raw_dataset_ref,
++    hash_file,
++    infer_attachment_kind,
++)
++from context.github_artifact_server_fetch_config import load_github_artifact_server_fetch_config  # noqa: E402
++
++
++def parse_args(argv: Sequence[str]) -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description="Sync one local GitHub Actions artifact directory into the configured server dataset.")
++    parser.add_argument("--config", type=Path, default=Path("config/github_artifact_server_fetch.example.ini"))
++    parser.add_argument("--artifact-dir", type=Path, required=True)
++    parser.add_argument("--repository", default="")
++    parser.add_argument("--run-id", default="local-run")
++    parser.add_argument("--artifact-id", default="local-artifact")
++    parser.add_argument("--artifact-name", default="autodoc-ticket-artifact-local")
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    return parser.parse_args(argv)
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = parse_args(tuple(sys.argv[1:] if argv is None else argv))
++    config = load_github_artifact_server_fetch_config(args.config)
++    repository = args.repository or config.external_repository
++    if repository not in config.allowed_repositories:
++        raise SystemExit(f"repository not allowed: {repository}")
++
++    report = sync_artifact_directory(
++        artifact_dir=args.artifact_dir,
++        repository=repository,
++        run_id=args.run_id,
++        artifact_id=args.artifact_id,
++        artifact_name=args.artifact_name,
++        config_path=args.config,
++    )
++
++    if args.format == "json":
++        print(json.dumps(report.to_json_dict(), indent=2, sort_keys=True))
++    else:
++        payload = report.to_json_dict()
++        print(f"status: {payload['status']}")
++        print(f"origin_frame_id: {payload['origin_frame_id']}")
++        print(f"attachment_count: {payload['counts']['attachment_count']}")
++        print(f"queued_count: {payload['counts']['queued_count']}")
++    return 0 if report.status == "ok" else 1
++
++
++def sync_artifact_directory(
++    *,
++    artifact_dir: Path,
++    repository: str,
++    run_id: str,
++    artifact_id: str,
++    artifact_name: str,
++    config_path: Path,
++) -> ServerDatasetSyncReport:
++    config = load_github_artifact_server_fetch_config(config_path)
++    bundle_path = artifact_dir / "artifact_bundle.json"
++    bundle = _read_json(bundle_path) if bundle_path.exists() else {}
++    origin_frame_id = str(bundle.get("origin_frame_id", f"github-frame:{repository}/unknown"))
++    ticket_revision_id = str(bundle.get("ticket_revision_id", "github-ticket-revision:unknown"))
++
++    dataset = config.dataset
++    raw_root = dataset.raw_path / repository.replace("/", "__") / run_id / artifact_id
++    raw_root.mkdir(parents=True, exist_ok=True)
++    dataset.index_path.mkdir(parents=True, exist_ok=True)
++    dataset.history_path.mkdir(parents=True, exist_ok=True)
++    dataset.conversion_queue_path.mkdir(parents=True, exist_ok=True)
++    dataset.vispy_events_path.mkdir(parents=True, exist_ok=True)
++
++    copied_files: list[str] = []
++    attachment_records: list[AttachmentRecord] = []
++    queue_records: list[ConversionQueueRecord] = []
++    total_bytes = 0
++
++    for source in sorted(path for path in artifact_dir.rglob("*") if path.is_file()):
++        relative = source.relative_to(artifact_dir)
++        target = raw_root / relative
++        target.parent.mkdir(parents=True, exist_ok=True)
++        shutil.copy2(source, target)
++        copied_files.append(str(relative))
++        size = target.stat().st_size
++        total_bytes += size
++        digest = hash_file(target)
++        raw_ref = build_raw_dataset_ref(repository, run_id, artifact_id, str(relative))
++
++        if _is_attachment_relative(relative):
++            kind = infer_attachment_kind(target)
++            attachment = AttachmentRecord(
++                filename=target.name,
++                kind=kind,
++                source="github_actions_artifact",
++                raw_dataset_ref=raw_ref,
++                sha256=digest,
++                byte_count=size,
++                processed=False,
++            )
++            attachment_records.append(attachment)
++            if config.queue_after_complete_sync and kind in config.allowed_attachment_kinds:
++                queue_ref = build_conversion_queue_ref(raw_ref, digest)
++                queue_record = ConversionQueueRecord(
++                    queue_ref=queue_ref,
++                    origin_frame_id=origin_frame_id,
++                    ticket_revision_id=ticket_revision_id,
++                    raw_dataset_ref=raw_ref,
++                    kind=kind,
++                    sha256=digest,
++                )
++                queue_records.append(queue_record)
++
++    artifact_sha = _hash_directory(raw_root)
++    artifact_record = GitHubFetchedArtifactRecord(
++        repository=repository,
++        artifact_name=artifact_name,
++        artifact_id=artifact_id,
++        run_id=run_id,
++        origin_frame_id=origin_frame_id,
++        ticket_revision_id=ticket_revision_id,
++        raw_dataset_ref=build_raw_dataset_ref(repository, run_id, artifact_id, "."),
++        sha256=artifact_sha,
++        byte_count=total_bytes,
++        files=tuple(copied_files),
++        status="synced",
++    )
++
++    index_path = dataset.index_path / f"{run_id}-{artifact_id}.json"
++    queue_path = dataset.conversion_queue_path / f"{run_id}-{artifact_id}.jsonl"
++    history_path = dataset.history_path / "fetch_history.jsonl"
++    vispy_path = dataset.vispy_events_path / f"{run_id}-{artifact_id}.json"
++
++    report = ServerDatasetSyncReport(
++        repository=repository,
++        origin_frame_id=origin_frame_id,
++        ticket_revision_id=ticket_revision_id,
++        artifact_record=artifact_record,
++        attachments=tuple(attachment_records),
++        queue_records=tuple(queue_records),
++        vispy_event_path=str(vispy_path),
++        status="ok",
++    )
++
++    _write_json(index_path, report.to_json_dict())
++    _append_jsonl(history_path, report.to_json_dict())
++    _write_json(vispy_path, _build_vispy_event(report))
++    _write_jsonl(queue_path, [record.to_json_dict() for record in queue_records])
++    _write_json(dataset.state_path, {"last_sync": report.to_json_dict()})
++    return report
++
++
++def _read_json(path: Path) -> Mapping[str, Any]:
++    return json.loads(path.read_text(encoding="utf-8"))
++
++
++def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "
++", encoding="utf-8")
++
++
++def _append_jsonl(path: Path, payload: Mapping[str, Any]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with path.open("a", encoding="utf-8") as handle:
++        handle.write(json.dumps(payload, sort_keys=True) + "
++")
++
++
++def _write_jsonl(path: Path, payloads: list[Mapping[str, Any]]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with path.open("w", encoding="utf-8") as handle:
++        for payload in payloads:
++            handle.write(json.dumps(payload, sort_keys=True) + "
++")
++
++
++def _is_attachment_relative(relative: Path) -> bool:
++    return len(relative.parts) >= 2 and relative.parts[0] == "attachments"
++
++
++def _hash_directory(path: Path) -> str:
++    import hashlib
++    digest = hashlib.sha256()
++    for item in sorted(candidate for candidate in path.rglob("*") if candidate.is_file()):
++        digest.update(str(item.relative_to(path)).encode("utf-8"))
++        digest.update(b" ")
++        with item.open("rb") as handle:
++            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
++                digest.update(chunk)
++    return digest.hexdigest()
++
++
++def _build_vispy_event(report: ServerDatasetSyncReport) -> dict[str, Any]:
++    payload = report.to_json_dict()
++    return {
++        "schema": "missipy.vispy.github_artifact_fetch_event.v1",
++        "event_kind": "github_artifact_dataset_sync",
++        "origin_frame_id": payload["origin_frame_id"],
++        "ticket_revision_id": payload["ticket_revision_id"],
++        "counts": payload["counts"],
++        "status": payload["status"],
++    }
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())
