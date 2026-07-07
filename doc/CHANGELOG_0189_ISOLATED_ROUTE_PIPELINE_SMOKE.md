@@ -9,6 +9,13 @@
   ControlProxy frames, GitHub API, network, conversion, inference, SQL, Qdrant,
   and VisPy are untouched.
 
+## Changed in 0190
+
+- 0189 now writes `scheduler.route_requests.policy_scoped.jsonl` before calling
+  0184.
+- Downstream pipeline stages read only the current `policy_decision_id` scoped
+  queue, preventing previous append-only queue entries from being replayed.
+
 ## Not changed
 
 - No new runtime handler.

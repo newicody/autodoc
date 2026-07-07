@@ -28,7 +28,7 @@ import json
 from pathlib import Path
 import sys
 from types import ModuleType
-from typing import Any
+from typing import Any, Mapping
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -40,6 +40,7 @@ from context.authorized_route_request_queue import append_authorized_route_reque
 
 ISOLATED_ROUTE_PIPELINE_SMOKE_SCHEMA = "missipy.route_pipeline.isolated_smoke.v1"
 DEFAULT_OUTPUT_NAME = "isolated_route_pipeline_smoke.json"
+POLICY_SCOPED_QUEUE_NAME = "scheduler.route_requests.policy_scoped.jsonl"
 
 
 class IsolatedRoutePipelineSmokeError(ValueError):
@@ -74,10 +75,16 @@ def run_isolated_route_pipeline_smoke(
         policy_decision_id=policy_decision_id,
     )
     queue_path = Path(queue_report.queue_path)
+    policy_scoped_queue_path = runtime / POLICY_SCOPED_QUEUE_NAME
+    policy_scoped_count = _write_policy_scoped_queue(
+        source_queue_path=queue_path,
+        scoped_queue_path=policy_scoped_queue_path,
+        policy_decision_id=policy_decision_id,
+    )
 
     command_plan_path = runtime / "route_request_to_command_dry_run_plan.jsonl"
     command_plan_report = stage_0184.build_route_request_to_command_dry_run_plan(
-        queue_path=queue_path,
+        queue_path=policy_scoped_queue_path,
         output_path=command_plan_path,
     )
 
@@ -115,6 +122,7 @@ def run_isolated_route_pipeline_smoke(
         "policy_decision_id": policy_decision_id,
         "artifacts": {
             "queue": str(queue_path),
+            "policy_scoped_queue": str(policy_scoped_queue_path),
             "route_request_to_command_plan": str(command_plan_path),
             "command_builder_smoke": str(command_smoke_path),
             "isolated_handler_execution_plan": str(isolated_plan_path),
@@ -130,6 +138,7 @@ def run_isolated_route_pipeline_smoke(
             "0188_isolated_readback_smoke": _compact_stage_report(readback_smoke_report),
         },
         "queued_count": queue_report.queued_count,
+        "policy_scoped_queued_count": policy_scoped_count,
         "command_plan_ready_count": int(command_plan_report.get("ready_count", 0)),
         "command_built_count": int(command_smoke_report.get("built_count", 0)),
         "handler_executed_count": int(handler_smoke_report.get("executed_count", 0)),
@@ -137,6 +146,7 @@ def run_isolated_route_pipeline_smoke(
         "readback_count": int(readback_smoke_report.get("readback_count", 0)),
         "pipeline_success": _pipeline_success(
             queued_count=queue_report.queued_count,
+            policy_scoped_queued_count=policy_scoped_count,
             command_plan_report=command_plan_report,
             command_smoke_report=command_smoke_report,
             handler_smoke_report=handler_smoke_report,
@@ -157,6 +167,7 @@ def run_isolated_route_pipeline_smoke(
 def _pipeline_success(
     *,
     queued_count: int,
+    policy_scoped_queued_count: int,
     command_plan_report: dict[str, Any],
     command_smoke_report: dict[str, Any],
     handler_smoke_report: dict[str, Any],
@@ -164,7 +175,11 @@ def _pipeline_success(
 ) -> bool:
     return (
         queued_count > 0
+        and policy_scoped_queued_count == queued_count
         and command_plan_report.get("blocked_count") == 0
+        and int(command_plan_report.get("ready_count", 0)) == policy_scoped_queued_count
+        and int(command_smoke_report.get("built_count", 0)) == policy_scoped_queued_count
+        and int(handler_smoke_report.get("executed_count", 0)) == policy_scoped_queued_count
         and command_smoke_report.get("blocked_count") == 0
         and handler_smoke_report.get("blocked_count") == 0
         and readback_smoke_report.get("blocked_count") == 0
@@ -177,6 +192,40 @@ def _pipeline_success(
         and handler_smoke_report.get("network_used") is False
         and readback_smoke_report.get("network_used") is False
     )
+
+
+def _write_policy_scoped_queue(
+    *,
+    source_queue_path: Path,
+    scoped_queue_path: Path,
+    policy_decision_id: str,
+) -> int:
+    if scoped_queue_path.name != POLICY_SCOPED_QUEUE_NAME:
+        raise IsolatedRoutePipelineSmokeError("policy scoped queue filename must be scheduler.route_requests.policy_scoped.jsonl")
+    count = 0
+    scoped_queue_path.parent.mkdir(parents=True, exist_ok=True)
+    with source_queue_path.open("r", encoding="utf-8") as source, scoped_queue_path.open("w", encoding="utf-8") as target:
+        for line_number, line in enumerate(source, start=1):
+            raw = line.strip()
+            if not raw:
+                continue
+            try:
+                item = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise IsolatedRoutePipelineSmokeError(
+                    f"invalid route request queue JSON at {source_queue_path}:{line_number}"
+                ) from exc
+            if not isinstance(item, Mapping):
+                raise IsolatedRoutePipelineSmokeError(
+                    f"route request queue line must be an object at {source_queue_path}:{line_number}"
+                )
+            if item.get("policy_decision_id") != policy_decision_id:
+                continue
+            target.write(json.dumps(dict(item), sort_keys=True, separators=(",", ":")) + "\n")
+            count += 1
+    if count == 0:
+        raise IsolatedRoutePipelineSmokeError("policy scoped queue is empty")
+    return count
 
 
 def _compact_stage_report(report: dict[str, Any]) -> dict[str, Any]:
@@ -200,6 +249,7 @@ def _compact_stage_report(report: dict[str, Any]) -> dict[str, Any]:
         "queue_path",
         "plan_path",
         "smoke_path",
+        "policy_scoped_queued_count",
     ):
         if key in report:
             compact[key] = report[key]
@@ -246,6 +296,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
         print(f"queued_count: {report['queued_count']}")
+        print(f"policy_scoped_queued_count: {report['policy_scoped_queued_count']}")
         print(f"command_built_count: {report['command_built_count']}")
         print(f"handler_executed_count: {report['handler_executed_count']}")
         print(f"frames_written_count: {report['frames_written_count']}")

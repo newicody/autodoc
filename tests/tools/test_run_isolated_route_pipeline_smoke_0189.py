@@ -54,6 +54,7 @@ def test_0189_runs_isolated_pipeline_end_to_end(tmp_path: Path) -> None:
 
     assert report["pipeline_success"] is True
     assert report["queued_count"] == 1
+    assert report["policy_scoped_queued_count"] == 1
     assert report["command_built_count"] == 1
     assert report["handler_executed_count"] == 1
     assert report["frames_written_count"] == 1
@@ -112,5 +113,36 @@ def test_0189_cli_outputs_json(tmp_path: Path) -> None:
     report = json.loads(completed.stdout)
     assert report["schema"] == "missipy.route_pipeline.isolated_smoke.v1"
     assert report["pipeline_success"] is True
+    assert report["policy_scoped_queued_count"] == 1
     assert report["readback_count"] == 1
     assert report["network_used"] is False
+
+
+def test_0190_pipeline_is_policy_scoped_when_queue_contains_previous_entries(tmp_path: Path) -> None:
+    module = _load_tool_module()
+    runtime = tmp_path / "runtime"
+    context_bus = _write_context_bus(runtime)
+
+    first = module.run_isolated_route_pipeline_smoke(
+        context_bus_path=context_bus,
+        runtime_root=runtime,
+        policy_decision_id="policy:allow:github-artifact:first",
+        isolated_runtime_root=runtime / "routeproxy-isolated-first",
+    )
+    second = module.run_isolated_route_pipeline_smoke(
+        context_bus_path=context_bus,
+        runtime_root=runtime,
+        policy_decision_id="policy:allow:github-artifact:second",
+        isolated_runtime_root=runtime / "routeproxy-isolated-second",
+    )
+
+    assert first["pipeline_success"] is True
+    assert second["pipeline_success"] is True
+    assert second["queued_count"] == 1
+    assert second["policy_scoped_queued_count"] == 1
+    assert second["command_plan_ready_count"] == 1
+    assert second["command_built_count"] == 1
+    assert second["handler_executed_count"] == 1
+    assert second["frames_written_count"] == 1
+    assert second["readback_count"] == 1
+    assert second["artifacts"]["policy_scoped_queue"].endswith("scheduler.route_requests.policy_scoped.jsonl")

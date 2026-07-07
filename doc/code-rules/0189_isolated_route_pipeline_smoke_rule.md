@@ -5,6 +5,9 @@
 Rules:
 
 - Run only against an explicit isolated_runtime_root.
+- Keep scheduler.route_requests.jsonl append-only.
+- Build scheduler.route_requests.policy_scoped.jsonl for the current policy_decision_id.
+- Downstream isolated pipeline stages must read the policy-scoped queue.
 - Reuse existing 0179 and 0184 through 0188 stages.
 - Require explicit policy_decision_id.
 - Write only pipeline artifacts under the requested runtime_root and RouteProxy frames under isolated_runtime_root.

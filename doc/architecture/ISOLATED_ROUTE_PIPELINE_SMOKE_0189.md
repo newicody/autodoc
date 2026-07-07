@@ -22,11 +22,22 @@ not add a new runtime handler and does not create a new authority path. It only
 orchestrates already validated local stages with an explicit isolated runtime
 root.
 
+## 0190 policy-scoped queue lock
+
+0190 keeps 0189 as the isolated pipeline smoke, but fixes accumulation across
+multiple runs. `scheduler.route_requests.jsonl` remains append-only. Before
+0184 is called, 0189 writes a fresh
+`scheduler.route_requests.policy_scoped.jsonl` containing only route requests
+with the current `policy_decision_id`.
+
+Downstream stages must read the policy-scoped queue, not the append-only queue.
+
 ## Pipeline
 
 ```text
 context.bus.jsonl
 -> 0179 scheduler.route_requests.jsonl
+-> 0190 scheduler.route_requests.policy_scoped.jsonl
 -> 0184 route_request_to_command_dry_run_plan.jsonl
 -> 0185 scheduler_route_handler_command_smoke.jsonl
 -> 0186 isolated_handler_execution_plan.jsonl

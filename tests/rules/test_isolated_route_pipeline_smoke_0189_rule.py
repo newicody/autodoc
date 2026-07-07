@@ -19,6 +19,9 @@ def test_0189_tool_reuses_stages_and_locks_boundary() -> None:
         "0187 isolated Scheduler route handler smoke",
         "0188 isolated Scheduler route handler readback smoke",
         "It executes the existing handler only through the 0187 isolated smoke stage",
+        "POLICY_SCOPED_QUEUE_NAME",
+        "scheduler.route_requests.policy_scoped.jsonl",
+        "policy scoped queue is empty",
         "It must not modify Scheduler.run",
         "It must not instantiate Scheduler",
         "It must not instantiate EventBus",
@@ -71,6 +74,18 @@ def test_0189_tool_has_no_network_imports() -> None:
     assert "import requests" not in source
     assert "from requests" not in source
     assert "urllib" not in source
+
+
+def test_0190_tool_locks_policy_scoped_queue() -> None:
+    source = TOOL.read_text(encoding="utf-8")
+    for token in [
+        "_write_policy_scoped_queue",
+        "policy_decision_id",
+        "scheduler.route_requests.policy_scoped.jsonl",
+        "policy_scoped_queued_count",
+        "policy scoped queue is empty",
+    ]:
+        assert token in source
 
 
 def test_0189_manifest_lists_pipeline_smoke_files() -> None:
