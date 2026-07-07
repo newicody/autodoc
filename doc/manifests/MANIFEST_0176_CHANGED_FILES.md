@@ -1,0 +1,13 @@
+# Manifest — 0176 GitHub artifact dataset bus observation bridge
+
+- PHASE0176_TEST_REPORT.md
+- src/context/github_artifact_dataset_bus_observation.py
+- tools/project_github_artifact_dataset_bus_observation.py
+- tests/context/test_github_artifact_dataset_bus_observation_0176.py
+- tests/tools/test_project_github_artifact_dataset_bus_observation_0176.py
+- tests/rules/test_github_artifact_dataset_bus_observation_bridge_0176_rule.py
+- doc/architecture/GITHUB_ARTIFACT_DATASET_BUS_OBSERVATION_BRIDGE_0176.md
+- doc/code-rules/0176_github_artifact_dataset_bus_observation_bridge_rule.md
+- doc/docs/architecture/runtime/176_github_artifact_dataset_bus_observation_bridge.dot
+- doc/CHANGELOG_0176_GITHUB_ARTIFACT_DATASET_BUS_OBSERVATION_BRIDGE.md
+- doc/manifests/MANIFEST_0176_CHANGED_FILES.md
