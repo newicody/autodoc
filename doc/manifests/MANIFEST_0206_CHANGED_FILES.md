@@ -1,0 +1,11 @@
+# Manifest — 0206 ControlProxy RouteProxy coherence acceptance
+
+- PHASE0206_TEST_REPORT.md
+- tools/run_controlproxy_routeproxy_coherence_acceptance.py
+- tests/tools/test_run_controlproxy_routeproxy_coherence_acceptance_0206.py
+- tests/rules/test_controlproxy_routeproxy_coherence_acceptance_0206_rule.py
+- doc/architecture/CONTROLPROXY_ROUTEPROXY_COHERENCE_ACCEPTANCE_0206.md
+- doc/code-rules/0206_controlproxy_routeproxy_coherence_acceptance_rule.md
+- doc/docs/architecture/runtime/206_controlproxy_routeproxy_coherence_acceptance.dot
+- doc/CHANGELOG_0206_CONTROLPROXY_ROUTEPROXY_COHERENCE_ACCEPTANCE.md
+- doc/manifests/MANIFEST_0206_CHANGED_FILES.md
