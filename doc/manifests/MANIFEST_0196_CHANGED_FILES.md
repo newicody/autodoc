@@ -1,0 +1,11 @@
+# Manifest — 0196 Isolated route pipeline promotion readiness acceptance
+
+- PHASE0196_TEST_REPORT.md
+- tools/accept_isolated_route_pipeline_promotion_readiness.py
+- tests/tools/test_accept_isolated_route_pipeline_promotion_readiness_0196.py
+- tests/rules/test_isolated_route_pipeline_promotion_readiness_acceptance_0196_rule.py
+- doc/architecture/ISOLATED_ROUTE_PIPELINE_PROMOTION_READINESS_ACCEPTANCE_0196.md
+- doc/code-rules/0196_isolated_route_pipeline_promotion_readiness_acceptance_rule.md
+- doc/docs/architecture/runtime/196_isolated_route_pipeline_promotion_readiness_acceptance.dot
+- doc/CHANGELOG_0196_ISOLATED_ROUTE_PIPELINE_PROMOTION_READINESS_ACCEPTANCE.md
+- doc/manifests/MANIFEST_0196_CHANGED_FILES.md
