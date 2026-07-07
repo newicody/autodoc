@@ -152,8 +152,14 @@ def audit_controlproxy_contract_surfaces(
 
     surface_reports = [_audit_surface(root=root, spec=spec) for spec in SURFACE_SPECS]
     for report in surface_reports:
-        if report["optional"] and not report["exists"]:
-            warnings.append(f"optional representation surface missing: {report['path']}")
+        if report["optional"]:
+            if not report["exists"]:
+                warnings.append(f"optional representation surface missing: {report['path']}")
+                continue
+            for symbol in report["missing_required_symbols"]:
+                warnings.append(f"optional representation surface missing symbol {symbol} in {report['path']}")
+            for token in report["missing_required_tokens"]:
+                warnings.append(f"optional representation surface missing token {token} in {report['path']}")
             continue
         if not report["exists"]:
             issues.append(f"missing existing surface: {report['path']}")
