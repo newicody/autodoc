@@ -1,0 +1,11 @@
+# Manifest — 0215 Controlled context recall integration acceptance
+
+- PHASE0215_TEST_REPORT.md
+- tools/accept_controlled_context_recall_integration.py
+- tests/tools/test_accept_controlled_context_recall_integration_0215.py
+- tests/rules/test_controlled_context_recall_integration_acceptance_0215_rule.py
+- doc/architecture/CONTROLLED_CONTEXT_RECALL_INTEGRATION_ACCEPTANCE_0215.md
+- doc/code-rules/0215_controlled_context_recall_integration_acceptance_rule.md
+- doc/docs/architecture/runtime/215_controlled_context_recall_integration_acceptance.dot
+- doc/CHANGELOG_0215_CONTROLLED_CONTEXT_RECALL_INTEGRATION_ACCEPTANCE.md
+- doc/manifests/MANIFEST_0215_CHANGED_FILES.md
