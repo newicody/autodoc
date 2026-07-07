@@ -1,0 +1,11 @@
+# Manifest — 0200 Controlled dev RouteProxy smoke post-execution acceptance
+
+- PHASE0200_TEST_REPORT.md
+- tools/accept_controlled_dev_routeproxy_smoke_post_execution.py
+- tests/tools/test_accept_controlled_dev_routeproxy_smoke_post_execution_0200.py
+- tests/rules/test_controlled_dev_routeproxy_smoke_post_execution_acceptance_0200_rule.py
+- doc/architecture/CONTROLLED_DEV_ROUTE_PROXY_SMOKE_POST_EXECUTION_ACCEPTANCE_0200.md
+- doc/code-rules/0200_controlled_dev_routeproxy_smoke_post_execution_acceptance_rule.md
+- doc/docs/architecture/runtime/200_controlled_dev_routeproxy_smoke_post_execution_acceptance.dot
+- doc/CHANGELOG_0200_CONTROLLED_DEV_ROUTE_PROXY_SMOKE_POST_EXECUTION_ACCEPTANCE.md
+- doc/manifests/MANIFEST_0200_CHANGED_FILES.md
