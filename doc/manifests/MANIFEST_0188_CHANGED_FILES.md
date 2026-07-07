@@ -1,0 +1,11 @@
+# Manifest — 0188 Isolated Scheduler route handler readback smoke
+
+- PHASE0188_TEST_REPORT.md
+- tools/readback_isolated_scheduler_route_handler_smoke.py
+- tests/tools/test_readback_isolated_scheduler_route_handler_smoke_0188.py
+- tests/rules/test_isolated_scheduler_route_handler_readback_smoke_0188_rule.py
+- doc/architecture/ISOLATED_SCHEDULER_ROUTE_HANDLER_READBACK_SMOKE_0188.md
+- doc/code-rules/0188_isolated_scheduler_route_handler_readback_smoke_rule.md
+- doc/docs/architecture/runtime/188_isolated_scheduler_route_handler_readback_smoke.dot
+- doc/CHANGELOG_0188_ISOLATED_SCHEDULER_ROUTE_HANDLER_READBACK_SMOKE.md
+- doc/manifests/MANIFEST_0188_CHANGED_FILES.md
