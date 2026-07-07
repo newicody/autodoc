@@ -43,7 +43,7 @@ CONTROLLED_SCHEDULER_HOOK_SMOKE_ACCEPTANCE_SCHEMA = (
 EXPECTED_PLAN_SCHEMA = "missipy.scheduler.hook_dry_run_plan.v1"
 EXPECTED_EXECUTION_TOOL = "tools/run_isolated_route_pipeline_smoke.py"
 DEFAULT_OUTPUT_NAME = "controlled_scheduler_hook_smoke_acceptance.json"
-DEFAULT_PIPELINE_OUTPUT_NAME = "controlled_scheduler_hook_smoke_pipeline.json"
+DEFAULT_PIPELINE_OUTPUT_NAME = "isolated_route_pipeline_smoke.json"
 
 FALSE_PLAN_FLAGS = (
     "runtime_imports_executed_by_0202",
