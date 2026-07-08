@@ -424,14 +424,26 @@ def run_tests(root: Path) -> None:
         run(command, root=root, env=env)
 
 
+def commit_candidate(path: str, *, include_patch_artifact: bool) -> bool:
+    """Return whether a changed path should be staged by the patch queue."""
+
+    if path == ".var" or path.startswith(".var/"):
+        return False
+    if not include_patch_artifact and path.startswith("patch/"):
+        return False
+    return True
+
+
 def changed_files_for_commit(root: Path, *, include_patch_artifact: bool) -> tuple[str, ...]:
     tracked = git_capture(("diff", "--name-only"), root=root).splitlines()
     staged = git_capture(("diff", "--cached", "--name-only"), root=root).splitlines()
     untracked = git_capture(("ls-files", "--others", "--exclude-standard"), root=root).splitlines()
     names = sorted(set(tracked + staged + untracked))
-    if include_patch_artifact:
-        return tuple(names)
-    return tuple(name for name in names if not name.startswith("patch/"))
+    return tuple(
+        name
+        for name in names
+        if commit_candidate(name, include_patch_artifact=include_patch_artifact)
+    )
 
 
 def create_commit(root: Path, item: PatchQueueItem, *, include_patch_artifact: bool, ssh: SshOptions) -> None:
