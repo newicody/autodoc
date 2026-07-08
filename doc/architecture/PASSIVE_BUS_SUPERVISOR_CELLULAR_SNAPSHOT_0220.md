@@ -118,3 +118,25 @@ call `Scheduler.run`, dispatch handlers, or mutate runtime state.
 `events.jsonl` is no longer a mandatory spine. It is an optional audit/replay
 surface used for tests, diagnostics, and reproducibility. The live supervision
 path is the in-memory sink fed by canonical EventBus events.
+
+## 0222 Scheduler EventBus Supervisor Source Update
+
+Patch 0222 keeps Scheduler central in the architecture without giving authority
+to the passive supervisor. The canonical runtime path is:
+
+```text
+Scheduler
+  -> canonical Scheduler EventBus event
+  -> EventBus
+  -> PassiveSupervisorSink
+  -> in-memory CellularState
+  -> optional snapshot/audit
+```
+
+The patch standardizes the Scheduler event shape with `cell_kind=SCHEDULER`, a
+`scheduler:<ref>` source reference, optional handler payload, and the same refs
+used by later RouteProxy, policy, SQL, Qdrant, SHM, GitHub, and rehydrate events.
+
+The passive supervisor still does not import Scheduler, does not call
+`Scheduler.run`, and does not dispatch handlers. It only observes events that are
+already on the EventBus path.

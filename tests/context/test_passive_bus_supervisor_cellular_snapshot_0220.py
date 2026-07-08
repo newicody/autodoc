@@ -164,3 +164,54 @@ def test_passive_supervisor_sink_audit_is_optional(tmp_path) -> None:
     assert payload["cellular_snapshot_written"] is True
     assert payload["audit_journal_enabled"] is True
     assert "routeproxy_status_observed" in audit_jsonl.read_text(encoding="utf-8")
+
+
+def test_scheduler_supervision_event_is_canonical_and_sink_accepts_it() -> None:
+    from src.context.passive_bus_supervisor_cellular_snapshot import (
+        PassiveSupervisorSink,
+        scheduler_supervision_event,
+    )
+
+    event = scheduler_supervision_event(
+        event_id="evt-scheduler-0222",
+        event_kind="scheduler_handler_completed",
+        scheduler_ref="main",
+        handler_ref="route-handler",
+        state="success",
+        observed_at="2026-07-08T00:00:00Z",
+        route_ref="route-1",
+        policy_decision_id="policy-1",
+        payload={"cycle": "1"},
+    )
+    sink = PassiveSupervisorSink()
+    sink.accept(event)
+    payload = sink.snapshot_payload(generated_at="2026-07-08T00:00:01Z")
+    cells = {cell["cell_id"]: cell for cell in payload["cells"]}
+
+    assert event.cell_kind == "SCHEDULER"
+    assert event.cell_id == "scheduler:main"
+    assert event.source_ref == "scheduler:main"
+    assert event.payload["handler_ref"] == "route-handler"
+    assert cells["scheduler:main"]["refs"]["route_ref"] == "route-1"
+    assert cells["scheduler:main"]["refs"]["policy_decision_id"] == "policy-1"
+    assert payload["authority_boundary"]["allows_scheduler_run"] is False
+
+
+def test_passive_supervisor_sink_accept_scheduler_event_keeps_scheduler_downstream() -> None:
+    from src.context.passive_bus_supervisor_cellular_snapshot import PassiveSupervisorSink
+
+    sink = PassiveSupervisorSink(metadata={"surface": "eventbus"})
+    event = sink.accept_scheduler_event(
+        event_id="evt-scheduler-accept-1",
+        event_kind="scheduler_handler_started",
+        scheduler_ref="main",
+        handler_ref="route-handler",
+        state="running",
+        observed_at="2026-07-08T00:00:00Z",
+    )
+    snapshot = sink.snapshot_payload(generated_at="2026-07-08T00:00:01Z")
+
+    assert event.cell_kind == "SCHEDULER"
+    assert snapshot["event_count"] == 1
+    assert snapshot["cells"][0]["health"] == "active"
+    assert snapshot["supervision_authority_violation"] is False

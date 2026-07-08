@@ -265,6 +265,58 @@ def event_from_mapping(mapping: Mapping[str, Any]) -> BusSupervisorEvent:
     )
 
 
+
+def scheduler_supervision_event(
+    *,
+    event_id: str,
+    event_kind: str,
+    scheduler_ref: str,
+    state: str,
+    observed_at: str,
+    handler_ref: str = "",
+    route_ref: str = "",
+    policy_decision_id: str = "",
+    artifact_ref: str = "",
+    sql_ref: str = "",
+    qdrant_ref: str = "",
+    shm_ref: str = "",
+    error: str = "",
+    payload: Mapping[str, Any] | None = None,
+) -> BusSupervisorEvent:
+    """Create a canonical scheduler supervision event for EventBus emission.
+
+    The returned object is data-only and can be published by the existing
+    scheduler/EventBus path or accepted by :class:`PassiveSupervisorSink` in
+    tests. This helper does not depend on Scheduler implementation, does not call Scheduler.run,
+    and does not dispatch handlers.
+    """
+
+    scheduler_name = _as_string(scheduler_ref).strip()
+    handler_name = _as_string(handler_ref).strip()
+    extra_payload = dict(_as_string_mapping(payload))
+    if handler_name:
+        extra_payload.setdefault("handler_ref", handler_name)
+
+    cell_id = f"scheduler:{scheduler_name}" if scheduler_name else "scheduler"
+    return BusSupervisorEvent(
+        event_id=event_id,
+        event_kind=event_kind,
+        cell_id=cell_id,
+        cell_kind="SCHEDULER",
+        state=state,
+        observed_at=observed_at,
+        source_ref=f"scheduler:{scheduler_name}" if scheduler_name else "scheduler",
+        route_ref=route_ref,
+        policy_decision_id=policy_decision_id,
+        artifact_ref=artifact_ref,
+        sql_ref=sql_ref,
+        qdrant_ref=qdrant_ref,
+        shm_ref=shm_ref,
+        error=error,
+        payload=extra_payload,
+    )
+
+
 def build_cellular_snapshot(
     events: Iterable[BusSupervisorEvent],
     *,
@@ -340,6 +392,45 @@ class PassiveSupervisorSink:
         if self._audit_jsonl is not None:
             self._write_audit_event(normalized)
         return normalized
+
+    def accept_scheduler_event(
+        self,
+        *,
+        event_id: str,
+        event_kind: str,
+        scheduler_ref: str,
+        state: str,
+        observed_at: str,
+        handler_ref: str = "",
+        route_ref: str = "",
+        policy_decision_id: str = "",
+        artifact_ref: str = "",
+        sql_ref: str = "",
+        qdrant_ref: str = "",
+        shm_ref: str = "",
+        error: str = "",
+        payload: Mapping[str, Any] | None = None,
+    ) -> BusSupervisorEvent:
+        """Accept an upstream Scheduler EventBus event without scheduler control."""
+
+        return self.accept(
+            scheduler_supervision_event(
+                event_id=event_id,
+                event_kind=event_kind,
+                scheduler_ref=scheduler_ref,
+                state=state,
+                observed_at=observed_at,
+                handler_ref=handler_ref,
+                route_ref=route_ref,
+                policy_decision_id=policy_decision_id,
+                artifact_ref=artifact_ref,
+                sql_ref=sql_ref,
+                qdrant_ref=qdrant_ref,
+                shm_ref=shm_ref,
+                error=error,
+                payload=payload,
+            )
+        )
 
     def event_count(self) -> int:
         return len(self._events)
