@@ -1,0 +1,13 @@
+# Manifest — 0228 EventBus supervision reuse audit
+
+```text
+PHASE0228_EVENTBUS_SUPERVISION_REUSE_AUDIT_TEST_REPORT.md
+doc/CHANGELOG_0228_EVENTBUS_SUPERVISION_REUSE_AUDIT.md
+doc/architecture/EVENTBUS_SUPERVISION_REUSE_AUDIT_0228.md
+doc/code-rules/0228_eventbus_supervision_reuse_audit_rule.md
+doc/docs/architecture/runtime/228_eventbus_supervision_reuse_audit.dot
+doc/manifests/MANIFEST_0228_EVENTBUS_SUPERVISION_REUSE_AUDIT_CHANGED_FILES.md
+tests/rules/test_eventbus_supervision_reuse_audit_0228_rule.py
+tests/tools/test_audit_eventbus_supervision_reuse_0228.py
+tools/audit_eventbus_supervision_reuse_0228.py
+```
