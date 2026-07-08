@@ -1,0 +1,13 @@
+# Manifest — 0223 Runtime Surface EventBus upstream contract
+
+```text
+PHASE0223_RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_TEST_REPORT.md
+doc/CHANGELOG_0223_RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT.md
+doc/architecture/RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_0223.md
+doc/code-rules/0223_runtime_surface_eventbus_upstream_contract_rule.md
+doc/docs/architecture/runtime/223_runtime_surface_eventbus_upstream_contract.dot
+doc/manifests/MANIFEST_0223_RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_CHANGED_FILES.md
+tests/rules/test_runtime_surface_eventbus_upstream_contract_0223_rule.py
+```
+
+No runtime files are changed by this contract patch.
