@@ -1,0 +1,15 @@
+# Manifest — 0227 functional resumption supervision gate contract
+
+Added files:
+
+```text
+PHASE0227_FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT_TEST_REPORT.md
+doc/architecture/FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT_0227.md
+doc/code-rules/0227_functional_resumption_supervision_gate_contract_rule.md
+doc/docs/architecture/runtime/227_functional_resumption_supervision_gate_contract.dot
+doc/CHANGELOG_0227_FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT.md
+doc/manifests/MANIFEST_0227_FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT_CHANGED_FILES.md
+tests/rules/test_functional_resumption_supervision_gate_contract_0227_rule.py
+```
+
+No runtime files changed.
