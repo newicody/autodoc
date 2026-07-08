@@ -1,0 +1,896 @@
+diff --git a/PHASE0200_TEST_REPORT.md b/PHASE0200_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0200_TEST_REPORT.md
+@@ -0,0 +1,40 @@
++# Phase 0200 Test Report — Controlled dev RouteProxy smoke post-execution acceptance
++
++Status: prepared.
++
++Scope:
++- Reads `controlled_dev_routeproxy_smoke_execution.json`.
++- Reads `isolated_route_pipeline_smoke.json`.
++- Produces `controlled_dev_routeproxy_smoke_post_execution_acceptance.json`.
++- Optionally appends `controlled_dev_routeproxy_smoke_registry.jsonl`.
++- Reuses existing P0199 execution report and pipeline artifacts.
++- Applies `doc/code-rules/code_rule.md`.
++- Updates docs, graph, changelog, manifest, and rule.
++- Closes Bloc B.
++- Opens Bloc C only after acceptance.
++- No controlled dev smoke execution in 0200.
++- No new runtime handler.
++- No new adapter.
++- No new bus.
++- No runtime import.
++- No handler call.
++- No RouteProxyRuntime preparation.
++- No read_route_frame call.
++- No writer permit request.
++- No frame write by 0200.
++- No Scheduler modification.
++- No Scheduler/EventBus instantiation.
++- No ControlProxy frame write.
++- No GitHub API/network.
++- No conversion/inference/SQL/Qdrant/VisPy writes.
++
++Validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/tools/test_accept_controlled_dev_routeproxy_smoke_post_execution_0200.py \
++  tests/rules/test_controlled_dev_routeproxy_smoke_post_execution_acceptance_0200_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
+diff --git a/tools/accept_controlled_dev_routeproxy_smoke_post_execution.py b/tools/accept_controlled_dev_routeproxy_smoke_post_execution.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/accept_controlled_dev_routeproxy_smoke_post_execution.py
+@@ -0,0 +1,378 @@
++#!/usr/bin/env python3
++"""Accept controlled dev RouteProxy smoke after P0199 execution.
++
++0200 is the Bloc B post-execution audit, acceptance, registry, and coherence
++patch.
++
++It reads controlled_dev_routeproxy_smoke_execution.json from 0199, reuses the
++existing isolated_route_pipeline_smoke.json produced by tools/run_isolated_route_pipeline_smoke.py,
++and writes controlled_dev_routeproxy_smoke_post_execution_acceptance.json. It
++can append controlled_dev_routeproxy_smoke_registry.jsonl.
++
++It must reuse the existing 0199 execution report and existing pipeline artifacts.
++It must not introduce a new runtime handler, adapter, bus, RouteProxy runtime,
++ControlProxy runtime, SQL backend, Qdrant backend, GitHub client, graph
++renderer, or inference path.
++
++0200 does not execute controlled-dev-routeproxy-smoke.
++0200 does not import runtime handler modules.
++0200 does not call handle_scheduler_route_command.
++0200 does not call handle_scheduler_route_request.
++0200 does not call prepare_route_proxy_runtime.
++0200 does not call read_route_frame.
++0200 does not request writer permits.
++0200 does not call write_route_frame.
++0200 does not modify Scheduler.run.
++0200 does not instantiate Scheduler.
++0200 does not instantiate EventBus.
++0200 does not write ControlProxy or RouteProxy frames.
++0200 does not call GitHub API or use network.
++"""
++
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++from pathlib import Path
++from typing import Any, Mapping
++
++
++CONTROLLED_DEV_POST_EXECUTION_ACCEPTANCE_SCHEMA = (
++    "missipy.route_pipeline.controlled_dev_post_execution_acceptance.v1"
++)
++CONTROLLED_DEV_REGISTRY_ENTRY_SCHEMA = "missipy.route_pipeline.controlled_dev_registry_entry.v1"
++EXPECTED_EXECUTION_SCHEMA = "missipy.route_pipeline.controlled_dev_routeproxy_smoke_execution.v1"
++EXPECTED_PIPELINE_SCHEMA = "missipy.route_pipeline.isolated_smoke.v1"
++EXPECTED_EXECUTION_TOOL = "tools/run_isolated_route_pipeline_smoke.py"
++EXPECTED_ACCEPTED_BASELINE = "controlled-dev-routeproxy-write-read-v1"
++DEFAULT_OUTPUT_NAME = "controlled_dev_routeproxy_smoke_post_execution_acceptance.json"
++DEFAULT_REGISTRY_NAME = "controlled_dev_routeproxy_smoke_registry.jsonl"
++
++
++class ControlledDevRouteProxySmokePostExecutionAcceptanceError(ValueError):
++    """Raised when the controlled dev smoke post-execution acceptance is unsafe."""
++
++
++def accept_controlled_dev_routeproxy_smoke_post_execution(
++    *,
++    execution_report_path: Path | str,
++    output_path: Path | str | None = None,
++    registry_path: Path | str | None = None,
++) -> dict[str, Any]:
++    """Audit and accept the P0199 controlled dev smoke execution without rerunning it."""
++
++    execution_path = Path(execution_report_path)
++    execution = _read_json_file(execution_path)
++    issues: list[str] = []
++    warnings: list[str] = []
++
++    _audit_execution_report(execution, issues, warnings)
++
++    pipeline_path = Path(str(execution.get("pipeline_output", "")))
++    pipeline: dict[str, Any] = {}
++    if not pipeline_path.is_absolute():
++        issues.append("pipeline_output must be absolute")
++    elif not pipeline_path.exists():
++        issues.append("pipeline_output must exist")
++    else:
++        pipeline = _read_json_file(pipeline_path)
++        _audit_pipeline_output(pipeline, execution, issues, warnings)
++
++    target_runtime_root = Path(str(execution.get("target_runtime_root", "")))
++    final_output = Path(output_path) if output_path is not None else target_runtime_root / DEFAULT_OUTPUT_NAME
++    if final_output.name != DEFAULT_OUTPUT_NAME:
++        issues.append("output filename must be controlled_dev_routeproxy_smoke_post_execution_acceptance.json")
++    if target_runtime_root.is_absolute() and final_output.is_absolute():
++        if not _is_within_or_equal(final_output, target_runtime_root):
++            issues.append("post-execution acceptance output must be inside target_runtime_root")
++
++    selected_entry_digest = str(execution.get("selected_entry_digest") or "")
++    source_baseline_ref = str(execution.get("selected_baseline_ref") or "")
++    acceptance_seed = {
++        "execution_report_path": str(execution_path),
++        "pipeline_output": str(pipeline_path),
++        "policy_decision_id": execution.get("policy_decision_id"),
++        "target_runtime_root": execution.get("target_runtime_root"),
++        "target_isolated_runtime_root": execution.get("target_isolated_runtime_root"),
++        "frames_written_count": execution.get("frames_written_count"),
++        "readback_count": execution.get("readback_count"),
++        "source_selected_entry_digest": selected_entry_digest,
++    }
++    acceptance_digest = _stable_digest(acceptance_seed)
++    controlled_dev_baseline_ref = f"baseline:{EXPECTED_ACCEPTED_BASELINE}:{acceptance_digest[:16]}"
++
++    acceptance = {
++        "schema": CONTROLLED_DEV_POST_EXECUTION_ACCEPTANCE_SCHEMA,
++        "bloc": "B",
++        "bloc_name": "controlled-dev-smoke",
++        "bloc_patch_limit": 3,
++        "bloc_patches": [
++            "0198-controlled_dev_routeproxy_smoke_plan",
++            "0199-controlled_dev_routeproxy_smoke_execution",
++            "0200-controlled_dev_routeproxy_smoke_post_execution_acceptance",
++        ],
++        "execution_report_path": str(execution_path),
++        "execution_report_schema": execution.get("schema"),
++        "pipeline_output": str(pipeline_path),
++        "pipeline_schema": pipeline.get("schema"),
++        "source_baseline_ref": source_baseline_ref,
++        "source_entry_digest": selected_entry_digest,
++        "accepted_baseline": EXPECTED_ACCEPTED_BASELINE,
++        "controlled_dev_baseline_ref": controlled_dev_baseline_ref,
++        "acceptance_digest": acceptance_digest,
++        "policy_decision_id": execution.get("policy_decision_id"),
++        "target_runtime_root": execution.get("target_runtime_root"),
++        "target_isolated_runtime_root": execution.get("target_isolated_runtime_root"),
++        "execution_tool_reused": execution.get("execution_tool_reused"),
++        "controlled_dev_smoke_accepted": not issues,
++        "bloc_b_coherence_accepted": not issues,
++        "bloc_b_complete": not issues,
++        "phase_re_evaluated": True,
++        "next_bloc": "C",
++        "next_bloc_name": "scheduler-hook-controlled",
++        "next_recommended_patch": "0201-scheduler_integration_surface_audit",
++        "execution_was_required_and_performed": True,
++        "execution_locks_released_for_phase": True,
++        "execution_scope": execution.get("execution_scope"),
++        "issues": issues,
++        "warnings": warnings,
++        "queued_count": execution.get("queued_count"),
++        "policy_scoped_queued_count": execution.get("policy_scoped_queued_count"),
++        "command_plan_ready_count": execution.get("command_plan_ready_count"),
++        "command_built_count": execution.get("command_built_count"),
++        "handler_executed_count": execution.get("handler_executed_count"),
++        "frames_written_count": execution.get("frames_written_count"),
++        "readback_count": execution.get("readback_count"),
++        "existing_surfaces_reused": True,
++        "new_runtime_handler_added": False,
++        "new_adapter_added": False,
++        "new_bus_added": False,
++        "new_sql_backend_added": False,
++        "new_qdrant_backend_added": False,
++        "new_github_client_added": False,
++        "runtime_imports_executed_by_0200": False,
++        "handler_called_by_0200": False,
++        "routeproxy_prepared_by_0200": False,
++        "read_route_frame_called_by_0200": False,
++        "writer_permits_requested_by_0200": False,
++        "frames_written_by_0200": False,
++        "controlproxy_frames_written": bool(execution.get("controlproxy_frames_written")),
++        "scheduler_modified": bool(execution.get("scheduler_modified")),
++        "eventbus_instantiated": bool(execution.get("eventbus_instantiated")),
++        "network_used": bool(execution.get("network_used")),
++    }
++
++    if registry_path is not None:
++        registry = _build_registry_entry(acceptance)
++        _append_registry(Path(registry_path), registry)
++        acceptance["registry_path"] = str(Path(registry_path))
++        acceptance["registry_entry_digest"] = registry["entry_digest"]
++
++    if output_path is not None:
++        _write_acceptance(final_output, acceptance)
++
++    return acceptance
++
++
++def _audit_execution_report(execution: Mapping[str, Any], issues: list[str], warnings: list[str]) -> None:
++    if execution.get("schema") != EXPECTED_EXECUTION_SCHEMA:
++        issues.append("execution report schema mismatch")
++    if execution.get("execution_success") is not True:
++        issues.append("execution_success must be true")
++    if execution.get("execution_allowed_by_0199") is not True:
++        issues.append("execution_allowed_by_0199 must be true")
++    if execution.get("execution_unlocked_by_p0199") is not True:
++        issues.append("execution_unlocked_by_p0199 must be true")
++    if execution.get("execution_tool_reused") != EXPECTED_EXECUTION_TOOL:
++        issues.append("execution_tool_reused must be tools/run_isolated_route_pipeline_smoke.py")
++    if execution.get("requires_p0200_post_execution_audit") is not True:
++        issues.append("requires_p0200_post_execution_audit must be true")
++    if execution.get("pipeline_success") is not True:
++        issues.append("pipeline_success must be true")
++    if execution.get("issues") not in ([], None):
++        issues.append("execution issues must be empty")
++    if isinstance(execution.get("warnings"), list) and execution.get("warnings"):
++        warnings.extend(str(item) for item in execution.get("warnings", []))
++    if execution.get("existing_surfaces_reused") is not True:
++        issues.append("existing_surfaces_reused must be true")
++    if execution.get("existing_pipeline_tool_executed") is not True:
++        issues.append("existing_pipeline_tool_executed must be true")
++    if execution.get("controlproxy_frames_written") is not False:
++        issues.append("ControlProxy frames must not be written")
++    if execution.get("scheduler_modified") is not False:
++        issues.append("Scheduler must not be modified")
++    if execution.get("eventbus_instantiated") is not False:
++        issues.append("EventBus must not be instantiated")
++    if execution.get("network_used") is not False:
++        issues.append("network must not be used")
++    if execution.get("frames_written_count") != 1:
++        issues.append("frames_written_count must be 1")
++    if execution.get("readback_count") != 1:
++        issues.append("readback_count must be 1")
++    if execution.get("queued_count") != execution.get("policy_scoped_queued_count"):
++        issues.append("queued_count must match policy_scoped_queued_count")
++    if not isinstance(execution.get("policy_decision_id"), str) or not execution.get("policy_decision_id"):
++        issues.append("policy_decision_id must be present")
++    _audit_target_paths(execution, issues)
++
++
++def _audit_pipeline_output(
++    pipeline: Mapping[str, Any],
++    execution: Mapping[str, Any],
++    issues: list[str],
++    warnings: list[str],
++) -> None:
++    if pipeline.get("schema") != EXPECTED_PIPELINE_SCHEMA:
++        issues.append("pipeline schema mismatch")
++    if pipeline.get("pipeline_success") is not True:
++        issues.append("pipeline output pipeline_success must be true")
++    for key in (
++        "queued_count",
++        "policy_scoped_queued_count",
++        "command_plan_ready_count",
++        "command_built_count",
++        "handler_executed_count",
++        "frames_written_count",
++        "readback_count",
++    ):
++        if pipeline.get(key) != execution.get(key):
++            issues.append(f"pipeline {key} must match execution report")
++    if pipeline.get("controlproxy_frames_written") is not False:
++        issues.append("pipeline ControlProxy frames must not be written")
++    if pipeline.get("scheduler_modified") is not False:
++        issues.append("pipeline Scheduler must not be modified")
++    if pipeline.get("eventbus_instantiated") is not False:
++        issues.append("pipeline EventBus must not be instantiated")
++    if pipeline.get("network_used") is not False:
++        issues.append("pipeline network must not be used")
++    artifacts = pipeline.get("artifacts")
++    if not isinstance(artifacts, Mapping):
++        issues.append("pipeline artifacts must be present")
++        return
++    for key in (
++        "queue",
++        "policy_scoped_queue",
++        "route_request_to_command_plan",
++        "command_builder_smoke",
++        "isolated_handler_execution_plan",
++        "isolated_handler_smoke",
++        "isolated_handler_readback_smoke",
++    ):
++        raw = artifacts.get(key)
++        if not isinstance(raw, str) or not raw:
++            issues.append(f"pipeline artifact missing: {key}")
++            continue
++        path = Path(raw)
++        if not path.exists():
++            issues.append(f"pipeline artifact does not exist: {key}")
++        target_runtime_root = Path(str(execution.get("target_runtime_root", "")))
++        if target_runtime_root.is_absolute() and path.is_absolute():
++            if not _is_within_or_equal(path, target_runtime_root):
++                issues.append(f"pipeline artifact must be inside target_runtime_root: {key}")
++
++
++def _audit_target_paths(execution: Mapping[str, Any], issues: list[str]) -> None:
++    target_runtime_root = Path(str(execution.get("target_runtime_root", "")))
++    target_isolated_runtime_root = Path(str(execution.get("target_isolated_runtime_root", "")))
++    if not target_runtime_root.is_absolute():
++        issues.append("target_runtime_root must be absolute")
++    if not target_isolated_runtime_root.is_absolute():
++        issues.append("target_isolated_runtime_root must be absolute")
++    if target_runtime_root == target_isolated_runtime_root:
++        issues.append("target_runtime_root and target_isolated_runtime_root must be distinct")
++    if target_runtime_root.is_absolute() and target_isolated_runtime_root.is_absolute():
++        if not _is_within_or_equal(target_isolated_runtime_root, target_runtime_root):
++            issues.append("target_isolated_runtime_root must be inside target_runtime_root")
++    pipeline_output = Path(str(execution.get("pipeline_output", "")))
++    if pipeline_output.is_absolute() and target_runtime_root.is_absolute():
++        if not _is_within_or_equal(pipeline_output, target_runtime_root):
++            issues.append("pipeline_output must be inside target_runtime_root")
++
++
++def _build_registry_entry(acceptance: Mapping[str, Any]) -> dict[str, Any]:
++    seed = {
++        "schema": CONTROLLED_DEV_REGISTRY_ENTRY_SCHEMA,
++        "accepted_baseline": acceptance.get("accepted_baseline"),
++        "controlled_dev_baseline_ref": acceptance.get("controlled_dev_baseline_ref"),
++        "acceptance_digest": acceptance.get("acceptance_digest"),
++        "policy_decision_id": acceptance.get("policy_decision_id"),
++        "target_runtime_root": acceptance.get("target_runtime_root"),
++        "target_isolated_runtime_root": acceptance.get("target_isolated_runtime_root"),
++        "frames_written_count": acceptance.get("frames_written_count"),
++        "readback_count": acceptance.get("readback_count"),
++    }
++    digest = _stable_digest(seed)
++    return {
++        **seed,
++        "entry_digest": digest,
++        "entry_ref": f"controlled-dev-registry:{digest[:16]}",
++    }
++
++
++def _append_registry(path: Path, entry: Mapping[str, Any]) -> None:
++    if path.name != DEFAULT_REGISTRY_NAME:
++        raise ControlledDevRouteProxySmokePostExecutionAcceptanceError(
++            "registry filename must be controlled_dev_routeproxy_smoke_registry.jsonl"
++        )
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with path.open("a", encoding="utf-8") as handle:
++        handle.write(json.dumps(dict(entry), sort_keys=True) + "\n")
++
++
++def _stable_digest(value: Mapping[str, Any]) -> str:
++    payload = json.dumps(dict(value), sort_keys=True, separators=(",", ":")).encode("utf-8")
++    return hashlib.sha256(payload).hexdigest()
++
++
++def _is_within_or_equal(path: Path, root: Path) -> bool:
++    try:
++        path.resolve().relative_to(root.resolve())
++    except ValueError:
++        return False
++    return True
++
++
++def _read_json_file(path: Path) -> dict[str, Any]:
++    raw = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(raw, dict):
++        raise ControlledDevRouteProxySmokePostExecutionAcceptanceError("input must be a JSON object")
++    return raw
++
++
++def _write_acceptance(path: Path, acceptance: dict[str, Any]) -> None:
++    if path.name != DEFAULT_OUTPUT_NAME:
++        raise ControlledDevRouteProxySmokePostExecutionAcceptanceError(
++            "output filename must be controlled_dev_routeproxy_smoke_post_execution_acceptance.json"
++        )
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(acceptance, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Accept controlled dev RouteProxy smoke post-execution.")
++    parser.add_argument("--execution", required=True, help="Path to controlled_dev_routeproxy_smoke_execution.json.")
++    parser.add_argument("--output", help="Optional controlled_dev_routeproxy_smoke_post_execution_acceptance.json output path.")
++    parser.add_argument("--registry", help="Optional controlled_dev_routeproxy_smoke_registry.jsonl append path.")
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    args = parser.parse_args(argv)
++
++    acceptance = accept_controlled_dev_routeproxy_smoke_post_execution(
++        execution_report_path=Path(args.execution),
++        output_path=Path(args.output) if args.output else None,
++        registry_path=Path(args.registry) if args.registry else None,
++    )
++
++    if args.format == "json":
++        print(json.dumps(acceptance, indent=2, sort_keys=True))
++    else:
++        print(f"controlled_dev_smoke_accepted: {acceptance['controlled_dev_smoke_accepted']}")
++        print(f"bloc_b_complete: {acceptance['bloc_b_complete']}")
++        print(f"next_bloc: {acceptance['next_bloc']}")
++        print(f"accepted_baseline: {acceptance['accepted_baseline']}")
++        print(f"issues: {len(acceptance['issues'])}")
++    return 0 if acceptance["controlled_dev_smoke_accepted"] else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_accept_controlled_dev_routeproxy_smoke_post_execution_0200.py b/tests/tools/test_accept_controlled_dev_routeproxy_smoke_post_execution_0200.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_accept_controlled_dev_routeproxy_smoke_post_execution_0200.py
+@@ -0,0 +1,143 @@
++from pathlib import Path
++import importlib.util
++import json
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "accept_controlled_dev_routeproxy_smoke_post_execution.py"
++
++
++def _load_tool_module():
++    spec = importlib.util.spec_from_file_location("accept_controlled_dev_routeproxy_smoke_post_execution_tool", TOOL)
++    assert spec is not None
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    assert spec.loader is not None
++    spec.loader.exec_module(module)
++    return module
++
++
++def _execution_fixture(tmp_path: Path) -> dict:
++    runtime = tmp_path / "runtime" / "dev-controlled"
++    isolated = runtime / "routeproxy-isolated"
++    pipeline_output = runtime / "isolated_route_pipeline_smoke.json"
++    return {
++        "schema": "missipy.route_pipeline.controlled_dev_routeproxy_smoke_execution.v1",
++        "bloc": "B",
++        "bloc_name": "controlled-dev-smoke",
++        "controlled_dev_plan_path": str(tmp_path / "controlled_dev_routeproxy_smoke_plan.json"),
++        "context_bus_path": str(tmp_path / "context.bus.jsonl"),
++        "policy_decision_id": "policy:allow:controlled-dev:manual0199",
++        "target_runtime_root": str(runtime),
++        "target_isolated_runtime_root": str(isolated),
++        "execution_tool_reused": "tools/run_isolated_route_pipeline_smoke.py",
++        "execution_unlocked_by_p0199": True,
++        "execution_allowed_by_0199": True,
++        "execution_scope": "controlled-dev-routeproxy-smoke",
++        "pipeline_output": str(pipeline_output),
++        "subprocess_returncode": 0,
++        "pipeline_success": True,
++        "queued_count": 1,
++        "policy_scoped_queued_count": 1,
++        "command_plan_ready_count": 1,
++        "command_built_count": 1,
++        "handler_executed_count": 1,
++        "frames_written_count": 1,
++        "readback_count": 1,
++        "issues": [],
++        "warnings": [],
++        "execution_success": True,
++        "existing_surfaces_reused": True,
++        "existing_pipeline_tool_executed": True,
++        "selected_baseline_ref": "baseline:isolated-route-pipeline-write-read-v1:0123456789abcdef",
++        "selected_entry_digest": "0123456789abcdef" * 4,
++        "controlproxy_frames_written": False,
++        "scheduler_modified": False,
++        "eventbus_instantiated": False,
++        "network_used": False,
++        "requires_p0200_post_execution_audit": True,
++    }
++
++
++def _pipeline_fixture(execution: dict) -> dict:
++    return {
++        "schema": "missipy.route_pipeline.isolated_smoke.v1",
++        "pipeline_success": True,
++        "queued_count": 1,
++        "policy_scoped_queued_count": 1,
++        "command_plan_ready_count": 1,
++        "command_built_count": 1,
++        "handler_executed_count": 1,
++        "frames_written_count": 1,
++        "readback_count": 1,
++        "controlproxy_frames_written": False,
++        "scheduler_modified": False,
++        "eventbus_instantiated": False,
++        "network_used": False,
++        "artifacts": {
++            "queue": str(Path(execution["target_runtime_root"]) / "scheduler.route_requests.jsonl"),
++            "policy_scoped_queue": str(Path(execution["target_runtime_root"]) / "scheduler.route_requests.policy_scoped.jsonl"),
++            "route_request_to_command_plan": str(Path(execution["target_runtime_root"]) / "route_request_to_command_dry_run_plan.jsonl"),
++            "command_builder_smoke": str(Path(execution["target_runtime_root"]) / "scheduler_route_handler_command_smoke.jsonl"),
++            "isolated_handler_execution_plan": str(Path(execution["target_runtime_root"]) / "isolated_handler_execution_plan.jsonl"),
++            "isolated_handler_smoke": str(Path(execution["target_runtime_root"]) / "isolated_scheduler_route_handler_smoke.jsonl"),
++            "isolated_handler_readback_smoke": str(Path(execution["target_runtime_root"]) / "isolated_scheduler_route_handler_readback_smoke.jsonl"),
++        },
++    }
++
++
++def _write_fixture_files(tmp_path: Path) -> Path:
++    execution = _execution_fixture(tmp_path)
++    runtime = Path(execution["target_runtime_root"])
++    runtime.mkdir(parents=True)
++    pipeline = _pipeline_fixture(execution)
++    for raw in pipeline["artifacts"].values():
++        Path(raw).write_text("{}", encoding="utf-8")
++    Path(execution["pipeline_output"]).write_text(json.dumps(pipeline, indent=2), encoding="utf-8")
++    execution_path = runtime / "controlled_dev_routeproxy_smoke_execution.json"
++    execution_path.write_text(json.dumps(execution, indent=2), encoding="utf-8")
++    return execution_path
++
++
++def test_0200_accepts_clean_controlled_dev_execution(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    execution_path = _write_fixture_files(tmp_path)
++    runtime = execution_path.parent
++    output = runtime / "controlled_dev_routeproxy_smoke_post_execution_acceptance.json"
++    registry = runtime / "controlled_dev_routeproxy_smoke_registry.jsonl"
++
++    acceptance = module.accept_controlled_dev_routeproxy_smoke_post_execution(
++        execution_report_path=execution_path,
++        output_path=output,
++        registry_path=registry,
++    )
++
++    assert acceptance["controlled_dev_smoke_accepted"] is True
++    assert acceptance["bloc_b_complete"] is True
++    assert acceptance["next_bloc"] == "C"
++    assert acceptance["accepted_baseline"] == "controlled-dev-routeproxy-write-read-v1"
++    assert acceptance["issues"] == []
++    assert acceptance["existing_surfaces_reused"] is True
++    assert acceptance["frames_written_count"] == 1
++    assert acceptance["readback_count"] == 1
++    assert acceptance["controlproxy_frames_written"] is False
++    assert acceptance["scheduler_modified"] is False
++    assert acceptance["network_used"] is False
++    assert output.exists()
++    assert registry.exists()
++
++
++def test_0200_rejects_scheduler_modification(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    execution_path = _write_fixture_files(tmp_path)
++    execution = json.loads(execution_path.read_text(encoding="utf-8"))
++    execution["scheduler_modified"] = True
++    execution_path.write_text(json.dumps(execution, indent=2), encoding="utf-8")
++
++    acceptance = module.accept_controlled_dev_routeproxy_smoke_post_execution(
++        execution_report_path=execution_path,
++    )
++
++    assert acceptance["controlled_dev_smoke_accepted"] is False
++    assert "Scheduler must not be modified" in acceptance["issues"]
+diff --git a/tests/rules/test_controlled_dev_routeproxy_smoke_post_execution_acceptance_0200_rule.py b/tests/rules/test_controlled_dev_routeproxy_smoke_post_execution_acceptance_0200_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_controlled_dev_routeproxy_smoke_post_execution_acceptance_0200_rule.py
+@@ -0,0 +1,89 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "accept_controlled_dev_routeproxy_smoke_post_execution.py"
++DOC = ROOT / "doc" / "architecture" / "CONTROLLED_DEV_ROUTE_PROXY_SMOKE_POST_EXECUTION_ACCEPTANCE_0200.md"
++RULE = ROOT / "doc" / "code-rules" / "0200_controlled_dev_routeproxy_smoke_post_execution_acceptance_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0200_CHANGED_FILES.md"
++
++
++def test_0200_tool_is_post_execution_acceptance_only() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    for token in [
++        "0200 is the Bloc B post-execution audit, acceptance, registry, and coherence",
++        "controlled_dev_routeproxy_smoke_execution.json",
++        "controlled_dev_routeproxy_smoke_post_execution_acceptance.json",
++        "controlled_dev_routeproxy_smoke_registry.jsonl",
++        "It must reuse the existing 0199 execution report and existing pipeline artifacts",
++        "introduce a new runtime handler",
++        "0200 does not execute controlled-dev-routeproxy-smoke",
++        "0200 does not import runtime handler modules",
++        "0200 does not call handle_scheduler_route_command",
++        "0200 does not call prepare_route_proxy_runtime",
++        "0200 does not call read_route_frame",
++        "0200 does not request writer permits",
++        "0200 does not call write_route_frame",
++        "0200 does not modify Scheduler.run",
++        "0200 does not instantiate Scheduler",
++        "0200 does not instantiate EventBus",
++        "0200 does not write ControlProxy or RouteProxy frames",
++        "0200 does not call GitHub API or use network",
++        "controlled-dev-routeproxy-write-read-v1",
++        "0201-scheduler_integration_surface_audit",
++    ]:
++        assert token in source
++    assert "from runtime." not in source
++    assert "import runtime." not in source
++    assert "import requests" not in source
++    assert "from requests" not in source
++
++
++def test_0200_doc_locks_bloc_b_acceptance_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    for token in [
++        "0200 closes Bloc B with post-execution audit, acceptance, registry, and coherence",
++        "The input is controlled_dev_routeproxy_smoke_execution.json",
++        "The output is controlled_dev_routeproxy_smoke_post_execution_acceptance.json",
++        "Reuse/adapt existing surfaces first",
++        "doc/code-rules/code_rule.md remains the primary rule",
++        "0200 does not execute controlled-dev-routeproxy-smoke",
++        "Bloc B is complete only when the execution is accepted",
++        "The next recommended patch is P0201 scheduler integration surface audit",
++        "docs, graph, changelog, manifest, and rule are updated with the patch",
++    ]:
++        assert token in doc
++
++
++def test_0200_rule_requires_post_execution_acceptance() -> None:
++    rule = RULE.read_text(encoding="utf-8")
++    for token in [
++        "Read controlled_dev_routeproxy_smoke_execution.json from 0199",
++        "Reuse existing pipeline artifacts from P0199",
++        "Do not execute controlled-dev-routeproxy-smoke in 0200",
++        "Do not add a new runtime handler",
++        "Do not add a new adapter",
++        "Do not add a new bus",
++        "Require execution_success true",
++        "Require pipeline_success true",
++        "Require frames_written_count 1",
++        "Require readback_count 1",
++        "Require ControlProxy frames false",
++        "Require Scheduler modified false",
++        "Require network used false",
++        "Append controlled_dev_routeproxy_smoke_registry.jsonl when requested",
++        "Open Bloc C only after acceptance",
++    ]:
++        assert token in rule
++
++
++def test_0200_manifest_lists_acceptance_files() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    for token in [
++        "tools/accept_controlled_dev_routeproxy_smoke_post_execution.py",
++        "tests/tools/test_accept_controlled_dev_routeproxy_smoke_post_execution_0200.py",
++        "tests/rules/test_controlled_dev_routeproxy_smoke_post_execution_acceptance_0200_rule.py",
++        "doc/architecture/CONTROLLED_DEV_ROUTE_PROXY_SMOKE_POST_EXECUTION_ACCEPTANCE_0200.md",
++        "doc/code-rules/0200_controlled_dev_routeproxy_smoke_post_execution_acceptance_rule.md",
++    ]:
++        assert token in manifest
+diff --git a/doc/architecture/CONTROLLED_DEV_ROUTE_PROXY_SMOKE_POST_EXECUTION_ACCEPTANCE_0200.md b/doc/architecture/CONTROLLED_DEV_ROUTE_PROXY_SMOKE_POST_EXECUTION_ACCEPTANCE_0200.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/CONTROLLED_DEV_ROUTE_PROXY_SMOKE_POST_EXECUTION_ACCEPTANCE_0200.md
+@@ -0,0 +1,93 @@
++# 0200 — Controlled dev RouteProxy smoke post-execution acceptance
++
++## Decision
++
++0200 closes Bloc B with post-execution audit, acceptance, registry, and coherence.
++
++The input is controlled_dev_routeproxy_smoke_execution.json.
++The output is controlled_dev_routeproxy_smoke_post_execution_acceptance.json.
++An optional registry append writes controlled_dev_routeproxy_smoke_registry.jsonl.
++
++Reuse/adapt existing surfaces first.
++doc/code-rules/code_rule.md remains the primary rule.
++docs, graph, changelog, manifest, and rule are updated with the patch.
++
++0200 does not execute controlled-dev-routeproxy-smoke.
++Bloc B is complete only when the execution is accepted.
++The next recommended patch is P0201 scheduler integration surface audit.
++
++## Why this exists
++
++P0199 performed the first controlled dev execution. P0200 verifies it after the
++fact, accepts it, and closes Bloc B.
++
++The prototype must execute, but every execution must be followed by audit,
++acceptance, and registry/coherence.
++
++## Existing-surface reuse decision
++
++0200 reuses:
++
++- `controlled_dev_routeproxy_smoke_execution.json` from P0199,
++- `isolated_route_pipeline_smoke.json` from the reused pipeline tool,
++- the pipeline artifacts recorded in the P0199 execution output.
++
++0200 adds no runtime handler, adapter, bus, SQL backend, Qdrant backend, GitHub
++client, graph renderer, or inference path.
++
++## Boundary
++
++0200:
++
++- reads `controlled_dev_routeproxy_smoke_execution.json`,
++- reads `isolated_route_pipeline_smoke.json`,
++- validates stage counts,
++- validates RouteProxy write/readback counts,
++- validates ControlProxy frames stayed false,
++- validates Scheduler stayed unmodified,
++- validates network stayed unused,
++- writes optional `controlled_dev_routeproxy_smoke_post_execution_acceptance.json`,
++- appends optional `controlled_dev_routeproxy_smoke_registry.jsonl`.
++
++0200 does not:
++
++- execute controlled-dev-routeproxy-smoke,
++- import runtime handler modules,
++- call handle_scheduler_route_command,
++- call handle_scheduler_route_request,
++- call prepare_route_proxy_runtime,
++- call read_route_frame,
++- request writer permits,
++- call write_route_frame,
++- modify Scheduler.run,
++- instantiate Scheduler,
++- instantiate EventBus,
++- create a parallel bus,
++- write ControlProxy or RouteProxy frames,
++- call GitHub API,
++- use network,
++- execute conversion,
++- execute inference,
++- write SQL,
++- write Qdrant,
++- write directly to VisPy.
++
++## Bloc B acceptance
++
++Bloc B is accepted as `controlled-dev-routeproxy-write-read-v1` when:
++
++- P0198 plan is ready,
++- P0199 execution succeeds,
++- pipeline success is true,
++- one policy-scoped queue item is executed,
++- one RouteProxy frame is written,
++- one RouteProxy frame is read back,
++- no ControlProxy frame is written,
++- Scheduler is not modified,
++- network is not used,
++- P0200 writes an acceptance record.
++
++## Authority
++
++Scheduler/policy/zone remain the authority.
++0200 accepts controlled dev smoke only. It does not approve production route writes.
+diff --git a/doc/code-rules/0200_controlled_dev_routeproxy_smoke_post_execution_acceptance_rule.md b/doc/code-rules/0200_controlled_dev_routeproxy_smoke_post_execution_acceptance_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0200_controlled_dev_routeproxy_smoke_post_execution_acceptance_rule.md
+@@ -0,0 +1,51 @@
++# 0200 controlled dev RouteProxy smoke post-execution acceptance rule
++
++0200 accepts Bloc B after P0199 execution.
++
++Rules:
++
++- Read controlled_dev_routeproxy_smoke_execution.json from 0199.
++- Reuse existing pipeline artifacts from P0199.
++- Apply doc/code-rules/code_rule.md as the primary rule.
++- Keep docs, graph, changelog, manifest, and rule updated with the patch.
++- Do not execute controlled-dev-routeproxy-smoke in 0200.
++- Do not add a new runtime handler.
++- Do not add a new adapter.
++- Do not add a new bus.
++- Do not add a new SQL backend.
++- Do not add a new Qdrant backend.
++- Do not add a new GitHub client.
++- Do not add a new graph renderer.
++- Do not add a new inference path.
++- Require execution_success true.
++- Require pipeline_success true.
++- Require frames_written_count 1.
++- Require readback_count 1.
++- Require ControlProxy frames false.
++- Require Scheduler modified false.
++- Require EventBus instantiated false.
++- Require network used false.
++- Require policy_scoped_queued_count equals queued_count.
++- Require pipeline artifacts to exist under target_runtime_root.
++- Append controlled_dev_routeproxy_smoke_registry.jsonl when requested.
++- Open Bloc C only after acceptance.
++- Do not approve production route writes.
++- Do not import runtime handler modules.
++- Do not call handle_scheduler_route_command.
++- Do not call handle_scheduler_route_request.
++- Do not call prepare_route_proxy_runtime.
++- Do not call read_route_frame.
++- Do not request writer permits.
++- Do not call write_route_frame.
++- Do not write ControlProxy or RouteProxy frames.
++- Do not modify Scheduler.run.
++- Do not instantiate Scheduler.
++- Do not instantiate EventBus.
++- Do not create a parallel bus.
++- Do not call GitHub API.
++- Do not use network.
++- Do not execute conversion.
++- Do not execute inference.
++- Do not write SQL.
++- Do not write Qdrant.
++- Do not write directly to VisPy.
+diff --git a/doc/docs/architecture/runtime/200_controlled_dev_routeproxy_smoke_post_execution_acceptance.dot b/doc/docs/architecture/runtime/200_controlled_dev_routeproxy_smoke_post_execution_acceptance.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/200_controlled_dev_routeproxy_smoke_post_execution_acceptance.dot
+@@ -0,0 +1,16 @@
++digraph controlled_dev_routeproxy_smoke_post_execution_acceptance_0200 {
++  rankdir=LR;
++  label="0200 Controlled dev RouteProxy smoke post-execution acceptance";
++  labelloc=t;
++
++  exec [label="controlled_dev_routeproxy_smoke_execution.json"];
++  pipeline [label="isolated_route_pipeline_smoke.json"];
++  acceptance [label="controlled_dev_routeproxy_smoke_post_execution_acceptance.json"];
++  registry [label="controlled_dev_routeproxy_smoke_registry.jsonl"];
++  blocC [label="Bloc C Scheduler integration audit"];
++
++  exec -> acceptance [label="audit execution report"];
++  pipeline -> acceptance [label="audit pipeline artifacts"];
++  acceptance -> registry [label="optional append"];
++  acceptance -> blocC [label="next recommended P0201"];
++}
+diff --git a/doc/CHANGELOG_0200_CONTROLLED_DEV_ROUTE_PROXY_SMOKE_POST_EXECUTION_ACCEPTANCE.md b/doc/CHANGELOG_0200_CONTROLLED_DEV_ROUTE_PROXY_SMOKE_POST_EXECUTION_ACCEPTANCE.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0200_CONTROLLED_DEV_ROUTE_PROXY_SMOKE_POST_EXECUTION_ACCEPTANCE.md
+@@ -0,0 +1,21 @@
++# Changelog — 0200 Controlled dev RouteProxy smoke post-execution acceptance
++
++## Added
++
++- Post-execution audit and acceptance for P0199.
++- Controlled dev baseline `controlled-dev-routeproxy-write-read-v1`.
++- Optional `controlled_dev_routeproxy_smoke_registry.jsonl` append.
++- Bloc B coherence closure.
++- Next Bloc C direction toward Scheduler integration surface audit.
++- Documentation, graph, changelog, manifest, and code-rule entry for the patch.
++
++## Not changed
++
++- No controlled dev smoke execution in 0200.
++- No runtime handler import.
++- No runtime handler call.
++- No new adapter, bus, SQL backend, Qdrant backend, GitHub client, graph
++  renderer, or inference path.
++- No Scheduler.run modification.
++- No ControlProxy or RouteProxy frame write by 0200.
++- No production route write.
+diff --git a/doc/manifests/MANIFEST_0200_CHANGED_FILES.md b/doc/manifests/MANIFEST_0200_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0200_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest — 0200 Controlled dev RouteProxy smoke post-execution acceptance
++
++- PHASE0200_TEST_REPORT.md
++- tools/accept_controlled_dev_routeproxy_smoke_post_execution.py
++- tests/tools/test_accept_controlled_dev_routeproxy_smoke_post_execution_0200.py
++- tests/rules/test_controlled_dev_routeproxy_smoke_post_execution_acceptance_0200_rule.py
++- doc/architecture/CONTROLLED_DEV_ROUTE_PROXY_SMOKE_POST_EXECUTION_ACCEPTANCE_0200.md
++- doc/code-rules/0200_controlled_dev_routeproxy_smoke_post_execution_acceptance_rule.md
++- doc/docs/architecture/runtime/200_controlled_dev_routeproxy_smoke_post_execution_acceptance.dot
++- doc/CHANGELOG_0200_CONTROLLED_DEV_ROUTE_PROXY_SMOKE_POST_EXECUTION_ACCEPTANCE.md
++- doc/manifests/MANIFEST_0200_CHANGED_FILES.md

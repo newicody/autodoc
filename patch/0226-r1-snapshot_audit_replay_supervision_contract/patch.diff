@@ -1,0 +1,347 @@
+diff --git a/PHASE0226_SNAPSHOT_AUDIT_REPLAY_SUPERVISION_CONTRACT_TEST_REPORT.md b/PHASE0226_SNAPSHOT_AUDIT_REPLAY_SUPERVISION_CONTRACT_TEST_REPORT.md
+new file mode 100644
+index 0000000..50b472b
+--- /dev/null
++++ b/PHASE0226_SNAPSHOT_AUDIT_REPLAY_SUPERVISION_CONTRACT_TEST_REPORT.md
+@@ -0,0 +1,23 @@
++# Phase 0226 test report — snapshot/audit/replay supervision contract
++
++Validation scope:
++
++- Documentation and rule-only patch.
++- No runtime code added.
++- Rule tests assert that the contract keeps snapshot, audit, replay, and VisPy optional and downstream.
++
++Expected validation commands:
++
++```bash
++python -m compileall -q tests
++python -m pytest -q tests/rules/test_snapshot_audit_replay_supervision_contract_0226_rule.py
++```
++
++Sandbox validation:
++
++```text
++git apply --check : OK
++git apply : OK
++compileall tests : OK
++pytest targeted : OK
++```
+diff --git a/doc/CHANGELOG_0226_SNAPSHOT_AUDIT_REPLAY_SUPERVISION_CONTRACT.md b/doc/CHANGELOG_0226_SNAPSHOT_AUDIT_REPLAY_SUPERVISION_CONTRACT.md
+new file mode 100644
+index 0000000..8214b06
+--- /dev/null
++++ b/doc/CHANGELOG_0226_SNAPSHOT_AUDIT_REPLAY_SUPERVISION_CONTRACT.md
+@@ -0,0 +1,18 @@
++# Changelog — 0226 snapshot/audit/replay supervision contract
++
++## Added
++
++- Documented the optional-output boundary for snapshot, audit journal, replay, and future VisPy views.
++- Explicitly preserved `EventBus -> PassiveSupervisorSink -> CellularState` as the canonical live path.
++- Added a code rule preventing `events.jsonl`, `snapshot.json`, status files, or VisPy from becoming mandatory runtime inputs.
++- Added DOT architecture for the optional outputs and forbidden reverse-control paths.
++
++## Not changed
++
++- No runtime code.
++- No new EventBus.
++- No Scheduler changes.
++- No `Scheduler.run()` usage.
++- No proxy/SHM/policy control.
++- No SQL/Qdrant/GitHub mutation.
++- No VisPy dependency.
+diff --git a/doc/architecture/SNAPSHOT_AUDIT_REPLAY_SUPERVISION_CONTRACT_0226.md b/doc/architecture/SNAPSHOT_AUDIT_REPLAY_SUPERVISION_CONTRACT_0226.md
+new file mode 100644
+index 0000000..1fd59c8
+--- /dev/null
++++ b/doc/architecture/SNAPSHOT_AUDIT_REPLAY_SUPERVISION_CONTRACT_0226.md
+@@ -0,0 +1,146 @@
++# Snapshot / audit / replay supervision contract — 0226
++
++## Decision
++
++The passive supervisor is downstream of the EventBus. Its live state is the in-memory `CellularState` maintained by `PassiveSupervisorSink`.
++
++The runtime path is:
++
++```text
++Scheduler / RouteProxy / ControlProxy / SHM / Policy / GitHub / SQL / Qdrant
++  -> EventBus
++  -> PassiveSupervisorSink
++  -> CellularState
++```
++
++Snapshot, audit journal, replay files, and later VisPy views are outputs or test harnesses. They are not the primary transport and must not become a second runtime backbone.
++
++## Snapshot boundary
++
++A snapshot is a read-only projection of the current cellular state. It exists for:
++
++```text
++debug
++inspection
++operator review
++tests
++reports
++VisPy bootstrap later
++```
++
++A snapshot may be exposed as:
++
++```text
++snapshot()
++write_snapshot(path)
++snapshot.json generated on demand or periodically
++```
++
++A snapshot must not be used as the normal upstream input for the supervisor.
++
++Forbidden normal path:
++
++```text
++component -> status.json -> snapshot loader -> supervisor
++```
++
++Canonical path:
++
++```text
++component -> EventBus -> PassiveSupervisorSink -> CellularState -> optional snapshot
++```
++
++## Audit journal boundary
++
++An audit journal such as `events.jsonl` is optional. It can be enabled to keep a durable trace of observed bus events.
++
++It exists for:
++
++```text
++audit
++run proof
++post-mortem analysis
++regression fixtures
++replay in tests
++debug of old components while they are being migrated to EventBus
++```
++
++It must not be mandatory in the runtime path.
++
++Forbidden normal path:
++
++```text
++EventBus -> events.jsonl -> supervisor
++```
++
++Allowed optional output:
++
++```text
++EventBus -> PassiveSupervisorSink -> CellularState
++                               -> optional events.jsonl audit
++```
++
++Allowed replay/test harness:
++
++```text
++events.jsonl fixture -> replay harness -> PassiveSupervisorSink
++```
++
++## Replay boundary
++
++Replay is a development and verification surface. It may feed recorded events to the same passive sink to reproduce a state.
++
++Replay must stay visibly separate from live runtime:
++
++```text
++live mode  = EventBus subscription
++replay mode = file fixture / audit journal / regression test
++```
++
++Replay must not claim authority over Scheduler, proxy, SHM, policy, SQL, Qdrant, GitHub, or pushback.
++
++## VisPy boundary
++
++VisPy is a future view. It must read the current projection, not own it.
++
++Allowed later paths:
++
++```text
++VisPy -> PassiveSupervisorSink.snapshot()
++VisPy -> snapshot.json
++```
++
++Forbidden paths:
++
++```text
++VisPy -> Scheduler
++VisPy -> EventBus mutation
++VisPy -> RouteProxy control
++VisPy -> SHM write
++VisPy -> Policy decision
++VisPy -> SQL/Qdrant/GitHub mutation
++```
++
++## Responsibility split
++
++```text
++EventBus                  = transport
++PassiveSupervisorSink     = downstream observer
++CellularState             = live projection
++snapshot                  = optional readable projection
++events.jsonl              = optional audit/replay trace
++replay harness            = tests/debug only
++VisPy                     = future human view
++Scheduler                 = orchestration authority
++Policy                    = decision authority
++Proxy/control plane       = routing/control authority
++SQL                       = durable authority
++Qdrant                    = projection/recall only
++GitHub                    = workflow/sync surface
++```
++
++## Rule
++
++If a feature requires `events.jsonl`, `snapshot.json`, or VisPy to be present for normal runtime supervision, it is not compliant with this contract.
++
++The supervisor may emit outputs. It must not be driven by those outputs in the normal path.
+diff --git a/doc/code-rules/0226_snapshot_audit_replay_supervision_contract_rule.md b/doc/code-rules/0226_snapshot_audit_replay_supervision_contract_rule.md
+new file mode 100644
+index 0000000..849c934
+--- /dev/null
++++ b/doc/code-rules/0226_snapshot_audit_replay_supervision_contract_rule.md
+@@ -0,0 +1,28 @@
++# Code rule — 0226 snapshot/audit/replay supervision boundary
++
++Any work after 0226 touching passive supervision must preserve this boundary:
++
++```text
++EventBus -> PassiveSupervisorSink -> CellularState
++```
++
++Snapshot, audit journal, replay files, and VisPy are optional downstream outputs or test harnesses. They are not mandatory runtime inputs.
++
++Required constraints:
++
++- Do not make `events.jsonl` mandatory for live supervision.
++- Do not make `snapshot.json` the normal upstream source of truth.
++- Do not add a status-file-first bridge for Scheduler, proxy, SHM, policy, GitHub, SQL, Qdrant, rehydration, or pushback.
++- Do not place VisPy in the critical runtime path.
++- Do not call or wrap `Scheduler.run()` from the passive supervisor.
++- Do not let replay claim authority over runtime decisions.
++- Keep audit/replay visibly optional and test/debug oriented.
++- Keep the supervisor downstream-only.
++
++Allowed:
++
++- `PassiveSupervisorSink.snapshot()` for inspection.
++- Optional `write_snapshot(path)`.
++- Optional audit journal emitted after accepting a bus event.
++- Replay harnesses for regression tests and debugging.
++- Future VisPy views that read `snapshot()` or `snapshot.json` only.
+diff --git a/doc/docs/architecture/runtime/226_snapshot_audit_replay_supervision_contract.dot b/doc/docs/architecture/runtime/226_snapshot_audit_replay_supervision_contract.dot
+new file mode 100644
+index 0000000..13ad074
+--- /dev/null
++++ b/doc/docs/architecture/runtime/226_snapshot_audit_replay_supervision_contract.dot
+@@ -0,0 +1,28 @@
++digraph snapshot_audit_replay_supervision_contract_0226 {
++  rankdir=LR;
++  node [shape=box];
++
++  scheduler [label="Scheduler\nupstream authority"];
++  runtime [label="Proxy / SHM / Policy / Data surfaces\nupstream emitters"];
++  bus [label="EventBus\ncanonical transport"];
++  sink [label="PassiveSupervisorSink\ndownstream observer"];
++  state [label="CellularState\nlive projection"];
++  snapshot [label="snapshot()/snapshot.json\noptional output"];
++  audit [label="events.jsonl\noptional audit/replay"];
++  replay [label="replay harness\ntest/debug only"];
++  vispy [label="VisPy later\nhuman view only"];
++
++  scheduler -> bus;
++  runtime -> bus;
++  bus -> sink;
++  sink -> state;
++  state -> snapshot [style=dashed, label="optional"];
++  sink -> audit [style=dashed, label="optional"];
++  replay -> sink [style=dashed, label="test/debug only"];
++  snapshot -> vispy [style=dashed, label="view"];
++  state -> vispy [style=dashed, label="snapshot()"];
++
++  snapshot -> sink [style=dotted, label="forbidden as normal input"];
++  audit -> sink [style=dotted, label="replay only, not live path"];
++  vispy -> scheduler [style=dotted, label="forbidden"];
++}
+diff --git a/doc/manifests/MANIFEST_0226_SNAPSHOT_AUDIT_REPLAY_SUPERVISION_CONTRACT_CHANGED_FILES.md b/doc/manifests/MANIFEST_0226_SNAPSHOT_AUDIT_REPLAY_SUPERVISION_CONTRACT_CHANGED_FILES.md
+new file mode 100644
+index 0000000..0d79ceb
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0226_SNAPSHOT_AUDIT_REPLAY_SUPERVISION_CONTRACT_CHANGED_FILES.md
+@@ -0,0 +1,9 @@
++# Manifest — 0226 snapshot/audit/replay supervision contract
++
++- `doc/architecture/SNAPSHOT_AUDIT_REPLAY_SUPERVISION_CONTRACT_0226.md`
++- `doc/code-rules/0226_snapshot_audit_replay_supervision_contract_rule.md`
++- `doc/docs/architecture/runtime/226_snapshot_audit_replay_supervision_contract.dot`
++- `doc/CHANGELOG_0226_SNAPSHOT_AUDIT_REPLAY_SUPERVISION_CONTRACT.md`
++- `doc/manifests/MANIFEST_0226_SNAPSHOT_AUDIT_REPLAY_SUPERVISION_CONTRACT_CHANGED_FILES.md`
++- `tests/rules/test_snapshot_audit_replay_supervision_contract_0226_rule.py`
++- `PHASE0226_SNAPSHOT_AUDIT_REPLAY_SUPERVISION_CONTRACT_TEST_REPORT.md`
+diff --git a/tests/rules/test_snapshot_audit_replay_supervision_contract_0226_rule.py b/tests/rules/test_snapshot_audit_replay_supervision_contract_0226_rule.py
+new file mode 100644
+index 0000000..94cad63
+--- /dev/null
++++ b/tests/rules/test_snapshot_audit_replay_supervision_contract_0226_rule.py
+@@ -0,0 +1,53 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "SNAPSHOT_AUDIT_REPLAY_SUPERVISION_CONTRACT_0226.md"
++RULE = ROOT / "doc" / "code-rules" / "0226_snapshot_audit_replay_supervision_contract_rule.md"
++DOT = ROOT / "doc" / "docs" / "architecture" / "runtime" / "226_snapshot_audit_replay_supervision_contract.dot"
++CHANGELOG = ROOT / "doc" / "CHANGELOG_0226_SNAPSHOT_AUDIT_REPLAY_SUPERVISION_CONTRACT.md"
++
++
++def read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_canonical_live_path_is_eventbus_sink_cellular_state() -> None:
++    text = read(DOC)
++    assert "EventBus" in text
++    assert "PassiveSupervisorSink" in text
++    assert "CellularState" in text
++    assert "component -> EventBus -> PassiveSupervisorSink -> CellularState -> optional snapshot" in text
++
++
++def test_events_jsonl_and_snapshot_are_not_mandatory_runtime_inputs() -> None:
++    text = read(DOC) + read(RULE)
++    assert "events.jsonl" in text
++    assert "snapshot.json" in text
++    assert "must not be mandatory in the runtime path" in text
++    assert "Do not make `events.jsonl` mandatory for live supervision." in text
++    assert "Do not make `snapshot.json` the normal upstream source of truth." in text
++
++
++def test_replay_and_vispy_are_optional_downstream_or_test_surfaces() -> None:
++    text = read(DOC) + read(RULE)
++    assert "replay mode = file fixture / audit journal / regression test" in text
++    assert "VisPy is a future view" in text
++    assert "Future VisPy views that read `snapshot()` or `snapshot.json` only." in text
++    assert "Do not place VisPy in the critical runtime path." in text
++
++
++def test_forbidden_authority_expansion_is_documented() -> None:
++    text = read(DOC) + read(RULE)
++    assert "Do not call or wrap `Scheduler.run()` from the passive supervisor." in text
++    assert "VisPy -> Scheduler" in text
++    assert "EventBus -> PassiveSupervisorSink -> CellularState" in text
++    assert "status-file-first bridge" in text
++
++
++def test_dot_and_changelog_record_optional_outputs() -> None:
++    dot = read(DOT)
++    changelog = read(CHANGELOG)
++    assert "optional audit/replay" in dot
++    assert "test/debug only" in dot
++    assert "forbidden as normal input" in dot
++    assert "No runtime code." in changelog

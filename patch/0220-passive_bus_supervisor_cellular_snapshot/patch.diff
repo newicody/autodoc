@@ -1,0 +1,985 @@
+diff --git a/src/context/passive_bus_supervisor_cellular_snapshot.py b/src/context/passive_bus_supervisor_cellular_snapshot.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/context/passive_bus_supervisor_cellular_snapshot.py
+@@ -0,0 +1,307 @@
++"""Passive bus supervisor cellular snapshot contracts.
++
++This module is intentionally data-only. It converts already-emitted bus events
++into a compact cellular snapshot for human supervision surfaces. It is not a bus
++producer, not a scheduler adapter, not a policy authority, and not a writer for
++SQL, Qdrant, GitHub, SHM, or proxy control planes.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++from typing import Any, Iterable, Mapping
++
++
++CELL_KINDS = frozenset(
++    {
++        "SCHEDULER",
++        "EVENT_BUS",
++        "GITHUB_ACTION",
++        "GITHUB_ARTIFACT",
++        "LOCAL_FETCHER",
++        "SOURCE_CANDIDATE",
++        "SQL_AUTHORITY",
++        "QDRANT_PROJECTION",
++        "REHYDRATE",
++        "RESPONSE_ARTIFACT",
++        "ROUTEPROXY",
++        "CONTROLPROXY",
++        "SHM_RING",
++        "POLICY_GATE",
++        "PUSHBACK",
++        "UNKNOWN",
++    }
++)
++
++CELL_STATES = frozenset(
++    {
++        "idle",
++        "queued",
++        "running",
++        "success",
++        "failed",
++        "blocked",
++        "waiting_policy",
++        "draining",
++        "stale",
++        "unknown",
++    }
++)
++
++AUTHORITY_BOUNDARY = {
++    "observation_only": True,
++    "allows_scheduler_run": False,
++    "allows_sql_write": False,
++    "allows_qdrant_write": False,
++    "allows_github_mutation": False,
++    "allows_proxy_control": False,
++    "allows_policy_decision": False,
++    "requires_non_stdlib": False,
++}
++
++
++def _as_string(value: Any) -> str:
++    if value is None:
++        return ""
++    return str(value)
++
++
++def _as_string_mapping(value: Mapping[str, Any] | None) -> dict[str, str]:
++    if not value:
++        return {}
++    return {str(key): _as_string(item) for key, item in value.items()}
++
++
++def _normalize_cell_kind(value: Any) -> str:
++    cell_kind = _as_string(value).strip().upper() or "UNKNOWN"
++    if cell_kind not in CELL_KINDS:
++        return "UNKNOWN"
++    return cell_kind
++
++
++def _normalize_state(value: Any) -> str:
++    state = _as_string(value).strip().lower() or "unknown"
++    if state not in CELL_STATES:
++        return "unknown"
++    return state
++
++
++def _health_for_state(state: str) -> str:
++    if state == "failed":
++        return "failed"
++    if state == "blocked":
++        return "blocked"
++    if state == "stale":
++        return "stale"
++    if state == "waiting_policy":
++        return "waiting_policy"
++    if state in {"queued", "running", "draining"}:
++        return "active"
++    if state in {"idle", "success"}:
++        return "healthy"
++    return "unknown"
++
++
++@dataclass(frozen=True)
++class BusSupervisorEvent:
++    """One already-observed event from the passive bus surface."""
++
++    event_id: str
++    event_kind: str
++    cell_id: str
++    cell_kind: str
++    state: str
++    observed_at: str
++    source_ref: str = ""
++    route_ref: str = ""
++    policy_decision_id: str = ""
++    artifact_ref: str = ""
++    sql_ref: str = ""
++    qdrant_ref: str = ""
++    shm_ref: str = ""
++    error: str = ""
++    payload: Mapping[str, str] = field(default_factory=dict)
++
++    def __post_init__(self) -> None:
++        object.__setattr__(self, "event_id", _as_string(self.event_id))
++        object.__setattr__(self, "event_kind", _as_string(self.event_kind))
++        object.__setattr__(self, "cell_id", _as_string(self.cell_id))
++        object.__setattr__(self, "cell_kind", _normalize_cell_kind(self.cell_kind))
++        object.__setattr__(self, "state", _normalize_state(self.state))
++        object.__setattr__(self, "observed_at", _as_string(self.observed_at))
++        object.__setattr__(self, "source_ref", _as_string(self.source_ref))
++        object.__setattr__(self, "route_ref", _as_string(self.route_ref))
++        object.__setattr__(
++            self, "policy_decision_id", _as_string(self.policy_decision_id)
++        )
++        object.__setattr__(self, "artifact_ref", _as_string(self.artifact_ref))
++        object.__setattr__(self, "sql_ref", _as_string(self.sql_ref))
++        object.__setattr__(self, "qdrant_ref", _as_string(self.qdrant_ref))
++        object.__setattr__(self, "shm_ref", _as_string(self.shm_ref))
++        object.__setattr__(self, "error", _as_string(self.error))
++        object.__setattr__(self, "payload", _as_string_mapping(self.payload))
++        if not self.event_id:
++            raise ValueError("event_id is required")
++        if not self.event_kind:
++            raise ValueError("event_kind is required")
++        if not self.cell_id:
++            raise ValueError("cell_id is required")
++        if not self.observed_at:
++            raise ValueError("observed_at is required")
++
++    def refs(self) -> dict[str, str]:
++        refs = {
++            "source_ref": self.source_ref,
++            "route_ref": self.route_ref,
++            "policy_decision_id": self.policy_decision_id,
++            "artifact_ref": self.artifact_ref,
++            "sql_ref": self.sql_ref,
++            "qdrant_ref": self.qdrant_ref,
++            "shm_ref": self.shm_ref,
++        }
++        return {key: value for key, value in refs.items() if value}
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "event_id": self.event_id,
++            "event_kind": self.event_kind,
++            "cell_id": self.cell_id,
++            "cell_kind": self.cell_kind,
++            "state": self.state,
++            "observed_at": self.observed_at,
++            "source_ref": self.source_ref,
++            "route_ref": self.route_ref,
++            "policy_decision_id": self.policy_decision_id,
++            "artifact_ref": self.artifact_ref,
++            "sql_ref": self.sql_ref,
++            "qdrant_ref": self.qdrant_ref,
++            "shm_ref": self.shm_ref,
++            "error": self.error,
++            "payload": dict(self.payload),
++        }
++
++
++@dataclass(frozen=True)
++class CellularBusCell:
++    """Current passive-supervision view of one runtime cell."""
++
++    cell_id: str
++    cell_kind: str
++    state: str
++    health: str
++    last_event_id: str
++    last_event_kind: str
++    last_seen_at: str
++    refs: Mapping[str, str] = field(default_factory=dict)
++    error: str = ""
++    event_count: int = 1
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "cell_id": self.cell_id,
++            "cell_kind": self.cell_kind,
++            "state": self.state,
++            "health": self.health,
++            "last_event_id": self.last_event_id,
++            "last_event_kind": self.last_event_kind,
++            "last_seen_at": self.last_seen_at,
++            "refs": dict(self.refs),
++            "error": self.error,
++            "event_count": self.event_count,
++        }
++
++
++@dataclass(frozen=True)
++class PassiveBusSupervisorSnapshot:
++    """Deterministic cellular snapshot derived from passive bus events."""
++
++    generated_at: str
++    cells: tuple[CellularBusCell, ...]
++    event_count: int
++    blocked_count: int
++    failed_count: int
++    stale_count: int
++    authority_boundary: Mapping[str, bool] = field(
++        default_factory=lambda: dict(AUTHORITY_BOUNDARY)
++    )
++    metadata: Mapping[str, str] = field(default_factory=dict)
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "generated_at": self.generated_at,
++            "event_count": self.event_count,
++            "cell_count": len(self.cells),
++            "blocked_count": self.blocked_count,
++            "failed_count": self.failed_count,
++            "stale_count": self.stale_count,
++            "authority_boundary": dict(self.authority_boundary),
++            "metadata": dict(self.metadata),
++            "cells": [cell.to_dict() for cell in self.cells],
++        }
++
++
++def event_from_mapping(mapping: Mapping[str, Any]) -> BusSupervisorEvent:
++    """Build a normalized event from a JSON-compatible mapping."""
++
++    return BusSupervisorEvent(
++        event_id=mapping.get("event_id", ""),
++        event_kind=mapping.get("event_kind", ""),
++        cell_id=mapping.get("cell_id", ""),
++        cell_kind=mapping.get("cell_kind", "UNKNOWN"),
++        state=mapping.get("state", "unknown"),
++        observed_at=mapping.get("observed_at", ""),
++        source_ref=mapping.get("source_ref", ""),
++        route_ref=mapping.get("route_ref", ""),
++        policy_decision_id=mapping.get("policy_decision_id", ""),
++        artifact_ref=mapping.get("artifact_ref", ""),
++        sql_ref=mapping.get("sql_ref", ""),
++        qdrant_ref=mapping.get("qdrant_ref", ""),
++        shm_ref=mapping.get("shm_ref", ""),
++        error=mapping.get("error", ""),
++        payload=mapping.get("payload", {}),
++    )
++
++
++def build_cellular_snapshot(
++    events: Iterable[BusSupervisorEvent],
++    *,
++    generated_at: str,
++    metadata: Mapping[str, Any] | None = None,
++) -> PassiveBusSupervisorSnapshot:
++    """Collapse passive bus events into the latest state for each cell."""
++
++    event_list = tuple(events)
++    cell_event_counts: dict[str, int] = {}
++    latest_by_cell: dict[str, BusSupervisorEvent] = {}
++
++    for event in event_list:
++        cell_event_counts[event.cell_id] = cell_event_counts.get(event.cell_id, 0) + 1
++        latest_by_cell[event.cell_id] = event
++
++    cells = []
++    for cell_id in sorted(latest_by_cell):
++        event = latest_by_cell[cell_id]
++        cells.append(
++            CellularBusCell(
++                cell_id=event.cell_id,
++                cell_kind=event.cell_kind,
++                state=event.state,
++                health=_health_for_state(event.state),
++                last_event_id=event.event_id,
++                last_event_kind=event.event_kind,
++                last_seen_at=event.observed_at,
++                refs=event.refs(),
++                error=event.error,
++                event_count=cell_event_counts[event.cell_id],
++            )
++        )
++
++    return PassiveBusSupervisorSnapshot(
++        generated_at=_as_string(generated_at),
++        cells=tuple(cells),
++        event_count=len(event_list),
++        blocked_count=sum(1 for cell in cells if cell.state == "blocked"),
++        failed_count=sum(1 for cell in cells if cell.state == "failed"),
++        stale_count=sum(1 for cell in cells if cell.state == "stale"),
++        metadata=_as_string_mapping(metadata),
++    )
+diff --git a/tools/run_passive_bus_supervisor_cellular_snapshot_0220.py b/tools/run_passive_bus_supervisor_cellular_snapshot_0220.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/run_passive_bus_supervisor_cellular_snapshot_0220.py
+@@ -0,0 +1,115 @@
++#!/usr/bin/env python3
++"""Build a passive bus supervisor cellular snapshot from JSONL events."""
++
++from __future__ import annotations
++
++import argparse
++import json
++from datetime import datetime, timezone
++from pathlib import Path
++from typing import Any
++
++from src.context.passive_bus_supervisor_cellular_snapshot import (
++    build_cellular_snapshot,
++    event_from_mapping,
++)
++
++
++def _utc_now() -> str:
++    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
++
++
++def _load_jsonl_events(path: Path) -> list[dict[str, Any]]:
++    events = []
++    with path.open("r", encoding="utf-8") as handle:
++        for line_number, line in enumerate(handle, start=1):
++            stripped = line.strip()
++            if not stripped:
++                continue
++            try:
++                event = json.loads(stripped)
++            except json.JSONDecodeError as exc:
++                raise ValueError(f"invalid JSON on line {line_number}: {exc}") from exc
++            if not isinstance(event, dict):
++                raise ValueError(f"event line {line_number} must be a JSON object")
++            events.append(event)
++    return events
++
++
++def build_snapshot_payload(
++    *,
++    events_jsonl: Path,
++    generated_at: str,
++    source_label: str,
++) -> dict[str, Any]:
++    raw_events = _load_jsonl_events(events_jsonl)
++    events = [event_from_mapping(event) for event in raw_events]
++    snapshot = build_cellular_snapshot(
++        events,
++        generated_at=generated_at,
++        metadata={
++            "source": source_label,
++            "events_jsonl": str(events_jsonl),
++            "patch_id": "0220-passive_bus_supervisor_cellular_snapshot",
++        },
++    )
++    payload = snapshot.to_dict()
++    payload["cellular_snapshot_written"] = True
++    payload["supervision_authority_violation"] = False
++    return payload
++
++
++def _write_payload(path: Path, payload: dict[str, Any]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++
++def _build_parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument(
++        "--events-jsonl",
++        required=True,
++        type=Path,
++        help="Path to passive bus events in JSONL format.",
++    )
++    parser.add_argument(
++        "--output",
++        required=True,
++        type=Path,
++        help="Path where the cellular snapshot JSON should be written.",
++    )
++    parser.add_argument(
++        "--generated-at",
++        default="",
++        help="Optional deterministic snapshot timestamp.",
++    )
++    parser.add_argument(
++        "--source-label",
++        default="passive_bus_supervisor",
++        help="Metadata label for the event source.",
++    )
++    parser.add_argument(
++        "--format",
++        choices=("json",),
++        default="json",
++        help="Output format. JSON is the only supported format.",
++    )
++    return parser
++
++
++def main() -> int:
++    parser = _build_parser()
++    args = parser.parse_args()
++    generated_at = args.generated_at or _utc_now()
++    payload = build_snapshot_payload(
++        events_jsonl=args.events_jsonl,
++        generated_at=generated_at,
++        source_label=args.source_label,
++    )
++    _write_payload(args.output, payload)
++    print(json.dumps(payload, sort_keys=True))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/context/test_passive_bus_supervisor_cellular_snapshot_0220.py b/tests/context/test_passive_bus_supervisor_cellular_snapshot_0220.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/context/test_passive_bus_supervisor_cellular_snapshot_0220.py
+@@ -0,0 +1,85 @@
++from src.context.passive_bus_supervisor_cellular_snapshot import (
++    AUTHORITY_BOUNDARY,
++    BusSupervisorEvent,
++    build_cellular_snapshot,
++    event_from_mapping,
++)
++
++
++def test_passive_bus_supervisor_snapshot_keeps_latest_cell_state() -> None:
++    events = [
++        BusSupervisorEvent(
++            event_id="evt-1",
++            event_kind="scheduler_tick",
++            cell_id="scheduler",
++            cell_kind="SCHEDULER",
++            state="running",
++            observed_at="2026-07-08T00:00:00Z",
++        ),
++        BusSupervisorEvent(
++            event_id="evt-2",
++            event_kind="scheduler_idle",
++            cell_id="scheduler",
++            cell_kind="SCHEDULER",
++            state="success",
++            observed_at="2026-07-08T00:00:01Z",
++        ),
++        BusSupervisorEvent(
++            event_id="evt-3",
++            event_kind="policy_blocked",
++            cell_id="policy",
++            cell_kind="POLICY_GATE",
++            state="blocked",
++            observed_at="2026-07-08T00:00:02Z",
++            policy_decision_id="policy-1",
++            error="write denied",
++        ),
++    ]
++
++    snapshot = build_cellular_snapshot(
++        events,
++        generated_at="2026-07-08T00:00:03Z",
++        metadata={"source": "test"},
++    )
++    payload = snapshot.to_dict()
++
++    assert payload["event_count"] == 3
++    assert payload["cell_count"] == 2
++    assert payload["blocked_count"] == 1
++    assert payload["failed_count"] == 0
++    assert payload["stale_count"] == 0
++    assert payload["authority_boundary"]["observation_only"] is True
++    assert payload["authority_boundary"]["allows_scheduler_run"] is False
++    assert payload["authority_boundary"]["allows_sql_write"] is False
++    assert payload["authority_boundary"]["allows_qdrant_write"] is False
++
++    cells = {cell["cell_id"]: cell for cell in payload["cells"]}
++    assert cells["scheduler"]["state"] == "success"
++    assert cells["scheduler"]["event_count"] == 2
++    assert cells["policy"]["health"] == "blocked"
++    assert cells["policy"]["refs"]["policy_decision_id"] == "policy-1"
++
++
++def test_event_from_mapping_normalizes_unknown_values() -> None:
++    event = event_from_mapping(
++        {
++            "event_id": "evt-unknown",
++            "event_kind": "custom_event",
++            "cell_id": "custom",
++            "cell_kind": "new-kind",
++            "state": "custom-state",
++            "observed_at": "2026-07-08T00:00:00Z",
++            "payload": {"attempt": 1},
++        }
++    )
++
++    assert event.cell_kind == "UNKNOWN"
++    assert event.state == "unknown"
++    assert event.payload == {"attempt": "1"}
++
++
++def test_authority_boundary_is_passive_and_stdlib_only() -> None:
++    assert AUTHORITY_BOUNDARY["observation_only"] is True
++    assert AUTHORITY_BOUNDARY["allows_github_mutation"] is False
++    assert AUTHORITY_BOUNDARY["allows_proxy_control"] is False
++    assert AUTHORITY_BOUNDARY["requires_non_stdlib"] is False
+diff --git a/tests/tools/test_run_passive_bus_supervisor_cellular_snapshot_0220.py b/tests/tools/test_run_passive_bus_supervisor_cellular_snapshot_0220.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_run_passive_bus_supervisor_cellular_snapshot_0220.py
+@@ -0,0 +1,71 @@
++import json
++import subprocess
++import sys
++from pathlib import Path
++
++
++def test_run_passive_bus_supervisor_cellular_snapshot_writes_snapshot(
++    tmp_path: Path,
++) -> None:
++    events_jsonl = tmp_path / "events.jsonl"
++    output = tmp_path / "snapshot.json"
++    events_jsonl.write_text(
++        "\n".join(
++            [
++                json.dumps(
++                    {
++                        "event_id": "evt-1",
++                        "event_kind": "artifact_seen",
++                        "cell_id": "artifact",
++                        "cell_kind": "GITHUB_ARTIFACT",
++                        "state": "queued",
++                        "observed_at": "2026-07-08T00:00:00Z",
++                        "artifact_ref": "artifact-1",
++                    }
++                ),
++                json.dumps(
++                    {
++                        "event_id": "evt-2",
++                        "event_kind": "artifact_imported",
++                        "cell_id": "artifact",
++                        "cell_kind": "GITHUB_ARTIFACT",
++                        "state": "success",
++                        "observed_at": "2026-07-08T00:00:01Z",
++                        "artifact_ref": "artifact-1",
++                    }
++                ),
++            ]
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/run_passive_bus_supervisor_cellular_snapshot_0220.py",
++            "--events-jsonl",
++            str(events_jsonl),
++            "--output",
++            str(output),
++            "--generated-at",
++            "2026-07-08T00:00:02Z",
++            "--format",
++            "json",
++        ],
++        check=True,
++        cwd=Path(__file__).resolve().parents[2],
++        text=True,
++        capture_output=True,
++    )
++
++    stdout_payload = json.loads(result.stdout)
++    payload = json.loads(output.read_text(encoding="utf-8"))
++    assert stdout_payload == payload
++    assert payload["cellular_snapshot_written"] is True
++    assert payload["supervision_authority_violation"] is False
++    assert payload["event_count"] == 2
++    assert payload["cell_count"] == 1
++    assert payload["cells"][0]["cell_id"] == "artifact"
++    assert payload["cells"][0]["state"] == "success"
++    assert payload["cells"][0]["refs"]["artifact_ref"] == "artifact-1"
+diff --git a/tests/rules/test_passive_bus_supervisor_cellular_snapshot_0220_rule.py b/tests/rules/test_passive_bus_supervisor_cellular_snapshot_0220_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_passive_bus_supervisor_cellular_snapshot_0220_rule.py
+@@ -0,0 +1,70 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(relative_path: str) -> str:
++    return (ROOT / relative_path).read_text(encoding="utf-8")
++
++
++def test_0220_source_is_passive_stdlib_only_and_has_no_runtime_authority() -> None:
++    source = _read("src/context/passive_bus_supervisor_cellular_snapshot.py")
++    tool = _read("tools/run_passive_bus_supervisor_cellular_snapshot_0220.py")
++    combined = source + "\n" + tool
++
++    forbidden_imports = [
++        "requests",
++        "httpx",
++        "github",
++        "qdrant",
++        "sqlite3",
++        "psycopg",
++        "vispy",
++        "openvino",
++    ]
++    for forbidden in forbidden_imports:
++        assert f"import {forbidden}" not in combined
++        assert f"from {forbidden}" not in combined
++
++    forbidden_calls = [
++        "Scheduler.run(",
++        "run_scheduler(",
++        "upsert(",
++        "execute(",
++        "mutate(",
++        "download_artifact(",
++        "pushback(",
++    ]
++    for forbidden in forbidden_calls:
++        assert forbidden not in combined
++
++    assert '"observation_only": True' in source
++    assert '"allows_scheduler_run": False' in source
++    assert '"allows_sql_write": False' in source
++    assert '"allows_qdrant_write": False' in source
++    assert '"allows_github_mutation": False' in source
++    assert '"allows_proxy_control": False' in source
++
++
++def test_0220_traceability_docs_are_present() -> None:
++    required_paths = [
++        "doc/architecture/PASSIVE_BUS_SUPERVISOR_CELLULAR_SNAPSHOT_0220.md",
++        "doc/code-rules/0220_passive_bus_supervisor_cellular_snapshot_rule.md",
++        "doc/docs/architecture/runtime/220_passive_bus_supervisor_cellular_snapshot.dot",
++        "doc/CHANGELOG_0220_PASSIVE_BUS_SUPERVISOR_CELLULAR_SNAPSHOT.md",
++        "doc/manifests/MANIFEST_0220_CHANGED_FILES.md",
++        "PHASE0220_TEST_REPORT.md",
++    ]
++    for relative_path in required_paths:
++        assert (ROOT / relative_path).exists(), relative_path
++
++
++def test_0220_changelog_and_rule_keep_vispy_as_optional_view_only() -> None:
++    changelog = _read("doc/CHANGELOG_0220_PASSIVE_BUS_SUPERVISOR_CELLULAR_SNAPSHOT.md")
++    rule = _read("doc/code-rules/0220_passive_bus_supervisor_cellular_snapshot_rule.md")
++
++    assert "VisPy is not introduced by this patch" in changelog
++    assert "view adapter only" in rule
++    assert "observation-only" in rule
++    assert "must not call Scheduler.run" in rule
+diff --git a/doc/architecture/PASSIVE_BUS_SUPERVISOR_CELLULAR_SNAPSHOT_0220.md b/doc/architecture/PASSIVE_BUS_SUPERVISOR_CELLULAR_SNAPSHOT_0220.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/PASSIVE_BUS_SUPERVISOR_CELLULAR_SNAPSHOT_0220.md
+@@ -0,0 +1,98 @@
++# 0220 Passive Bus Supervisor Cellular Snapshot
++
++Patch 0220 resumes the passive bus supervisor direction without creating a
++parallel runtime or a graphical authority. The added surface consumes events
++that have already been emitted by scheduler, runtime, proxy, SHM, policy,
++GitHub artifact, SQL, Qdrant, or pushback components and collapses them into a
++deterministic cellular snapshot.
++
++## Intent
++
++The goal is to make the next implementation patches observable:
++
++- GitHub Action artifact flow
++- local read-only artifact fetch
++- SourceCandidate import
++- SQL/Qdrant promotion
++- GitHub pushback
++- runtime root stabilization
++- bus/proxy/SHM consolidation
++- policy execution gates
++
++The supervisor is passive. It only reads event records supplied to it and writes
++a snapshot artifact for human inspection.
++
++## Boundary
++
++The supervisor must remain:
++
++- observation-only
++- stdlib-only
++- deterministic
++- serializable
++- safe to run in tests without graphics or network
++
++The supervisor must not:
++
++- call `Scheduler.run`
++- call GitHub APIs
++- download artifacts
++- mutate GitHub Projects or issues
++- write SQL
++- write Qdrant
++- control RouteProxy or ControlProxy
++- decide policy
++- require VisPy
++
++VisPy remains a future optional view adapter only. It should consume the JSON
++snapshot and never become the state owner.
++
++## Event Shape
++
++A passive event includes:
++
++- `event_id`
++- `event_kind`
++- `cell_id`
++- `cell_kind`
++- `state`
++- `observed_at`
++- optional references: `route_ref`, `policy_decision_id`, `artifact_ref`,
++  `sql_ref`, `qdrant_ref`, `shm_ref`
++- optional `error`
++- optional string payload
++
++## Cell Kinds
++
++Initial cell kinds are:
++
++- `SCHEDULER`
++- `EVENT_BUS`
++- `GITHUB_ACTION`
++- `GITHUB_ARTIFACT`
++- `LOCAL_FETCHER`
++- `SOURCE_CANDIDATE`
++- `SQL_AUTHORITY`
++- `QDRANT_PROJECTION`
++- `REHYDRATE`
++- `RESPONSE_ARTIFACT`
++- `ROUTEPROXY`
++- `CONTROLPROXY`
++- `SHM_RING`
++- `POLICY_GATE`
++- `PUSHBACK`
++- `UNKNOWN`
++
++## Output
++
++The snapshot contains:
++
++- event count
++- cell count
++- blocked/failed/stale counts
++- authority boundary flags
++- latest cell state per `cell_id`
++- cell references for traceability
++
++This gives the following patches a stable observation target before live GitHub,
++fetch, promotion, pushback, proxy, SHM, and policy work continues.
+diff --git a/doc/code-rules/0220_passive_bus_supervisor_cellular_snapshot_rule.md b/doc/code-rules/0220_passive_bus_supervisor_cellular_snapshot_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0220_passive_bus_supervisor_cellular_snapshot_rule.md
+@@ -0,0 +1,51 @@
++# 0220 Passive Bus Supervisor Cellular Snapshot Rule
++
++The passive bus supervisor cellular snapshot is an observation-only surface.
++
++## Required Boundary
++
++The implementation:
++
++- must use only the Python standard library
++- must consume already-emitted event data
++- must produce serializable snapshot data
++- must keep `AUTHORITY_BOUNDARY["observation_only"]` true
++- must keep runtime mutation flags false
++
++The implementation must not call Scheduler.run.
++
++The implementation must not:
++
++- call GitHub APIs
++- download artifacts
++- mutate GitHub Projects or issues
++- write SQL
++- write Qdrant
++- control RouteProxy
++- control ControlProxy
++- decide policy
++- require VisPy
++
++## VisPy
++
++VisPy is a future view adapter only. Any future VisPy code must read a snapshot
++or a passive event stream and render it. It must not become the owner of runtime
++state, policy decisions, scheduler execution, SQL writes, Qdrant writes, GitHub
++mutations, or proxy control.
++
++## Placement
++
++The 0220 module is deliberately placed as a contract/snapshot surface. It does
++not replace the existing bus, scheduler, ControlProxy, RouteProxy, SHM, SQL,
++Qdrant, GitHub, or policy modules.
++
++## Traceability
++
++Every future patch that emits events for this supervisor should include at least
++one event reference usable by the snapshot:
++
++- `policy_decision_id`
++- `artifact_ref`
++- `sql_ref`
++- `qdrant_ref`
++- `route_ref`
+diff --git a/doc/docs/architecture/runtime/220_passive_bus_supervisor_cellular_snapshot.dot b/doc/docs/architecture/runtime/220_passive_bus_supervisor_cellular_snapshot.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/220_passive_bus_supervisor_cellular_snapshot.dot
+@@ -0,0 +1,20 @@
++digraph passive_bus_supervisor_cellular_snapshot_0220 {
++  rankdir=LR;
++  label="0220 Passive bus supervisor cellular snapshot";
++  labelloc=t;
++
++  scheduler [label="Scheduler/runtime events"];
++  bus [label="Passive bus"];
++  supervisor [label="Passive supervisor"];
++  snapshot [label="Cellular snapshot JSON"];
++  view [label="Text/DOT/VisPy view"];
++  authority [label="No authority"];
++
++  scheduler -> bus;
++  bus -> supervisor;
++  supervisor -> snapshot;
++  snapshot -> view;
++
++  authority -> supervisor [label="boundary"];
++  authority -> snapshot [label="boundary"];
++}
+diff --git a/doc/CHANGELOG_0220_PASSIVE_BUS_SUPERVISOR_CELLULAR_SNAPSHOT.md b/doc/CHANGELOG_0220_PASSIVE_BUS_SUPERVISOR_CELLULAR_SNAPSHOT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0220_PASSIVE_BUS_SUPERVISOR_CELLULAR_SNAPSHOT.md
+@@ -0,0 +1,41 @@
++# Changelog 0220 - Passive Bus Supervisor Cellular Snapshot
++
++## Added
++
++- Added `src/context/passive_bus_supervisor_cellular_snapshot.py`.
++- Added `tools/run_passive_bus_supervisor_cellular_snapshot_0220.py`.
++- Added focused context, tool, and rule tests.
++- Added passive bus supervisor architecture documentation.
++- Added DOT graph for the observation flow.
++- Added manifest and phase test report for traceability.
++
++## Boundary
++
++The 0220 surface is:
++
++- observation-only
++- stdlib-only
++- additive
++- deterministic
++- JSON-serializable
++
++It does not:
++
++- call GitHub
++- call network APIs
++- download artifacts
++- mutate GitHub Projects
++- call `Scheduler.run`
++- write SQL
++- write Qdrant
++- control RouteProxy or ControlProxy
++- require VisPy
++
++VisPy is not introduced by this patch. It remains a future optional read-only
++view over the emitted snapshot.
++
++## Validation Note
++
++This patch was prepared in a sandbox where the Autodoc checkout was not mounted
++and GitHub access was blocked for local clone. Validation must be run in the real
++repository through the patch queue.
+diff --git a/doc/manifests/MANIFEST_0220_CHANGED_FILES.md b/doc/manifests/MANIFEST_0220_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0220_CHANGED_FILES.md
+@@ -0,0 +1,16 @@
++# Manifest 0220 - Changed Files
++
++Patch: `0220-passive_bus_supervisor_cellular_snapshot`
++
++## Added
++
++- `src/context/passive_bus_supervisor_cellular_snapshot.py`
++- `tools/run_passive_bus_supervisor_cellular_snapshot_0220.py`
++- `tests/context/test_passive_bus_supervisor_cellular_snapshot_0220.py`
++- `tests/tools/test_run_passive_bus_supervisor_cellular_snapshot_0220.py`
++- `tests/rules/test_passive_bus_supervisor_cellular_snapshot_0220_rule.py`
++- `doc/architecture/PASSIVE_BUS_SUPERVISOR_CELLULAR_SNAPSHOT_0220.md`
++- `doc/code-rules/0220_passive_bus_supervisor_cellular_snapshot_rule.md`
++- `doc/docs/architecture/runtime/220_passive_bus_supervisor_cellular_snapshot.dot`
++- `doc/CHANGELOG_0220_PASSIVE_BUS_SUPERVISOR_CELLULAR_SNAPSHOT.md`
++- `PHASE0220_TEST_REPORT.md`
+diff --git a/PHASE0220_TEST_REPORT.md b/PHASE0220_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0220_TEST_REPORT.md
+@@ -0,0 +1,45 @@
++# Phase 0220 Test Report
++
++Patch: `0220-passive_bus_supervisor_cellular_snapshot`
++
++## Purpose
++
++Resume the passive bus supervisor work by adding a stdlib-only cellular snapshot
++contract and CLI builder. The snapshot makes future GitHub artifact, fetch,
++SourceCandidate, SQL/Qdrant, pushback, proxy, SHM, and policy events visible
++without giving the supervisor runtime authority.
++
++## Expected Validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. python -m pytest -q \
++  tests/context/test_passive_bus_supervisor_cellular_snapshot_0220.py \
++  tests/tools/test_run_passive_bus_supervisor_cellular_snapshot_0220.py \
++  tests/rules/test_passive_bus_supervisor_cellular_snapshot_0220_rule.py
++PYTHONPATH=src:. python -m pytest -q tests/rules
++```
++
++## Manual Smoke
++
++```bash
++mkdir -p .var/autodoc/runtime/dev-controlled/supervision
++cat > .var/autodoc/runtime/dev-controlled/supervision/events.jsonl <<'JSONL'
++{"event_id":"evt-1","event_kind":"scheduler_tick","cell_id":"scheduler","cell_kind":"SCHEDULER","state":"running","observed_at":"2026-07-08T00:00:00Z"}
++{"event_id":"evt-2","event_kind":"policy_blocked","cell_id":"policy","cell_kind":"POLICY_GATE","state":"blocked","observed_at":"2026-07-08T00:00:01Z","policy_decision_id":"policy-1","error":"write denied"}
++JSONL
++PYTHONPATH=src:. python tools/run_passive_bus_supervisor_cellular_snapshot_0220.py \
++  --events-jsonl .var/autodoc/runtime/dev-controlled/supervision/events.jsonl \
++  --output .var/autodoc/runtime/dev-controlled/supervision/snapshot.json \
++  --format json
++```
++
++## Sandbox Result
++
++Not run here against the real repository because the current sandbox does not
++contain the Autodoc checkout and local GitHub clone is blocked. The patch is
++additive and must be validated through `apply_patch_queue.py` in the real repo.
++
++## Non-Stdlib Dependencies
++
++None.

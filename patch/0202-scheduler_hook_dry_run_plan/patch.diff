@@ -1,0 +1,785 @@
+diff --git a/PHASE0202_TEST_REPORT.md b/PHASE0202_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0202_TEST_REPORT.md
+@@ -0,0 +1,34 @@
++# Phase 0202 Test Report — Scheduler hook dry-run plan
++
++Status: prepared.
++
++Scope:
++- Reads `scheduler_integration_surface_audit.json`.
++- Produces `scheduler_hook_dry_run_plan.json`.
++- Reuses 0201 audited surfaces.
++- Applies `doc/code-rules/code_rule.md`.
++- Updates docs, graph, changelog, manifest, and rule.
++- Plans P0203 controlled Scheduler hook smoke.
++- No Scheduler.run execution.
++- No Scheduler hook implementation.
++- No runtime import.
++- No handler call.
++- No RouteProxyRuntime preparation.
++- No read_route_frame call.
++- No writer permit request.
++- No frame write by 0202.
++- No Scheduler/EventBus instantiation.
++- No ControlProxy frame write.
++- No GitHub API/network.
++- No conversion/inference/SQL/Qdrant/VisPy writes.
++
++Validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/tools/test_plan_scheduler_hook_dry_run_0202.py \
++  tests/rules/test_scheduler_hook_dry_run_plan_0202_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
+diff --git a/tools/plan_scheduler_hook_dry_run.py b/tools/plan_scheduler_hook_dry_run.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/plan_scheduler_hook_dry_run.py
+@@ -0,0 +1,308 @@
++#!/usr/bin/env python3
++"""Plan a Scheduler hook dry-run from the 0201 surface audit.
++
++0202 is the Bloc C Scheduler hook dry-run plan only.
++
++It reads scheduler_integration_surface_audit.json from 0201 and writes
++scheduler_hook_dry_run_plan.json. It plans how a later controlled scheduler hook
++smoke may reuse existing surfaces.
++
++Reuse/adapt existing surfaces first.
++doc/code-rules/code_rule.md remains the primary rule.
++0202 must reuse the 0201 surface audit and must not add a new Scheduler hook
++implementation.
++
++0202 must not introduce a new runtime handler, adapter, bus, Scheduler,
++RouteProxy runtime, ControlProxy runtime, SQL backend, Qdrant backend, GitHub
++client, graph renderer, or inference path.
++
++0202 does not execute Scheduler.run.
++0202 does not import runtime handler modules.
++0202 does not call handle_scheduler_route_command.
++0202 does not call handle_scheduler_route_request.
++0202 does not call prepare_route_proxy_runtime.
++0202 does not call read_route_frame.
++0202 does not request writer permits.
++0202 does not call write_route_frame.
++0202 does not write ControlProxy or RouteProxy frames.
++0202 does not call GitHub API or use network.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++from typing import Any, Mapping
++
++
++SCHEDULER_HOOK_DRY_RUN_PLAN_SCHEMA = "missipy.scheduler.hook_dry_run_plan.v1"
++EXPECTED_AUDIT_SCHEMA = "missipy.scheduler.integration_surface_audit.v1"
++DEFAULT_OUTPUT_NAME = "scheduler_hook_dry_run_plan.json"
++
++REQUIRED_REUSE_PATHS = (
++    "src/runtime/scheduler_route_adapter.py",
++    "src/runtime/scheduler_route_handler_minimal.py",
++    "src/runtime/scheduler_route_handshake.py",
++)
++
++OPTIONAL_REUSE_CANDIDATE_PATHS = (
++    "src/runtime/controlproxy_scheduler_handler.py",
++    "src/runtime/route_proxy_runtime_minimal.py",
++    "src/runtime/shm_runtime_schema.py",
++)
++
++FALSE_AUDIT_FLAGS = (
++    "runtime_imports_executed_by_0201",
++    "scheduler_run_executed",
++    "handler_called_by_0201",
++    "routeproxy_prepared_by_0201",
++    "read_route_frame_called_by_0201",
++    "writer_permits_requested_by_0201",
++    "frames_written_by_0201",
++    "controlproxy_frames_written_by_0201",
++    "eventbus_instantiated_by_0201",
++    "network_used_by_0201",
++)
++
++FALSE_NEW_SURFACE_FLAGS = (
++    "new_runtime_handler_added",
++    "new_adapter_added",
++    "new_bus_added",
++    "new_scheduler_added",
++    "new_routeproxy_runtime_added",
++    "new_controlproxy_runtime_added",
++    "new_sql_backend_added",
++    "new_qdrant_backend_added",
++    "new_github_client_added",
++    "new_graph_renderer_added",
++    "new_inference_path_added",
++)
++
++
++class SchedulerHookDryRunPlanError(ValueError):
++    """Raised when the Scheduler hook dry-run plan input is unsafe."""
++
++
++def plan_scheduler_hook_dry_run(
++    *,
++    surface_audit_path: Path | str,
++    output_path: Path | str | None = None,
++) -> dict[str, Any]:
++    """Build a Scheduler hook dry-run plan without executing or importing runtime code."""
++
++    audit_path = Path(surface_audit_path)
++    audit = _read_json_file(audit_path)
++    issues: list[str] = []
++    warnings: list[str] = []
++
++    _audit_surface_audit(audit, issues, warnings)
++    reuse_paths = _audit_reuse_paths(audit, issues)
++
++    target_runtime_root = Path(str(audit.get("target_runtime_root", "")))
++    final_output = Path(output_path) if output_path is not None else target_runtime_root / DEFAULT_OUTPUT_NAME
++    if final_output.name != DEFAULT_OUTPUT_NAME:
++        issues.append("output filename must be scheduler_hook_dry_run_plan.json")
++
++    provenance_repair_items = []
++    if audit.get("provenance_warning"):
++        provenance_repair_items.append(str(audit.get("provenance_warning")))
++
++    plan = {
++        "schema": SCHEDULER_HOOK_DRY_RUN_PLAN_SCHEMA,
++        "bloc": "C",
++        "bloc_name": "scheduler-hook-controlled",
++        "surface_audit_path": str(audit_path),
++        "surface_audit_schema": audit.get("schema"),
++        "accepted_baseline": audit.get("accepted_baseline"),
++        "controlled_dev_baseline_ref": audit.get("controlled_dev_baseline_ref"),
++        "policy_decision_id": audit.get("policy_decision_id"),
++        "target_runtime_root": audit.get("target_runtime_root"),
++        "target_isolated_runtime_root": audit.get("target_isolated_runtime_root"),
++        "recommended_integration_path": audit.get("recommended_integration_path"),
++        "scheduler_hook_dry_run_plan_ready": not issues,
++        "execution_allowed_by_0202": False,
++        "scheduler_run_execution_allowed": False,
++        "p0203_may_execute_controlled_scheduler_hook": not issues,
++        "planned_next_patch": "0203-controlled_scheduler_hook_smoke_acceptance",
++        "reuse_sequence": [
++            {
++                "step": "map_authorized_request",
++                "surface": "src/runtime/scheduler_route_adapter.py",
++                "symbol": "scheduler_route_request_mapping",
++                "purpose": "reuse existing SchedulerRouteRequest mapping",
++            },
++            {
++                "step": "prepare_route",
++                "surface": "src/runtime/scheduler_route_handshake.py",
++                "symbol": "prepare_route_for_scheduler",
++                "purpose": "reuse existing route preparation handshake",
++            },
++            {
++                "step": "build_command",
++                "surface": "src/runtime/scheduler_route_handler_minimal.py",
++                "symbol": "build_single_frame_route_command",
++                "purpose": "reuse existing command builder",
++            },
++            {
++                "step": "execute_minimal_handler",
++                "surface": "src/runtime/scheduler_route_handler_minimal.py",
++                "symbol": "handle_scheduler_route_command",
++                "purpose": "reuse existing minimal handler in controlled smoke only",
++            },
++            {
++                "step": "readback",
++                "surface": "src/runtime/scheduler_route_handler_minimal.py",
++                "symbol": "read_scheduler_route_handler_result_frames",
++                "purpose": "reuse existing readback surface",
++            },
++        ],
++        "required_reuse_paths": list(REQUIRED_REUSE_PATHS),
++        "optional_existing_surface_candidates": list(OPTIONAL_REUSE_CANDIDATE_PATHS),
++        "existing_surface_paths_from_audit": reuse_paths,
++        "dry_run_boundaries": [
++            "P0202 does not execute Scheduler.run",
++            "P0202 does not import runtime handler modules",
++            "P0202 does not write RouteProxy frames",
++            "P0202 does not write ControlProxy frames",
++            "P0202 does not create a new Scheduler hook implementation",
++        ],
++        "p0203_execution_unlock_requirements": [
++            "explicit controlled scheduler hook smoke patch",
++            "explicit policy_decision_id",
++            "reuse adapter -> command builder -> minimal handler -> readback",
++            "no new runtime handler before proving existing surfaces insufficient",
++            "RouteProxy writes restricted to target_isolated_runtime_root",
++            "ControlProxy frames remain false",
++            "Scheduler.run modification remains false unless a later dedicated patch audits and authorizes it",
++            "post-smoke acceptance in the same P0203 patch or a declared follow-up",
++        ],
++        "provenance_repair_items": provenance_repair_items,
++        "issues": issues,
++        "warnings": warnings,
++        "existing_surfaces_reused": True,
++        "new_runtime_handler_added": False,
++        "new_adapter_added": False,
++        "new_bus_added": False,
++        "new_scheduler_added": False,
++        "new_routeproxy_runtime_added": False,
++        "new_controlproxy_runtime_added": False,
++        "new_sql_backend_added": False,
++        "new_qdrant_backend_added": False,
++        "new_github_client_added": False,
++        "new_graph_renderer_added": False,
++        "new_inference_path_added": False,
++        "runtime_imports_executed_by_0202": False,
++        "scheduler_run_executed": False,
++        "handler_called_by_0202": False,
++        "routeproxy_prepared_by_0202": False,
++        "read_route_frame_called_by_0202": False,
++        "writer_permits_requested_by_0202": False,
++        "frames_written_by_0202": False,
++        "controlproxy_frames_written_by_0202": False,
++        "eventbus_instantiated_by_0202": False,
++        "network_used_by_0202": False,
++    }
++
++    if output_path is not None:
++        _write_plan(final_output, plan)
++
++    return plan
++
++
++def _audit_surface_audit(audit: Mapping[str, Any], issues: list[str], warnings: list[str]) -> None:
++    if audit.get("schema") != EXPECTED_AUDIT_SCHEMA:
++        issues.append("surface audit schema mismatch")
++    if audit.get("integration_surface_audit_success") is not True:
++        issues.append("integration_surface_audit_success must be true")
++    if audit.get("scheduler_hook_plan_allowed_next") is not True:
++        issues.append("scheduler_hook_plan_allowed_next must be true")
++    if audit.get("next_recommended_patch") != "0202-scheduler_hook_dry_run_plan":
++        issues.append("next_recommended_patch must be 0202-scheduler_hook_dry_run_plan")
++    if audit.get("issues") not in ([], None):
++        issues.append("surface audit issues must be empty")
++    if isinstance(audit.get("warnings"), list) and audit.get("warnings"):
++        warnings.extend(str(item) for item in audit.get("warnings", []))
++    if audit.get("existing_surfaces_reused") is not True:
++        issues.append("existing_surfaces_reused must be true")
++    if audit.get("existing_surface_count") != 6:
++        issues.append("existing_surface_count must be 6")
++    if not isinstance(audit.get("policy_decision_id"), str) or not audit.get("policy_decision_id"):
++        issues.append("policy_decision_id must be present")
++    for flag in FALSE_AUDIT_FLAGS:
++        if audit.get(flag) is not False:
++            issues.append(f"{flag} must be false")
++    for flag in FALSE_NEW_SURFACE_FLAGS:
++        if audit.get(flag) is not False:
++            issues.append(f"{flag} must be false")
++
++    recommended = audit.get("recommended_integration_path")
++    if not isinstance(recommended, Mapping):
++        issues.append("recommended_integration_path must be present")
++    elif recommended.get("path") != "adapter -> command builder -> minimal handler -> readback":
++        issues.append("recommended integration path mismatch")
++
++
++def _audit_reuse_paths(audit: Mapping[str, Any], issues: list[str]) -> list[str]:
++    reports = audit.get("surface_reports")
++    if not isinstance(reports, list):
++        issues.append("surface_reports must be a list")
++        return []
++    by_path: dict[str, Mapping[str, Any]] = {}
++    for report in reports:
++        if isinstance(report, Mapping) and isinstance(report.get("path"), str):
++            by_path[str(report["path"])] = report
++    for path in REQUIRED_REUSE_PATHS + OPTIONAL_REUSE_CANDIDATE_PATHS:
++        report = by_path.get(path)
++        if not report:
++            issues.append(f"missing surface report for {path}")
++            continue
++        if report.get("exists") is not True:
++            issues.append(f"surface does not exist: {path}")
++        if report.get("missing_required_symbols") not in ([], None):
++            issues.append(f"surface has missing required symbols: {path}")
++        if report.get("use_before_new_code") is not True:
++            issues.append(f"surface must be marked use_before_new_code: {path}")
++    return sorted(by_path)
++
++
++def _read_json_file(path: Path) -> dict[str, Any]:
++    raw = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(raw, dict):
++        raise SchedulerHookDryRunPlanError("input must be a JSON object")
++    return raw
++
++
++def _write_plan(path: Path, plan: dict[str, Any]) -> None:
++    if path.name != DEFAULT_OUTPUT_NAME:
++        raise SchedulerHookDryRunPlanError("output filename must be scheduler_hook_dry_run_plan.json")
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Plan Scheduler hook dry-run.")
++    parser.add_argument("--surface-audit", required=True, help="Path to scheduler_integration_surface_audit.json.")
++    parser.add_argument("--output", help="Optional scheduler_hook_dry_run_plan.json output path.")
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    args = parser.parse_args(argv)
++
++    plan = plan_scheduler_hook_dry_run(
++        surface_audit_path=Path(args.surface_audit),
++        output_path=Path(args.output) if args.output else None,
++    )
++
++    if args.format == "json":
++        print(json.dumps(plan, indent=2, sort_keys=True))
++    else:
++        print(f"scheduler_hook_dry_run_plan_ready: {plan['scheduler_hook_dry_run_plan_ready']}")
++        print(f"execution_allowed_by_0202: {plan['execution_allowed_by_0202']}")
++        print(f"p0203_may_execute_controlled_scheduler_hook: {plan['p0203_may_execute_controlled_scheduler_hook']}")
++        print(f"planned_next_patch: {plan['planned_next_patch']}")
++        print(f"issues: {len(plan['issues'])}")
++        print(f"warnings: {len(plan['warnings'])}")
++    return 0 if plan["scheduler_hook_dry_run_plan_ready"] else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_plan_scheduler_hook_dry_run_0202.py b/tests/tools/test_plan_scheduler_hook_dry_run_0202.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_plan_scheduler_hook_dry_run_0202.py
+@@ -0,0 +1,132 @@
++from pathlib import Path
++import importlib.util
++import json
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "plan_scheduler_hook_dry_run.py"
++
++
++def _load_tool_module():
++    spec = importlib.util.spec_from_file_location("plan_scheduler_hook_dry_run_tool", TOOL)
++    assert spec is not None
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    assert spec.loader is not None
++    spec.loader.exec_module(module)
++    return module
++
++
++def _surface_report(path: str, symbols: list[str]) -> dict:
++    return {
++        "path": path,
++        "role": "role",
++        "exists": True,
++        "parse_error": "",
++        "function_count": len(symbols),
++        "class_count": 0,
++        "functions": symbols,
++        "classes": [],
++        "required_symbols": symbols,
++        "matched_required_symbols": symbols,
++        "missing_required_symbols": [],
++        "use_before_new_code": True,
++    }
++
++
++def _audit_fixture(tmp_path: Path, *, success: bool = True) -> dict:
++    return {
++        "schema": "missipy.scheduler.integration_surface_audit.v1",
++        "bloc": "C",
++        "bloc_name": "scheduler-hook-controlled",
++        "accepted_baseline": "controlled-dev-routeproxy-write-read-v1",
++        "controlled_dev_baseline_ref": "baseline:controlled-dev-routeproxy-write-read-v1:0123456789abcdef",
++        "policy_decision_id": "policy:allow:controlled-dev:manual0199",
++        "target_runtime_root": str(tmp_path / "runtime" / "dev-controlled"),
++        "target_isolated_runtime_root": str(tmp_path / "runtime" / "dev-controlled" / "routeproxy-isolated"),
++        "surface_count": 6,
++        "existing_surface_count": 6,
++        "integration_surface_audit_success": success,
++        "scheduler_hook_plan_allowed_next": success,
++        "next_recommended_patch": "0202-scheduler_hook_dry_run_plan",
++        "recommended_integration_path": {
++            "path": "adapter -> command builder -> minimal handler -> readback",
++            "reuse_first": [
++                "src/runtime/scheduler_route_adapter.py",
++                "src/runtime/scheduler_route_handler_minimal.py",
++                "src/runtime/scheduler_route_handshake.py",
++            ],
++        },
++        "provenance_warning": "source_baseline_ref or source_entry_digest missing from P0200 acceptance; preserve this as a provenance repair item",
++        "issues": [] if success else ["integration_surface_audit_success must be true"],
++        "warnings": [],
++        "existing_surfaces_reused": True,
++        "new_runtime_handler_added": False,
++        "new_adapter_added": False,
++        "new_bus_added": False,
++        "new_scheduler_added": False,
++        "new_routeproxy_runtime_added": False,
++        "new_controlproxy_runtime_added": False,
++        "new_sql_backend_added": False,
++        "new_qdrant_backend_added": False,
++        "new_github_client_added": False,
++        "new_graph_renderer_added": False,
++        "new_inference_path_added": False,
++        "runtime_imports_executed_by_0201": False,
++        "scheduler_run_executed": False,
++        "handler_called_by_0201": False,
++        "routeproxy_prepared_by_0201": False,
++        "read_route_frame_called_by_0201": False,
++        "writer_permits_requested_by_0201": False,
++        "frames_written_by_0201": False,
++        "controlproxy_frames_written_by_0201": False,
++        "eventbus_instantiated_by_0201": False,
++        "network_used_by_0201": False,
++        "surface_reports": [
++            _surface_report("src/runtime/scheduler_route_adapter.py", ["scheduler_route_request_mapping"]),
++            _surface_report("src/runtime/scheduler_route_handler_minimal.py", ["build_single_frame_route_command", "handle_scheduler_route_command", "read_scheduler_route_handler_result_frames"]),
++            _surface_report("src/runtime/scheduler_route_handshake.py", ["prepare_route_for_scheduler"]),
++            _surface_report("src/runtime/controlproxy_scheduler_handler.py", ["handle_scheduler_route_request"]),
++            _surface_report("src/runtime/route_proxy_runtime_minimal.py", ["RouteProxyRuntimePolicy", "prepare_route_proxy_runtime"]),
++            _surface_report("src/runtime/shm_runtime_schema.py", ["EventBusMessage", "ContextBusMessage"]),
++        ],
++    }
++
++
++def test_0202_plans_scheduler_hook_dry_run_from_clean_audit(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    audit_path = tmp_path / "scheduler_integration_surface_audit.json"
++    output = tmp_path / "scheduler_hook_dry_run_plan.json"
++    audit_path.write_text(json.dumps(_audit_fixture(tmp_path), indent=2), encoding="utf-8")
++
++    plan = module.plan_scheduler_hook_dry_run(
++        surface_audit_path=audit_path,
++        output_path=output,
++    )
++
++    assert plan["scheduler_hook_dry_run_plan_ready"] is True
++    assert plan["execution_allowed_by_0202"] is False
++    assert plan["scheduler_run_execution_allowed"] is False
++    assert plan["p0203_may_execute_controlled_scheduler_hook"] is True
++    assert plan["planned_next_patch"] == "0203-controlled_scheduler_hook_smoke_acceptance"
++    assert plan["existing_surfaces_reused"] is True
++    assert plan["new_runtime_handler_added"] is False
++    assert plan["new_adapter_added"] is False
++    assert plan["scheduler_run_executed"] is False
++    assert plan["frames_written_by_0202"] is False
++    assert plan["provenance_repair_items"]
++    assert output.exists()
++
++
++def test_0202_rejects_failed_surface_audit(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    audit_path = tmp_path / "scheduler_integration_surface_audit.json"
++    audit_path.write_text(json.dumps(_audit_fixture(tmp_path, success=False), indent=2), encoding="utf-8")
++
++    plan = module.plan_scheduler_hook_dry_run(surface_audit_path=audit_path)
++
++    assert plan["scheduler_hook_dry_run_plan_ready"] is False
++    assert plan["p0203_may_execute_controlled_scheduler_hook"] is False
++    assert "integration_surface_audit_success must be true" in plan["issues"]
++    assert "scheduler_hook_plan_allowed_next must be true" in plan["issues"]
+diff --git a/tests/rules/test_scheduler_hook_dry_run_plan_0202_rule.py b/tests/rules/test_scheduler_hook_dry_run_plan_0202_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_scheduler_hook_dry_run_plan_0202_rule.py
+@@ -0,0 +1,84 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "plan_scheduler_hook_dry_run.py"
++DOC = ROOT / "doc" / "architecture" / "SCHEDULER_HOOK_DRY_RUN_PLAN_0202.md"
++RULE = ROOT / "doc" / "code-rules" / "0202_scheduler_hook_dry_run_plan_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0202_CHANGED_FILES.md"
++
++
++def test_0202_tool_is_plan_only_and_reuses_audited_surfaces() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    for token in [
++        "0202 is the Bloc C Scheduler hook dry-run plan only",
++        "scheduler_integration_surface_audit.json",
++        "scheduler_hook_dry_run_plan.json",
++        "Reuse/adapt existing surfaces first",
++        "0202 must reuse the 0201 surface audit",
++        "0202 must not add a new Scheduler hook implementation",
++        "0202 must not introduce a new runtime handler",
++        "0202 does not execute Scheduler.run",
++        "0202 does not import runtime handler modules",
++        "0202 does not call handle_scheduler_route_command",
++        "0202 does not call handle_scheduler_route_request",
++        "0202 does not call prepare_route_proxy_runtime",
++        "0202 does not call read_route_frame",
++        "0202 does not request writer permits",
++        "0202 does not call write_route_frame",
++        "0202 does not write ControlProxy or RouteProxy frames",
++        "0202 does not call GitHub API or use network",
++        "adapter -> command builder -> minimal handler -> readback",
++        "p0203_may_execute_controlled_scheduler_hook",
++        "0203-controlled_scheduler_hook_smoke_acceptance",
++        "source_baseline_ref or source_entry_digest missing",
++    ]:
++        assert token in source
++    assert "from runtime." not in source
++    assert "import runtime." not in source
++    assert "import requests" not in source
++    assert "from requests" not in source
++
++
++def test_0202_doc_locks_scheduler_hook_dry_run_plan_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    for token in [
++        "0202 creates a Scheduler hook dry-run plan from the 0201 surface audit",
++        "The input is scheduler_integration_surface_audit.json",
++        "The output is scheduler_hook_dry_run_plan.json",
++        "Reuse/adapt existing surfaces first",
++        "doc/code-rules/code_rule.md remains the primary rule",
++        "0202 does not execute Scheduler.run",
++        "0202 does not write RouteProxy or ControlProxy frames",
++        "P0203 may unlock a controlled Scheduler hook smoke explicitly",
++        "The provenance repair item from P0201 is carried forward",
++    ]:
++        assert token in doc
++
++
++def test_0202_rule_requires_dry_run_plan_only() -> None:
++    rule = RULE.read_text(encoding="utf-8")
++    for token in [
++        "Read scheduler_integration_surface_audit.json from 0201",
++        "Reuse the existing audited surfaces before adding new code",
++        "Do not add a new Scheduler hook implementation",
++        "Do not execute Scheduler.run in 0202",
++        "Do not write RouteProxy frames in 0202",
++        "Do not write ControlProxy frames in 0202",
++        "Allow P0203 to unlock a controlled Scheduler hook smoke explicitly",
++        "Require adapter -> command builder -> minimal handler -> readback",
++        "Carry provenance repair items forward",
++    ]:
++        assert token in rule
++
++
++def test_0202_manifest_lists_scheduler_hook_plan_files() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    for token in [
++        "tools/plan_scheduler_hook_dry_run.py",
++        "tests/tools/test_plan_scheduler_hook_dry_run_0202.py",
++        "tests/rules/test_scheduler_hook_dry_run_plan_0202_rule.py",
++        "doc/architecture/SCHEDULER_HOOK_DRY_RUN_PLAN_0202.md",
++        "doc/code-rules/0202_scheduler_hook_dry_run_plan_rule.md",
++    ]:
++        assert token in manifest
+diff --git a/doc/architecture/SCHEDULER_HOOK_DRY_RUN_PLAN_0202.md b/doc/architecture/SCHEDULER_HOOK_DRY_RUN_PLAN_0202.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/SCHEDULER_HOOK_DRY_RUN_PLAN_0202.md
+@@ -0,0 +1,80 @@
++# 0202 — Scheduler hook dry-run plan
++
++## Decision
++
++0202 creates a Scheduler hook dry-run plan from the 0201 surface audit.
++
++The input is scheduler_integration_surface_audit.json.
++The output is scheduler_hook_dry_run_plan.json.
++
++Reuse/adapt existing surfaces first.
++doc/code-rules/code_rule.md remains the primary rule.
++docs, graph, changelog, manifest, and rule are updated with the patch.
++
++0202 does not execute Scheduler.run.
++0202 does not write RouteProxy or ControlProxy frames.
++P0203 may unlock a controlled Scheduler hook smoke explicitly.
++The provenance repair item from P0201 is carried forward.
++
++## Why this exists
++
++0201 showed that the existing surfaces are present and coherent. 0202 converts
++that audit into a concrete dry-run plan without adding a new hook path.
++
++The planned reuse path is:
++
++```text
++adapter -> command builder -> minimal handler -> readback
++```
++
++## Existing-surface reuse decision
++
++0202 reuses the 0201 audit and plans to reuse:
++
++- `src/runtime/scheduler_route_adapter.py`,
++- `src/runtime/scheduler_route_handshake.py`,
++- `src/runtime/scheduler_route_handler_minimal.py`.
++
++It treats these as optional existing candidates:
++
++- `src/runtime/controlproxy_scheduler_handler.py`,
++- `src/runtime/route_proxy_runtime_minimal.py`,
++- `src/runtime/shm_runtime_schema.py`.
++
++## Boundary
++
++0202:
++
++- reads `scheduler_integration_surface_audit.json`,
++- validates the audit is clean,
++- validates the recommended integration path,
++- records reuse sequence,
++- carries provenance repair items,
++- writes optional `scheduler_hook_dry_run_plan.json`.
++
++0202 does not:
++
++- execute Scheduler.run,
++- add a new Scheduler hook implementation,
++- import runtime handler modules,
++- call handle_scheduler_route_command,
++- call handle_scheduler_route_request,
++- call prepare_route_proxy_runtime,
++- call read_route_frame,
++- request writer permits,
++- call write_route_frame,
++- instantiate Scheduler,
++- instantiate EventBus,
++- create a parallel bus,
++- write ControlProxy or RouteProxy frames,
++- call GitHub API,
++- use network,
++- execute conversion,
++- execute inference,
++- write SQL,
++- write Qdrant,
++- write directly to VisPy.
++
++## Next
++
++If 0202 succeeds, P0203 may unlock a controlled Scheduler hook smoke explicitly.
+diff --git a/doc/code-rules/0202_scheduler_hook_dry_run_plan_rule.md b/doc/code-rules/0202_scheduler_hook_dry_run_plan_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0202_scheduler_hook_dry_run_plan_rule.md
+@@ -0,0 +1,44 @@
++# 0202 Scheduler hook dry-run plan rule
++
++0202 creates a dry-run plan only.
++
++Rules:
++
++- Read scheduler_integration_surface_audit.json from 0201.
++- Reuse the existing audited surfaces before adding new code.
++- Apply doc/code-rules/code_rule.md as the primary rule.
++- Keep docs, graph, changelog, manifest, and rule updated with the patch.
++- Do not add a new Scheduler hook implementation.
++- Do not add a new runtime handler.
++- Do not add a new adapter.
++- Do not add a new bus.
++- Do not add a new Scheduler.
++- Do not add a new RouteProxy runtime.
++- Do not add a new ControlProxy runtime.
++- Do not add a new SQL backend.
++- Do not add a new Qdrant backend.
++- Do not add a new GitHub client.
++- Do not add a new graph renderer.
++- Do not add a new inference path.
++- Do not execute Scheduler.run in 0202.
++- Do not write RouteProxy frames in 0202.
++- Do not write ControlProxy frames in 0202.
++- Do not instantiate Scheduler.
++- Do not instantiate EventBus.
++- Do not import runtime handler modules.
++- Do not call handle_scheduler_route_command.
++- Do not call handle_scheduler_route_request.
++- Do not call prepare_route_proxy_runtime.
++- Do not call read_route_frame.
++- Do not request writer permits.
++- Do not call write_route_frame.
++- Do not call GitHub API.
++- Do not use network.
++- Do not execute conversion.
++- Do not execute inference.
++- Do not write SQL.
++- Do not write Qdrant.
++- Do not write directly to VisPy.
++- Allow P0203 to unlock a controlled Scheduler hook smoke explicitly.
++- Require adapter -> command builder -> minimal handler -> readback.
++- Carry provenance repair items forward.
+diff --git a/doc/docs/architecture/runtime/202_scheduler_hook_dry_run_plan.dot b/doc/docs/architecture/runtime/202_scheduler_hook_dry_run_plan.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/202_scheduler_hook_dry_run_plan.dot
+@@ -0,0 +1,18 @@
++digraph scheduler_hook_dry_run_plan_0202 {
++  rankdir=LR;
++  label="0202 Scheduler hook dry-run plan";
++  labelloc=t;
++
++  audit [label="scheduler_integration_surface_audit.json"];
++  plan [label="scheduler_hook_dry_run_plan.json"];
++  adapter [label="scheduler_route_adapter.py"];
++  handler [label="scheduler_route_handler_minimal.py"];
++  handshake [label="scheduler_route_handshake.py"];
++  p0203 [label="P0203 controlled Scheduler hook smoke"];
++
++  audit -> plan [label="clean surface audit"];
++  adapter -> plan [label="reuse"];
++  handshake -> plan [label="reuse"];
++  handler -> plan [label="reuse"];
++  plan -> p0203 [label="may unlock controlled smoke"];
++}
+diff --git a/doc/CHANGELOG_0202_SCHEDULER_HOOK_DRY_RUN_PLAN.md b/doc/CHANGELOG_0202_SCHEDULER_HOOK_DRY_RUN_PLAN.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0202_SCHEDULER_HOOK_DRY_RUN_PLAN.md
+@@ -0,0 +1,20 @@
++# Changelog — 0202 Scheduler hook dry-run plan
++
++## Added
++
++- Scheduler hook dry-run plan from 0201 surface audit.
++- Reuse sequence for adapter -> command builder -> minimal handler -> readback.
++- P0203 controlled Scheduler hook smoke unlock plan.
++- Provenance repair item carry-forward.
++- Documentation, graph, changelog, manifest, and code-rule entry for the patch.
++
++## Not changed
++
++- No Scheduler.run execution.
++- No Scheduler hook implementation.
++- No runtime handler import.
++- No runtime handler call.
++- No new adapter, bus, Scheduler, RouteProxy runtime, ControlProxy runtime, SQL
++  backend, Qdrant backend, GitHub client, graph renderer, or inference path.
++- No ControlProxy or RouteProxy frame write.
++- No production route write.
+diff --git a/doc/manifests/MANIFEST_0202_CHANGED_FILES.md b/doc/manifests/MANIFEST_0202_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0202_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest — 0202 Scheduler hook dry-run plan
++
++- PHASE0202_TEST_REPORT.md
++- tools/plan_scheduler_hook_dry_run.py
++- tests/tools/test_plan_scheduler_hook_dry_run_0202.py
++- tests/rules/test_scheduler_hook_dry_run_plan_0202_rule.py
++- doc/architecture/SCHEDULER_HOOK_DRY_RUN_PLAN_0202.md
++- doc/code-rules/0202_scheduler_hook_dry_run_plan_rule.md
++- doc/docs/architecture/runtime/202_scheduler_hook_dry_run_plan.dot
++- doc/CHANGELOG_0202_SCHEDULER_HOOK_DRY_RUN_PLAN.md
++- doc/manifests/MANIFEST_0202_CHANGED_FILES.md

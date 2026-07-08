@@ -1,0 +1,468 @@
+diff --git a/PHASE0224_DATA_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_TEST_REPORT.md b/PHASE0224_DATA_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_TEST_REPORT.md
+new file mode 100644
+index 0000000..f1ec54d
+--- /dev/null
++++ b/PHASE0224_DATA_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_TEST_REPORT.md
+@@ -0,0 +1,42 @@
++# PHASE 0224 — Data Surface EventBus Upstream Contract Test Report
++
++## Scope
++
++This phase is documentation/rule only. It does not add runtime code.
++
++It locks the passive-supervision contract for data-oriented surfaces:
++
++- GitHub artifact flow
++- SourceCandidate flow
++- SQL persistence / lookup / rehydrate references
++- Qdrant projection / recall references
++- rehydration
++- pushback status/result
++
++All these surfaces are upstream EventBus event sources observed by the passive supervisor.
++They are not controlled by the supervisor.
++
++## Validation
++
++Expected validation commands:
++
++```bash
++python -m compileall -q tests
++python -m pytest -q tests/rules/test_data_surface_eventbus_upstream_contract_0224_rule.py
++```
++
++## Result
++
++- patch applies cleanly
++- rule test is syntactically valid
++- no runtime code is added
++- no GitHub network call is introduced
++- no SQL/Qdrant writer is introduced
++- no scheduler/proxy/policy authority is introduced
++
++## Authority boundary
++
++The supervisor remains downstream-only. It may observe data-surface events, update a
++cellular projection, expose snapshots, and optionally write audit/replay records.
++It must not mutate GitHub, SQL, Qdrant, SourceCandidate state, pushback state, or
++rehydration state.
+diff --git a/doc/CHANGELOG_0224_DATA_SURFACE_EVENTBUS_UPSTREAM_CONTRACT.md b/doc/CHANGELOG_0224_DATA_SURFACE_EVENTBUS_UPSTREAM_CONTRACT.md
+new file mode 100644
+index 0000000..60fe3ae
+--- /dev/null
++++ b/doc/CHANGELOG_0224_DATA_SURFACE_EVENTBUS_UPSTREAM_CONTRACT.md
+@@ -0,0 +1,22 @@
++# Changelog — 0224 Data Surface EventBus Upstream Contract
++
++## Added
++
++- Documented data-surface supervision contract for GitHub artifact,
++  SourceCandidate, SQL, Qdrant, rehydration, and pushback surfaces.
++- Added code-rule forbidding passive-supervisor mutation of GitHub, SQL, Qdrant,
++  SourceCandidate, rehydration, pushback, Scheduler, proxy, SHM, and policy.
++- Added DOT architecture graph showing EventBus as canonical transport and
++  snapshot/audit as optional outputs.
++- Added rule test to keep the contract traceable.
++
++## Not added
++
++- No runtime code.
++- No GitHub client.
++- No SQL/Qdrant adapter.
++- No SourceCandidate promotion code.
++- No rehydration executor.
++- No pushback sender.
++- No EventBus implementation.
++- No Scheduler changes.
+diff --git a/doc/architecture/DATA_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_0224.md b/doc/architecture/DATA_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_0224.md
+new file mode 100644
+index 0000000..6f2402b
+--- /dev/null
++++ b/doc/architecture/DATA_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_0224.md
+@@ -0,0 +1,203 @@
++# 0224 — Data Surface EventBus Upstream Contract
++
++## Decision
++
++GitHub artifact, SourceCandidate, SQL, Qdrant, rehydration, and pushback surfaces
++are observable upstream sources for the passive supervision path.
++
++They must emit or expose canonical events through the EventBus.
++
++The passive supervisor consumes those events downstream and updates its in-memory
++cellular projection.
++
++```text
++GitHub artifact / SourceCandidate / SQL / Qdrant / Rehydrate / Pushback
++  -> EventBus
++  -> PassiveSupervisorSink
++  -> CellularState
++  -> optional snapshot
++  -> optional audit/replay
++```
++
++The supervisor is not a data orchestrator, not a persistence worker, not a Qdrant
++projection worker, not a GitHub client, and not a pushback agent.
++
++## Relation to Scheduler
++
++The Scheduler remains the orchestration authority.
++
++The Scheduler may cause or coordinate data-surface operations through existing
++runtime paths, but the supervisor only observes their emitted EventBus events.
++
++The supervisor must never call, wrap, or trigger `Scheduler.run()`.
++
++## Relation to GitHub artifact flow
++
++GitHub artifact events may describe:
++
++```text
++artifact_seen
++artifact_fetched
++artifact_verified
++artifact_rejected
++artifact_import_requested
++artifact_imported
++artifact_failed
++```
++
++The supervisor may display the artifact lifecycle and carry `artifact_ref`.
++
++The supervisor must not:
++
++```text
++call GitHub APIs
++fetch artifacts
++upload artifacts
++mutate issues
++mutate projects
++post comments
++change labels
++change status fields
++```
++
++## Relation to SourceCandidate
++
++SourceCandidate events may describe:
++
++```text
++source_candidate_seen
++source_candidate_validated
++source_candidate_rejected
++source_candidate_promoted
++source_candidate_failed
++```
++
++The supervisor may display the candidate lifecycle and carry
++`source_candidate_ref`.
++
++The supervisor must not validate, promote, reject, or enrich candidates. Those
++choices belong to the ingestion/policy/orchestration layers.
++
++## Relation to SQL
++
++SQL events may describe:
++
++```text
++sql_write_requested
++sql_written
++sql_read_requested
++sql_read
++sql_rehydrate_ref_seen
++sql_failed
++```
++
++The supervisor may display SQL activity and carry `sql_ref`.
++
++SQL remains durable authority for local records. The supervisor must not write,
++read, migrate, or reconcile SQL state.
++
++## Relation to Qdrant
++
++Qdrant events may describe:
++
++```text
++qdrant_projection_requested
++qdrant_projected
++qdrant_recall_requested
++qdrant_recalled
++qdrant_failed
++```
++
++The supervisor may display projection/recall activity and carry `qdrant_ref`.
++
++Qdrant remains a projection/search/recall surface. The supervisor must not write,
++query, create collections, delete collections, or reconcile Qdrant state.
++
++## Relation to rehydration
++
++Rehydration events may describe:
++
++```text
++rehydration_requested
++rehydration_sql_ref_seen
++rehydration_context_loaded
++rehydration_completed
++rehydration_failed
++```
++
++The supervisor may display rehydration progress and carry `sql_ref`, `qdrant_ref`,
++and `handoff_ref`.
++
++The supervisor must not hydrate context itself.
++
++## Relation to pushback
++
++Pushback events may describe:
++
++```text
++pushback_requested
++pushback_prepared
++pushback_sent
++pushback_skipped
++pushback_failed
++```
++
++The supervisor may display pushback state and carry `pushback_ref`.
++
++The supervisor must not mutate GitHub, send pushback, or decide whether pushback is
++allowed.
++
++## Canonical observable refs
++
++Data-surface events should preserve first-level references when available:
++
++```text
++artifact_ref
++source_candidate_ref
++sql_ref
++qdrant_ref
++handoff_ref
++pushback_ref
++policy_decision_id
++route_ref
++```
++
++These references allow the cellular projection to show movement of a datum across
++surfaces without making the supervisor authoritative.
++
++## Cellular movement
++
++Cells may be grouped by locality and may appear to move when a datum, route,
++lease, artifact, source candidate, SQL reference, Qdrant reference, or pushback
++reference is transmitted elsewhere.
++
++This movement is a visualization/projection effect only.
++
++It must not imply that the supervisor owns, transfers, validates, stores, or
++controls the underlying object.
++
++## Forbidden paths
++
++The following paths are forbidden for this contract:
++
++```text
++EventBus -> events.jsonl -> supervisor as the normal path
++status.json -> supervisor as the normal path
++supervisor -> GitHub mutation
++supervisor -> SQL write/read
++supervisor -> Qdrant write/query
++supervisor -> SourceCandidate promotion/rejection
++supervisor -> rehydration execution
++supervisor -> pushback send
++supervisor -> Scheduler.run()
++supervisor -> proxy control
++supervisor -> policy decision
++```
++
++`events.jsonl` may exist only as optional audit/replay/debug output.
++
++## Acceptance
++
++This contract is accepted when documentation and rule tests state that data
++surfaces are upstream EventBus sources and that the supervisor remains downstream,
++read-only, and non-authoritative.
+diff --git a/doc/code-rules/0224_data_surface_eventbus_upstream_contract_rule.md b/doc/code-rules/0224_data_surface_eventbus_upstream_contract_rule.md
+new file mode 100644
+index 0000000..71bbb09
+--- /dev/null
++++ b/doc/code-rules/0224_data_surface_eventbus_upstream_contract_rule.md
+@@ -0,0 +1,33 @@
++# 0224 Code Rule — Data Surface EventBus Upstream Contract
++
++Any GitHub artifact, SourceCandidate, SQL, Qdrant, rehydration, or pushback
++supervision integration MUST use EventBus as the canonical upstream observation
++path and MUST keep the passive supervisor downstream-only.
++
++The passive supervisor MAY:
++
++- accept canonical EventBus events
++- update an in-memory cellular projection
++- expose snapshots
++- optionally write audit/replay records
++- preserve first-level refs such as `artifact_ref`, `source_candidate_ref`,
++  `sql_ref`, `qdrant_ref`, `handoff_ref`, and `pushback_ref`
++
++The passive supervisor MUST NOT:
++
++- call GitHub APIs
++- fetch or upload GitHub artifacts
++- mutate GitHub issues, projects, comments, labels, or statuses
++- validate, promote, reject, or enrich SourceCandidates
++- write, read, migrate, or reconcile SQL state
++- write, query, create, delete, or reconcile Qdrant state
++- execute rehydration
++- send pushback
++- call or wrap `Scheduler.run()`
++- control RouteProxy or ControlProxy
++- mutate SHM
++- make policy decisions
++- introduce a new EventBus
++- make `events.jsonl` or `status.json` the normal runtime path
++
++`events.jsonl` is allowed only as optional audit/replay/debug output.
+diff --git a/doc/docs/architecture/runtime/224_data_surface_eventbus_upstream_contract.dot b/doc/docs/architecture/runtime/224_data_surface_eventbus_upstream_contract.dot
+new file mode 100644
+index 0000000..f468b6e
+--- /dev/null
++++ b/doc/docs/architecture/runtime/224_data_surface_eventbus_upstream_contract.dot
+@@ -0,0 +1,33 @@
++digraph data_surface_eventbus_upstream_contract_0224 {
++  rankdir=LR;
++
++  scheduler [label="Scheduler\nupstream authority"];
++  github [label="GitHub artifact flow\nobserved source"];
++  source_candidate [label="SourceCandidate flow\nobserved source"];
++  sql [label="SQL\ndurable authority"];
++  qdrant [label="Qdrant\nprojection/recall"];
++  rehydrate [label="Rehydrate\ncontext load"];
++  pushback [label="Pushback\nstatus/result"];
++  bus [label="EventBus\ncanonical transport"];
++  supervisor [label="PassiveSupervisorSink\ndownstream-only"];
++  cellular [label="CellularState\nin-memory projection"];
++  snapshot [label="snapshot\noptional"];
++  audit [label="events.jsonl\noptional audit/replay"];
++
++  scheduler -> bus;
++  github -> bus;
++  source_candidate -> bus;
++  sql -> bus;
++  qdrant -> bus;
++  rehydrate -> bus;
++  pushback -> bus;
++  bus -> supervisor;
++  supervisor -> cellular;
++  cellular -> snapshot [style=dashed];
++  supervisor -> audit [style=dashed];
++
++  supervisor -> github [label="forbidden mutation", color=red, style=dotted];
++  supervisor -> sql [label="forbidden write/read", color=red, style=dotted];
++  supervisor -> qdrant [label="forbidden write/query", color=red, style=dotted];
++  supervisor -> scheduler [label="forbidden Scheduler.run", color=red, style=dotted];
++}
+diff --git a/doc/manifests/MANIFEST_0224_DATA_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_CHANGED_FILES.md b/doc/manifests/MANIFEST_0224_DATA_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_CHANGED_FILES.md
+new file mode 100644
+index 0000000..9944734
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0224_DATA_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_CHANGED_FILES.md
+@@ -0,0 +1,15 @@
++# Manifest — 0224 Data Surface EventBus Upstream Contract
++
++## Added files
++
++- `PHASE0224_DATA_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_TEST_REPORT.md`
++- `doc/architecture/DATA_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_0224.md`
++- `doc/code-rules/0224_data_surface_eventbus_upstream_contract_rule.md`
++- `doc/docs/architecture/runtime/224_data_surface_eventbus_upstream_contract.dot`
++- `doc/CHANGELOG_0224_DATA_SURFACE_EVENTBUS_UPSTREAM_CONTRACT.md`
++- `doc/manifests/MANIFEST_0224_DATA_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_CHANGED_FILES.md`
++- `tests/rules/test_data_surface_eventbus_upstream_contract_0224_rule.py`
++
++## Runtime impact
++
++None. This patch is documentation/rule only.
+diff --git a/tests/rules/test_data_surface_eventbus_upstream_contract_0224_rule.py b/tests/rules/test_data_surface_eventbus_upstream_contract_0224_rule.py
+new file mode 100644
+index 0000000..406f230
+--- /dev/null
++++ b/tests/rules/test_data_surface_eventbus_upstream_contract_0224_rule.py
+@@ -0,0 +1,78 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++RULE = ROOT / "doc" / "code-rules" / "0224_data_surface_eventbus_upstream_contract_rule.md"
++ARCH = ROOT / "doc" / "architecture" / "DATA_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_0224.md"
++DOT = ROOT / "doc" / "docs" / "architecture" / "runtime" / "224_data_surface_eventbus_upstream_contract.dot"
++
++
++def read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_data_surface_contract_mentions_all_observed_surfaces() -> None:
++    text = read(ARCH)
++    for token in [
++        "GitHub artifact",
++        "SourceCandidate",
++        "SQL",
++        "Qdrant",
++        "Rehydration",
++        "Pushback",
++        "EventBus",
++        "PassiveSupervisorSink",
++    ]:
++        assert token in text
++
++
++def test_data_surface_contract_keeps_supervisor_downstream_only() -> None:
++    text = read(RULE)
++    for forbidden in [
++        "call GitHub APIs",
++        "validate, promote, reject, or enrich SourceCandidates",
++        "write, read, migrate, or reconcile SQL state",
++        "write, query, create, delete, or reconcile Qdrant state",
++        "execute rehydration",
++        "send pushback",
++        "call or wrap `Scheduler.run()`",
++        "control RouteProxy or ControlProxy",
++        "mutate SHM",
++        "make policy decisions",
++        "introduce a new EventBus",
++    ]:
++        assert forbidden in text
++
++
++def test_data_surface_contract_preserves_first_level_refs() -> None:
++    text = read(RULE)
++    for token in [
++        "artifact_ref",
++        "source_candidate_ref",
++        "sql_ref",
++        "qdrant_ref",
++        "handoff_ref",
++        "pushback_ref",
++    ]:
++        assert token in text
++
++
++def test_data_surface_dot_shows_optional_outputs_and_forbidden_edges() -> None:
++    text = read(DOT)
++    for token in [
++        "EventBus",
++        "PassiveSupervisorSink",
++        "CellularState",
++        "optional audit/replay",
++        "forbidden mutation",
++        "forbidden write/read",
++        "forbidden write/query",
++        "forbidden Scheduler.run",
++    ]:
++        assert token in text
++
++
++def test_events_jsonl_is_optional_not_normal_path() -> None:
++    text = read(RULE) + "\n" + read(ARCH)
++    assert "optional audit/replay" in text
++    assert "make `events.jsonl` or `status.json` the normal runtime path" in text

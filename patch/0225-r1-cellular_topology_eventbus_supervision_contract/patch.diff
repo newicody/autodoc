@@ -1,0 +1,501 @@
+diff --git a/PHASE0225_CELLULAR_TOPOLOGY_EVENTBUS_SUPERVISION_CONTRACT_TEST_REPORT.md b/PHASE0225_CELLULAR_TOPOLOGY_EVENTBUS_SUPERVISION_CONTRACT_TEST_REPORT.md
+new file mode 100644
+index 0000000..fe2289f
+--- /dev/null
++++ b/PHASE0225_CELLULAR_TOPOLOGY_EVENTBUS_SUPERVISION_CONTRACT_TEST_REPORT.md
+@@ -0,0 +1,33 @@
++# PHASE 0225 — Cellular Topology EventBus Supervision Contract Test Report
++
++## Scope
++
++This phase is documentation/rule only. It does not add runtime code.
++
++It locks the passive-supervision contract for cellular topology, locality, grouping,
++movement, and handoff visibility.
++
++## Validation
++
++Expected validation commands:
++
++```bash
++python -m compileall -q tests
++python -m pytest -q tests/rules/test_cellular_topology_eventbus_supervision_contract_0225_rule.py
++```
++
++## Result
++
++- patch applies cleanly
++- rule test is syntactically valid
++- no runtime code is added
++- no EventBus implementation is added
++- no scheduler/proxy/policy authority is introduced
++- no SHM mutation or raw `/dev/shm` requirement is introduced
++- no SQL/Qdrant/GitHub writer is introduced
++
++## Authority boundary
++
++Cell movement is an observed projection. It is not an authority transfer performed
++by the passive supervisor. The Scheduler, policy, proxy/control plane, SHM surface,
++and data workers remain the owners of their decisions and mutations.
+diff --git a/doc/CHANGELOG_0225_CELLULAR_TOPOLOGY_EVENTBUS_SUPERVISION_CONTRACT.md b/doc/CHANGELOG_0225_CELLULAR_TOPOLOGY_EVENTBUS_SUPERVISION_CONTRACT.md
+new file mode 100644
+index 0000000..02831a8
+--- /dev/null
++++ b/doc/CHANGELOG_0225_CELLULAR_TOPOLOGY_EVENTBUS_SUPERVISION_CONTRACT.md
+@@ -0,0 +1,23 @@
++# Changelog — 0225 Cellular Topology EventBus Supervision Contract
++
++## Added
++
++- Documented the cellular topology contract for passive EventBus supervision.
++- Locked the distinction between observed cell movement and runtime authority.
++- Documented locality grouping for scheduler, proxy, SHM, policy, GitHub, SQL,
++  Qdrant, rehydration, and pushback surfaces.
++- Added a code-rule requiring topology/movement to remain a projection over
++  canonical EventBus events.
++- Added DOT architecture graph showing topology projection as downstream-only.
++- Added rule test to keep the topology contract traceable.
++
++## Not added
++
++- No runtime code.
++- No new EventBus.
++- No scheduler wrapper.
++- No proxy controller.
++- No SHM reader/writer.
++- No policy decision engine.
++- No SQL/Qdrant/GitHub mutation.
++- No VisPy renderer.
+diff --git a/doc/architecture/CELLULAR_TOPOLOGY_EVENTBUS_SUPERVISION_CONTRACT_0225.md b/doc/architecture/CELLULAR_TOPOLOGY_EVENTBUS_SUPERVISION_CONTRACT_0225.md
+new file mode 100644
+index 0000000..3aa1189
+--- /dev/null
++++ b/doc/architecture/CELLULAR_TOPOLOGY_EVENTBUS_SUPERVISION_CONTRACT_0225.md
+@@ -0,0 +1,273 @@
++# 0225 — Cellular Topology EventBus Supervision Contract
++
++## Decision
++
++The passive supervisor may expose a cellular topology, but that topology is a
++projection of canonical EventBus events. It is not a new runtime, not a placement
++engine, not a scheduler, and not a control plane.
++
++```text
++Scheduler / RouteProxy / ControlProxy / SHM / Policy / GitHub / SQL / Qdrant
++  -> EventBus
++  -> PassiveSupervisorSink
++  -> CellularState
++  -> CellularTopology projection
++  -> optional snapshot
++  -> optional audit/replay
++  -> optional VisPy view later
++```
++
++The topology describes where observable cells appear to be, how they are grouped,
++and how a reference appears to move when data, context, route ownership, leases,
++or handoff references are transmitted elsewhere.
++
++Movement is observed. It is not caused by the supervisor.
++
++## Relation to existing contracts
++
++This contract extends the written passive-supervision direction locked by the
++previous phases:
++
++- the Scheduler remains the upstream orchestration authority;
++- the EventBus remains the canonical transport;
++- the passive supervisor remains downstream-only;
++- `CellularState` remains an in-memory projection;
++- `snapshot.json` remains optional;
++- `events.jsonl` remains optional audit/replay, not the main path.
++
++## Cell identity
++
++A cell represents an observable unit in the supervision projection.
++
++A cell should be identified by stable references when they exist.
++
++Recommended identity fields:
++
++```text
++cell_id
++cell_kind
++surface
++source
++location_ref
++route_ref
++shm_ref
++policy_decision_id
++artifact_ref
++source_candidate_ref
++sql_ref
++qdrant_ref
++handoff_ref
++pushback_ref
++```
++
++The supervisor must not invent authoritative identities for runtime objects. It
++may derive display identities only for visualization or snapshot readability.
++
++## Cell locality
++
++Cells may be grouped by locality.
++
++Locality is a descriptive grouping, not a scheduler placement decision.
++
++Examples:
++
++```text
++scheduler node
++route proxy zone
++control proxy zone
++SHM ring/slot group
++policy gate
++GitHub artifact flow
++SourceCandidate intake area
++SQL store area
++Qdrant projection area
++rehydration area
++pushback area
++```
++
++A locality group may be represented by:
++
++```text
++location_ref
++location_kind
++parent_location_ref
++zone_ref
++node_ref
++route_ref
++shm_ref
++```
++
++The supervisor may show locality changes, but it must not allocate, pin, drain,
++lock, or move runtime work.
++
++## Cell movement
++
++A cell may appear to move when an upstream event describes a handoff, transfer,
++route change, lease change, context movement, or artifact/data promotion.
++
++Examples:
++
++```text
++SourceCandidate imported from GitHub artifact
++SourceCandidate promoted toward SQL/Qdrant projection
++context rehydrated from sql_ref/qdrant_ref
++route lease transferred
++SHM ring slot advanced
++policy gate blocked or released
++pushback status emitted
++```
++
++The passive supervisor may update the projected cell locality after observing
++such events.
++
++It must not execute the movement.
++
++## Movement event fields
++
++A canonical EventBus event that describes projected movement should prefer common
++fields instead of nested, incompatible payloads.
++
++Recommended fields:
++
++```text
++event_id
++event_kind
++emitted_at
++source
++surface
++cell_id
++cell_kind
++state
++health
++location_ref
++previous_location_ref
++next_location_ref
++handoff_ref
++route_ref
++shm_ref
++policy_decision_id
++artifact_ref
++source_candidate_ref
++sql_ref
++qdrant_ref
++pushback_ref
++error
++payload
++```
++
++The supervisor should be tolerant of optional fields, but future emitters should
++prefer these canonical names to avoid adapter sprawl.
++
++## Authority boundary
++
++The passive supervisor may:
++
++```text
++consume EventBus events
++update CellularState
++project cell locality
++project observed movement
++produce snapshot output
++write optional audit/replay records
++serve future read-only visualization
++```
++
++The passive supervisor must not:
++
++```text
++call Scheduler.run()
++wrap Scheduler.run()
++dispatch scheduler handlers
++claim or release proxy leases
++block or unblock proxy zones
++write to SHM or mutate cursors/slots
++read raw /dev/shm as a required path
++decide policy
++promote SourceCandidate records
++write SQL
++query/write Qdrant
++mutate GitHub
++send pushback
++own VisPy runtime authority
++```
++
++## Scheduler relation
++
++The Scheduler may emit events that describe orchestration locality and state.
++
++The supervisor may show the Scheduler cell and related movements, but it does not
++influence the Scheduler.
++
++```text
++Scheduler authority
++  -> EventBus event
++  -> PassiveSupervisorSink
++  -> CellularTopology projection
++```
++
++## Proxy and SHM relation
++
++RouteProxy, ControlProxy, and SHM events may describe locality, zone health,
++leases, route changes, ring state, blocked areas, emitter lag, and context change.
++
++The supervisor may project those states onto cells and groups.
++
++The supervisor must not control RouteProxy, ControlProxy, or SHM.
++
++## Policy relation
++
++Policy may emit decisions such as allowed, blocked, deferred, escalated, or
++released.
++
++The supervisor may project the affected cell and the policy gate locality.
++
++The supervisor must not decide policy.
++
++## Data surface relation
++
++GitHub artifact, SourceCandidate, SQL, Qdrant, rehydration, and pushback events
++may describe data moving through the pipeline.
++
++The supervisor may project this movement:
++
++```text
++GitHub artifact cell
++  -> SourceCandidate cell
++  -> SQL/Qdrant reference cells
++  -> rehydration cell
++  -> pushback cell
++```
++
++This is a visualization and diagnostic projection only. The data flow remains
++owned by the existing runtime/data components.
++
++## Snapshot shape
++
++A topology-aware snapshot may include additional read-only fields:
++
++```text
++cells
++locations
++edges
++movements
++last_seen_at
++last_event
++authority_boundary
++```
++
++These fields are outputs. They must not become required runtime inputs.
++
++## Design rule
++
++If adding topology support requires a large adapter layer, a parallel bus, or a
++status-file driven path, the EventBus event contract should be corrected first.
++
++The preferred order is:
++
++```text
++clarify canonical EventBus fields
++reuse existing emitters and sink state
++project locality/movement downstream
++keep snapshot/audit optional
++add visualization later
++```
+diff --git a/doc/code-rules/0225_cellular_topology_eventbus_supervision_contract_rule.md b/doc/code-rules/0225_cellular_topology_eventbus_supervision_contract_rule.md
+new file mode 100644
+index 0000000..bd8af87
+--- /dev/null
++++ b/doc/code-rules/0225_cellular_topology_eventbus_supervision_contract_rule.md
+@@ -0,0 +1,16 @@
++# 0225 Rule — Cellular Topology EventBus Supervision Contract
++
++Cellular topology is a passive projection over canonical EventBus events.
++
++The passive supervisor may group cells by locality and may show observed movement
++when upstream events describe handoff, route change, lease change, context
++movement, artifact promotion, SQL/Qdrant reference creation, rehydration, or
++pushback status.
++
++The passive supervisor must not cause movement, schedule work, control proxy or
++SHM, decide policy, mutate GitHub, write SQL/Qdrant, or introduce a parallel bus.
++
++`events.jsonl` and `snapshot.json` remain optional outputs for audit, replay,
++debug, and visualization. They are not the canonical runtime path.
++
++`Scheduler.run()` remains outside the passive-supervisor path.
+diff --git a/doc/docs/architecture/runtime/225_cellular_topology_eventbus_supervision_contract.dot b/doc/docs/architecture/runtime/225_cellular_topology_eventbus_supervision_contract.dot
+new file mode 100644
+index 0000000..4dbc7a6
+--- /dev/null
++++ b/doc/docs/architecture/runtime/225_cellular_topology_eventbus_supervision_contract.dot
+@@ -0,0 +1,39 @@
++digraph cellular_topology_eventbus_supervision_contract_0225 {
++  rankdir=LR;
++  node [shape=box];
++
++  scheduler [label="Scheduler\nupstream authority"];
++  route_proxy [label="RouteProxy\nupstream events"];
++  control_proxy [label="ControlProxy\nupstream events"];
++  shm [label="SHM ring/status\nupstream events"];
++  policy [label="Policy gate\nupstream decisions"];
++  data [label="GitHub / SourceCandidate / SQL / Qdrant\nrehydrate / pushback events"];
++
++  bus [label="EventBus\ncanonical transport"];
++  sink [label="PassiveSupervisorSink\ndownstream-only"];
++  state [label="CellularState\nin memory"];
++  topology [label="CellularTopology\nlocality + observed movement"];
++  snapshot [label="optional snapshot"];
++  audit [label="optional audit/replay"];
++  vispy [label="future VisPy view\nread-only"];
++
++  scheduler -> bus;
++  route_proxy -> bus;
++  control_proxy -> bus;
++  shm -> bus;
++  policy -> bus;
++  data -> bus;
++
++  bus -> sink;
++  sink -> state;
++  state -> topology;
++  topology -> snapshot [style=dashed];
++  topology -> audit [style=dashed];
++  topology -> vispy [style=dashed];
++
++  sink -> scheduler [label="no control", style=dotted];
++  sink -> route_proxy [label="no control", style=dotted];
++  sink -> shm [label="no write", style=dotted];
++  sink -> policy [label="no decision", style=dotted];
++  sink -> data [label="no mutation", style=dotted];
++}
+diff --git a/doc/manifests/MANIFEST_0225_CELLULAR_TOPOLOGY_EVENTBUS_SUPERVISION_CONTRACT_CHANGED_FILES.md b/doc/manifests/MANIFEST_0225_CELLULAR_TOPOLOGY_EVENTBUS_SUPERVISION_CONTRACT_CHANGED_FILES.md
+new file mode 100644
+index 0000000..5768b59
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0225_CELLULAR_TOPOLOGY_EVENTBUS_SUPERVISION_CONTRACT_CHANGED_FILES.md
+@@ -0,0 +1,15 @@
++# Manifest — 0225 Cellular Topology EventBus Supervision Contract
++
++## Added
++
++- `PHASE0225_CELLULAR_TOPOLOGY_EVENTBUS_SUPERVISION_CONTRACT_TEST_REPORT.md`
++- `doc/CHANGELOG_0225_CELLULAR_TOPOLOGY_EVENTBUS_SUPERVISION_CONTRACT.md`
++- `doc/architecture/CELLULAR_TOPOLOGY_EVENTBUS_SUPERVISION_CONTRACT_0225.md`
++- `doc/code-rules/0225_cellular_topology_eventbus_supervision_contract_rule.md`
++- `doc/docs/architecture/runtime/225_cellular_topology_eventbus_supervision_contract.dot`
++- `doc/manifests/MANIFEST_0225_CELLULAR_TOPOLOGY_EVENTBUS_SUPERVISION_CONTRACT_CHANGED_FILES.md`
++- `tests/rules/test_cellular_topology_eventbus_supervision_contract_0225_rule.py`
++
++## Runtime impact
++
++None. This is a documentation/rule patch only.
+diff --git a/tests/rules/test_cellular_topology_eventbus_supervision_contract_0225_rule.py b/tests/rules/test_cellular_topology_eventbus_supervision_contract_0225_rule.py
+new file mode 100644
+index 0000000..bf26296
+--- /dev/null
++++ b/tests/rules/test_cellular_topology_eventbus_supervision_contract_0225_rule.py
+@@ -0,0 +1,60 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc/architecture/CELLULAR_TOPOLOGY_EVENTBUS_SUPERVISION_CONTRACT_0225.md"
++RULE = ROOT / "doc/code-rules/0225_cellular_topology_eventbus_supervision_contract_rule.md"
++DOT = ROOT / "doc/docs/architecture/runtime/225_cellular_topology_eventbus_supervision_contract.dot"
++CHANGELOG = ROOT / "doc/CHANGELOG_0225_CELLULAR_TOPOLOGY_EVENTBUS_SUPERVISION_CONTRACT.md"
++MANIFEST = ROOT / "doc/manifests/MANIFEST_0225_CELLULAR_TOPOLOGY_EVENTBUS_SUPERVISION_CONTRACT_CHANGED_FILES.md"
++REPORT = ROOT / "PHASE0225_CELLULAR_TOPOLOGY_EVENTBUS_SUPERVISION_CONTRACT_TEST_REPORT.md"
++
++
++def read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_cellular_topology_contract_files_exist() -> None:
++    for path in (DOC, RULE, DOT, CHANGELOG, MANIFEST, REPORT):
++        assert path.exists(), path
++
++
++def test_cellular_topology_is_downstream_projection() -> None:
++    text = read(DOC)
++    assert "projection of canonical EventBus events" in text
++    assert "Movement is observed" in text
++    assert "It must not execute the movement" in text
++    assert "The supervisor must not invent authoritative identities" in text
++
++
++def test_cellular_topology_preserves_authority_boundaries() -> None:
++    text = read(DOC) + "\n" + read(RULE)
++    required = [
++        "call Scheduler.run()",
++        "wrap Scheduler.run()",
++        "claim or release proxy leases",
++        "write to SHM",
++        "decide policy",
++        "write SQL",
++        "query/write Qdrant",
++        "mutate GitHub",
++        "introduce a parallel bus",
++    ]
++    for token in required:
++        assert token in text
++
++
++def test_cellular_topology_keeps_snapshot_and_audit_optional() -> None:
++    text = read(DOC) + "\n" + read(RULE)
++    assert "optional snapshot" in text
++    assert "optional audit/replay" in text
++    assert "They are not the canonical runtime path" in text
++
++
++def test_cellular_topology_dot_shows_eventbus_path() -> None:
++    dot = read(DOT)
++    assert "EventBus" in dot
++    assert "PassiveSupervisorSink" in dot
++    assert "CellularTopology" in dot
++    assert "future VisPy view" in dot
++    assert "no control" in dot

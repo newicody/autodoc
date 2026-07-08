@@ -1,0 +1,950 @@
+diff --git a/src/context/github_issue_attachment_manifest.py b/src/context/github_issue_attachment_manifest.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/context/github_issue_attachment_manifest.py
+@@ -0,0 +1,196 @@
++"""GitHub issue attachment manifest contracts.
++
++0170 records attachment references found in an external GitHub issue/ticket
++body. It performs no GitHub API call and no remote mutation. GitHub Actions
++artifacts remain the source system: this manifest is produced by the external
++action as metadata, then the local server fetches the real files into the
++configured server dataset before conversion.
++
++The contract is data-only. It does not store user artifacts in the Autodoc
++repository.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++import hashlib
++import re
++from typing import Any, Iterable
++from urllib.parse import unquote, urlparse
++
++
++_MANIFEST_SCHEMA = "missipy.github_issue.attachment_manifest.v1"
++_REFERENCE_SCHEMA = "missipy.github_issue.attachment_reference.v1"
++
++_MARKDOWN_LINK_RE = re.compile(r"(!?)\[([^\]]*)\]\((https?://github\.com/user-attachments/[^\s)]+)\)")
++_BARE_ATTACHMENT_RE = re.compile(r"(?<!\()https?://github\.com/user-attachments/[^\s)>'\"]+")
++
++_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".heic", ".heif"}
++_AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".opus"}
++_VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
++_PDF_EXTENSIONS = {".pdf"}
++_ARCHIVE_EXTENSIONS = {".zip", ".tar", ".tgz", ".gz", ".bz2", ".xz", ".7z", ".rar"}
++_TEXT_EXTENSIONS = {".txt", ".md", ".rst", ".csv", ".json", ".yaml", ".yml", ".toml", ".ini", ".log"}
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubIssueAttachmentReference:
++    url: str
++    filename: str
++    kind: str
++    source: str = "github_issue_attachment_reference"
++    label: str = ""
++    raw_text: str = ""
++    processed: bool = False
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "schema": _REFERENCE_SCHEMA,
++            "url": self.url,
++            "filename": self.filename,
++            "kind": self.kind,
++            "source": self.source,
++            "label": self.label,
++            "raw_text": self.raw_text,
++            "processed": self.processed,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubIssueAttachmentManifest:
++    repository: str
++    issue_number: int
++    issue_url: str
++    origin_frame_id: str
++    ticket_revision_id: str
++    attachments: tuple[GitHubIssueAttachmentReference, ...]
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "schema": _MANIFEST_SCHEMA,
++            "repository": self.repository,
++            "issue": {"number": self.issue_number, "url": self.issue_url},
++            "origin_frame_id": self.origin_frame_id,
++            "ticket_revision_id": self.ticket_revision_id,
++            "attachments": [item.to_json_dict() for item in self.attachments],
++            "counts": {"attachment_count": len(self.attachments)},
++            "boundary": [
++                "GitHub issue attachment references only",
++                "no GitHub API call",
++                "no remote mutation",
++                "GitHub Actions artifacts remain the source system",
++                "no user artifacts in Autodoc repository",
++                "server fetch stores files in the configured server dataset before conversion",
++            ],
++        }
++
++
++def build_github_issue_attachment_manifest(
++    *,
++    repository: str,
++    issue_number: int,
++    issue_url: str,
++    body: str,
++    origin_frame_id: str = "",
++    ticket_revision_id: str = "",
++) -> GitHubIssueAttachmentManifest:
++    frame_id = origin_frame_id or f"github-frame:{repository}/issues/{issue_number}"
++    revision_id = ticket_revision_id or f"github-ticket-revision:{_digest(frame_id + ':' + body)}"
++    return GitHubIssueAttachmentManifest(
++        repository=repository,
++        issue_number=issue_number,
++        issue_url=issue_url,
++        origin_frame_id=frame_id,
++        ticket_revision_id=revision_id,
++        attachments=tuple(parse_github_issue_attachment_references(body)),
++    )
++
++
++def parse_github_issue_attachment_references(body: str) -> tuple[GitHubIssueAttachmentReference, ...]:
++    """Parse GitHub issue attachment references without downloading files."""
++
++    references: list[GitHubIssueAttachmentReference] = []
++    seen: set[str] = set()
++
++    for match in _MARKDOWN_LINK_RE.finditer(body):
++        image_marker, label, url = match.groups()
++        references.append(_build_reference(url=url, label=label, raw_text=match.group(0), image_hint=bool(image_marker)))
++        seen.add(url)
++
++    for match in _BARE_ATTACHMENT_RE.finditer(body):
++        url = match.group(0).rstrip(".,;")
++        if url in seen:
++            continue
++        references.append(_build_reference(url=url, label="", raw_text=match.group(0), image_hint=False))
++        seen.add(url)
++
++    return tuple(references)
++
++
++def _build_reference(*, url: str, label: str, raw_text: str, image_hint: bool) -> GitHubIssueAttachmentReference:
++    filename = _filename_from_label_or_url(label, url)
++    kind = _kind_from_filename(filename, image_hint=image_hint)
++    return GitHubIssueAttachmentReference(url=url, filename=filename, kind=kind, label=label, raw_text=raw_text)
++
++
++def _filename_from_label_or_url(label: str, url: str) -> str:
++    normalized_label = label.strip().strip("`")
++    if _looks_like_filename(normalized_label):
++        return _sanitize_filename(normalized_label)
++
++    parsed = urlparse(url)
++    path_name = unquote(PathLikeName(parsed.path).name)
++    if _looks_like_filename(path_name):
++        return _sanitize_filename(path_name)
++
++    fallback = _digest(url)[:12]
++    return f"github-attachment-{fallback}.bin"
++
++
++def _kind_from_filename(filename: str, *, image_hint: bool) -> str:
++    suffix = _suffix(filename)
++    if suffix in _IMAGE_EXTENSIONS or image_hint:
++        return "image"
++    if suffix in _AUDIO_EXTENSIONS:
++        return "audio"
++    if suffix in _VIDEO_EXTENSIONS:
++        return "video"
++    if suffix in _PDF_EXTENSIONS:
++        return "pdf"
++    if suffix in _ARCHIVE_EXTENSIONS:
++        return "archive"
++    if suffix in _TEXT_EXTENSIONS:
++        return "text"
++    return "binary"
++
++
++def _looks_like_filename(value: str) -> bool:
++    stripped = value.strip()
++    return bool(stripped and "." in stripped and "/" not in stripped and "\\" not in stripped)
++
++
++def _sanitize_filename(value: str) -> str:
++    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip())
++    return cleaned.strip("._") or "attachment.bin"
++
++
++def _suffix(filename: str) -> str:
++    lowered = filename.lower()
++    for extension in sorted(_ARCHIVE_EXTENSIONS | _IMAGE_EXTENSIONS | _AUDIO_EXTENSIONS | _VIDEO_EXTENSIONS | _PDF_EXTENSIONS | _TEXT_EXTENSIONS, key=len, reverse=True):
++        if lowered.endswith(extension):
++            return extension
++    return ""
++
++
++def _digest(value: str) -> str:
++    return hashlib.sha256(value.encode("utf-8")).hexdigest()
++
++
++class PathLikeName:
++    def __init__(self, path: str) -> None:
++        self.path = path
++
++    @property
++    def name(self) -> str:
++        parts = [part for part in self.path.split("/") if part]
++        return parts[-1] if parts else ""
+diff --git a/tools/build_github_issue_attachment_manifest.py b/tools/build_github_issue_attachment_manifest.py
+new file mode 100755
+index 0000000..1111111
+--- /dev/null
++++ b/tools/build_github_issue_attachment_manifest.py
+@@ -0,0 +1,87 @@
++#!/usr/bin/env python3
++"""Build a GitHub issue attachment manifest from an event payload.
++
++0170 performs no GitHub API call and no remote mutation. It only parses the
++event payload produced by GitHub Actions and writes attachment-reference
++metadata that can be uploaded as a GitHub Actions artifact.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import sys
++from typing import Any, Mapping, Sequence
++
++
++_REPO_ROOT = Path(__file__).resolve().parents[1]
++_SRC_ROOT = _REPO_ROOT / "src"
++if str(_SRC_ROOT) not in sys.path:
++    sys.path.insert(0, str(_SRC_ROOT))
++
++
++from context.github_issue_attachment_manifest import build_github_issue_attachment_manifest  # noqa: E402
++
++
++def parse_args(argv: Sequence[str]) -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description="Build an attachment manifest from a GitHub issue event payload.")
++    parser.add_argument("--event-path", type=Path, required=True)
++    parser.add_argument("--output-dir", type=Path, default=Path("out/autodoc-artifacts"))
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    return parser.parse_args(argv)
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = parse_args(tuple(sys.argv[1:] if argv is None else argv))
++    event = json.loads(args.event_path.read_text(encoding="utf-8"))
++    issue = event.get("issue") if isinstance(event.get("issue"), Mapping) else {}
++    repository = _repository_full_name(event)
++    issue_number = int(issue.get("number", 0))
++    issue_url = str(issue.get("html_url", ""))
++    body = str(issue.get("body", "") or "")
++    manifest = build_github_issue_attachment_manifest(
++        repository=repository,
++        issue_number=issue_number,
++        issue_url=issue_url,
++        body=body,
++    )
++    args.output_dir.mkdir(parents=True, exist_ok=True)
++    output_path = args.output_dir / "attachment_manifest.json"
++    output_path.write_text(json.dumps(manifest.to_json_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++    report = {
++        "schema": "missipy.github_issue.attachment_manifest_build_report.v1",
++        "status": "ok",
++        "repository": repository,
++        "issue_number": issue_number,
++        "output_path": str(output_path),
++        "attachment_count": len(manifest.attachments),
++        "github_api_called": False,
++        "remote_mutation_performed": False,
++        "boundary": [
++            "event payload only",
++            "attachment references only",
++            "no GitHub API call",
++            "no remote mutation",
++            "no user artifacts in Autodoc repository",
++        ],
++    }
++    if args.format == "json":
++        print(json.dumps(report, indent=2, sort_keys=True))
++    else:
++        print(f"status: {report['status']}")
++        print(f"attachment_count: {report['attachment_count']}")
++        print(f"output_path: {output_path}")
++    return 0
++
++
++def _repository_full_name(event: Mapping[str, Any]) -> str:
++    repository = event.get("repository")
++    if isinstance(repository, Mapping) and repository.get("full_name"):
++        return str(repository["full_name"])
++    return ""
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())
+diff --git a/templates/github/scripts/build_autodoc_issue_attachment_manifest.py b/templates/github/scripts/build_autodoc_issue_attachment_manifest.py
+new file mode 100755
+index 0000000..1111111
+--- /dev/null
++++ b/templates/github/scripts/build_autodoc_issue_attachment_manifest.py
+@@ -0,0 +1,128 @@
++#!/usr/bin/env python3
++"""Standalone external-repository attachment manifest builder.
++
++Copy this file to `scripts/build_autodoc_issue_attachment_manifest.py` in the
++external idea repository. It intentionally has no Autodoc import, no GitHub
++API call, and no remote mutation.
++"""
++
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++import os
++from pathlib import Path
++import re
++from urllib.parse import unquote, urlparse
++
++
++MARKDOWN_LINK_RE = re.compile(r"(!?)\[([^\]]*)\]\((https?://github\.com/user-attachments/[^\s)]+)\)")
++BARE_ATTACHMENT_RE = re.compile(r"(?<!\()https?://github\.com/user-attachments/[^\s)>'\"]+")
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--event-path", type=Path, required=True)
++    parser.add_argument("--output-dir", type=Path, default=Path("out/autodoc-artifacts"))
++    args = parser.parse_args()
++    event = json.loads(args.event_path.read_text(encoding="utf-8"))
++    issue = event.get("issue") or {}
++    repository = (event.get("repository") or {}).get("full_name", "")
++    body = issue.get("body") or ""
++    origin_frame_id = f"github-frame:{repository}/issues/{issue.get('number', 0)}"
++    ticket_revision_id = f"github-ticket-revision:{digest(origin_frame_id + ':' + (os.environ.get('GITHUB_SHA') or issue.get('updated_at', '') or body))}"
++    manifest = {
++        "schema": "missipy.github_issue.attachment_manifest.v1",
++        "repository": repository,
++        "issue": {"number": issue.get("number", 0), "url": issue.get("html_url", "")},
++        "origin_frame_id": origin_frame_id,
++        "ticket_revision_id": ticket_revision_id,
++        "attachments": parse_attachments(body),
++        "counts": {"attachment_count": 0},
++        "boundary": [
++            "GitHub issue attachment references only",
++            "no GitHub API call",
++            "no remote mutation",
++            "GitHub Actions artifacts remain the source system",
++            "no user artifacts in Autodoc repository",
++        ],
++    }
++    manifest["counts"]["attachment_count"] = len(manifest["attachments"])
++    args.output_dir.mkdir(parents=True, exist_ok=True)
++    (args.output_dir / "attachment_manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    return 0
++
++
++def parse_attachments(body: str) -> list[dict]:
++    refs = []
++    seen = set()
++    for match in MARKDOWN_LINK_RE.finditer(body):
++        image_marker, label, url = match.groups()
++        refs.append(build_ref(url, label, match.group(0), bool(image_marker)))
++        seen.add(url)
++    for match in BARE_ATTACHMENT_RE.finditer(body):
++        url = match.group(0).rstrip(".,;")
++        if url in seen:
++            continue
++        refs.append(build_ref(url, "", match.group(0), False))
++        seen.add(url)
++    return refs
++
++
++def build_ref(url: str, label: str, raw_text: str, image_hint: bool) -> dict:
++    filename = filename_from_label_or_url(label, url)
++    return {
++        "schema": "missipy.github_issue.attachment_reference.v1",
++        "url": url,
++        "filename": filename,
++        "kind": kind_from_filename(filename, image_hint),
++        "source": "github_issue_attachment_reference",
++        "label": label,
++        "raw_text": raw_text,
++        "processed": False,
++    }
++
++
++def filename_from_label_or_url(label: str, url: str) -> str:
++    if looks_like_filename(label):
++        return sanitize_filename(label)
++    path_name = unquote(urlparse(url).path.rstrip("/").split("/")[-1])
++    if looks_like_filename(path_name):
++        return sanitize_filename(path_name)
++    return f"github-attachment-{digest(url)[:12]}.bin"
++
++
++def kind_from_filename(filename: str, image_hint: bool) -> str:
++    lower = filename.lower()
++    if image_hint or lower.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".svg", ".heic", ".heif")):
++        return "image"
++    if lower.endswith((".mp3", ".wav", ".flac", ".ogg", ".m4a", ".aac", ".opus")):
++        return "audio"
++    if lower.endswith((".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v")):
++        return "video"
++    if lower.endswith(".pdf"):
++        return "pdf"
++    if lower.endswith((".zip", ".tar", ".tgz", ".gz", ".bz2", ".xz", ".7z", ".rar")):
++        return "archive"
++    if lower.endswith((".txt", ".md", ".rst", ".csv", ".json", ".yaml", ".yml", ".toml", ".ini", ".log")):
++        return "text"
++    return "binary"
++
++
++def looks_like_filename(value: str) -> bool:
++    stripped = value.strip().strip("`")
++    return bool(stripped and "." in stripped and "/" not in stripped and "\\" not in stripped)
++
++
++def sanitize_filename(value: str) -> str:
++    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip().strip("`"))
++    return cleaned.strip("._") or "attachment.bin"
++
++
++def digest(value: str) -> str:
++    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/templates/github/autodoc-attachment-manifest.yml b/templates/github/autodoc-attachment-manifest.yml
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/templates/github/autodoc-attachment-manifest.yml
+@@ -0,0 +1,34 @@
++name: autodoc-attachment-manifest
++
++on:
++  issues:
++    types:
++      - opened
++      - edited
++      - reopened
++  workflow_dispatch:
++
++permissions:
++  contents: read
++  issues: read
++  actions: read
++
++jobs:
++  build-autodoc-attachment-manifest:
++    runs-on: ubuntu-latest
++
++    steps:
++      - name: Checkout external idea repository
++        uses: actions/checkout@v4
++
++      - name: Build Autodoc attachment manifest
++        run: |
++          python scripts/build_autodoc_issue_attachment_manifest.py \
++            --event-path "$GITHUB_EVENT_PATH" \
++            --output-dir out/autodoc-artifacts
++
++      - name: Upload attachment manifest artifact
++        uses: actions/upload-artifact@v4
++        with:
++          name: autodoc-attachment-manifest-${{ github.run_id }}
++          path: out/autodoc-artifacts/attachment_manifest.json
+diff --git a/tools/build_github_idea_repo_attachment_bootstrap_bundle.py b/tools/build_github_idea_repo_attachment_bootstrap_bundle.py
+new file mode 100755
+index 0000000..1111111
+--- /dev/null
++++ b/tools/build_github_idea_repo_attachment_bootstrap_bundle.py
+@@ -0,0 +1,126 @@
++#!/usr/bin/env python3
++"""Build/install the attachment-manifest bootstrap files for the external idea repo.
++
++0170 is local-only: no GitHub API call and no remote mutation. It copies the
++attachment workflow/script templates into a staging directory or into an
++explicitly supplied local clone of the external idea repository.
++"""
++
++from __future__ import annotations
++
++import argparse
++import hashlib
++import json
++from pathlib import Path
++import sys
++from typing import Any, Mapping, Sequence
++
++
++_REPO_ROOT = Path(__file__).resolve().parents[1]
++_TEMPLATE_ROOT = _REPO_ROOT / "templates" / "github"
++_DEVELOPMENT_REPOSITORY = "newicody/autodoc"
++_SCHEMA = "missipy.github_idea_repo.attachment_bootstrap_bundle.v1"
++_TEMPLATE_MAP: tuple[tuple[str, str], ...] = (
++    ("autodoc-attachment-manifest.yml", ".github/workflows/autodoc-attachment-manifest.yml"),
++    ("scripts/build_autodoc_issue_attachment_manifest.py", "scripts/build_autodoc_issue_attachment_manifest.py"),
++)
++
++
++def parse_args(argv: Sequence[str]) -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description="Build/install attachment-manifest templates for the external idea repository.")
++    parser.add_argument("--repository", required=True)
++    parser.add_argument("--output-dir", type=Path, default=Path(".var/bootstrap/autodoc-ideas-attachments"))
++    parser.add_argument("--external-repo-root", type=Path, default=None)
++    parser.add_argument("--write", action="store_true")
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    return parser.parse_args(argv)
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = parse_args(tuple(sys.argv[1:] if argv is None else argv))
++    report = build_attachment_bootstrap_bundle(args.repository, args.output_dir, args.external_repo_root, args.write)
++    if args.format == "json":
++        print(json.dumps(report, indent=2, sort_keys=True))
++    else:
++        print(f"status: {report['status']}")
++        for item in report["files"]:
++            state = "written" if item["external_written"] else "staged"
++            print(f"{state}: {item['target_path']}")
++    return 0 if report["status"] == "ok" else 1
++
++
++def build_attachment_bootstrap_bundle(repository: str, output_dir: Path, external_repo_root: Path | None, write: bool) -> dict[str, Any]:
++    issues = _validate(repository, external_repo_root, write)
++    files: list[dict[str, Any]] = []
++    if not issues:
++        for source_rel, target_rel in _TEMPLATE_MAP:
++            source_path = _TEMPLATE_ROOT / source_rel
++            if not source_path.exists():
++                issues.append({"code": "template_missing", "message": str(source_path)})
++                continue
++            payload = source_path.read_bytes()
++            staged_path = _safe_join(output_dir, target_rel)
++            staged_path.parent.mkdir(parents=True, exist_ok=True)
++            staged_path.write_bytes(payload)
++            external_path = None
++            external_written = False
++            if write and external_repo_root is not None:
++                external_path = _safe_join(external_repo_root, target_rel)
++                external_path.parent.mkdir(parents=True, exist_ok=True)
++                external_path.write_bytes(payload)
++                external_written = True
++            files.append({
++                "source_template": str(source_path.relative_to(_REPO_ROOT)),
++                "target_path": target_rel,
++                "staged_path": str(staged_path),
++                "external_path": str(external_path) if external_path is not None else None,
++                "external_written": external_written,
++                "byte_count": len(payload),
++                "sha256": hashlib.sha256(payload).hexdigest(),
++            })
++    report = {
++        "schema": _SCHEMA,
++        "status": "ok" if not issues else "blocked",
++        "repository": repository,
++        "output_dir": str(output_dir),
++        "external_repo_root": str(external_repo_root) if external_repo_root else None,
++        "write_requested": write,
++        "github_api_called": False,
++        "remote_mutation_performed": False,
++        "files": files,
++        "issues": issues,
++        "boundary": [
++            "external idea repository attachment bootstrap",
++            "reuse 0166 external action pattern",
++            "no GitHub API call",
++            "no remote mutation",
++            "GitHub Actions artifacts remain the source system",
++            "no user artifacts in Autodoc repository",
++        ],
++    }
++    output_dir.mkdir(parents=True, exist_ok=True)
++    (output_dir / "autodoc_idea_repo_attachment_bootstrap_manifest.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    return report
++
++
++def _validate(repository: str, external_repo_root: Path | None, write: bool) -> list[dict[str, str]]:
++    issues: list[dict[str, str]] = []
++    if not repository or "/" not in repository:
++        issues.append({"code": "repository_invalid", "message": "repository must be owner/name"})
++    if repository == _DEVELOPMENT_REPOSITORY:
++        issues.append({"code": "development_repository_rejected", "message": "target must be the external idea repository"})
++    if write and external_repo_root is None:
++        issues.append({"code": "external_repo_root_required", "message": "--write requires --external-repo-root"})
++    return issues
++
++
++def _safe_join(root: Path, relative: str) -> Path:
++    candidate = (root / relative).resolve()
++    root_resolved = root.resolve()
++    if root_resolved != candidate and root_resolved not in candidate.parents:
++        raise ValueError(f"path escapes output root: {relative}")
++    return candidate
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())
+diff --git a/tests/context/test_github_issue_attachment_manifest_0170.py b/tests/context/test_github_issue_attachment_manifest_0170.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/context/test_github_issue_attachment_manifest_0170.py
+@@ -0,0 +1,36 @@
++from __future__ import annotations
++
++from context.github_issue_attachment_manifest import build_github_issue_attachment_manifest, parse_github_issue_attachment_references
++
++
++def test_0170_parses_github_issue_attachment_references() -> None:
++    body = """
++Voici les pièces jointes:
++
++![photo.jpg](https://github.com/user-attachments/assets/photo.jpg)
++[plan.pdf](https://github.com/user-attachments/assets/plan.pdf)
++[archive.zip](https://github.com/user-attachments/assets/archive.zip)
++https://github.com/user-attachments/assets/audio.mp3
++"""
++    refs = parse_github_issue_attachment_references(body)
++
++    assert [ref.kind for ref in refs] == ["image", "pdf", "archive", "audio"]
++    assert refs[0].filename == "photo.jpg"
++    assert refs[1].filename == "plan.pdf"
++    assert all(ref.processed is False for ref in refs)
++
++
++def test_0170_builds_manifest_without_remote_access() -> None:
++    manifest = build_github_issue_attachment_manifest(
++        repository="newicody/autodoc-ideas",
++        issue_number=42,
++        issue_url="https://github.com/newicody/autodoc-ideas/issues/42",
++        body="![image](https://github.com/user-attachments/assets/123456)",
++    )
++    payload = manifest.to_json_dict()
++
++    assert payload["schema"] == "missipy.github_issue.attachment_manifest.v1"
++    assert payload["counts"]["attachment_count"] == 1
++    assert payload["attachments"][0]["kind"] == "image"
++    assert "no GitHub API call" in payload["boundary"]
++    assert "no user artifacts in Autodoc repository" in payload["boundary"]
+diff --git a/tests/tools/test_github_issue_attachment_manifest_0170.py b/tests/tools/test_github_issue_attachment_manifest_0170.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_github_issue_attachment_manifest_0170.py
+@@ -0,0 +1,54 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++import subprocess
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "build_github_issue_attachment_manifest.py"
++
++
++def test_0170_tool_builds_attachment_manifest_from_event(tmp_path: Path) -> None:
++    event_path = tmp_path / "event.json"
++    event_path.write_text(
++        json.dumps(
++            {
++                "action": "opened",
++                "repository": {"full_name": "newicody/autodoc-ideas"},
++                "issue": {
++                    "number": 42,
++                    "title": "Need analysis",
++                    "body": "![photo.jpg](https://github.com/user-attachments/assets/photo.jpg)\n[notes.txt](https://github.com/user-attachments/assets/notes.txt)",
++                    "html_url": "https://github.com/newicody/autodoc-ideas/issues/42",
++                },
++            }
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--event-path",
++            str(event_path),
++            "--output-dir",
++            str(tmp_path / "out"),
++            "--format",
++            "json",
++        ],
++        cwd=ROOT,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=True,
++    )
++    report = json.loads(completed.stdout)
++    manifest = json.loads((tmp_path / "out" / "attachment_manifest.json").read_text(encoding="utf-8"))
++
++    assert report["status"] == "ok"
++    assert report["attachment_count"] == 2
++    assert manifest["counts"]["attachment_count"] == 2
++    assert [item["kind"] for item in manifest["attachments"]] == ["image", "text"]
+diff --git a/tests/tools/test_github_idea_repo_attachment_bootstrap_bundle_0170.py b/tests/tools/test_github_idea_repo_attachment_bootstrap_bundle_0170.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_github_idea_repo_attachment_bootstrap_bundle_0170.py
+@@ -0,0 +1,62 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++import subprocess
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "build_github_idea_repo_attachment_bootstrap_bundle.py"
++
++
++def test_0170_attachment_bootstrap_stages_templates(tmp_path: Path) -> None:
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--repository",
++            "newicody/autodoc-ideas",
++            "--output-dir",
++            str(tmp_path / "stage"),
++            "--format",
++            "json",
++        ],
++        cwd=ROOT,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=True,
++    )
++    report = json.loads(completed.stdout)
++
++    assert report["status"] == "ok"
++    assert report["github_api_called"] is False
++    assert report["remote_mutation_performed"] is False
++    assert (tmp_path / "stage" / ".github" / "workflows" / "autodoc-attachment-manifest.yml").exists()
++    assert (tmp_path / "stage" / "scripts" / "build_autodoc_issue_attachment_manifest.py").exists()
++
++
++def test_0170_attachment_bootstrap_rejects_development_repository(tmp_path: Path) -> None:
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--repository",
++            "newicody/autodoc",
++            "--output-dir",
++            str(tmp_path / "stage"),
++            "--format",
++            "json",
++        ],
++        cwd=ROOT,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=False,
++    )
++    report = json.loads(completed.stdout)
++
++    assert completed.returncode == 1
++    assert report["status"] == "blocked"
++    assert report["issues"][0]["code"] == "development_repository_rejected"
+diff --git a/tests/rules/test_github_issue_attachment_manifest_0170_rule.py b/tests/rules/test_github_issue_attachment_manifest_0170_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_github_issue_attachment_manifest_0170_rule.py
+@@ -0,0 +1,43 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "context" / "github_issue_attachment_manifest.py"
++TOOL = ROOT / "tools" / "build_github_issue_attachment_manifest.py"
++BOOTSTRAP = ROOT / "tools" / "build_github_idea_repo_attachment_bootstrap_bundle.py"
++DOC = ROOT / "doc" / "architecture" / "GITHUB_ISSUE_ATTACHMENT_MANIFEST_0170.md"
++RULE = ROOT / "doc" / "code-rules" / "0170_github_issue_attachment_manifest_rule.md"
++
++
++def test_0170_attachment_manifest_is_reference_only() -> None:
++    text = MODULE.read_text(encoding="utf-8") + TOOL.read_text(encoding="utf-8") + BOOTSTRAP.read_text(encoding="utf-8")
++    for token in [
++        "no GitHub API call",
++        "no remote mutation",
++        "GitHub Actions artifacts remain the source system",
++        "no user artifacts in Autodoc repository",
++        "server dataset before conversion",
++        "github_issue_attachment_reference",
++    ]:
++        assert token in text
++    forbidden = ["requests.", "urllib.request", "subprocess.run(['git", 'subprocess.run(["git', "gh api", "workflow_dispatch"]
++    for token in forbidden:
++        assert token not in text
++
++
++def test_0170_docs_lock_attachment_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    rule = RULE.read_text(encoding="utf-8")
++    for token in [
++        "photo, audio, video, PDF, archive, and text",
++        "GitHub issue attachment references only",
++        "no GitHub API call",
++        "no remote mutation",
++        "GitHub Actions artifacts remain the source system",
++        "no user artifacts in Autodoc repository",
++        "server dataset before conversion",
++    ]:
++        assert token in doc
++        assert token in rule
+diff --git a/doc/architecture/GITHUB_ISSUE_ATTACHMENT_MANIFEST_0170.md b/doc/architecture/GITHUB_ISSUE_ATTACHMENT_MANIFEST_0170.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/GITHUB_ISSUE_ATTACHMENT_MANIFEST_0170.md
+@@ -0,0 +1,26 @@
++# 0170 — GitHub issue attachment manifest
++
++## Decision
++
++0170 adds a reference-only manifest for attachments pasted into the external
++GitHub idea repository issue body. It supports photo, audio, video, PDF,
++archive, and text references, plus binary fallback references.
++
++The manifest records GitHub issue attachment references only. It does not
++download the files, does not call the GitHub API, and does not perform remote
++mutation. GitHub Actions artifacts remain the source system.
++
++## Flow
++
++The external GitHub Action parses the issue body and writes
++`attachment_manifest.json` as a GitHub Actions artifact. The local server then
++fetches that artifact and, in the next fetch/download phase, stores real user
++files in the configured server dataset before conversion.
++
++## Boundary
++
++- no GitHub API call
++- no remote mutation
++- no user artifacts in Autodoc repository
++- server dataset before conversion
++- attachment manifest is metadata only
+diff --git a/doc/code-rules/0170_github_issue_attachment_manifest_rule.md b/doc/code-rules/0170_github_issue_attachment_manifest_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0170_github_issue_attachment_manifest_rule.md
+@@ -0,0 +1,17 @@
++# 0170 GitHub issue attachment manifest rule
++
++0170 introduces a reference-only attachment manifest for the external idea
++repository workflow.
++
++Required boundary:
++
++- parse photo, audio, video, PDF, archive, and text attachment references
++- GitHub issue attachment references only
++- no GitHub API call
++- no remote mutation
++- GitHub Actions artifacts remain the source system
++- no user artifacts in Autodoc repository
++- store fetched files in the server dataset before conversion
++
++The manifest may contain URLs and metadata. It must not contain downloaded user
++files or runtime dataset contents.
+diff --git a/doc/docs/architecture/runtime/170_github_issue_attachment_manifest.dot b/doc/docs/architecture/runtime/170_github_issue_attachment_manifest.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/170_github_issue_attachment_manifest.dot
+@@ -0,0 +1,12 @@
++digraph github_issue_attachment_manifest_0170 {
++  rankdir=LR;
++  issue [label="GitHub issue body\nattachment references"];
++  action [label="GitHub Action\nparse references only"];
++  manifest [label="attachment_manifest.json\nGitHub Actions artifact"];
++  fetch [label="server fetch"];
++  dataset [label="server dataset\nbefore conversion"];
++  issue -> action;
++  action -> manifest;
++  manifest -> fetch;
++  fetch -> dataset;
++}
+diff --git a/doc/CHANGELOG_0170_GITHUB_ISSUE_ATTACHMENT_MANIFEST.md b/doc/CHANGELOG_0170_GITHUB_ISSUE_ATTACHMENT_MANIFEST.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0170_GITHUB_ISSUE_ATTACHMENT_MANIFEST.md
+@@ -0,0 +1,7 @@
++# Changelog 0170 — GitHub issue attachment manifest
++
++- Added data-only attachment-reference manifest contract.
++- Added local tool to build `attachment_manifest.json` from a GitHub issue event payload.
++- Added standalone external repository script and workflow template.
++- Added local bootstrap helper for the external idea repository attachment workflow.
++- Locked boundary: no GitHub API call, no remote mutation, no user artifacts in Autodoc repository.
+diff --git a/doc/manifests/MANIFEST_0170_CHANGED_FILES.md b/doc/manifests/MANIFEST_0170_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0170_CHANGED_FILES.md
+@@ -0,0 +1,16 @@
++# Manifest 0170 changed files
++
++- `src/context/github_issue_attachment_manifest.py`
++- `tools/build_github_issue_attachment_manifest.py`
++- `tools/build_github_idea_repo_attachment_bootstrap_bundle.py`
++- `templates/github/scripts/build_autodoc_issue_attachment_manifest.py`
++- `templates/github/autodoc-attachment-manifest.yml`
++- `tests/context/test_github_issue_attachment_manifest_0170.py`
++- `tests/tools/test_github_issue_attachment_manifest_0170.py`
++- `tests/tools/test_github_idea_repo_attachment_bootstrap_bundle_0170.py`
++- `tests/rules/test_github_issue_attachment_manifest_0170_rule.py`
++- `doc/architecture/GITHUB_ISSUE_ATTACHMENT_MANIFEST_0170.md`
++- `doc/code-rules/0170_github_issue_attachment_manifest_rule.md`
++- `doc/docs/architecture/runtime/170_github_issue_attachment_manifest.dot`
++- `doc/CHANGELOG_0170_GITHUB_ISSUE_ATTACHMENT_MANIFEST.md`
++- `PHASE0170_TEST_REPORT.md`
+diff --git a/PHASE0170_TEST_REPORT.md b/PHASE0170_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0170_TEST_REPORT.md
+@@ -0,0 +1,16 @@
++# Phase 0170 test report
++
++Planned validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/context/test_github_issue_attachment_manifest_0170.py \
++  tests/tools/test_github_issue_attachment_manifest_0170.py \
++  tests/tools/test_github_idea_repo_attachment_bootstrap_bundle_0170.py \
++  tests/rules/test_github_issue_attachment_manifest_0170_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
++
++Boundary: reference-only attachment manifest, no GitHub API call, no remote mutation, no user artifacts in Autodoc repository.

@@ -1,0 +1,743 @@
+diff --git a/PHASE0194_TEST_REPORT.md b/PHASE0194_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0194_TEST_REPORT.md
+@@ -0,0 +1,31 @@
++# Phase 0194 Test Report — Isolated route pipeline promotion plan
++
++Status: prepared.
++
++Scope:
++- Reads `isolated_route_pipeline_baseline_registry.jsonl`.
++- Produces `isolated_route_pipeline_promotion_plan.json`.
++- Plans `controlled-dev-routeproxy-smoke`.
++- No promotion execution.
++- No runtime import.
++- No handler call.
++- No RouteProxyRuntime preparation.
++- No read_route_frame call.
++- No writer permit request.
++- No frame write.
++- No Scheduler modification.
++- No Scheduler/EventBus instantiation.
++- No ControlProxy frame write.
++- No GitHub API/network.
++- No conversion/inference/SQL/Qdrant/VisPy writes.
++
++Validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/tools/test_plan_isolated_route_pipeline_promotion_0194.py \
++  tests/rules/test_isolated_route_pipeline_promotion_plan_0194_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
+diff --git a/tools/plan_isolated_route_pipeline_promotion.py b/tools/plan_isolated_route_pipeline_promotion.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/plan_isolated_route_pipeline_promotion.py
+@@ -0,0 +1,276 @@
++#!/usr/bin/env python3
++"""Plan promotion from accepted isolated baseline to controlled dev smoke.
++
++0194 is a promotion planning tool only.
++
++It reads isolated_route_pipeline_baseline_registry.jsonl from 0193 and writes a
++controlled isolated_route_pipeline_promotion_plan.json. The plan describes the
++next safe move from the accepted isolated prototype baseline toward a controlled
++dev runtime smoke.
++
++It does not execute the promotion.
++It does not import runtime handler modules.
++It does not call handle_scheduler_route_command.
++It does not call handle_scheduler_route_request.
++It does not call prepare_route_proxy_runtime.
++It does not call read_route_frame.
++It does not request writer permits.
++It does not call write_route_frame.
++It does not modify Scheduler.run.
++It does not instantiate Scheduler.
++It does not instantiate EventBus.
++It does not write ControlProxy or RouteProxy frames.
++It does not call GitHub API or use network.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++from typing import Any, Iterable, Mapping
++
++
++ISOLATED_ROUTE_PIPELINE_PROMOTION_PLAN_SCHEMA = "missipy.route_pipeline.isolated_promotion_plan.v1"
++EXPECTED_REGISTRY_ENTRY_SCHEMA = "missipy.route_pipeline.isolated_baseline_registry_entry.v1"
++EXPECTED_BASELINE = "isolated-route-pipeline-write-read-v1"
++DEFAULT_OUTPUT_NAME = "isolated_route_pipeline_promotion_plan.json"
++
++
++class IsolatedRoutePipelinePromotionPlanError(ValueError):
++    """Raised when a promotion plan cannot be built safely."""
++
++
++def build_isolated_route_pipeline_promotion_plan(
++    *,
++    registry_path: Path | str,
++    baseline_ref: str | None = None,
++    target_runtime_root: Path | str,
++    target_isolated_runtime_root: Path | str,
++    output_path: Path | str | None = None,
++) -> dict[str, Any]:
++    """Build a promotion plan from the accepted baseline registry."""
++
++    registry = Path(registry_path)
++    entries = list(_read_registry_entries(registry))
++    selected = _select_entry(entries, baseline_ref=baseline_ref)
++    issues: list[str] = []
++    warnings: list[str] = []
++
++    target_root = Path(target_runtime_root)
++    target_route_root = Path(target_isolated_runtime_root)
++    if not target_root.is_absolute():
++        issues.append("target_runtime_root must be absolute")
++    if not target_route_root.is_absolute():
++        issues.append("target_isolated_runtime_root must be absolute")
++    if _is_forbidden_runtime_root(target_route_root):
++        issues.append("target_isolated_runtime_root is forbidden")
++    if target_root == target_route_root:
++        issues.append("target_runtime_root and target_isolated_runtime_root must be distinct")
++    if target_route_root != target_root and not _is_within_or_equal(target_route_root, target_root):
++        warnings.append("target_isolated_runtime_root is outside target_runtime_root")
++
++    _validate_selected_entry(selected, issues)
++
++    plan = {
++        "schema": ISOLATED_ROUTE_PIPELINE_PROMOTION_PLAN_SCHEMA,
++        "registry_path": str(registry),
++        "selected_baseline_ref": selected.get("baseline_ref"),
++        "selected_entry_digest": selected.get("entry_digest"),
++        "accepted_baseline": selected.get("accepted_baseline"),
++        "source_policy_decision_id": selected.get("policy_decision_id"),
++        "source_runtime_root": selected.get("runtime_root"),
++        "source_isolated_runtime_root": selected.get("isolated_runtime_root"),
++        "target_runtime_root": str(target_root),
++        "target_isolated_runtime_root": str(target_route_root),
++        "promotion_target": "controlled-dev-routeproxy-smoke",
++        "promotion_allowed_by_0194": False,
++        "promotion_ready": not issues,
++        "issues": issues,
++        "warnings": warnings,
++        "required_preconditions": [
++            "Use an explicit new policy_decision_id for the controlled dev smoke.",
++            "Use a fresh scheduler.route_requests.policy_scoped.jsonl for the target run.",
++            "Keep scheduler.route_requests.jsonl append-only.",
++            "Run the 0189 pipeline only against target_runtime_root and target_isolated_runtime_root.",
++            "Run 0191 artifact audit after the controlled dev smoke.",
++            "Run 0192 acceptance gate after audit.",
++            "Do not promote to production route roots from 0194.",
++        ],
++        "planned_steps": [
++            {
++                "step": "dev-smoke-run",
++                "tool": "tools/run_isolated_route_pipeline_smoke.py",
++                "runtime_writes_allowed": True,
++                "routeproxy_frames_allowed": "target_isolated_runtime_root only",
++                "scheduler_run_modified": False,
++                "controlproxy_frames_written": False,
++            },
++            {
++                "step": "artifact-audit",
++                "tool": "tools/audit_isolated_route_pipeline_artifacts.py",
++                "runtime_writes_allowed": False,
++                "routeproxy_frames_allowed": False,
++                "scheduler_run_modified": False,
++                "controlproxy_frames_written": False,
++            },
++            {
++                "step": "acceptance-gate",
++                "tool": "tools/assert_isolated_route_pipeline_acceptance.py",
++                "runtime_writes_allowed": False,
++                "routeproxy_frames_allowed": False,
++                "scheduler_run_modified": False,
++                "controlproxy_frames_written": False,
++            },
++            {
++                "step": "baseline-registry",
++                "tool": "tools/register_isolated_route_pipeline_baseline.py",
++                "runtime_writes_allowed": False,
++                "routeproxy_frames_allowed": False,
++                "scheduler_run_modified": False,
++                "controlproxy_frames_written": False,
++            },
++        ],
++        "runtime_imports_executed": False,
++        "handler_called": False,
++        "routeproxy_prepared": False,
++        "read_route_frame_called": False,
++        "writer_permits_requested": False,
++        "frames_written": False,
++        "controlproxy_frames_written": False,
++        "scheduler_modified": False,
++        "eventbus_instantiated": False,
++        "network_used": False,
++    }
++
++    if output_path is not None:
++        _write_plan(Path(output_path), plan)
++
++    return plan
++
++
++def _validate_selected_entry(entry: Mapping[str, Any], issues: list[str]) -> None:
++    if entry.get("schema") != EXPECTED_REGISTRY_ENTRY_SCHEMA:
++        issues.append("registry entry schema mismatch")
++    if entry.get("accepted_baseline") != EXPECTED_BASELINE:
++        issues.append("accepted baseline mismatch")
++    top_counts = entry.get("top_level_counts")
++    artifact_counts = entry.get("artifact_counts")
++    safety_flags = entry.get("safety_flags")
++    if not isinstance(top_counts, Mapping):
++        issues.append("top_level_counts must be an object")
++        top_counts = {}
++    if not isinstance(artifact_counts, Mapping):
++        issues.append("artifact_counts must be an object")
++        artifact_counts = {}
++    if not isinstance(safety_flags, Mapping):
++        issues.append("safety_flags must be an object")
++        safety_flags = {}
++    scoped = top_counts.get("policy_scoped_queued_count")
++    if not isinstance(scoped, int) or scoped <= 0:
++        issues.append("policy_scoped_queued_count must be positive")
++    for name in (
++        "command_plan_ready_count",
++        "command_built_count",
++        "handler_executed_count",
++        "frames_written_count",
++        "readback_count",
++    ):
++        if top_counts.get(name) != scoped:
++            issues.append(f"{name} must equal policy_scoped_queued_count")
++    for name in (
++        "policy_scoped_queue_items",
++        "command_plan_items",
++        "command_smoke_items",
++        "isolated_plan_items",
++        "handler_smoke_items",
++        "readback_items",
++    ):
++        if artifact_counts.get(name) != scoped:
++            issues.append(f"{name} must equal policy_scoped_queued_count")
++    for flag, value in safety_flags.items():
++        if value is not False:
++            issues.append(f"safety flag must be false: {flag}")
++
++
++def _select_entry(entries: list[dict[str, Any]], *, baseline_ref: str | None) -> dict[str, Any]:
++    if not entries:
++        raise IsolatedRoutePipelinePromotionPlanError("baseline registry is empty")
++    if baseline_ref is not None:
++        for entry in entries:
++            if entry.get("baseline_ref") == baseline_ref:
++                return entry
++        raise IsolatedRoutePipelinePromotionPlanError("requested baseline_ref not found")
++    return entries[-1]
++
++
++def _read_registry_entries(path: Path) -> Iterable[dict[str, Any]]:
++    with path.open("r", encoding="utf-8") as handle:
++        for line_number, line in enumerate(handle, start=1):
++            raw = line.strip()
++            if not raw:
++                continue
++            value = json.loads(raw)
++            if not isinstance(value, dict):
++                raise IsolatedRoutePipelinePromotionPlanError(f"registry line must be an object at {path}:{line_number}")
++            yield value
++
++
++def _is_forbidden_runtime_root(path: Path) -> bool:
++    resolved = path.resolve()
++    return resolved in {
++        Path("/"),
++        Path("/dev"),
++        Path("/dev/shm"),
++        Path("/proc"),
++        Path("/sys"),
++        Path("/run"),
++    }
++
++
++def _is_within_or_equal(path: Path, root: Path) -> bool:
++    try:
++        path.resolve().relative_to(root.resolve())
++    except ValueError:
++        return False
++    return True
++
++
++def _write_plan(path: Path, plan: dict[str, Any]) -> None:
++    if path.name != DEFAULT_OUTPUT_NAME:
++        raise IsolatedRoutePipelinePromotionPlanError("output filename must be isolated_route_pipeline_promotion_plan.json")
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Plan promotion from accepted isolated baseline to controlled dev smoke.")
++    parser.add_argument("--registry", required=True, help="Path to isolated_route_pipeline_baseline_registry.jsonl.")
++    parser.add_argument("--baseline-ref", help="Optional explicit baseline_ref to promote from.")
++    parser.add_argument("--target-runtime-root", required=True, help="Absolute target runtime root for the planned dev smoke.")
++    parser.add_argument("--target-isolated-runtime-root", required=True, help="Absolute target RouteProxy root for the planned dev smoke.")
++    parser.add_argument("--output", help="Optional isolated_route_pipeline_promotion_plan.json output path.")
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    args = parser.parse_args(argv)
++
++    plan = build_isolated_route_pipeline_promotion_plan(
++        registry_path=Path(args.registry),
++        baseline_ref=args.baseline_ref,
++        target_runtime_root=Path(args.target_runtime_root),
++        target_isolated_runtime_root=Path(args.target_isolated_runtime_root),
++        output_path=Path(args.output) if args.output else None,
++    )
++
++    if args.format == "json":
++        print(json.dumps(plan, indent=2, sort_keys=True))
++    else:
++        print(f"promotion_ready: {plan['promotion_ready']}")
++        print(f"promotion_allowed_by_0194: {plan['promotion_allowed_by_0194']}")
++        print(f"selected_baseline_ref: {plan['selected_baseline_ref']}")
++        print(f"issues: {len(plan['issues'])}")
++        print(f"warnings: {len(plan['warnings'])}")
++    return 0 if plan["promotion_ready"] else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_plan_isolated_route_pipeline_promotion_0194.py b/tests/tools/test_plan_isolated_route_pipeline_promotion_0194.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_plan_isolated_route_pipeline_promotion_0194.py
+@@ -0,0 +1,134 @@
++from pathlib import Path
++import importlib.util
++import json
++import subprocess
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "plan_isolated_route_pipeline_promotion.py"
++
++
++def _load_tool_module():
++    spec = importlib.util.spec_from_file_location("plan_isolated_route_pipeline_promotion_tool", TOOL)
++    assert spec is not None
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    assert spec.loader is not None
++    spec.loader.exec_module(module)
++    return module
++
++
++def _registry_entry() -> dict:
++    return {
++        "schema": "missipy.route_pipeline.isolated_baseline_registry_entry.v1",
++        "accepted_baseline": "isolated-route-pipeline-write-read-v1",
++        "baseline_ref": "baseline:isolated-route-pipeline-write-read-v1:0123456789abcdef",
++        "entry_digest": "0123456789abcdef" * 4,
++        "policy_decision_id": "policy:allow:github-artifact:0194",
++        "runtime_root": "/tmp/runtime",
++        "isolated_runtime_root": "/tmp/runtime/routeproxy-isolated",
++        "top_level_counts": {
++            "queued_count": 4,
++            "policy_scoped_queued_count": 1,
++            "command_plan_ready_count": 1,
++            "command_built_count": 1,
++            "handler_executed_count": 1,
++            "frames_written_count": 1,
++            "readback_count": 1,
++        },
++        "artifact_counts": {
++            "queue_items": 4,
++            "policy_scoped_queue_items": 1,
++            "command_plan_items": 1,
++            "command_smoke_items": 1,
++            "isolated_plan_items": 1,
++            "handler_smoke_items": 1,
++            "readback_items": 1,
++        },
++        "safety_flags": {
++            "runtime_imports_executed": False,
++            "handler_called": False,
++            "routeproxy_prepared": False,
++            "read_route_frame_called": False,
++            "writer_permits_requested": False,
++            "frames_written": False,
++            "controlproxy_frames_written": False,
++            "scheduler_modified": False,
++            "eventbus_instantiated": False,
++            "network_used": False,
++        },
++    }
++
++
++def _write_registry(path: Path) -> Path:
++    registry = path / "isolated_route_pipeline_baseline_registry.jsonl"
++    registry.write_text(json.dumps(_registry_entry(), sort_keys=True) + "\n", encoding="utf-8")
++    return registry
++
++
++def test_0194_builds_promotion_plan_without_runtime_execution(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    registry = _write_registry(tmp_path)
++
++    plan = module.build_isolated_route_pipeline_promotion_plan(
++        registry_path=registry,
++        target_runtime_root=tmp_path / "dev-runtime",
++        target_isolated_runtime_root=tmp_path / "dev-runtime" / "routeproxy-isolated",
++        output_path=tmp_path / "isolated_route_pipeline_promotion_plan.json",
++    )
++
++    assert plan["promotion_ready"] is True
++    assert plan["promotion_allowed_by_0194"] is False
++    assert plan["selected_baseline_ref"].startswith("baseline:isolated-route-pipeline-write-read-v1")
++    assert plan["issues"] == []
++    assert plan["handler_called"] is False
++    assert plan["frames_written"] is False
++    assert plan["network_used"] is False
++    assert len(plan["planned_steps"]) == 4
++    assert (tmp_path / "isolated_route_pipeline_promotion_plan.json").exists()
++
++
++def test_0194_rejects_relative_target_roots(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    registry = _write_registry(tmp_path)
++
++    plan = module.build_isolated_route_pipeline_promotion_plan(
++        registry_path=registry,
++        target_runtime_root=Path("relative-runtime"),
++        target_isolated_runtime_root=Path("relative-runtime/routeproxy-isolated"),
++    )
++
++    assert plan["promotion_ready"] is False
++    assert "target_runtime_root must be absolute" in plan["issues"]
++    assert "target_isolated_runtime_root must be absolute" in plan["issues"]
++
++
++def test_0194_cli_outputs_json(tmp_path: Path) -> None:
++    registry = _write_registry(tmp_path)
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--registry",
++            str(registry),
++            "--target-runtime-root",
++            str(tmp_path / "dev-runtime"),
++            "--target-isolated-runtime-root",
++            str(tmp_path / "dev-runtime" / "routeproxy-isolated"),
++            "--output",
++            str(tmp_path / "isolated_route_pipeline_promotion_plan.json"),
++            "--format",
++            "json",
++        ],
++        cwd=ROOT,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=True,
++    )
++    plan = json.loads(completed.stdout)
++    assert plan["schema"] == "missipy.route_pipeline.isolated_promotion_plan.v1"
++    assert plan["promotion_ready"] is True
++    assert plan["promotion_allowed_by_0194"] is False
++    assert plan["handler_called"] is False
+diff --git a/tests/rules/test_isolated_route_pipeline_promotion_plan_0194_rule.py b/tests/rules/test_isolated_route_pipeline_promotion_plan_0194_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_isolated_route_pipeline_promotion_plan_0194_rule.py
+@@ -0,0 +1,90 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "plan_isolated_route_pipeline_promotion.py"
++DOC = ROOT / "doc" / "architecture" / "ISOLATED_ROUTE_PIPELINE_PROMOTION_PLAN_0194.md"
++RULE = ROOT / "doc" / "code-rules" / "0194_isolated_route_pipeline_promotion_plan_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0194_CHANGED_FILES.md"
++
++
++def test_0194_tool_is_promotion_plan_only() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    for token in [
++        "0194 is a promotion planning tool only",
++        "isolated_route_pipeline_baseline_registry.jsonl",
++        "isolated_route_pipeline_promotion_plan.json",
++        "controlled-dev-routeproxy-smoke",
++        "promotion_allowed_by_0194",
++        "It does not execute the promotion",
++        "It does not import runtime handler modules",
++        "It does not call handle_scheduler_route_command",
++        "It does not call prepare_route_proxy_runtime",
++        "It does not call read_route_frame",
++        "It does not request writer permits",
++        "It does not call write_route_frame",
++        "It does not modify Scheduler.run",
++        "It does not instantiate Scheduler",
++        "It does not instantiate EventBus",
++        "It does not write ControlProxy or RouteProxy frames",
++        "It does not call GitHub API or use network",
++    ]:
++        assert token in source
++    assert "from runtime." not in source
++    assert "handle_scheduler_route_command(" not in source
++    assert "prepare_route_proxy_runtime(" not in source
++    assert "read_route_frame(" not in source
++    assert "write_route_frame(" not in source
++
++
++def test_0194_doc_locks_promotion_plan_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    for token in [
++        "0194 plans the next promotion step from the accepted isolated baseline",
++        "The input is isolated_route_pipeline_baseline_registry.jsonl",
++        "The output is isolated_route_pipeline_promotion_plan.json",
++        "It plans controlled-dev-routeproxy-smoke",
++        "It does not execute the promotion",
++        "It does not call runtime APIs",
++        "0194 is not a production promotion",
++    ]:
++        assert token in doc
++
++
++def test_0194_rule_blocks_runtime_execution() -> None:
++    rule = RULE.read_text(encoding="utf-8")
++    for token in [
++        "Read isolated_route_pipeline_baseline_registry.jsonl from 0193",
++        "Plan only controlled-dev-routeproxy-smoke",
++        "Do not execute the promotion",
++        "Do not import runtime handler modules",
++        "Do not call handle_scheduler_route_command",
++        "Do not call prepare_route_proxy_runtime",
++        "Do not call read_route_frame",
++        "Do not write ControlProxy or RouteProxy frames",
++        "Do not write SQL",
++        "Do not write Qdrant",
++    ]:
++        assert token in rule
++
++
++def test_0194_tool_has_no_network_imports() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    assert "--registry" in source
++    assert "--target-runtime-root" in source
++    assert "--target-isolated-runtime-root" in source
++    assert "import requests" not in source
++    assert "from requests" not in source
++    assert "urllib" not in source
++
++
++def test_0194_manifest_lists_promotion_plan_files() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    for token in [
++        "tools/plan_isolated_route_pipeline_promotion.py",
++        "tests/tools/test_plan_isolated_route_pipeline_promotion_0194.py",
++        "tests/rules/test_isolated_route_pipeline_promotion_plan_0194_rule.py",
++        "doc/architecture/ISOLATED_ROUTE_PIPELINE_PROMOTION_PLAN_0194.md",
++        "doc/code-rules/0194_isolated_route_pipeline_promotion_plan_rule.md",
++    ]:
++        assert token in manifest
+diff --git a/doc/architecture/ISOLATED_ROUTE_PIPELINE_PROMOTION_PLAN_0194.md b/doc/architecture/ISOLATED_ROUTE_PIPELINE_PROMOTION_PLAN_0194.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/ISOLATED_ROUTE_PIPELINE_PROMOTION_PLAN_0194.md
+@@ -0,0 +1,80 @@
++# 0194 — Isolated route pipeline promotion plan
++
++## Decision
++
++0194 plans the next promotion step from the accepted isolated baseline.
++
++The input is isolated_route_pipeline_baseline_registry.jsonl.
++The output is isolated_route_pipeline_promotion_plan.json.
++
++It plans controlled-dev-routeproxy-smoke.
++It does not execute the promotion.
++It does not call runtime APIs.
++
++0194 is not a production promotion.
++
++## Why this exists
++
++0193 registered the accepted isolated baseline. The next safe step is not to jump
++to production, but to plan a controlled dev smoke rooted in explicit target
++directories.
++
++0194 creates that plan and records the preconditions before any future patch is
++allowed to execute a dev smoke.
++
++## Boundary
++
++0194:
++
++- reads `isolated_route_pipeline_baseline_registry.jsonl`,
++- selects the latest or requested `baseline_ref`,
++- verifies the accepted baseline and counts,
++- verifies safety flags,
++- records `target_runtime_root`,
++- records `target_isolated_runtime_root`,
++- writes `isolated_route_pipeline_promotion_plan.json`.
++
++0194 does not:
++
++- execute the promotion,
++- import runtime handler modules,
++- call handle_scheduler_route_command,
++- call handle_scheduler_route_request,
++- call prepare_route_proxy_runtime,
++- call read_route_frame,
++- request writer permits,
++- call write_route_frame,
++- modify Scheduler.run,
++- instantiate Scheduler,
++- instantiate EventBus,
++- create a parallel bus,
++- write ControlProxy or RouteProxy frames,
++- call GitHub API,
++- use network,
++- execute conversion,
++- execute inference,
++- write SQL,
++- write Qdrant,
++- write directly to VisPy.
++
++## Promotion target
++
++The only target planned by 0194 is:
++
++```text
++controlled-dev-routeproxy-smoke
++```
++
++A future patch may execute that target only if it uses:
++
++- a new explicit `policy_decision_id`,
++- a fresh policy-scoped queue,
++- an explicit `target_runtime_root`,
++- an explicit `target_isolated_runtime_root`,
++- post-run 0191 audit,
++- post-audit 0192 acceptance gate.
++
++## Authority
++
++Scheduler/policy/zone remain the authority.
++0194 records promotion intent only. It does not approve production route writes.
+diff --git a/doc/code-rules/0194_isolated_route_pipeline_promotion_plan_rule.md b/doc/code-rules/0194_isolated_route_pipeline_promotion_plan_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0194_isolated_route_pipeline_promotion_plan_rule.md
+@@ -0,0 +1,32 @@
++# 0194 isolated route pipeline promotion plan rule
++
++0194 plans a controlled dev promotion from the accepted isolated baseline.
++
++Rules:
++
++- Read isolated_route_pipeline_baseline_registry.jsonl from 0193.
++- Plan only controlled-dev-routeproxy-smoke.
++- Require explicit target_runtime_root.
++- Require explicit target_isolated_runtime_root.
++- Do not execute the promotion.
++- Do not approve production route writes.
++- Do not import runtime handler modules.
++- Do not call handle_scheduler_route_command.
++- Do not call handle_scheduler_route_request.
++- Do not call prepare_route_proxy_runtime.
++- Do not call read_route_frame.
++- Do not request writer permits.
++- Do not call write_route_frame.
++- Do not write ControlProxy or RouteProxy frames.
++- Do not add a new runtime handler.
++- Do not modify Scheduler.run.
++- Do not instantiate Scheduler.
++- Do not instantiate EventBus.
++- Do not create a parallel bus.
++- Do not call GitHub API.
++- Do not use network.
++- Do not execute conversion.
++- Do not execute inference.
++- Do not write SQL.
++- Do not write Qdrant.
++- Do not write directly to VisPy.
+diff --git a/doc/docs/architecture/runtime/194_isolated_route_pipeline_promotion_plan.dot b/doc/docs/architecture/runtime/194_isolated_route_pipeline_promotion_plan.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/194_isolated_route_pipeline_promotion_plan.dot
+@@ -0,0 +1,16 @@
++digraph isolated_route_pipeline_promotion_plan_0194 {
++  rankdir=LR;
++  label="0194 Isolated route pipeline promotion plan";
++  labelloc=t;
++
++  registry [label="isolated_route_pipeline_baseline_registry.jsonl"];
++  baseline [label="accepted baseline"];
++  plan [label="isolated_route_pipeline_promotion_plan.json"];
++  target [label="controlled-dev-routeproxy-smoke"];
++
++  registry -> baseline [label="baseline_ref"];
++  baseline -> plan [label="counts + safety flags"];
++  plan -> target [label="planned only"];
++
++  target -> plan [label="not executed by 0194", style=dashed];
++}
+diff --git a/doc/CHANGELOG_0194_ISOLATED_ROUTE_PIPELINE_PROMOTION_PLAN.md b/doc/CHANGELOG_0194_ISOLATED_ROUTE_PIPELINE_PROMOTION_PLAN.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0194_ISOLATED_ROUTE_PIPELINE_PROMOTION_PLAN.md
+@@ -0,0 +1,19 @@
++# Changelog — 0194 Isolated route pipeline promotion plan
++
++## Added
++
++- Promotion planning tool from accepted isolated baseline registry.
++- Controlled target label: `controlled-dev-routeproxy-smoke`.
++- Explicit `target_runtime_root` and `target_isolated_runtime_root` planning.
++- Preconditions for future controlled dev smoke.
++- Tests/rules locking that no runtime import, handler call, RouteProxy runtime
++  call, frame write, Scheduler modification, EventBus instantiation, GitHub API,
++  network, SQL, Qdrant, or VisPy write is introduced.
++
++## Not changed
++
++- No runtime execution.
++- No promotion execution.
++- No new runtime handler.
++- No Scheduler.run modification.
++- No production route write.
+diff --git a/doc/manifests/MANIFEST_0194_CHANGED_FILES.md b/doc/manifests/MANIFEST_0194_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0194_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest — 0194 Isolated route pipeline promotion plan
++
++- PHASE0194_TEST_REPORT.md
++- tools/plan_isolated_route_pipeline_promotion.py
++- tests/tools/test_plan_isolated_route_pipeline_promotion_0194.py
++- tests/rules/test_isolated_route_pipeline_promotion_plan_0194_rule.py
++- doc/architecture/ISOLATED_ROUTE_PIPELINE_PROMOTION_PLAN_0194.md
++- doc/code-rules/0194_isolated_route_pipeline_promotion_plan_rule.md
++- doc/docs/architecture/runtime/194_isolated_route_pipeline_promotion_plan.dot
++- doc/CHANGELOG_0194_ISOLATED_ROUTE_PIPELINE_PROMOTION_PLAN.md
++- doc/manifests/MANIFEST_0194_CHANGED_FILES.md

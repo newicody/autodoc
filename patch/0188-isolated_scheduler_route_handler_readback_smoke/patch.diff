@@ -1,0 +1,733 @@
+diff --git a/PHASE0188_TEST_REPORT.md b/PHASE0188_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0188_TEST_REPORT.md
+@@ -0,0 +1,29 @@
++# Phase 0188 Test Report — Isolated Scheduler route handler readback smoke
++
++Status: prepared.
++
++Scope:
++- Reads `isolated_scheduler_route_handler_smoke.jsonl`.
++- Calls `read_route_frame` for written refs under the isolated runtime root.
++- Verifies readback route refs.
++- Verifies readback creates no new frame files.
++- Writes optional `isolated_scheduler_route_handler_readback_smoke.jsonl`.
++- No handler call.
++- No writer permit request.
++- No frame write.
++- No Scheduler modification.
++- No Scheduler/EventBus instantiation.
++- No ControlProxy frame write.
++- No GitHub API/network.
++- No conversion/inference/SQL/Qdrant/VisPy writes.
++
++Validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/tools/test_readback_isolated_scheduler_route_handler_smoke_0188.py \
++  tests/rules/test_isolated_scheduler_route_handler_readback_smoke_0188_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
+diff --git a/tools/readback_isolated_scheduler_route_handler_smoke.py b/tools/readback_isolated_scheduler_route_handler_smoke.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/readback_isolated_scheduler_route_handler_smoke.py
+@@ -0,0 +1,281 @@
++#!/usr/bin/env python3
++"""Read back isolated Scheduler route handler smoke frames.
++
++0188 is a controlled isolated readback smoke.
++
++It reads isolated_scheduler_route_handler_smoke.jsonl from 0187, prepares
++RouteProxyRuntime only inside the recorded isolated runtime root, reads back each
++written route frame through read_route_frame, verifies the route_ref and path
++boundaries, and writes isolated_scheduler_route_handler_readback_smoke.jsonl.
++
++It must not call handle_scheduler_route_command.
++It must not call handle_scheduler_route_request.
++It must not request writer permits.
++It must not call write_route_frame.
++It must not modify Scheduler.run.
++It must not instantiate Scheduler.
++It must not instantiate EventBus.
++It must not write ControlProxy frames.
++It must not call GitHub API or use network.
++"""
++
++from __future__ import annotations
++
++import argparse
++import inspect
++import json
++from pathlib import Path
++import sys
++from typing import Any, Iterable, Mapping
++
++ROOT = Path(__file__).resolve().parents[1]
++SRC = ROOT / "src"
++if str(SRC) not in sys.path:
++    sys.path.insert(0, str(SRC))
++
++from runtime.route_proxy_runtime_minimal import (  # noqa: E402
++    RouteProxyRuntimePolicy,
++    prepare_route_proxy_runtime,
++    read_route_frame,
++)
++
++
++ISOLATED_SCHEDULER_ROUTE_HANDLER_READBACK_SMOKE_SCHEMA = "missipy.scheduler.route_handler.isolated_readback_smoke.v1"
++DEFAULT_INPUT_NAME = "isolated_scheduler_route_handler_smoke.jsonl"
++DEFAULT_OUTPUT_NAME = "isolated_scheduler_route_handler_readback_smoke.jsonl"
++
++
++class IsolatedSchedulerRouteHandlerReadbackSmokeError(ValueError):
++    """Raised when isolated readback smoke cannot run safely."""
++
++
++def run_isolated_scheduler_route_handler_readback_smoke(
++    *,
++    smoke_path: Path | str,
++    output_path: Path | str | None = None,
++) -> dict[str, Any]:
++    """Read frames written by 0187 from the explicit isolated runtime root."""
++
++    smoke = Path(smoke_path)
++    items = [_readback_item(index, item) for index, item in enumerate(_read_smoke_items(smoke), start=1)]
++
++    if output_path is not None:
++        _write_readback_jsonl(Path(output_path), items)
++
++    readback_count = sum(len(item["readback_frames"]) for item in items)
++    blocked_count = sum(1 for item in items if item["issues"])
++    return {
++        "schema": ISOLATED_SCHEDULER_ROUTE_HANDLER_READBACK_SMOKE_SCHEMA,
++        "smoke_path": str(smoke),
++        "output_path": str(output_path) if output_path is not None else None,
++        "item_count": len(items),
++        "readback_count": readback_count,
++        "blocked_count": blocked_count,
++        "items": items,
++        "routeproxy_prepared": readback_count > 0,
++        "read_route_frame_called": readback_count > 0,
++        "handler_called": False,
++        "writer_permits_requested": False,
++        "frames_written": False,
++        "controlproxy_frames_written": False,
++        "scheduler_modified": False,
++        "eventbus_instantiated": False,
++        "network_used": False,
++    }
++
++
++def _readback_item(index: int, item: Mapping[str, Any]) -> dict[str, Any]:
++    issues: list[str] = []
++    if not item.get("handler_called"):
++        issues.append("0187 smoke item did not call handler")
++    isolated_root = Path(str(item.get("isolated_runtime_root") or ""))
++    if not _safe_isolated_root(isolated_root):
++        issues.append("isolated_runtime_root is unsafe")
++    written_route_refs = item.get("written_route_refs")
++    if not isinstance(written_route_refs, list) or not all(isinstance(value, str) for value in written_route_refs):
++        issues.append("written_route_refs must be a list of strings")
++        written_route_refs = []
++    frame_paths = item.get("frame_paths")
++    if not isinstance(frame_paths, list) or not all(isinstance(value, str) for value in frame_paths):
++        issues.append("frame_paths must be a list of strings")
++        frame_paths = []
++
++    for frame_path in frame_paths:
++        path = Path(frame_path)
++        if not _is_within(path, isolated_root):
++            issues.append("frame_path escaped isolated_runtime_root")
++        if not path.exists():
++            issues.append("frame_path does not exist")
++
++    if issues:
++        return _blocked_item(index, item, issues)
++
++    before_files = _frame_file_set(isolated_root)
++    policy = _build_runtime_policy(isolated_root)
++    state = prepare_route_proxy_runtime(policy)
++    readback_frames: list[dict[str, Any]] = []
++    for route_ref in written_route_refs:
++        frame = read_route_frame(state, route_ref)
++        mapping = _json_ready(frame.to_mapping())
++        if mapping.get("route_ref") != route_ref:
++            raise IsolatedSchedulerRouteHandlerReadbackSmokeError("readback route_ref mismatch")
++        readback_frames.append(mapping)
++
++    after_files = _frame_file_set(isolated_root)
++    if after_files != before_files:
++        raise IsolatedSchedulerRouteHandlerReadbackSmokeError("readback changed isolated frame files")
++
++    return {
++        "index": index,
++        "source_request_id": item.get("source_request_id"),
++        "source_route_id": item.get("source_route_id"),
++        "source_task_id": item.get("source_task_id"),
++        "policy_decision_id": item.get("policy_decision_id"),
++        "command_ref": item.get("command_ref"),
++        "isolated_runtime_root": str(isolated_root),
++        "written_route_refs": list(written_route_refs),
++        "frame_paths": list(frame_paths),
++        "readback_frames": readback_frames,
++        "readback_count": len(readback_frames),
++        "routeproxy_prepared": True,
++        "read_route_frame_called": True,
++        "handler_called": False,
++        "writer_permits_requested": False,
++        "frames_written": False,
++        "controlproxy_frames_written": False,
++        "scheduler_modified": False,
++        "issues": [],
++    }
++
++
++def _blocked_item(index: int, item: Mapping[str, Any], issues: list[str]) -> dict[str, Any]:
++    return {
++        "index": index,
++        "source_request_id": item.get("source_request_id"),
++        "source_route_id": item.get("source_route_id"),
++        "source_task_id": item.get("source_task_id"),
++        "policy_decision_id": item.get("policy_decision_id"),
++        "command_ref": item.get("command_ref"),
++        "isolated_runtime_root": str(item.get("isolated_runtime_root")),
++        "written_route_refs": [],
++        "frame_paths": [],
++        "readback_frames": [],
++        "readback_count": 0,
++        "routeproxy_prepared": False,
++        "read_route_frame_called": False,
++        "handler_called": False,
++        "writer_permits_requested": False,
++        "frames_written": False,
++        "controlproxy_frames_written": False,
++        "scheduler_modified": False,
++        "issues": issues,
++    }
++
++
++def _build_runtime_policy(isolated_root: Path) -> RouteProxyRuntimePolicy:
++    signature = inspect.signature(RouteProxyRuntimePolicy)
++    accepted = set(signature.parameters)
++    kwargs: dict[str, Any] = {}
++    if "route_root" in accepted:
++        kwargs["route_root"] = isolated_root
++    if "runtime_root" in accepted:
++        kwargs["runtime_root"] = isolated_root
++    if "allow_test_root" in accepted:
++        kwargs["allow_test_root"] = True
++    if "require_dev_shm" in accepted:
++        kwargs["require_dev_shm"] = False
++    if "proxy_ref" in accepted:
++        kwargs["proxy_ref"] = "proxy:0188-isolated-readback-smoke"
++    if "namespace" in accepted:
++        kwargs["namespace"] = "0188-isolated-readback-smoke"
++    return RouteProxyRuntimePolicy(**kwargs)
++
++
++def _read_smoke_items(path: Path) -> Iterable[dict[str, Any]]:
++    if path.name != DEFAULT_INPUT_NAME:
++        raise IsolatedSchedulerRouteHandlerReadbackSmokeError("input filename must be isolated_scheduler_route_handler_smoke.jsonl")
++    with path.open("r", encoding="utf-8") as handle:
++        for line_number, line in enumerate(handle, start=1):
++            raw = line.strip()
++            if not raw:
++                continue
++            try:
++                item = json.loads(raw)
++            except json.JSONDecodeError as exc:
++                raise IsolatedSchedulerRouteHandlerReadbackSmokeError(f"invalid smoke JSON at {path}:{line_number}") from exc
++            if not isinstance(item, dict):
++                raise IsolatedSchedulerRouteHandlerReadbackSmokeError(f"smoke line must be an object at {path}:{line_number}")
++            yield item
++
++
++def _write_readback_jsonl(path: Path, items: list[Mapping[str, Any]]) -> None:
++    if path.name != DEFAULT_OUTPUT_NAME:
++        raise IsolatedSchedulerRouteHandlerReadbackSmokeError("output filename must be isolated_scheduler_route_handler_readback_smoke.jsonl")
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with path.open("w", encoding="utf-8") as handle:
++        for item in items:
++            handle.write(json.dumps(dict(item), sort_keys=True, separators=(",", ":")) + "\n")
++
++
++def _frame_file_set(root: Path) -> set[Path]:
++    frames = root / "frames"
++    if not frames.exists():
++        return set()
++    return {path.resolve() for path in frames.glob("*.json") if path.is_file()}
++
++
++def _safe_isolated_root(path: Path) -> bool:
++    if not path.is_absolute():
++        return False
++    resolved = path.resolve()
++    if resolved == Path("/"):
++        return False
++    forbidden = {Path("/dev"), Path("/dev/shm"), Path("/proc"), Path("/sys"), Path("/run")}
++    return all(resolved != forbidden_path for forbidden_path in forbidden)
++
++
++def _is_within(path: Path, root: Path) -> bool:
++    try:
++        path.resolve().relative_to(root.resolve())
++    except ValueError:
++        return False
++    return True
++
++
++def _json_ready(value: Any) -> Any:
++    if isinstance(value, Path):
++        return str(value)
++    if isinstance(value, dict):
++        return {str(key): _json_ready(item) for key, item in value.items()}
++    if isinstance(value, (list, tuple)):
++        return [_json_ready(item) for item in value]
++    return value
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Read back isolated Scheduler route handler smoke frames.")
++    parser.add_argument("--smoke", required=True, help="Path to isolated_scheduler_route_handler_smoke.jsonl.")
++    parser.add_argument("--output", help="Optional isolated_scheduler_route_handler_readback_smoke.jsonl output path.")
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    args = parser.parse_args(argv)
++
++    report = run_isolated_scheduler_route_handler_readback_smoke(
++        smoke_path=Path(args.smoke),
++        output_path=Path(args.output) if args.output else None,
++    )
++
++    if args.format == "json":
++        print(json.dumps(report, indent=2, sort_keys=True))
++    else:
++        print(f"item_count: {report['item_count']}")
++        print(f"readback_count: {report['readback_count']}")
++        print(f"blocked_count: {report['blocked_count']}")
++        print(f"routeproxy_prepared: {report['routeproxy_prepared']}")
++        print(f"read_route_frame_called: {report['read_route_frame_called']}")
++        print("handler_called: False")
++        print("frames_written: False")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_readback_isolated_scheduler_route_handler_smoke_0188.py b/tests/tools/test_readback_isolated_scheduler_route_handler_smoke_0188.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_readback_isolated_scheduler_route_handler_smoke_0188.py
+@@ -0,0 +1,152 @@
++from pathlib import Path
++import importlib.util
++import json
++import subprocess
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++HANDLER_TOOL = ROOT / "tools" / "run_isolated_scheduler_route_handler_smoke.py"
++TOOL = ROOT / "tools" / "readback_isolated_scheduler_route_handler_smoke.py"
++
++
++def _load_tool_module(path: Path, name: str):
++    spec = importlib.util.spec_from_file_location(name, path)
++    assert spec is not None
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    assert spec.loader is not None
++    spec.loader.exec_module(module)
++    return module
++
++
++def _write_plan(root: Path) -> Path:
++    plan = root / "isolated_handler_execution_plan.jsonl"
++    isolated = root / "routeproxy-isolated"
++    plan.write_text(
++        json.dumps(
++            {
++                "source_request_id": "request-0188",
++                "source_route_id": "route-0188",
++                "source_task_id": "task-0188",
++                "policy_decision_id": "policy:allow:0188",
++                "command_ref": "scheduler-command:task-0188",
++                "handler_call_allowed_by_0186": False,
++                "handler_surface": "handle_scheduler_route_command",
++                "isolated_runtime_root": str(isolated),
++                "runtime_policy_kwargs": {"route_root": str(isolated)},
++                "ready_for_later_isolated_handler_call": True,
++                "command_mapping": {
++                    "schema": "missipy.scheduler.route_handler_command.v1",
++                    "command_ref": "scheduler-command:task-0188",
++                    "handler_ref": "handler:scheduler-route-minimal",
++                    "route_root_ref": "route:runtime/root",
++                    "frame_requests": [
++                        {
++                            "schema": "missipy.scheduler.route_frame_request.v1",
++                            "route_ref": "route:0188-test",
++                            "owner_ref": "scheduler-command:task-0188",
++                            "context_ref": "ctx:request-0188",
++                            "context_generation": 1,
++                            "priority": 50,
++                            "frame_kind": "runtime_probe",
++                            "payload": {"policy_decision_id": "policy:allow:0188"},
++                            "write_allowed": True,
++                            "denial_reason": None,
++                        }
++                    ],
++                    "runtime_policy": None,
++                    "scheduler_run_modified": False,
++                },
++            }
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++    return plan
++
++
++def _write_0187_smoke(root: Path) -> Path:
++    handler_module = _load_tool_module(HANDLER_TOOL, "run_isolated_scheduler_route_handler_smoke_tool_0188")
++    plan = _write_plan(root)
++    smoke = root / "isolated_scheduler_route_handler_smoke.jsonl"
++    handler_module.run_isolated_scheduler_route_handler_smoke(plan_path=plan, output_path=smoke)
++    return smoke
++
++
++def test_0188_reads_back_frame_without_new_frame_write_or_handler_call(tmp_path: Path) -> None:
++    module = _load_tool_module(TOOL, "readback_isolated_scheduler_route_handler_smoke_tool")
++    smoke = _write_0187_smoke(tmp_path)
++
++    before = set((tmp_path / "routeproxy-isolated" / "frames").glob("*.json"))
++    report = module.run_isolated_scheduler_route_handler_readback_smoke(
++        smoke_path=smoke,
++        output_path=tmp_path / "isolated_scheduler_route_handler_readback_smoke.jsonl",
++    )
++    after = set((tmp_path / "routeproxy-isolated" / "frames").glob("*.json"))
++
++    assert report["item_count"] == 1
++    assert report["readback_count"] == 1
++    assert report["blocked_count"] == 0
++    assert report["routeproxy_prepared"] is True
++    assert report["read_route_frame_called"] is True
++    assert report["handler_called"] is False
++    assert report["writer_permits_requested"] is False
++    assert report["frames_written"] is False
++    assert report["controlproxy_frames_written"] is False
++    assert before == after
++    item = report["items"][0]
++    assert item["issues"] == []
++    assert item["readback_frames"][0]["route_ref"] == "route:0188-test"
++    assert (tmp_path / "isolated_scheduler_route_handler_readback_smoke.jsonl").exists()
++
++
++def test_0188_blocks_unsafe_smoke_item(tmp_path: Path) -> None:
++    module = _load_tool_module(TOOL, "readback_isolated_scheduler_route_handler_smoke_tool_block")
++    smoke = tmp_path / "isolated_scheduler_route_handler_smoke.jsonl"
++    smoke.write_text(
++        json.dumps(
++            {
++                "handler_called": False,
++                "isolated_runtime_root": "relative-root",
++                "written_route_refs": [],
++                "frame_paths": [],
++            }
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++
++    report = module.run_isolated_scheduler_route_handler_readback_smoke(smoke_path=smoke)
++
++    assert report["readback_count"] == 0
++    assert report["blocked_count"] == 1
++    assert report["handler_called"] is False
++    assert "0187 smoke item did not call handler" in report["items"][0]["issues"]
++
++
++def test_0188_cli_outputs_json(tmp_path: Path) -> None:
++    smoke = _write_0187_smoke(tmp_path)
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--smoke",
++            str(smoke),
++            "--output",
++            str(tmp_path / "isolated_scheduler_route_handler_readback_smoke.jsonl"),
++            "--format",
++            "json",
++        ],
++        cwd=ROOT,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=True,
++    )
++    report = json.loads(completed.stdout)
++    assert report["schema"] == "missipy.scheduler.route_handler.isolated_readback_smoke.v1"
++    assert report["readback_count"] == 1
++    assert report["handler_called"] is False
++    assert report["frames_written"] is False
++    assert report["network_used"] is False
+diff --git a/tests/rules/test_isolated_scheduler_route_handler_readback_smoke_0188_rule.py b/tests/rules/test_isolated_scheduler_route_handler_readback_smoke_0188_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_isolated_scheduler_route_handler_readback_smoke_0188_rule.py
+@@ -0,0 +1,84 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "readback_isolated_scheduler_route_handler_smoke.py"
++DOC = ROOT / "doc" / "architecture" / "ISOLATED_SCHEDULER_ROUTE_HANDLER_READBACK_SMOKE_0188.md"
++RULE = ROOT / "doc" / "code-rules" / "0188_isolated_scheduler_route_handler_readback_smoke_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0188_CHANGED_FILES.md"
++
++
++def test_0188_tool_allows_only_isolated_readback() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    for token in [
++        "0188 is a controlled isolated readback smoke",
++        "isolated_scheduler_route_handler_smoke.jsonl",
++        "isolated_scheduler_route_handler_readback_smoke.jsonl",
++        "read_route_frame",
++        "It must not call handle_scheduler_route_command",
++        "It must not call handle_scheduler_route_request",
++        "It must not request writer permits",
++        "It must not call write_route_frame",
++        "It must not modify Scheduler.run",
++        "It must not instantiate Scheduler",
++        "It must not instantiate EventBus",
++        "It must not write ControlProxy frames",
++        "network_used",
++    ]:
++        assert token in source
++    assert "handle_scheduler_route_command(" not in source
++    assert "handle_scheduler_route_request(" not in source
++    assert "request_writer_permit(" not in source
++    assert "write_route_frame(" not in source
++    assert "from kernel.scheduler import Scheduler" not in source
++    assert "from kernel.event_bus import EventBus" not in source
++
++
++def test_0188_doc_locks_isolated_readback_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    for token in [
++        "0188 reads back frames written by 0187, but does not call the handler",
++        "The input is isolated_scheduler_route_handler_smoke.jsonl",
++        "The output is isolated_scheduler_route_handler_readback_smoke.jsonl",
++        "It may call read_route_frame",
++        "It must not call write_route_frame",
++        "It must verify no new frame files are created by readback",
++        "This proves isolated RouteProxy write/read smoke",
++    ]:
++        assert token in doc
++
++
++def test_0188_rule_blocks_handler_and_writer_paths() -> None:
++    rule = RULE.read_text(encoding="utf-8")
++    for token in [
++        "Read isolated_scheduler_route_handler_smoke.jsonl from 0187",
++        "Call read_route_frame only for written_route_refs from 0187",
++        "Do not call handle_scheduler_route_command",
++        "Do not call handle_scheduler_route_request",
++        "Do not request writer permits",
++        "Do not call write_route_frame",
++        "Verify readback does not create new frame files",
++        "Do not write ControlProxy frames",
++    ]:
++        assert token in rule
++
++
++def test_0188_tool_has_no_network_imports() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    assert "--smoke" in source
++    assert "--output" in source
++    assert "import requests" not in source
++    assert "from requests" not in source
++    assert "urllib" not in source
++
++
++def test_0188_manifest_lists_readback_files() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    for token in [
++        "tools/readback_isolated_scheduler_route_handler_smoke.py",
++        "tests/tools/test_readback_isolated_scheduler_route_handler_smoke_0188.py",
++        "tests/rules/test_isolated_scheduler_route_handler_readback_smoke_0188_rule.py",
++        "doc/architecture/ISOLATED_SCHEDULER_ROUTE_HANDLER_READBACK_SMOKE_0188.md",
++        "doc/code-rules/0188_isolated_scheduler_route_handler_readback_smoke_rule.md",
++    ]:
++        assert token in manifest
+diff --git a/doc/architecture/ISOLATED_SCHEDULER_ROUTE_HANDLER_READBACK_SMOKE_0188.md b/doc/architecture/ISOLATED_SCHEDULER_ROUTE_HANDLER_READBACK_SMOKE_0188.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/ISOLATED_SCHEDULER_ROUTE_HANDLER_READBACK_SMOKE_0188.md
+@@ -0,0 +1,58 @@
++# 0188 — Isolated Scheduler route handler readback smoke
++
++## Decision
++
++0188 reads back frames written by 0187, but does not call the handler.
++
++The input is isolated_scheduler_route_handler_smoke.jsonl.
++The output is isolated_scheduler_route_handler_readback_smoke.jsonl.
++
++It may call read_route_frame.
++It must not call write_route_frame.
++It must verify no new frame files are created by readback.
++
++This proves isolated RouteProxy write/read smoke.
++
++## Why this exists
++
++0187 proved that the existing minimal scheduler route handler can write a
++RouteProxy frame under an explicit isolated runtime root.
++
++0188 proves the matching readback path without re-executing the handler and
++without requesting writer permits.
++
++## Boundary
++
++0188:
++
++- reads `isolated_scheduler_route_handler_smoke.jsonl`,
++- prepares RouteProxyRuntime only in the recorded isolated root,
++- calls `read_route_frame` for `written_route_refs` from 0187,
++- verifies read `route_ref` values,
++- verifies readback does not create new frame files,
++- writes optional `isolated_scheduler_route_handler_readback_smoke.jsonl`.
++
++0188 does not:
++
++- call handle_scheduler_route_command,
++- call handle_scheduler_route_request,
++- request writer permits,
++- call write_route_frame,
++- modify Scheduler.run,
++- instantiate Scheduler,
++- instantiate EventBus,
++- create a parallel bus,
++- write ControlProxy frames,
++- call GitHub API,
++- use network,
++- execute conversion,
++- execute inference,
++- write SQL,
++- write Qdrant,
++- write directly to VisPy.
++
++## Authority
++
++Scheduler/policy/zone remain the authority.
++0188 proves isolated RouteProxy readback only. It does not enable production
++route writes.
+diff --git a/doc/code-rules/0188_isolated_scheduler_route_handler_readback_smoke_rule.md b/doc/code-rules/0188_isolated_scheduler_route_handler_readback_smoke_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0188_isolated_scheduler_route_handler_readback_smoke_rule.md
+@@ -0,0 +1,27 @@
++# 0188 isolated Scheduler route handler readback smoke rule
++
++0188 proves isolated RouteProxy readback without handler execution.
++
++Rules:
++
++- Read isolated_scheduler_route_handler_smoke.jsonl from 0187.
++- Call read_route_frame only for written_route_refs from 0187.
++- Prepare RouteProxyRuntime only inside the recorded isolated runtime root.
++- Do not call handle_scheduler_route_command.
++- Do not call handle_scheduler_route_request.
++- Do not request writer permits.
++- Do not call write_route_frame.
++- Verify readback does not create new frame files.
++- Write only isolated_scheduler_route_handler_readback_smoke.jsonl as report output.
++- Do not modify Scheduler.run.
++- Do not instantiate Scheduler.
++- Do not instantiate EventBus.
++- Do not create a parallel bus.
++- Do not write ControlProxy frames.
++- Do not call GitHub API.
++- Do not use network.
++- Do not execute conversion.
++- Do not execute inference.
++- Do not write SQL.
++- Do not write Qdrant.
++- Do not write directly to VisPy.
+diff --git a/doc/docs/architecture/runtime/188_isolated_scheduler_route_handler_readback_smoke.dot b/doc/docs/architecture/runtime/188_isolated_scheduler_route_handler_readback_smoke.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/188_isolated_scheduler_route_handler_readback_smoke.dot
+@@ -0,0 +1,20 @@
++digraph isolated_scheduler_route_handler_readback_smoke_0188 {
++  rankdir=LR;
++  label="0188 Isolated Scheduler route handler readback smoke";
++  labelloc=t;
++
++  smoke [label="isolated_scheduler_route_handler_smoke.jsonl"];
++  root [label="isolated_runtime_root"];
++  read [label="read_route_frame"];
++  frames [label="existing RouteProxy frames"];
++  report [label="isolated_scheduler_route_handler_readback_smoke.jsonl"];
++
++  smoke -> root;
++  smoke -> read [label="written_route_refs"];
++  root -> read;
++  frames -> read;
++  read -> report;
++
++  read -> frames [label="no new frame files", style=dashed];
++  read -> report [label="handler not called", style=dashed];
++}
+diff --git a/doc/CHANGELOG_0188_ISOLATED_SCHEDULER_ROUTE_HANDLER_READBACK_SMOKE.md b/doc/CHANGELOG_0188_ISOLATED_SCHEDULER_ROUTE_HANDLER_READBACK_SMOKE.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0188_ISOLATED_SCHEDULER_ROUTE_HANDLER_READBACK_SMOKE.md
+@@ -0,0 +1,17 @@
++# Changelog — 0188 Isolated Scheduler route handler readback smoke
++
++## Added
++
++- Isolated readback smoke for RouteProxy frames written by 0187.
++- Verification that readback does not create new frame files.
++- Optional `isolated_scheduler_route_handler_readback_smoke.jsonl` output.
++- Tests/rules locking that handler execution, writer permits, frame writes,
++  Scheduler.run, Scheduler/EventBus instantiation, ControlProxy frames, GitHub
++  API, network, conversion, inference, SQL, Qdrant, and VisPy are untouched.
++
++## Not changed
++
++- No Scheduler.run modification.
++- No route handler execution.
++- No new RouteProxy frame write.
++- No ControlProxy frame write.
+diff --git a/doc/manifests/MANIFEST_0188_CHANGED_FILES.md b/doc/manifests/MANIFEST_0188_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0188_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest — 0188 Isolated Scheduler route handler readback smoke
++
++- PHASE0188_TEST_REPORT.md
++- tools/readback_isolated_scheduler_route_handler_smoke.py
++- tests/tools/test_readback_isolated_scheduler_route_handler_smoke_0188.py
++- tests/rules/test_isolated_scheduler_route_handler_readback_smoke_0188_rule.py
++- doc/architecture/ISOLATED_SCHEDULER_ROUTE_HANDLER_READBACK_SMOKE_0188.md
++- doc/code-rules/0188_isolated_scheduler_route_handler_readback_smoke_rule.md
++- doc/docs/architecture/runtime/188_isolated_scheduler_route_handler_readback_smoke.dot
++- doc/CHANGELOG_0188_ISOLATED_SCHEDULER_ROUTE_HANDLER_READBACK_SMOKE.md
++- doc/manifests/MANIFEST_0188_CHANGED_FILES.md

@@ -1,0 +1,636 @@
+diff --git a/PHASE0184_TEST_REPORT.md b/PHASE0184_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0184_TEST_REPORT.md
+@@ -0,0 +1,27 @@
++# Phase 0184 Test Report — Route request to command dry-run plan
++
++Status: prepared.
++
++Scope:
++- Reads `scheduler.route_requests.jsonl`.
++- Builds reviewable kwargs for `build_single_frame_route_command`.
++- Writes optional `route_request_to_command_dry_run_plan.jsonl`.
++- No handler import.
++- No builder call.
++- No handler call.
++- No Scheduler modification.
++- No EventBus instantiation.
++- No ControlProxy/RouteProxy frame write.
++- No GitHub API/network.
++- No conversion/inference/SQL/Qdrant/VisPy writes.
++
++Validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/tools/test_build_route_request_to_command_dry_run_plan_0184.py \
++  tests/rules/test_route_request_to_command_dry_run_plan_0184_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
+diff --git a/tools/build_route_request_to_command_dry_run_plan.py b/tools/build_route_request_to_command_dry_run_plan.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/build_route_request_to_command_dry_run_plan.py
+@@ -0,0 +1,207 @@
++#!/usr/bin/env python3
++"""Build a dry-run SchedulerRouteRequest to SchedulerRouteHandlerCommand plan.
++
++0184 is a planning tool only.
++
++It reads scheduler.route_requests.jsonl through the existing 0179 queue reader
++and builds reviewable keyword arguments for the existing
++build_single_frame_route_command surface discovered by 0183.
++
++It does not import runtime handler modules.
++It does not call build_single_frame_route_command.
++It does not call handle_scheduler_route_command.
++It does not call handle_scheduler_route_request.
++It does not modify Scheduler.run.
++It does not instantiate Scheduler.
++It does not instantiate EventBus.
++It does not write RouteProxy or ControlProxy frames.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import re
++import sys
++from typing import Any, Mapping
++
++ROOT = Path(__file__).resolve().parents[1]
++SRC = ROOT / "src"
++if str(SRC) not in sys.path:
++    sys.path.insert(0, str(SRC))
++
++from context.authorized_route_request_queue import iter_authorized_route_request_queue  # noqa: E402
++
++
++ROUTE_REQUEST_TO_COMMAND_DRY_RUN_PLAN_SCHEMA = "missipy.route_request.to_command_dry_run_plan.v1"
++DEFAULT_OUTPUT_NAME = "route_request_to_command_dry_run_plan.jsonl"
++TYPED_REF_RE = re.compile(r"^[a-z][a-z0-9-]*:[^\s].*$")
++DEFAULT_FRAME_KIND = "runtime_probe"
++
++
++class RouteRequestToCommandDryRunPlanError(ValueError):
++    """Raised when the dry-run request-to-command plan is unsafe."""
++
++
++def build_route_request_to_command_dry_run_plan(
++    *,
++    queue_path: Path | str,
++    output_path: Path | str | None = None,
++    frame_kind: str = DEFAULT_FRAME_KIND,
++) -> dict[str, Any]:
++    """Build dry-run command-builder keyword plans from authorized route requests."""
++
++    queue = Path(queue_path)
++    items: list[dict[str, Any]] = []
++    for index, request in enumerate(iter_authorized_route_request_queue(queue), start=1):
++        item = _request_to_command_builder_item(index, request, frame_kind=frame_kind)
++        items.append(item)
++
++    if output_path is not None:
++        _write_plan_jsonl(Path(output_path), items)
++
++    ready_count = sum(1 for item in items if item["ready_for_later_command_builder_call"])
++    return {
++        "schema": ROUTE_REQUEST_TO_COMMAND_DRY_RUN_PLAN_SCHEMA,
++        "queue_path": str(queue),
++        "output_path": str(output_path) if output_path is not None else None,
++        "item_count": len(items),
++        "ready_count": ready_count,
++        "blocked_count": len(items) - ready_count,
++        "items": items,
++        "dry_run_only": True,
++        "runtime_imports_executed": False,
++        "builder_called": False,
++        "handler_called": False,
++        "scheduler_modified": False,
++        "frames_written": False,
++    }
++
++
++def _request_to_command_builder_item(index: int, request: Any, *, frame_kind: str) -> dict[str, Any]:
++    request_mapping = request.to_mapping()
++    command_ref = _typed_ref("scheduler-command", request.task_id)
++    route_ref = _typed_ref("route", request.route_id)
++    owner_ref = _typed_ref("scheduler-command", request.task_id)
++    context_ref = _typed_ref("ctx", request.request_id)
++    context_generation = 1
++    priority = _request_priority(request_mapping)
++    payload = {
++        "source_schema": request_mapping.get("schema"),
++        "request_id": request.request_id,
++        "route_id": request.route_id,
++        "task_id": request.task_id,
++        "holder": request_mapping.get("holder"),
++        "scope": request_mapping.get("scope"),
++        "policy_decision_id": request.policy_decision_id,
++        "authorized": request.authorized,
++        "dry_run_planned_by": ROUTE_REQUEST_TO_COMMAND_DRY_RUN_PLAN_SCHEMA,
++    }
++
++    builder_kwargs = {
++        "command_ref": command_ref,
++        "route_ref": route_ref,
++        "owner_ref": owner_ref,
++        "context_ref": context_ref,
++        "context_generation": context_generation,
++        "priority": priority,
++        "frame_kind": frame_kind,
++        "payload": payload,
++        "runtime_policy": None,
++    }
++
++    issues = _validate_builder_kwargs(builder_kwargs)
++    if not request.authorized:
++        issues.append("request is not authorized")
++    if not request.policy_decision_id:
++        issues.append("missing policy_decision_id")
++
++    return {
++        "index": index,
++        "request_id": request.request_id,
++        "route_id": request.route_id,
++        "task_id": request.task_id,
++        "policy_decision_id": request.policy_decision_id,
++        "authorized": request.authorized,
++        "builder_surface": "build_single_frame_route_command",
++        "handler_surface": "handle_scheduler_route_command",
++        "builder_kwargs": builder_kwargs,
++        "ready_for_later_command_builder_call": not issues,
++        "issues": issues,
++    }
++
++
++def _request_priority(mapping: Mapping[str, Any]) -> int:
++    value = mapping.get("priority")
++    if isinstance(value, int):
++        return max(0, min(10000, value))
++    return 50
++
++
++def _typed_ref(prefix: str, raw: object) -> str:
++    value = str(raw or "").strip()
++    if not value:
++        value = "missing"
++    if TYPED_REF_RE.match(value):
++        return value
++    safe = re.sub(r"[^a-zA-Z0-9_.:-]+", "-", value).strip("-")
++    if not safe:
++        safe = "missing"
++    return f"{prefix}:{safe}"
++
++
++def _validate_builder_kwargs(kwargs: Mapping[str, Any]) -> list[str]:
++    issues: list[str] = []
++    for name in ("command_ref", "route_ref", "owner_ref", "context_ref"):
++        value = kwargs.get(name)
++        if not isinstance(value, str) or not TYPED_REF_RE.match(value):
++            issues.append(f"{name} is not a typed ref")
++    generation = kwargs.get("context_generation")
++    if not isinstance(generation, int) or generation <= 0:
++        issues.append("context_generation must be a positive integer")
++    priority = kwargs.get("priority")
++    if not isinstance(priority, int) or priority < 0 or priority > 10000:
++        issues.append("priority must be between 0 and 10000")
++    if kwargs.get("frame_kind") != DEFAULT_FRAME_KIND:
++        issues.append("frame_kind must remain runtime_probe in 0184")
++    if not isinstance(kwargs.get("payload"), dict):
++        issues.append("payload must be a dict")
++    return issues
++
++
++def _write_plan_jsonl(path: Path, items: list[Mapping[str, Any]]) -> None:
++    if path.name != DEFAULT_OUTPUT_NAME:
++        raise RouteRequestToCommandDryRunPlanError("output filename must be route_request_to_command_dry_run_plan.jsonl")
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with path.open("w", encoding="utf-8") as handle:
++        for item in items:
++            handle.write(json.dumps(dict(item), sort_keys=True, separators=(",", ":")) + "\n")
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Build dry-run SchedulerRouteRequest to SchedulerRouteHandlerCommand plan.")
++    parser.add_argument("--queue", required=True, help="Path to scheduler.route_requests.jsonl.")
++    parser.add_argument("--output", help="Optional route_request_to_command_dry_run_plan.jsonl output path.")
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    args = parser.parse_args(argv)
++
++    report = build_route_request_to_command_dry_run_plan(
++        queue_path=Path(args.queue),
++        output_path=Path(args.output) if args.output else None,
++    )
++
++    if args.format == "json":
++        print(json.dumps(report, indent=2, sort_keys=True))
++    else:
++        print(f"item_count: {report['item_count']}")
++        print(f"ready_count: {report['ready_count']}")
++        print(f"blocked_count: {report['blocked_count']}")
++        print("dry_run_only: True")
++        print("builder_called: False")
++        print("handler_called: False")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_build_route_request_to_command_dry_run_plan_0184.py b/tests/tools/test_build_route_request_to_command_dry_run_plan_0184.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_build_route_request_to_command_dry_run_plan_0184.py
+@@ -0,0 +1,116 @@
++from pathlib import Path
++import importlib.util
++import json
++import subprocess
++import sys
++
++from context.authorized_route_request_queue import append_authorized_route_requests_from_context_bus
++from context.github_artifact_dataset_bus_observation import append_github_artifact_dataset_bus_observation
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "build_route_request_to_command_dry_run_plan.py"
++
++
++def _load_tool_module():
++    spec = importlib.util.spec_from_file_location("build_route_request_to_command_dry_run_plan_tool", TOOL)
++    assert spec is not None
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    assert spec.loader is not None
++    spec.loader.exec_module(module)
++    return module
++
++
++def _write_queue(root: Path) -> str:
++    append_github_artifact_dataset_bus_observation(
++        runtime_root=root,
++        raw={
++            "report_ref": "report:github-artifact:0184",
++            "repository": "newicody/autodoc-ideas",
++            "run_id": "run0184",
++            "artifact_id": "artifact0184",
++            "status": "queued",
++            "dataset_root_ref": "server-dataset:github-artifacts",
++            "raw_count": 1,
++            "queued_count": 1,
++            "failed_count": 0,
++            "occurred_at": "2026-07-07T00:00:00Z",
++        },
++    )
++    handoff = append_authorized_route_requests_from_context_bus(
++        context_bus_path=root / "context.bus.jsonl",
++        runtime_root=root,
++        policy_decision_id="policy:allow:github-artifact:0184",
++    )
++    return handoff.queue_path
++
++
++def test_0184_builds_route_request_to_command_dry_run_plan(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    queue_path = _write_queue(tmp_path)
++
++    report = module.build_route_request_to_command_dry_run_plan(
++        queue_path=queue_path,
++        output_path=tmp_path / "route_request_to_command_dry_run_plan.jsonl",
++    )
++
++    assert report["item_count"] == 1
++    assert report["ready_count"] == 1
++    assert report["dry_run_only"] is True
++    assert report["builder_called"] is False
++    assert report["handler_called"] is False
++    assert report["frames_written"] is False
++    item = report["items"][0]
++    assert item["builder_surface"] == "build_single_frame_route_command"
++    assert item["handler_surface"] == "handle_scheduler_route_command"
++    kwargs = item["builder_kwargs"]
++    assert kwargs["command_ref"].startswith("scheduler-command:")
++    assert kwargs["route_ref"].startswith("route:")
++    assert kwargs["owner_ref"].startswith("scheduler-command:")
++    assert kwargs["context_ref"].startswith("ctx:")
++    assert kwargs["frame_kind"] == "runtime_probe"
++    assert kwargs["runtime_policy"] is None
++    assert (tmp_path / "route_request_to_command_dry_run_plan.jsonl").exists()
++
++
++def test_0184_output_filename_is_locked(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    queue_path = _write_queue(tmp_path)
++
++    try:
++        module.build_route_request_to_command_dry_run_plan(
++            queue_path=queue_path,
++            output_path=tmp_path / "wrong.jsonl",
++        )
++    except module.RouteRequestToCommandDryRunPlanError as exc:
++        assert "route_request_to_command_dry_run_plan.jsonl" in str(exc)
++    else:
++        raise AssertionError("expected locked output filename error")
++
++
++def test_0184_cli_outputs_json(tmp_path: Path) -> None:
++    queue_path = _write_queue(tmp_path)
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--queue",
++            queue_path,
++            "--output",
++            str(tmp_path / "route_request_to_command_dry_run_plan.jsonl"),
++            "--format",
++            "json",
++        ],
++        cwd=ROOT,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=True,
++    )
++    report = json.loads(completed.stdout)
++    assert report["schema"] == "missipy.route_request.to_command_dry_run_plan.v1"
++    assert report["ready_count"] == 1
++    assert report["dry_run_only"] is True
++    assert report["builder_called"] is False
++    assert report["handler_called"] is False
+diff --git a/tests/rules/test_route_request_to_command_dry_run_plan_0184_rule.py b/tests/rules/test_route_request_to_command_dry_run_plan_0184_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_route_request_to_command_dry_run_plan_0184_rule.py
+@@ -0,0 +1,82 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "build_route_request_to_command_dry_run_plan.py"
++DOC = ROOT / "doc" / "architecture" / "ROUTE_REQUEST_TO_COMMAND_DRY_RUN_PLAN_0184.md"
++RULE = ROOT / "doc" / "code-rules" / "0184_route_request_to_command_dry_run_plan_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0184_CHANGED_FILES.md"
++
++
++def test_0184_tool_is_request_to_command_plan_only() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    for token in [
++        "0184 is a planning tool only",
++        "scheduler.route_requests.jsonl",
++        "route_request_to_command_dry_run_plan.jsonl",
++        "build_single_frame_route_command",
++        "handle_scheduler_route_command",
++        "It does not import runtime handler modules",
++        "It does not call build_single_frame_route_command",
++        "It does not call handle_scheduler_route_command",
++        "It does not call handle_scheduler_route_request",
++        "It does not modify Scheduler.run",
++        "It does not instantiate Scheduler",
++        "It does not instantiate EventBus",
++        "It does not write RouteProxy or ControlProxy frames",
++    ]:
++        assert token in source
++    assert "from runtime.scheduler_route_handler_minimal import" not in source
++    assert "handle_scheduler_route_command(" not in source
++    assert "handle_scheduler_route_request(" not in source
++    assert "build_single_frame_route_command(" not in source
++
++
++def test_0184_doc_locks_request_to_command_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    for token in [
++        "0184 maps SchedulerRouteRequest data into command-builder kwargs",
++        "The input is scheduler.route_requests.jsonl",
++        "The output is route_request_to_command_dry_run_plan.jsonl",
++        "It targets build_single_frame_route_command",
++        "It does not call build_single_frame_route_command",
++        "It does not call handle_scheduler_route_command",
++        "A future patch may consume this plan only after review",
++    ]:
++        assert token in doc
++
++
++def test_0184_rule_blocks_execution_and_handler_import() -> None:
++    rule = RULE.read_text(encoding="utf-8")
++    for token in [
++        "Read scheduler.route_requests.jsonl from 0179",
++        "Build only route_request_to_command_dry_run_plan.jsonl",
++        "Normalize typed refs for the existing command builder",
++        "Do not import runtime handler modules",
++        "Do not call build_single_frame_route_command",
++        "Do not call handle_scheduler_route_command",
++        "Do not modify Scheduler.run",
++        "Do not write ControlProxy or RouteProxy frames",
++    ]:
++        assert token in rule
++
++
++def test_0184_tool_has_no_network_imports() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    assert "--queue" in source
++    assert "--output" in source
++    assert "import requests" not in source
++    assert "from requests" not in source
++    assert "urllib" not in source
++
++
++def test_0184_manifest_lists_plan_files() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    for token in [
++        "tools/build_route_request_to_command_dry_run_plan.py",
++        "tests/tools/test_build_route_request_to_command_dry_run_plan_0184.py",
++        "tests/rules/test_route_request_to_command_dry_run_plan_0184_rule.py",
++        "doc/architecture/ROUTE_REQUEST_TO_COMMAND_DRY_RUN_PLAN_0184.md",
++        "doc/code-rules/0184_route_request_to_command_dry_run_plan_rule.md",
++    ]:
++        assert token in manifest
+diff --git a/doc/architecture/ROUTE_REQUEST_TO_COMMAND_DRY_RUN_PLAN_0184.md b/doc/architecture/ROUTE_REQUEST_TO_COMMAND_DRY_RUN_PLAN_0184.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/ROUTE_REQUEST_TO_COMMAND_DRY_RUN_PLAN_0184.md
+@@ -0,0 +1,77 @@
++# 0184 — Route request to command dry-run plan
++
++## Decision
++
++0184 maps SchedulerRouteRequest data into command-builder kwargs.
++
++The input is scheduler.route_requests.jsonl.
++The output is route_request_to_command_dry_run_plan.jsonl.
++
++It targets build_single_frame_route_command.
++It does not call build_single_frame_route_command.
++It does not call handle_scheduler_route_command.
++
++A future patch may consume this plan only after review.
++
++## Why this exists
++
++0183 resolved the real handler split:
++
++```text
++SchedulerRouteRequest / handle_scheduler_route_request
++```
++
++is the request/adapter boundary, while:
++
++```text
++SchedulerRouteHandlerCommand / handle_scheduler_route_command
++```
++
++is the minimal command handler boundary.
++
++0184 bridges these two concepts as a dry-run plan only. It converts authorized
++route request metadata into typed refs and keyword arguments suitable for later
++review against `build_single_frame_route_command`.
++
++## Boundary
++
++0184:
++
++- reads `scheduler.route_requests.jsonl`,
++- normalizes typed refs for the existing command builder,
++- builds reviewable keyword arguments,
++- optionally writes `route_request_to_command_dry_run_plan.jsonl`.
++
++0184 does not:
++
++- import runtime handler modules,
++- call build_single_frame_route_command,
++- call handle_scheduler_route_command,
++- call handle_scheduler_route_request,
++- add a new runtime handler,
++- instantiate Scheduler,
++- modify Scheduler.run,
++- instantiate EventBus,
++- create a parallel bus,
++- write ControlProxy or RouteProxy frames,
++- call GitHub API,
++- use network,
++- execute conversion,
++- execute inference,
++- write SQL,
++- write Qdrant,
++- write directly to VisPy.
++
++## Ref normalization
++
++0184 only plans typed refs:
++
++```text
++command_ref -> scheduler-command:<task_id>
++route_ref   -> route:<route_id>
++owner_ref   -> scheduler-command:<task_id>
++context_ref -> ctx:<request_id>
++```
++
++It does not claim these refs are final business authority. Scheduler/policy/zone
++remain authoritative.
+diff --git a/doc/code-rules/0184_route_request_to_command_dry_run_plan_rule.md b/doc/code-rules/0184_route_request_to_command_dry_run_plan_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0184_route_request_to_command_dry_run_plan_rule.md
+@@ -0,0 +1,27 @@
++# 0184 route request to command dry-run plan rule
++
++0184 builds a reviewable request-to-command plan only.
++
++Rules:
++
++- Read scheduler.route_requests.jsonl from 0179.
++- Build only route_request_to_command_dry_run_plan.jsonl.
++- Normalize typed refs for the existing command builder.
++- Target build_single_frame_route_command as the later builder surface.
++- Do not import runtime handler modules.
++- Do not call build_single_frame_route_command.
++- Do not call handle_scheduler_route_command.
++- Do not call handle_scheduler_route_request.
++- Do not add a new runtime handler.
++- Do not modify Scheduler.run.
++- Do not instantiate Scheduler.
++- Do not instantiate EventBus.
++- Do not create a parallel bus.
++- Do not write ControlProxy or RouteProxy frames.
++- Do not call GitHub API.
++- Do not use network.
++- Do not execute conversion.
++- Do not execute inference.
++- Do not write SQL.
++- Do not write Qdrant.
++- Do not write directly to VisPy.
+diff --git a/doc/docs/architecture/runtime/184_route_request_to_command_dry_run_plan.dot b/doc/docs/architecture/runtime/184_route_request_to_command_dry_run_plan.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/184_route_request_to_command_dry_run_plan.dot
+@@ -0,0 +1,16 @@
++digraph route_request_to_command_dry_run_plan_0184 {
++  rankdir=LR;
++  label="0184 Route request to command dry-run plan";
++  labelloc=t;
++
++  queue [label="scheduler.route_requests.jsonl"];
++  plan [label="route_request_to_command_dry_run_plan.jsonl"];
++  builder [label="build_single_frame_route_command\nfuture only"];
++  handler [label="handle_scheduler_route_command\nfuture only"];
++
++  queue -> plan [label="authorized request metadata"];
++  plan -> builder [label="kwargs only; later patch"];
++  builder -> handler [label="not called in 0184", style=dashed];
++
++  plan -> handler [label="does not grant execution", style=dashed];
++}
+diff --git a/doc/CHANGELOG_0184_ROUTE_REQUEST_TO_COMMAND_DRY_RUN_PLAN.md b/doc/CHANGELOG_0184_ROUTE_REQUEST_TO_COMMAND_DRY_RUN_PLAN.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0184_ROUTE_REQUEST_TO_COMMAND_DRY_RUN_PLAN.md
+@@ -0,0 +1,19 @@
++# Changelog — 0184 Route request to command dry-run plan
++
++## Added
++
++- Dry-run request-to-command planner for authorized SchedulerRouteRequest queue
++  entries.
++- Typed-ref normalization for later `build_single_frame_route_command` review.
++- Optional `route_request_to_command_dry_run_plan.jsonl` output.
++- Tests/rules locking that no handler import, builder call, handler call,
++  Scheduler modification, EventBus instantiation, frame write, GitHub API,
++  network, conversion, inference, SQL, Qdrant, or VisPy write is introduced.
++
++## Not changed
++
++- No new runtime handler.
++- No Scheduler.run modification.
++- No command builder execution.
++- No route handler execution.
++- No ControlProxy/RouteProxy frame write.
+diff --git a/doc/manifests/MANIFEST_0184_CHANGED_FILES.md b/doc/manifests/MANIFEST_0184_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0184_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest — 0184 Route request to command dry-run plan
++
++- PHASE0184_TEST_REPORT.md
++- tools/build_route_request_to_command_dry_run_plan.py
++- tests/tools/test_build_route_request_to_command_dry_run_plan_0184.py
++- tests/rules/test_route_request_to_command_dry_run_plan_0184_rule.py
++- doc/architecture/ROUTE_REQUEST_TO_COMMAND_DRY_RUN_PLAN_0184.md
++- doc/code-rules/0184_route_request_to_command_dry_run_plan_rule.md
++- doc/docs/architecture/runtime/184_route_request_to_command_dry_run_plan.dot
++- doc/CHANGELOG_0184_ROUTE_REQUEST_TO_COMMAND_DRY_RUN_PLAN.md
++- doc/manifests/MANIFEST_0184_CHANGED_FILES.md

@@ -1,0 +1,441 @@
+diff --git a/PHASE0222_SCHEDULER_EVENTBUS_UPSTREAM_CONTRACT_TEST_REPORT.md b/PHASE0222_SCHEDULER_EVENTBUS_UPSTREAM_CONTRACT_TEST_REPORT.md
+new file mode 100644
+index 0000000..d8d4833
+--- /dev/null
++++ b/PHASE0222_SCHEDULER_EVENTBUS_UPSTREAM_CONTRACT_TEST_REPORT.md
+@@ -0,0 +1,23 @@
++# Phase 0222 Test Report — Scheduler EventBus upstream contract
++
++## Scope
++
++Written contract only. No runtime code added.
++
++## Local validation
++
++```text
++git apply --check patch/0222-scheduler_eventbus_upstream_contract/patch.diff : OK
++python -m compileall -q tests : OK
++python -m pytest -q tests/rules/test_scheduler_eventbus_upstream_contract_0222_rule.py : OK
++```
++
++## Authority boundary
++
++```text
++Scheduler remains upstream orchestration authority.
++EventBus remains canonical observation transport.
++PassiveSupervisorSink remains downstream-only.
++No Scheduler.run() call or modification.
++No proxy, SHM, policy, SQL, Qdrant, GitHub, or VisPy mutation.
++```
+diff --git a/doc/CHANGELOG_0222_SCHEDULER_EVENTBUS_UPSTREAM_CONTRACT.md b/doc/CHANGELOG_0222_SCHEDULER_EVENTBUS_UPSTREAM_CONTRACT.md
+new file mode 100644
+index 0000000..a29f453
+--- /dev/null
++++ b/doc/CHANGELOG_0222_SCHEDULER_EVENTBUS_UPSTREAM_CONTRACT.md
+@@ -0,0 +1,16 @@
++# Changelog — 0222 Scheduler EventBus upstream contract
++
++## Added
++
++- Written architecture contract for Scheduler-origin EventBus observation.
++- Rule file locking Scheduler as upstream authority and passive supervisor as downstream-only.
++- DOT diagram for the canonical Scheduler -> EventBus -> PassiveSupervisorSink flow.
++- Rule tests covering the authority boundary and forbidden runtime shortcuts.
++
++## Not changed
++
++- No runtime code.
++- No Scheduler implementation.
++- No EventBus implementation.
++- No `Scheduler.run()` call or modification.
++- No proxy, SHM, policy, SQL, Qdrant, GitHub, or VisPy integration.
+diff --git a/doc/architecture/SCHEDULER_EVENTBUS_UPSTREAM_CONTRACT_0222.md b/doc/architecture/SCHEDULER_EVENTBUS_UPSTREAM_CONTRACT_0222.md
+new file mode 100644
+index 0000000..49a441a
+--- /dev/null
++++ b/doc/architecture/SCHEDULER_EVENTBUS_UPSTREAM_CONTRACT_0222.md
+@@ -0,0 +1,236 @@
++# 0222 — Scheduler EventBus Upstream Contract
++
++## Decision
++
++The Scheduler remains the orchestration authority.
++
++It is upstream of passive supervision and may emit or expose canonical runtime
++state transitions on the EventBus. The passive supervisor is downstream-only and
++must never become a scheduler, handler dispatcher, policy authority, or proxy
++controller.
++
++Canonical path:
++
++```text
++Scheduler authority
++  -> EventBus canonical event
++  -> PassiveSupervisorSink
++  -> CellularState in memory
++  -> optional snapshot
++  -> optional audit/replay
++```
++
++## Scope
++
++This patch is a written contract only.
++
++It does not add runtime code, handlers, adapters, workers, bus implementations,
++or Scheduler wiring. It exists to lock the architecture before a functional
++integration patch is prepared.
++
++## Scheduler authority boundary
++
++The Scheduler may decide or coordinate:
++
++```text
++run lifecycle
++handler sequencing
++task dispatch ordering
++policy gate entry
++runtime transitions
++retry/defer/cancel flow
++backpressure response
++context handoff intent
++```
++
++The passive supervisor may only observe:
++
++```text
++scheduler state
++scheduler transition
++handler selected
++handler started
++handler completed
++handler failed
++task queued
++task dispatched
++task deferred
++task cancelled
++policy gate entered
++policy gate result observed
++context handoff observed
++```
++
++The passive supervisor must not:
++
++```text
++call Scheduler.run()
++wrap Scheduler.run()
++replace Scheduler.run()
++dispatch handlers
++change task order
++make policy decisions
++control RouteProxy or ControlProxy
++write SHM
++write SQL
++write Qdrant
++mutate GitHub
++```
++
++## EventBus role
++
++EventBus is the canonical transport for Scheduler observation.
++
++The Scheduler side may publish an event directly, expose a hook that publishes an
++event, or hand a scheduler-origin frame to an existing bus writer. The passive
++supervisor consumes the bus downstream.
++
++The default path must not be:
++
++```text
++Scheduler -> status.json -> supervisor
++Scheduler -> events.jsonl -> supervisor
++Scheduler -> custom bridge -> supervisor
++```
++
++Those file paths may exist only for audit, replay, smoke tests, or temporary dev
++fallbacks.
++
++## Minimal Scheduler-origin event
++
++A supervisable Scheduler-origin event should carry:
++
++```text
++event_id
++source = scheduler
++surface = scheduler
++event_kind
++emitted_at or observed_at
++cell_id
++cell_kind = scheduler
++state
++health optional
++refs optional
++payload optional
++```
++
++Recommended scheduler states:
++
++```text
++idle
++queued
++running
++waiting
++blocked
++deferred
++success
++failed
++cancelled
++draining
++stopped
++```
++
++Recommended scheduler event kinds:
++
++```text
++scheduler_started
++scheduler_stopped
++scheduler_tick
++scheduler_drain_started
++scheduler_drain_finished
++task_queued
++task_dispatched
++task_deferred
++task_cancelled
++handler_selected
++handler_started
++handler_completed
++handler_failed
++policy_gate_entered
++policy_gate_observed
++context_handoff_observed
++```
++
++## Refs
++
++Scheduler-origin events may include references without dereferencing them in the
++supervisor:
++
++```text
++task_ref
++handler_ref
++route_ref
++shm_ref
++policy_decision_id
++artifact_ref
++source_candidate_ref
++sql_ref
++qdrant_ref
++handoff_ref
++pushback_ref
++```
++
++These refs are for visibility and later correlation. The passive supervisor must
++not use them as authority to mutate external systems.
++
++## Cellular projection
++
++A Scheduler-origin event updates a scheduler cell or a child cell associated with
++the observed task/handler/location.
++
++Cells may be grouped by locality and may move when the data or task ownership is
++transferred elsewhere. Movement is represented as observed state, not as a
++supervisor decision.
++
++Example:
++
++```text
++scheduler/main
++scheduler/task/<task_ref>
++scheduler/handler/<handler_ref>
++scheduler/handoff/<handoff_ref>
++```
++
++## Relationship with policy, proxy, and SHM
++
++Scheduler events may mention policy/proxy/SHM refs, but the detailed state of
++those surfaces should be emitted by their own upstream components:
++
++```text
++Policy -> EventBus -> supervisor
++RouteProxy -> EventBus -> supervisor
++ControlProxy -> EventBus -> supervisor
++SHM ring/status -> EventBus -> supervisor
++```
++
++The Scheduler can observe or coordinate those transitions, but the passive
++supervisor must not merge their authority into the scheduler cell.
++
++## Functional integration gate
++
++A later functional patch may connect this contract to existing Scheduler and
++EventBus surfaces only after auditing the repository for existing modules.
++
++Before adding runtime code, the integration patch must verify:
++
++```text
++existing Scheduler surface reused
++existing EventBus surface reused
++no new bus introduced
++no Scheduler.run() modification unless explicitly reviewed
++PassiveSupervisorSink remains downstream-only
++snapshot and audit remain optional
++```
++
++## Non-goals
++
++```text
++no new runtime loop
++no new EventBus implementation
++no new Scheduler adapter unless audit proves no reusable surface exists
++no handler execution
++no policy execution
++no proxy or SHM mutation
++no GitHub, SQL, or Qdrant mutation
++no VisPy renderer
++```
+diff --git a/doc/code-rules/0222_scheduler_eventbus_upstream_contract_rule.md b/doc/code-rules/0222_scheduler_eventbus_upstream_contract_rule.md
+new file mode 100644
+index 0000000..a3d7c25
+--- /dev/null
++++ b/doc/code-rules/0222_scheduler_eventbus_upstream_contract_rule.md
+@@ -0,0 +1,25 @@
++# Code rule — 0222 Scheduler EventBus upstream contract
++
++Any Scheduler supervision integration must preserve the following rule:
++
++```text
++Scheduler is the upstream orchestration authority.
++EventBus is the canonical observation transport.
++PassiveSupervisorSink is downstream-only.
++```
++
++A compliant patch may add observation events from existing Scheduler surfaces to
++an existing EventBus.
++
++A compliant patch must not introduce a new EventBus, a Scheduler replacement, a
++parallel runtime loop, or a mandatory file-status path.
++
++A compliant patch must not call, wrap, replace, or modify `Scheduler.run()` unless
++a separate reviewed exception explicitly authorizes that change.
++
++A compliant patch must not let the passive supervisor dispatch handlers, make
++policy decisions, control proxies, write SHM, write SQL, write Qdrant, or mutate
++GitHub.
++
++Before adding runtime code, the patch must audit existing Scheduler and EventBus
++modules and reuse or extend them whenever possible.
+diff --git a/doc/docs/architecture/runtime/222_scheduler_eventbus_upstream_contract.dot b/doc/docs/architecture/runtime/222_scheduler_eventbus_upstream_contract.dot
+new file mode 100644
+index 0000000..078d924
+--- /dev/null
++++ b/doc/docs/architecture/runtime/222_scheduler_eventbus_upstream_contract.dot
+@@ -0,0 +1,23 @@
++digraph scheduler_eventbus_upstream_contract_0222 {
++  rankdir=LR;
++  node [shape=box];
++
++  scheduler [label="Scheduler\nupstream authority"];
++  eventbus [label="EventBus\ncanonical transport"];
++  sink [label="PassiveSupervisorSink\ndownstream observer"];
++  cellular [label="CellularState\nin memory"];
++  snapshot [label="snapshot\noptional"];
++  audit [label="audit/replay\noptional"];
++
++  scheduler -> eventbus [label="emits/exposes events"];
++  eventbus -> sink [label="consume"];
++  sink -> cellular [label="project"];
++  cellular -> snapshot [style=dashed, label="optional write"];
++  sink -> audit [style=dashed, label="optional audit"];
++
++  forbidden_run [shape=octagon, label="forbidden:\nSupervisor -> Scheduler.run"];
++  forbidden_dispatch [shape=octagon, label="forbidden:\nSupervisor dispatch/policy/proxy"];
++
++  sink -> forbidden_run [style=dotted, label="must not"];
++  sink -> forbidden_dispatch [style=dotted, label="must not"];
++}
+diff --git a/doc/manifests/MANIFEST_0222_SCHEDULER_EVENTBUS_UPSTREAM_CONTRACT_CHANGED_FILES.md b/doc/manifests/MANIFEST_0222_SCHEDULER_EVENTBUS_UPSTREAM_CONTRACT_CHANGED_FILES.md
+new file mode 100644
+index 0000000..ee6f312
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0222_SCHEDULER_EVENTBUS_UPSTREAM_CONTRACT_CHANGED_FILES.md
+@@ -0,0 +1,26 @@
++# Manifest — 0222 Scheduler EventBus upstream contract
++
++## Added files
++
++```text
++doc/architecture/SCHEDULER_EVENTBUS_UPSTREAM_CONTRACT_0222.md
++doc/code-rules/0222_scheduler_eventbus_upstream_contract_rule.md
++doc/docs/architecture/runtime/222_scheduler_eventbus_upstream_contract.dot
++doc/CHANGELOG_0222_SCHEDULER_EVENTBUS_UPSTREAM_CONTRACT.md
++doc/manifests/MANIFEST_0222_SCHEDULER_EVENTBUS_UPSTREAM_CONTRACT_CHANGED_FILES.md
++tests/rules/test_scheduler_eventbus_upstream_contract_0222_rule.py
++PHASE0222_SCHEDULER_EVENTBUS_UPSTREAM_CONTRACT_TEST_REPORT.md
++```
++
++## Runtime impact
++
++```text
++none
++```
++
++## Authority impact
++
++```text
++Scheduler remains upstream authority.
++Passive supervisor remains downstream observer.
++```
+diff --git a/tests/rules/test_scheduler_eventbus_upstream_contract_0222_rule.py b/tests/rules/test_scheduler_eventbus_upstream_contract_0222_rule.py
+new file mode 100644
+index 0000000..11713e0
+--- /dev/null
++++ b/tests/rules/test_scheduler_eventbus_upstream_contract_0222_rule.py
+@@ -0,0 +1,50 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++ARCH = ROOT / "doc/architecture/SCHEDULER_EVENTBUS_UPSTREAM_CONTRACT_0222.md"
++RULE = ROOT / "doc/code-rules/0222_scheduler_eventbus_upstream_contract_rule.md"
++DOT = ROOT / "doc/docs/architecture/runtime/222_scheduler_eventbus_upstream_contract.dot"
++CHANGELOG = ROOT / "doc/CHANGELOG_0222_SCHEDULER_EVENTBUS_UPSTREAM_CONTRACT.md"
++
++
++def read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_scheduler_is_upstream_authority_and_supervisor_downstream_only() -> None:
++    text = read(ARCH)
++    assert "The Scheduler remains the orchestration authority" in text
++    assert "PassiveSupervisorSink" in text
++    assert "downstream-only" in text
++    assert "EventBus is the canonical transport" in text
++
++
++def test_scheduler_run_and_runtime_authority_are_forbidden() -> None:
++    combined = read(ARCH) + "\n" + read(RULE)
++    assert "call Scheduler.run()" in combined
++    assert "modify `Scheduler.run()`" in combined
++    assert "must not let the passive supervisor dispatch handlers" in combined
++    assert "write SQL" in combined
++    assert "write Qdrant" in combined
++    assert "mutate GitHub" in combined
++
++
++def test_files_are_not_canonical_observation_path() -> None:
++    text = read(ARCH)
++    assert "Scheduler -> status.json -> supervisor" in text
++    assert "Scheduler -> events.jsonl -> supervisor" in text
++    assert "only for audit, replay, smoke tests" in text
++
++
++def test_runtime_diagram_keeps_scheduler_eventbus_sink_order() -> None:
++    text = read(DOT)
++    assert "scheduler -> eventbus" in text
++    assert "eventbus -> sink" in text
++    assert "sink -> cellular" in text
++    assert "forbidden" in text
++
++
++def test_changelog_declares_no_runtime_change() -> None:
++    text = read(CHANGELOG)
++    assert "No runtime code" in text
++    assert "No `Scheduler.run()` call or modification" in text

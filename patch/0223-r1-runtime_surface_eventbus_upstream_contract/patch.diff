@@ -1,0 +1,565 @@
+diff --git a/PHASE0223_RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_TEST_REPORT.md b/PHASE0223_RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_TEST_REPORT.md
+new file mode 100644
+index 0000000..1197624
+--- /dev/null
++++ b/PHASE0223_RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_TEST_REPORT.md
+@@ -0,0 +1,22 @@
++# Phase 0223 Test Report — Runtime surface EventBus upstream contract
++
++## Scope
++
++Written contract only. No runtime code added.
++
++## Local validation
++
++```text
++git apply --check patch/0223-r1-runtime_surface_eventbus_upstream_contract/patch.diff : OK
++python -m compileall -q tests : OK
++python -m pytest -q tests/rules/test_runtime_surface_eventbus_upstream_contract_0223_rule.py : OK
++```
++
++## Authority boundary
++
++```text
++RouteProxy, ControlProxy, SHM, and Policy remain upstream runtime/control surfaces.
++EventBus remains canonical observation transport.
++PassiveSupervisorSink remains downstream-only.
++No proxy control, SHM write, raw mmap read, policy decision, Scheduler.run(), SQL/Qdrant/GitHub mutation, or VisPy runtime path.
++```
+diff --git a/doc/CHANGELOG_0223_RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT.md b/doc/CHANGELOG_0223_RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT.md
+new file mode 100644
+index 0000000..69b8b1d
+--- /dev/null
++++ b/doc/CHANGELOG_0223_RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT.md
+@@ -0,0 +1,18 @@
++# Changelog — 0223 Runtime Surface EventBus upstream contract
++
++## Added
++
++- Written architecture contract for RouteProxy, ControlProxy, SHM, and Policy observation through EventBus.
++- Rule file locking runtime surfaces as upstream emitters and passive supervision as downstream-only.
++- DOT diagram for runtime surface event emission into the passive supervisor.
++- Rule tests covering the authority boundary and forbidden shortcuts.
++
++## Not changed
++
++- No runtime code.
++- No new EventBus implementation.
++- No proxy controller.
++- No `/dev/shm` or mmap reader.
++- No policy engine.
++- No `Scheduler.run()` call or modification.
++- No SQL, Qdrant, GitHub, or VisPy integration.
+diff --git a/doc/architecture/RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_0223.md b/doc/architecture/RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_0223.md
+new file mode 100644
+index 0000000..9870bdc
+--- /dev/null
++++ b/doc/architecture/RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_0223.md
+@@ -0,0 +1,307 @@
++# 0223 — Runtime Surface EventBus Upstream Contract
++
++## Decision
++
++RouteProxy, ControlProxy, SHM, and Policy are upstream runtime/control surfaces
++that may emit or expose canonical EventBus events for passive supervision.
++
++The passive supervisor remains downstream-only. It observes these events through
++the EventBus, updates CellularState in memory, and may expose an optional snapshot
++or optional audit/replay output. It must not become a proxy controller, SHM owner,
++policy authority, scheduler, worker, or transport layer.
++
++Canonical path:
++
++```text
++Scheduler authority
++RouteProxy / ControlProxy / SHM / Policy surfaces
++  -> EventBus canonical event
++  -> PassiveSupervisorSink
++  -> CellularState in memory
++  -> optional snapshot
++  -> optional audit/replay
++```
++
++## Scope
++
++This contract prepares the later functional integration by fixing the boundary
++between fast runtime surfaces and passive supervision.
++
++It covers events emitted by, or exposed on behalf of:
++
++```text
++RouteProxy
++ControlProxy
++SHM ring/status
++Policy gate/decision
++```
++
++It does not implement the runtime connection yet. This phase is a written lock so
++future code cannot drift into a parallel bridge, a status-file-first path, or a
++control-plane mutation hidden behind supervision.
++
++## Scheduler relation
++
++The Scheduler remains the orchestration authority.
++
++Runtime surfaces may reflect, route, block, drain, prioritize, or expose effects
++of scheduler-driven activity, but passive supervision must not invoke or wrap
++`Scheduler.run()` and must not dispatch handlers.
++
++The intended authority relation is:
++
++```text
++Scheduler = orchestration authority
++Policy = decision authority
++Proxy/control plane = routing/control authority
++SHM = fast exchange/status surface
++EventBus = canonical observation transport
++PassiveSupervisorSink = downstream observer
++CellularState = projection of observed state
++```
++
++## EventBus relation
++
++The EventBus is the normal observation transport.
++
++Runtime surfaces should be observed by events carried on the EventBus. Status
++files, JSONL replay, and snapshots are not the main runtime path.
++
++Forbidden normal path:
++
++```text
++proxy status JSON -> supervisor
++SHM dump -> supervisor
++events.jsonl -> supervisor as primary transport
++```
++
++Canonical path:
++
++```text
++runtime surface -> EventBus -> PassiveSupervisorSink -> CellularState
++```
++
++Optional diagnostic path:
++
++```text
++PassiveSupervisorSink -> snapshot.json
++PassiveSupervisorSink -> events.jsonl audit/replay
++```
++
++## RouteProxy observation
++
++RouteProxy events may describe route-level visibility such as:
++
++```text
++route active
++route draining
++route blocked by authority
++route lease visible
++emitter lag
++context changed
++route health
++```
++
++The passive supervisor may display these states and references, but must not:
++
++```text
++create a route
++modify a route
++delete a route
++claim a lease
++release a lease
++block an area
++prioritize traffic
++notify emitters as an authority
++```
++
++RouteProxy refs should remain references, for example:
++
++```text
++route_ref
++cell_id
++cell_kind
++state
++health
++error
++payload
++```
++
++## ControlProxy observation
++
++ControlProxy events may describe control-plane visibility such as:
++
++```text
++control channel active
++control channel degraded
++lease observed
++command rejected by authority
++operator-visible status
++proxy health
++```
++
++The passive supervisor must not become a control proxy.
++
++It must not:
++
++```text
++send proxy commands
++acknowledge commands as authority
++change proxy routing
++distribute registries as authority
++write route/control state
++```
++
++## SHM observation
++
++SHM events may describe ring/status visibility such as:
++
++```text
++ring active
++ring backpressure
++slot lag
++reader lag
++writer lag
++context generation changed
++blocked area visible
++priority update visible
++```
++
++The passive supervisor must not own SHM.
++
++It must not:
++
++```text
++open /dev/shm as a required runtime path
++mmap raw SHM as an authority
++write SHM
++mutate slots
++advance cursors
++reset rings
++block zones directly
++```
++
++A later implementation may reuse existing SHM/proxy observation surfaces if they
++already expose safe events. If only raw SHM exists, a separate audited emitter must
++translate it upstream into EventBus events; the passive supervisor still consumes
++only the EventBus side.
++
++## Policy observation
++
++Policy events may describe decisions such as:
++
++```text
++allowed
++blocked
++deferred
++requires review
++denied by rule
++gate open
++gate closed
++```
++
++The passive supervisor may expose:
++
++```text
++policy_decision_id
++state
++health
++reason
++cell_id
++cell_kind
++error
++payload
++```
++
++The passive supervisor must not decide policy. It may only reflect the decision
++made by the existing policy authority.
++
++## Cellular locality and movement
++
++CellularState is a projection of observed state, not a storage owner.
++
++Cells may be grouped by locality or runtime area, for example:
++
++```text
++scheduler locality
++route proxy locality
++control proxy locality
++SHM locality
++policy locality
++GitHub/import locality
++SQL/Qdrant locality
++```
++
++A cell may appear to move when a related data item, route, lease, source
++candidate, artifact, or context is transmitted elsewhere. This movement is a
++visual/projection concern: it records where the observed responsibility or data
++reference is currently visible. It must not imply ownership transfer by the
++supervisor.
++
++## Minimal runtime-surface event fields
++
++A supervisable runtime-surface EventBus event should expose enough information to
++update CellularState without a heavy adapter:
++
++```text
++event_id
++event_kind
++emitted_at or observed_at
++source
++surface
++cell_id
++cell_kind
++state
++health optional
++refs optional
++payload optional
++```
++
++Runtime-surface refs include:
++
++```text
++route_ref
++shm_ref
++policy_decision_id
++control_ref
++scheduler_ref
++artifact_ref
++source_candidate_ref
++sql_ref
++qdrant_ref
++pushback_ref
++```
++
++## Forbidden shortcuts
++
++Future patches must not use this supervision path to introduce:
++
++```text
++new EventBus implementation
++status-file-first bridge
++mandatory events.jsonl transport
++Scheduler.run wrapper
++proxy controller
++SHM raw reader as primary path
++policy decision engine
++SQL/Qdrant writer
++GitHub mutation
++VisPy runtime dependency
++non-stdlib dependency
++```
++
++## Future implementation expectation
++
++A later functional patch should update or extend the existing passive supervisor
++surface instead of creating a parallel runtime.
++
++Expected direction:
++
++```text
++existing EventBus event
++  -> PassiveSupervisorSink.accept(event)
++  -> existing CellularState/snapshot surface
++```
++
++Fallback/debug-only helpers may exist for replay, but must be named and documented
++as replay or audit helpers, never as the canonical transport.
+diff --git a/doc/code-rules/0223_runtime_surface_eventbus_upstream_contract_rule.md b/doc/code-rules/0223_runtime_surface_eventbus_upstream_contract_rule.md
+new file mode 100644
+index 0000000..e90c3d9
+--- /dev/null
++++ b/doc/code-rules/0223_runtime_surface_eventbus_upstream_contract_rule.md
+@@ -0,0 +1,50 @@
++# 0223 Rule — Runtime Surface EventBus Upstream Contract
++
++This rule locks passive supervision for RouteProxy, ControlProxy, SHM, and Policy.
++
++## Required direction
++
++Runtime/control surfaces are upstream of passive supervision:
++
++```text
++RouteProxy / ControlProxy / SHM / Policy
++  -> EventBus
++  -> PassiveSupervisorSink
++  -> CellularState
++```
++
++The Scheduler remains orchestration authority. The passive supervisor remains
++downstream-only.
++
++## Mandatory constraints
++
++Future code MUST:
++
++- reuse the existing EventBus contract/surface when available;
++- reuse or extend the existing passive supervisor surface when available;
++- keep EventBus as the canonical observation transport;
++- keep snapshot and events.jsonl optional outputs only;
++- preserve CellularState as a projection, not an owner;
++- keep cell locality/movement as visualization/projection metadata only;
++- treat RouteProxy, ControlProxy, SHM, and Policy as observed upstream surfaces;
++- document any fallback/replay helper as non-canonical.
++
++Future code MUST NOT:
++
++- create a new EventBus implementation for this supervision path;
++- make status JSON or events.jsonl the normal runtime transport;
++- call, wrap, or modify `Scheduler.run()`;
++- control RouteProxy or ControlProxy;
++- claim or release proxy leases;
++- write SHM or mutate SHM cursors/slots;
++- use raw `/dev/shm` or mmap as the passive supervisor's required path;
++- decide policy or become a policy engine;
++- write SQL or Qdrant;
++- mutate GitHub;
++- introduce VisPy into the runtime path;
++- add a non-stdlib dependency for this contract phase.
++
++## Acceptance intent
++
++A valid implementation phase can be accepted only if the passive supervisor is a
++consumer of canonical EventBus events and remains downstream-only.
+diff --git a/doc/docs/architecture/runtime/223_runtime_surface_eventbus_upstream_contract.dot b/doc/docs/architecture/runtime/223_runtime_surface_eventbus_upstream_contract.dot
+new file mode 100644
+index 0000000..1dfb6da
+--- /dev/null
++++ b/doc/docs/architecture/runtime/223_runtime_surface_eventbus_upstream_contract.dot
+@@ -0,0 +1,40 @@
++digraph runtime_surface_eventbus_upstream_contract_0223 {
++  rankdir=LR;
++
++  scheduler [label="Scheduler
++upstream authority", shape=box];
++  route_proxy [label="RouteProxy
++observed surface", shape=box];
++  control_proxy [label="ControlProxy
++observed surface", shape=box];
++  shm [label="SHM ring/status
++observed surface", shape=box];
++  policy [label="Policy gate
++decision authority", shape=box];
++  eventbus [label="EventBus
++canonical observation transport", shape=ellipse];
++  sink [label="PassiveSupervisorSink
++downstream-only", shape=box];
++  cellular [label="CellularState
++in-memory projection", shape=box];
++  snapshot [label="snapshot
++optional", shape=note];
++  audit [label="events.jsonl
++optional audit/replay", shape=note];
++
++  scheduler -> eventbus [label="emits/exposes events"];
++  route_proxy -> eventbus [label="route events"];
++  control_proxy -> eventbus [label="control events"];
++  shm -> eventbus [label="safe status events"];
++  policy -> eventbus [label="decision events"];
++  eventbus -> sink [label="consume"];
++  sink -> cellular [label="project"];
++  cellular -> snapshot [label="write on demand"];
++  sink -> audit [label="optional audit"];
++
++  sink -> scheduler [label="forbidden", style=dashed, color=red];
++  sink -> route_proxy [label="forbidden control", style=dashed, color=red];
++  sink -> control_proxy [label="forbidden control", style=dashed, color=red];
++  sink -> shm [label="forbidden write/mmap authority", style=dashed, color=red];
++  sink -> policy [label="forbidden decision", style=dashed, color=red];
++}
+diff --git a/doc/manifests/MANIFEST_0223_RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_CHANGED_FILES.md b/doc/manifests/MANIFEST_0223_RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_CHANGED_FILES.md
+new file mode 100644
+index 0000000..d371f18
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0223_RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest — 0223 Runtime Surface EventBus upstream contract
++
++```text
++PHASE0223_RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_TEST_REPORT.md
++doc/CHANGELOG_0223_RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT.md
++doc/architecture/RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_0223.md
++doc/code-rules/0223_runtime_surface_eventbus_upstream_contract_rule.md
++doc/docs/architecture/runtime/223_runtime_surface_eventbus_upstream_contract.dot
++doc/manifests/MANIFEST_0223_RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_CHANGED_FILES.md
++tests/rules/test_runtime_surface_eventbus_upstream_contract_0223_rule.py
++```
++
++No runtime files are changed by this contract patch.
+diff --git a/tests/rules/test_runtime_surface_eventbus_upstream_contract_0223_rule.py b/tests/rules/test_runtime_surface_eventbus_upstream_contract_0223_rule.py
+new file mode 100644
+index 0000000..7794a68
+--- /dev/null
++++ b/tests/rules/test_runtime_surface_eventbus_upstream_contract_0223_rule.py
+@@ -0,0 +1,73 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++ARCH = ROOT / "doc/architecture/RUNTIME_SURFACE_EVENTBUS_UPSTREAM_CONTRACT_0223.md"
++RULE = ROOT / "doc/code-rules/0223_runtime_surface_eventbus_upstream_contract_rule.md"
++DOT = ROOT / "doc/docs/architecture/runtime/223_runtime_surface_eventbus_upstream_contract.dot"
++
++
++def _read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_runtime_surface_contract_documents_canonical_eventbus_path() -> None:
++    text = _read(ARCH)
++
++    assert "RouteProxy" in text
++    assert "ControlProxy" in text
++    assert "SHM" in text
++    assert "Policy" in text
++    assert "EventBus" in text
++    assert "PassiveSupervisorSink" in text
++    assert "CellularState" in text
++    assert "runtime surface -> EventBus -> PassiveSupervisorSink -> CellularState" in text
++
++
++def test_runtime_surface_contract_preserves_scheduler_and_policy_authority() -> None:
++    text = _read(ARCH)
++
++    assert "The Scheduler remains the orchestration authority." in text
++    assert "Policy = decision authority" in text
++    assert "must not invoke or wrap" in text
++    assert "must not decide policy" in text
++
++
++def test_runtime_surface_rule_forbids_parallel_control_paths() -> None:
++    text = _read(RULE)
++
++    required = [
++        "create a new EventBus implementation",
++        "make status JSON or events.jsonl the normal runtime transport",
++        "call, wrap, or modify `Scheduler.run()`",
++        "control RouteProxy or ControlProxy",
++        "write SHM or mutate SHM cursors/slots",
++        "decide policy or become a policy engine",
++        "write SQL or Qdrant",
++        "mutate GitHub",
++        "introduce VisPy into the runtime path",
++    ]
++
++    for phrase in required:
++        assert phrase in text
++
++
++def test_runtime_surface_contract_keeps_snapshot_and_audit_optional() -> None:
++    arch = _read(ARCH)
++    rule = _read(RULE)
++
++    assert "optional snapshot" in arch
++    assert "optional audit/replay" in arch
++    assert "keep snapshot and events.jsonl optional outputs only" in rule
++    assert "events.jsonl -> supervisor as primary transport" in arch
++    assert "Forbidden normal path" in arch
++
++
++def test_runtime_surface_dot_contains_forbidden_back_edges() -> None:
++    text = _read(DOT)
++
++    assert "EventBus" in text
++    assert "PassiveSupervisorSink" in text
++    assert "forbidden control" in text
++    assert "forbidden write/mmap authority" in text
++    assert "forbidden decision" in text

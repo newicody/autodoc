@@ -1,0 +1,473 @@
+diff --git a/tools/run_isolated_route_pipeline_smoke.py b/tools/run_isolated_route_pipeline_smoke.py
+index 1111111..2222222 100644
+--- a/tools/run_isolated_route_pipeline_smoke.py
++++ b/tools/run_isolated_route_pipeline_smoke.py
+@@ -28,7 +28,7 @@
+ from pathlib import Path
+ import sys
+ from types import ModuleType
+-from typing import Any
++from typing import Any, Mapping
+ 
+ ROOT = Path(__file__).resolve().parents[1]
+ SRC = ROOT / "src"
+@@ -40,6 +40,7 @@
+ 
+ ISOLATED_ROUTE_PIPELINE_SMOKE_SCHEMA = "missipy.route_pipeline.isolated_smoke.v1"
+ DEFAULT_OUTPUT_NAME = "isolated_route_pipeline_smoke.json"
++POLICY_SCOPED_QUEUE_NAME = "scheduler.route_requests.policy_scoped.jsonl"
+ 
+ 
+ class IsolatedRoutePipelineSmokeError(ValueError):
+@@ -74,10 +75,16 @@
+         policy_decision_id=policy_decision_id,
+     )
+     queue_path = Path(queue_report.queue_path)
++    policy_scoped_queue_path = runtime / POLICY_SCOPED_QUEUE_NAME
++    policy_scoped_count = _write_policy_scoped_queue(
++        source_queue_path=queue_path,
++        scoped_queue_path=policy_scoped_queue_path,
++        policy_decision_id=policy_decision_id,
++    )
+ 
+     command_plan_path = runtime / "route_request_to_command_dry_run_plan.jsonl"
+     command_plan_report = stage_0184.build_route_request_to_command_dry_run_plan(
+-        queue_path=queue_path,
++        queue_path=policy_scoped_queue_path,
+         output_path=command_plan_path,
+     )
+ 
+@@ -115,6 +122,7 @@
+         "policy_decision_id": policy_decision_id,
+         "artifacts": {
+             "queue": str(queue_path),
++            "policy_scoped_queue": str(policy_scoped_queue_path),
+             "route_request_to_command_plan": str(command_plan_path),
+             "command_builder_smoke": str(command_smoke_path),
+             "isolated_handler_execution_plan": str(isolated_plan_path),
+@@ -130,6 +138,7 @@
+             "0188_isolated_readback_smoke": _compact_stage_report(readback_smoke_report),
+         },
+         "queued_count": queue_report.queued_count,
++        "policy_scoped_queued_count": policy_scoped_count,
+         "command_plan_ready_count": int(command_plan_report.get("ready_count", 0)),
+         "command_built_count": int(command_smoke_report.get("built_count", 0)),
+         "handler_executed_count": int(handler_smoke_report.get("executed_count", 0)),
+@@ -137,6 +146,7 @@
+         "readback_count": int(readback_smoke_report.get("readback_count", 0)),
+         "pipeline_success": _pipeline_success(
+             queued_count=queue_report.queued_count,
++            policy_scoped_queued_count=policy_scoped_count,
+             command_plan_report=command_plan_report,
+             command_smoke_report=command_smoke_report,
+             handler_smoke_report=handler_smoke_report,
+@@ -157,6 +167,7 @@
+ def _pipeline_success(
+     *,
+     queued_count: int,
++    policy_scoped_queued_count: int,
+     command_plan_report: dict[str, Any],
+     command_smoke_report: dict[str, Any],
+     handler_smoke_report: dict[str, Any],
+@@ -164,7 +175,11 @@
+ ) -> bool:
+     return (
+         queued_count > 0
++        and policy_scoped_queued_count == queued_count
+         and command_plan_report.get("blocked_count") == 0
++        and int(command_plan_report.get("ready_count", 0)) == policy_scoped_queued_count
++        and int(command_smoke_report.get("built_count", 0)) == policy_scoped_queued_count
++        and int(handler_smoke_report.get("executed_count", 0)) == policy_scoped_queued_count
+         and command_smoke_report.get("blocked_count") == 0
+         and handler_smoke_report.get("blocked_count") == 0
+         and readback_smoke_report.get("blocked_count") == 0
+@@ -177,6 +192,40 @@
+         and handler_smoke_report.get("network_used") is False
+         and readback_smoke_report.get("network_used") is False
+     )
++
++
++def _write_policy_scoped_queue(
++    *,
++    source_queue_path: Path,
++    scoped_queue_path: Path,
++    policy_decision_id: str,
++) -> int:
++    if scoped_queue_path.name != POLICY_SCOPED_QUEUE_NAME:
++        raise IsolatedRoutePipelineSmokeError("policy scoped queue filename must be scheduler.route_requests.policy_scoped.jsonl")
++    count = 0
++    scoped_queue_path.parent.mkdir(parents=True, exist_ok=True)
++    with source_queue_path.open("r", encoding="utf-8") as source, scoped_queue_path.open("w", encoding="utf-8") as target:
++        for line_number, line in enumerate(source, start=1):
++            raw = line.strip()
++            if not raw:
++                continue
++            try:
++                item = json.loads(raw)
++            except json.JSONDecodeError as exc:
++                raise IsolatedRoutePipelineSmokeError(
++                    f"invalid route request queue JSON at {source_queue_path}:{line_number}"
++                ) from exc
++            if not isinstance(item, Mapping):
++                raise IsolatedRoutePipelineSmokeError(
++                    f"route request queue line must be an object at {source_queue_path}:{line_number}"
++                )
++            if item.get("policy_decision_id") != policy_decision_id:
++                continue
++            target.write(json.dumps(dict(item), sort_keys=True, separators=(",", ":")) + "\n")
++            count += 1
++    if count == 0:
++        raise IsolatedRoutePipelineSmokeError("policy scoped queue is empty")
++    return count
+ 
+ 
+ def _compact_stage_report(report: dict[str, Any]) -> dict[str, Any]:
+@@ -200,6 +249,7 @@
+         "queue_path",
+         "plan_path",
+         "smoke_path",
++        "policy_scoped_queued_count",
+     ):
+         if key in report:
+             compact[key] = report[key]
+@@ -246,6 +296,7 @@
+         print(json.dumps(report, indent=2, sort_keys=True))
+     else:
+         print(f"queued_count: {report['queued_count']}")
++        print(f"policy_scoped_queued_count: {report['policy_scoped_queued_count']}")
+         print(f"command_built_count: {report['command_built_count']}")
+         print(f"handler_executed_count: {report['handler_executed_count']}")
+         print(f"frames_written_count: {report['frames_written_count']}")
+diff --git a/tests/tools/test_run_isolated_route_pipeline_smoke_0189.py b/tests/tools/test_run_isolated_route_pipeline_smoke_0189.py
+index 1111111..2222222 100644
+--- a/tests/tools/test_run_isolated_route_pipeline_smoke_0189.py
++++ b/tests/tools/test_run_isolated_route_pipeline_smoke_0189.py
+@@ -54,6 +54,7 @@
+ 
+     assert report["pipeline_success"] is True
+     assert report["queued_count"] == 1
++    assert report["policy_scoped_queued_count"] == 1
+     assert report["command_built_count"] == 1
+     assert report["handler_executed_count"] == 1
+     assert report["frames_written_count"] == 1
+@@ -112,5 +113,36 @@
+     report = json.loads(completed.stdout)
+     assert report["schema"] == "missipy.route_pipeline.isolated_smoke.v1"
+     assert report["pipeline_success"] is True
++    assert report["policy_scoped_queued_count"] == 1
+     assert report["readback_count"] == 1
+     assert report["network_used"] is False
++
++
++def test_0190_pipeline_is_policy_scoped_when_queue_contains_previous_entries(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    runtime = tmp_path / "runtime"
++    context_bus = _write_context_bus(runtime)
++
++    first = module.run_isolated_route_pipeline_smoke(
++        context_bus_path=context_bus,
++        runtime_root=runtime,
++        policy_decision_id="policy:allow:github-artifact:first",
++        isolated_runtime_root=runtime / "routeproxy-isolated-first",
++    )
++    second = module.run_isolated_route_pipeline_smoke(
++        context_bus_path=context_bus,
++        runtime_root=runtime,
++        policy_decision_id="policy:allow:github-artifact:second",
++        isolated_runtime_root=runtime / "routeproxy-isolated-second",
++    )
++
++    assert first["pipeline_success"] is True
++    assert second["pipeline_success"] is True
++    assert second["queued_count"] == 1
++    assert second["policy_scoped_queued_count"] == 1
++    assert second["command_plan_ready_count"] == 1
++    assert second["command_built_count"] == 1
++    assert second["handler_executed_count"] == 1
++    assert second["frames_written_count"] == 1
++    assert second["readback_count"] == 1
++    assert second["artifacts"]["policy_scoped_queue"].endswith("scheduler.route_requests.policy_scoped.jsonl")
+diff --git a/tests/rules/test_isolated_route_pipeline_smoke_0189_rule.py b/tests/rules/test_isolated_route_pipeline_smoke_0189_rule.py
+index 1111111..2222222 100644
+--- a/tests/rules/test_isolated_route_pipeline_smoke_0189_rule.py
++++ b/tests/rules/test_isolated_route_pipeline_smoke_0189_rule.py
+@@ -19,6 +19,9 @@
+         "0187 isolated Scheduler route handler smoke",
+         "0188 isolated Scheduler route handler readback smoke",
+         "It executes the existing handler only through the 0187 isolated smoke stage",
++        "POLICY_SCOPED_QUEUE_NAME",
++        "scheduler.route_requests.policy_scoped.jsonl",
++        "policy scoped queue is empty",
+         "It must not modify Scheduler.run",
+         "It must not instantiate Scheduler",
+         "It must not instantiate EventBus",
+@@ -73,6 +76,18 @@
+     assert "urllib" not in source
+ 
+ 
++def test_0190_tool_locks_policy_scoped_queue() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    for token in [
++        "_write_policy_scoped_queue",
++        "policy_decision_id",
++        "scheduler.route_requests.policy_scoped.jsonl",
++        "policy_scoped_queued_count",
++        "policy scoped queue is empty",
++    ]:
++        assert token in source
++
++
+ def test_0189_manifest_lists_pipeline_smoke_files() -> None:
+     manifest = MANIFEST.read_text(encoding="utf-8")
+     for token in [
+diff --git a/doc/architecture/ISOLATED_ROUTE_PIPELINE_SMOKE_0189.md b/doc/architecture/ISOLATED_ROUTE_PIPELINE_SMOKE_0189.md
+index 1111111..2222222 100644
+--- a/doc/architecture/ISOLATED_ROUTE_PIPELINE_SMOKE_0189.md
++++ b/doc/architecture/ISOLATED_ROUTE_PIPELINE_SMOKE_0189.md
+@@ -22,11 +22,22 @@
+ orchestrates already validated local stages with an explicit isolated runtime
+ root.
+ 
++## 0190 policy-scoped queue lock
++
++0190 keeps 0189 as the isolated pipeline smoke, but fixes accumulation across
++multiple runs. `scheduler.route_requests.jsonl` remains append-only. Before
++0184 is called, 0189 writes a fresh
++`scheduler.route_requests.policy_scoped.jsonl` containing only route requests
++with the current `policy_decision_id`.
++
++Downstream stages must read the policy-scoped queue, not the append-only queue.
++
+ ## Pipeline
+ 
+ ```text
+ context.bus.jsonl
+ -> 0179 scheduler.route_requests.jsonl
++-> 0190 scheduler.route_requests.policy_scoped.jsonl
+ -> 0184 route_request_to_command_dry_run_plan.jsonl
+ -> 0185 scheduler_route_handler_command_smoke.jsonl
+ -> 0186 isolated_handler_execution_plan.jsonl
+diff --git a/doc/code-rules/0189_isolated_route_pipeline_smoke_rule.md b/doc/code-rules/0189_isolated_route_pipeline_smoke_rule.md
+index 1111111..2222222 100644
+--- a/doc/code-rules/0189_isolated_route_pipeline_smoke_rule.md
++++ b/doc/code-rules/0189_isolated_route_pipeline_smoke_rule.md
+@@ -5,6 +5,9 @@
+ Rules:
+ 
+ - Run only against an explicit isolated_runtime_root.
++- Keep scheduler.route_requests.jsonl append-only.
++- Build scheduler.route_requests.policy_scoped.jsonl for the current policy_decision_id.
++- Downstream isolated pipeline stages must read the policy-scoped queue.
+ - Reuse existing 0179 and 0184 through 0188 stages.
+ - Require explicit policy_decision_id.
+ - Write only pipeline artifacts under the requested runtime_root and RouteProxy frames under isolated_runtime_root.
+diff --git a/doc/CHANGELOG_0189_ISOLATED_ROUTE_PIPELINE_SMOKE.md b/doc/CHANGELOG_0189_ISOLATED_ROUTE_PIPELINE_SMOKE.md
+index 1111111..2222222 100644
+--- a/doc/CHANGELOG_0189_ISOLATED_ROUTE_PIPELINE_SMOKE.md
++++ b/doc/CHANGELOG_0189_ISOLATED_ROUTE_PIPELINE_SMOKE.md
+@@ -9,6 +9,13 @@
+   ControlProxy frames, GitHub API, network, conversion, inference, SQL, Qdrant,
+   and VisPy are untouched.
+ 
++## Changed in 0190
++
++- 0189 now writes `scheduler.route_requests.policy_scoped.jsonl` before calling
++  0184.
++- Downstream pipeline stages read only the current `policy_decision_id` scoped
++  queue, preventing previous append-only queue entries from being replayed.
++
+ ## Not changed
+ 
+ - No new runtime handler.
+diff --git a/PHASE0190_TEST_REPORT.md b/PHASE0190_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0190_TEST_REPORT.md
+@@ -0,0 +1,28 @@
++# Phase 0190 Test Report — Policy-scoped isolated route pipeline smoke
++
++Status: prepared.
++
++Scope:
++- Keeps 0189 as the isolated pipeline smoke.
++- Preserves append-only `scheduler.route_requests.jsonl`.
++- Adds `scheduler.route_requests.policy_scoped.jsonl` for the current
++  `policy_decision_id`.
++- Ensures downstream 0184 through 0188 stages process only policy-scoped route
++  requests.
++- No new runtime handler.
++- No Scheduler modification.
++- No Scheduler/EventBus instantiation.
++- No ControlProxy frame write.
++- No GitHub API/network.
++- No conversion/inference/SQL/Qdrant/VisPy writes.
++
++Validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/tools/test_run_isolated_route_pipeline_smoke_0189.py \
++  tests/rules/test_isolated_route_pipeline_smoke_0189_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
+diff --git a/doc/architecture/ISOLATED_ROUTE_PIPELINE_POLICY_SCOPED_QUEUE_0190.md b/doc/architecture/ISOLATED_ROUTE_PIPELINE_POLICY_SCOPED_QUEUE_0190.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/ISOLATED_ROUTE_PIPELINE_POLICY_SCOPED_QUEUE_0190.md
+@@ -0,0 +1,55 @@
++# 0190 — Isolated route pipeline policy-scoped queue
++
++## Decision
++
++0190 fixes pipeline replay caused by the append-only route request queue.
++
++`scheduler.route_requests.jsonl` remains append-only.
++`scheduler.route_requests.policy_scoped.jsonl` is rebuilt for the current
++`policy_decision_id` before downstream pipeline stages run.
++
++Downstream 0184 through 0188 stages read only the policy-scoped queue.
++
++## Why this exists
++
++0189 successfully proved the isolated write/read pipeline, but a manual run
++showed:
++
++```text
++queued_count: 1
++command_built_count: 2
++handler_executed_count: 2
++readback_count: 2
++```
++
++That means an old queue entry was replayed because
++`scheduler.route_requests.jsonl` is append-only.
++
++0190 preserves the append-only audit trail while making the pipeline run
++deterministic and scoped to the current policy decision.
++
++## Boundary
++
++0190:
++
++- reads the append-only `scheduler.route_requests.jsonl`,
++- filters by exact `policy_decision_id`,
++- writes fresh `scheduler.route_requests.policy_scoped.jsonl`,
++- passes the scoped queue to 0184,
++- reports `policy_scoped_queued_count`.
++
++0190 does not:
++
++- add a new runtime handler,
++- modify Scheduler.run,
++- instantiate Scheduler,
++- instantiate EventBus,
++- create a parallel bus,
++- write ControlProxy frames,
++- call GitHub API,
++- use network,
++- execute conversion,
++- execute inference,
++- write SQL,
++- write Qdrant,
++- write directly to VisPy.
+diff --git a/doc/code-rules/0190_isolated_route_pipeline_policy_scoped_queue_rule.md b/doc/code-rules/0190_isolated_route_pipeline_policy_scoped_queue_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0190_isolated_route_pipeline_policy_scoped_queue_rule.md
+@@ -0,0 +1,23 @@
++# 0190 isolated route pipeline policy-scoped queue rule
++
++0190 prevents append-only queue replay in the isolated route pipeline smoke.
++
++Rules:
++
++- Keep scheduler.route_requests.jsonl append-only.
++- Rebuild scheduler.route_requests.policy_scoped.jsonl for the current policy_decision_id.
++- Downstream 0184 through 0188 stages must read scheduler.route_requests.policy_scoped.jsonl.
++- Report policy_scoped_queued_count.
++- Do not add a new runtime handler.
++- Do not modify Scheduler.run.
++- Do not instantiate Scheduler.
++- Do not instantiate EventBus.
++- Do not create a parallel bus.
++- Do not write ControlProxy frames.
++- Do not call GitHub API.
++- Do not use network.
++- Do not execute conversion.
++- Do not execute inference.
++- Do not write SQL.
++- Do not write Qdrant.
++- Do not write directly to VisPy.
+diff --git a/doc/docs/architecture/runtime/190_isolated_route_pipeline_policy_scoped_queue.dot b/doc/docs/architecture/runtime/190_isolated_route_pipeline_policy_scoped_queue.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/190_isolated_route_pipeline_policy_scoped_queue.dot
+@@ -0,0 +1,17 @@
++digraph isolated_route_pipeline_policy_scoped_queue_0190 {
++  rankdir=LR;
++  label="0190 Isolated route pipeline policy-scoped queue";
++  labelloc=t;
++
++  append_only [label="scheduler.route_requests.jsonl\nappend-only"];
++  scoped [label="scheduler.route_requests.policy_scoped.jsonl\ncurrent policy_decision_id only"];
++  downstream [label="0184 -> 0188 isolated stages"];
++  report [label="isolated_route_pipeline_smoke.json"];
++
++  append_only -> scoped [label="filter by policy_decision_id"];
++  scoped -> downstream;
++  downstream -> report;
++
++  append_only -> report [label="audit trail kept", style=dashed];
++  scoped -> report [label="policy_scoped_queued_count", style=dashed];
++}
+diff --git a/doc/CHANGELOG_0190_ISOLATED_ROUTE_PIPELINE_POLICY_SCOPED_QUEUE.md b/doc/CHANGELOG_0190_ISOLATED_ROUTE_PIPELINE_POLICY_SCOPED_QUEUE.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0190_ISOLATED_ROUTE_PIPELINE_POLICY_SCOPED_QUEUE.md
+@@ -0,0 +1,19 @@
++# Changelog — 0190 Isolated route pipeline policy-scoped queue
++
++## Added
++
++- Fresh `scheduler.route_requests.policy_scoped.jsonl` derived from the
++  append-only queue and filtered by current `policy_decision_id`.
++- `policy_scoped_queued_count` in the consolidated 0189 pipeline report.
++- Test covering repeated runs with previous queue entries.
++
++## Changed
++
++- 0189 downstream stages now consume the policy-scoped queue instead of the full
++  append-only queue.
++
++## Not changed
++
++- No new runtime handler.
++- No Scheduler.run modification.
++- No production route write.
+diff --git a/doc/manifests/MANIFEST_0190_CHANGED_FILES.md b/doc/manifests/MANIFEST_0190_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0190_CHANGED_FILES.md
+@@ -0,0 +1,14 @@
++# Manifest — 0190 Isolated route pipeline policy-scoped queue
++
++- PHASE0190_TEST_REPORT.md
++- tools/run_isolated_route_pipeline_smoke.py
++- tests/tools/test_run_isolated_route_pipeline_smoke_0189.py
++- tests/rules/test_isolated_route_pipeline_smoke_0189_rule.py
++- doc/architecture/ISOLATED_ROUTE_PIPELINE_SMOKE_0189.md
++- doc/architecture/ISOLATED_ROUTE_PIPELINE_POLICY_SCOPED_QUEUE_0190.md
++- doc/code-rules/0189_isolated_route_pipeline_smoke_rule.md
++- doc/code-rules/0190_isolated_route_pipeline_policy_scoped_queue_rule.md
++- doc/docs/architecture/runtime/190_isolated_route_pipeline_policy_scoped_queue.dot
++- doc/CHANGELOG_0189_ISOLATED_ROUTE_PIPELINE_SMOKE.md
++- doc/CHANGELOG_0190_ISOLATED_ROUTE_PIPELINE_POLICY_SCOPED_QUEUE.md
++- doc/manifests/MANIFEST_0190_CHANGED_FILES.md

@@ -1,0 +1,776 @@
+diff --git a/PHASE0186_TEST_REPORT.md b/PHASE0186_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0186_TEST_REPORT.md
+@@ -0,0 +1,29 @@
++# Phase 0186 Test Report — Isolated handler execution plan
++
++Status: prepared.
++
++Scope:
++- Reads `scheduler_route_handler_command_smoke.jsonl`.
++- Reads `route_proxy_runtime_minimal.py` as text/AST.
++- Resolves `RouteProxyRuntimePolicy` and selected isolated runtime root field.
++- Writes optional `isolated_handler_execution_plan.jsonl`.
++- No RouteProxyRuntime import.
++- No RouteProxyRuntime preparation.
++- No writer permit request.
++- No handler call.
++- No Scheduler modification.
++- No EventBus instantiation.
++- No ControlProxy/RouteProxy frame write.
++- No GitHub API/network.
++- No conversion/inference/SQL/Qdrant/VisPy writes.
++
++Validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/tools/test_build_isolated_handler_execution_plan_0186.py \
++  tests/rules/test_isolated_handler_execution_plan_0186_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
+diff --git a/tools/build_isolated_handler_execution_plan.py b/tools/build_isolated_handler_execution_plan.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/build_isolated_handler_execution_plan.py
+@@ -0,0 +1,313 @@
++#!/usr/bin/env python3
++"""Build an isolated handler execution plan without executing the handler.
++
++0186 is a planning/audit tool only.
++
++It reads scheduler_route_handler_command_smoke.jsonl from 0185, inspects the
++existing route_proxy_runtime_minimal.py file as text/AST, resolves the
++RouteProxyRuntimePolicy shape, and writes a reviewable isolated execution plan.
++
++It does not import runtime handler modules.
++It does not import route_proxy_runtime_minimal.
++It does not call handle_scheduler_route_command.
++It does not call prepare_route_proxy_runtime.
++It does not request writer permits.
++It does not write RouteProxy or ControlProxy frames.
++It does not modify Scheduler.run.
++It does not instantiate Scheduler.
++It does not instantiate EventBus.
++"""
++
++from __future__ import annotations
++
++import argparse
++import ast
++import json
++from pathlib import Path
++from typing import Any, Iterable, Mapping
++
++
++ISOLATED_HANDLER_EXECUTION_PLAN_SCHEMA = "missipy.route_handler.isolated_execution_plan.v1"
++DEFAULT_INPUT_NAME = "scheduler_route_handler_command_smoke.jsonl"
++DEFAULT_OUTPUT_NAME = "isolated_handler_execution_plan.jsonl"
++DEFAULT_ROUTE_PROXY_RUNTIME_PATH = "src/runtime/route_proxy_runtime_minimal.py"
++
++POLICY_ROOT_FIELD_PREFERENCE = (
++    "runtime_root",
++    "route_root",
++    "root",
++    "shm_root",
++    "base_dir",
++    "runtime_dir",
++)
++
++
++class IsolatedHandlerExecutionPlanError(ValueError):
++    """Raised when isolated handler execution planning is unsafe."""
++
++
++def build_isolated_handler_execution_plan(
++    *,
++    smoke_path: Path | str,
++    repo_root: Path | str,
++    isolated_runtime_root: Path | str,
++    output_path: Path | str | None = None,
++    route_proxy_runtime_path: str = DEFAULT_ROUTE_PROXY_RUNTIME_PATH,
++) -> dict[str, Any]:
++    """Build an isolated execution plan from command-builder smoke output."""
++
++    smoke = Path(smoke_path)
++    root = Path(repo_root)
++    isolated_root = Path(isolated_runtime_root)
++    runtime_surface = _inspect_route_proxy_runtime_surface(root, route_proxy_runtime_path)
++    items = [
++        _build_item(index, item, runtime_surface=runtime_surface, isolated_runtime_root=isolated_root)
++        for index, item in enumerate(_read_smoke_items(smoke), start=1)
++    ]
++
++    if output_path is not None:
++        _write_plan_jsonl(Path(output_path), items)
++
++    ready_count = sum(1 for item in items if item["ready_for_later_isolated_handler_call"])
++    return {
++        "schema": ISOLATED_HANDLER_EXECUTION_PLAN_SCHEMA,
++        "smoke_path": str(smoke),
++        "repo_root": str(root),
++        "isolated_runtime_root": str(isolated_root),
++        "output_path": str(output_path) if output_path is not None else None,
++        "route_proxy_runtime_surface": runtime_surface,
++        "item_count": len(items),
++        "ready_count": ready_count,
++        "blocked_count": len(items) - ready_count,
++        "items": items,
++        "dry_run_only": True,
++        "runtime_imports_executed": False,
++        "handler_called": False,
++        "routeproxy_prepared": False,
++        "writer_permits_requested": False,
++        "frames_written": False,
++        "scheduler_modified": False,
++    }
++
++
++def _build_item(
++    index: int,
++    smoke_item: Mapping[str, Any],
++    *,
++    runtime_surface: Mapping[str, Any],
++    isolated_runtime_root: Path,
++) -> dict[str, Any]:
++    issues: list[str] = []
++    if not smoke_item.get("command_built"):
++        issues.append("command smoke item was not built")
++    if not smoke_item.get("ready_for_later_handler_call"):
++        issues.append("command smoke item is not ready for handler call")
++    command_mapping = smoke_item.get("command_mapping")
++    if not isinstance(command_mapping, Mapping):
++        issues.append("command_mapping must be an object")
++        command_mapping = {}
++
++    if not runtime_surface.get("route_proxy_runtime_policy_available"):
++        issues.append("RouteProxyRuntimePolicy is not available")
++    if not runtime_surface.get("prepare_route_proxy_runtime_available"):
++        issues.append("prepare_route_proxy_runtime is not available")
++
++    selected_root_field = runtime_surface.get("selected_policy_root_field")
++    runtime_policy_kwargs: dict[str, Any] | None = None
++    if selected_root_field is None:
++        issues.append("no isolated runtime root field found on RouteProxyRuntimePolicy")
++    else:
++        runtime_policy_kwargs = {str(selected_root_field): str(isolated_runtime_root)}
++
++    return {
++        "index": index,
++        "source_request_id": smoke_item.get("source_request_id"),
++        "source_route_id": smoke_item.get("source_route_id"),
++        "source_task_id": smoke_item.get("source_task_id"),
++        "policy_decision_id": smoke_item.get("policy_decision_id"),
++        "command_ref": command_mapping.get("command_ref"),
++        "handler_surface": smoke_item.get("handler_surface"),
++        "handler_call_allowed_by_0186": False,
++        "planned_handler_surface": "handle_scheduler_route_command",
++        "planned_runtime_surface": "prepare_route_proxy_runtime",
++        "isolated_runtime_root": str(isolated_runtime_root),
++        "runtime_policy_kwargs": runtime_policy_kwargs,
++        "command_mapping": dict(command_mapping),
++        "ready_for_later_isolated_handler_call": not issues,
++        "issues": issues,
++    }
++
++
++def _inspect_route_proxy_runtime_surface(repo_root: Path, relative_path: str) -> dict[str, Any]:
++    path = _safe_repo_file(repo_root, relative_path)
++    if not path.exists():
++        return {
++            "path": relative_path,
++            "exists": False,
++            "ast_parse_ok": False,
++            "route_proxy_runtime_policy_available": False,
++            "prepare_route_proxy_runtime_available": False,
++            "request_writer_permit_available": False,
++            "write_route_frame_available": False,
++            "read_route_frame_available": False,
++            "policy_fields": [],
++            "policy_required_fields": [],
++            "policy_root_field_candidates": [],
++            "selected_policy_root_field": None,
++        }
++
++    text = path.read_text(encoding="utf-8")
++    try:
++        tree = ast.parse(text, filename=str(path))
++    except SyntaxError:
++        return {
++            "path": relative_path,
++            "exists": True,
++            "ast_parse_ok": False,
++            "route_proxy_runtime_policy_available": False,
++            "prepare_route_proxy_runtime_available": False,
++            "request_writer_permit_available": False,
++            "write_route_frame_available": False,
++            "read_route_frame_available": False,
++            "policy_fields": [],
++            "policy_required_fields": [],
++            "policy_root_field_candidates": [],
++            "selected_policy_root_field": None,
++        }
++
++    functions = _top_level_functions(tree)
++    classes = _top_level_classes(tree)
++    policy_fields, required_fields = _dataclass_like_fields(classes.get("RouteProxyRuntimePolicy"))
++    root_candidates = _root_field_candidates(policy_fields)
++    selected = _select_root_field(root_candidates)
++
++    return {
++        "path": relative_path,
++        "exists": True,
++        "ast_parse_ok": True,
++        "route_proxy_runtime_policy_available": "RouteProxyRuntimePolicy" in classes,
++        "prepare_route_proxy_runtime_available": "prepare_route_proxy_runtime" in functions,
++        "request_writer_permit_available": "request_writer_permit" in functions,
++        "write_route_frame_available": "write_route_frame" in functions,
++        "read_route_frame_available": "read_route_frame" in functions,
++        "policy_fields": policy_fields,
++        "policy_required_fields": required_fields,
++        "policy_root_field_candidates": root_candidates,
++        "selected_policy_root_field": selected,
++    }
++
++
++def _top_level_functions(tree: ast.AST) -> set[str]:
++    return {
++        node.name
++        for node in getattr(tree, "body", [])
++        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
++    }
++
++
++def _top_level_classes(tree: ast.AST) -> dict[str, ast.ClassDef]:
++    return {
++        node.name: node
++        for node in getattr(tree, "body", [])
++        if isinstance(node, ast.ClassDef)
++    }
++
++
++def _dataclass_like_fields(node: ast.ClassDef | None) -> tuple[list[str], list[str]]:
++    if node is None:
++        return [], []
++    fields: list[str] = []
++    required: list[str] = []
++    for child in node.body:
++        if isinstance(child, ast.AnnAssign) and isinstance(child.target, ast.Name):
++            name = child.target.id
++            fields.append(name)
++            if child.value is None:
++                required.append(name)
++        elif isinstance(child, ast.Assign):
++            for target in child.targets:
++                if isinstance(target, ast.Name):
++                    fields.append(target.id)
++    return fields, required
++
++
++def _root_field_candidates(fields: Iterable[str]) -> list[str]:
++    candidates: list[str] = []
++    for field in fields:
++        lowered = field.lower()
++        if "root" in lowered or lowered.endswith("_dir") or lowered.endswith("_path"):
++            candidates.append(field)
++    return candidates
++
++
++def _select_root_field(candidates: Iterable[str]) -> str | None:
++    candidate_list = list(candidates)
++    for preferred in POLICY_ROOT_FIELD_PREFERENCE:
++        if preferred in candidate_list:
++            return preferred
++    return candidate_list[0] if candidate_list else None
++
++
++def _read_smoke_items(path: Path) -> Iterable[dict[str, Any]]:
++    if path.name != DEFAULT_INPUT_NAME:
++        raise IsolatedHandlerExecutionPlanError("input filename must be scheduler_route_handler_command_smoke.jsonl")
++    with path.open("r", encoding="utf-8") as handle:
++        for line_number, line in enumerate(handle, start=1):
++            raw = line.strip()
++            if not raw:
++                continue
++            try:
++                item = json.loads(raw)
++            except json.JSONDecodeError as exc:
++                raise IsolatedHandlerExecutionPlanError(f"invalid smoke JSON at {path}:{line_number}") from exc
++            if not isinstance(item, dict):
++                raise IsolatedHandlerExecutionPlanError(f"smoke line must be an object at {path}:{line_number}")
++            yield item
++
++
++def _write_plan_jsonl(path: Path, items: list[Mapping[str, Any]]) -> None:
++    if path.name != DEFAULT_OUTPUT_NAME:
++        raise IsolatedHandlerExecutionPlanError("output filename must be isolated_handler_execution_plan.jsonl")
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with path.open("w", encoding="utf-8") as handle:
++        for item in items:
++            handle.write(json.dumps(dict(item), sort_keys=True, separators=(",", ":")) + "\n")
++
++
++def _safe_repo_file(repo_root: Path, relative: str) -> Path:
++    if not relative or relative.startswith("/") or "\\" in relative or ".." in relative.split("/"):
++        raise IsolatedHandlerExecutionPlanError("path must be a safe repo-relative path")
++    return repo_root / relative
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Build isolated handler execution plan without executing the handler.")
++    parser.add_argument("--smoke", required=True, help="Path to scheduler_route_handler_command_smoke.jsonl.")
++    parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]), help="Repository root.")
++    parser.add_argument("--isolated-runtime-root", required=True, help="Explicit isolated runtime root for a later smoke.")
++    parser.add_argument("--output", help="Optional isolated_handler_execution_plan.jsonl output path.")
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    args = parser.parse_args(argv)
++
++    report = build_isolated_handler_execution_plan(
++        smoke_path=Path(args.smoke),
++        repo_root=Path(args.repo_root),
++        isolated_runtime_root=Path(args.isolated_runtime_root),
++        output_path=Path(args.output) if args.output else None,
++    )
++
++    if args.format == "json":
++        print(json.dumps(report, indent=2, sort_keys=True))
++    else:
++        print(f"item_count: {report['item_count']}")
++        print(f"ready_count: {report['ready_count']}")
++        print(f"blocked_count: {report['blocked_count']}")
++        print("dry_run_only: True")
++        print("handler_called: False")
++        print("routeproxy_prepared: False")
++        print("frames_written: False")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_build_isolated_handler_execution_plan_0186.py b/tests/tools/test_build_isolated_handler_execution_plan_0186.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_build_isolated_handler_execution_plan_0186.py
+@@ -0,0 +1,155 @@
++from pathlib import Path
++import importlib.util
++import json
++import subprocess
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "build_isolated_handler_execution_plan.py"
++
++
++def _load_tool_module():
++    spec = importlib.util.spec_from_file_location("build_isolated_handler_execution_plan_tool", TOOL)
++    assert spec is not None
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    assert spec.loader is not None
++    spec.loader.exec_module(module)
++    return module
++
++
++def _write(root: Path, relative: str, content: str) -> None:
++    path = root / relative
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(content, encoding="utf-8")
++
++
++def _write_smoke(root: Path, *, command_built: bool = True) -> Path:
++    smoke = root / "scheduler_route_handler_command_smoke.jsonl"
++    smoke.write_text(
++        json.dumps(
++            {
++                "source_request_id": "request-1",
++                "source_route_id": "route-1",
++                "source_task_id": "task-1",
++                "policy_decision_id": "policy:allow:test",
++                "handler_surface": "handle_scheduler_route_command",
++                "command_built": command_built,
++                "ready_for_later_handler_call": command_built,
++                "command_mapping": {
++                    "schema": "missipy.scheduler.route_handler_command.v1",
++                    "command_ref": "scheduler-command:task-1",
++                    "handler_ref": "handler:scheduler-route-minimal",
++                    "route_root_ref": "route:runtime/root",
++                    "frame_requests": [],
++                    "scheduler_run_modified": False,
++                },
++            }
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++    return smoke
++
++
++def test_0186_builds_isolated_execution_plan_without_handler_call(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    _write(
++        tmp_path,
++        "src/runtime/route_proxy_runtime_minimal.py",
++        (
++            "from dataclasses import dataclass\n"
++            "@dataclass(frozen=True)\n"
++            "class RouteProxyRuntimePolicy:\n"
++            "    runtime_root: str\n"
++            "    create: bool = True\n"
++            "def prepare_route_proxy_runtime(policy=None): pass\n"
++            "def request_writer_permit(*args, **kwargs): pass\n"
++            "def write_route_frame(*args, **kwargs): pass\n"
++            "def read_route_frame(*args, **kwargs): pass\n"
++        ),
++    )
++    smoke = _write_smoke(tmp_path)
++
++    report = module.build_isolated_handler_execution_plan(
++        smoke_path=smoke,
++        repo_root=tmp_path,
++        isolated_runtime_root=tmp_path / "runtime-isolated",
++        output_path=tmp_path / "isolated_handler_execution_plan.jsonl",
++    )
++
++    assert report["item_count"] == 1
++    assert report["ready_count"] == 1
++    assert report["dry_run_only"] is True
++    assert report["handler_called"] is False
++    assert report["routeproxy_prepared"] is False
++    assert report["frames_written"] is False
++    assert report["route_proxy_runtime_surface"]["selected_policy_root_field"] == "runtime_root"
++    item = report["items"][0]
++    assert item["ready_for_later_isolated_handler_call"] is True
++    assert item["runtime_policy_kwargs"] == {"runtime_root": str(tmp_path / "runtime-isolated")}
++    assert (tmp_path / "isolated_handler_execution_plan.jsonl").exists()
++
++
++def test_0186_blocks_when_policy_root_field_is_missing(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    _write(
++        tmp_path,
++        "src/runtime/route_proxy_runtime_minimal.py",
++        (
++            "class RouteProxyRuntimePolicy:\n"
++            "    pass\n"
++            "def prepare_route_proxy_runtime(policy=None): pass\n"
++        ),
++    )
++    smoke = _write_smoke(tmp_path)
++
++    report = module.build_isolated_handler_execution_plan(
++        smoke_path=smoke,
++        repo_root=tmp_path,
++        isolated_runtime_root=tmp_path / "runtime-isolated",
++    )
++
++    assert report["ready_count"] == 0
++    assert "no isolated runtime root field found on RouteProxyRuntimePolicy" in report["items"][0]["issues"]
++
++
++def test_0186_cli_outputs_json(tmp_path: Path) -> None:
++    _write(
++        tmp_path,
++        "src/runtime/route_proxy_runtime_minimal.py",
++        (
++            "class RouteProxyRuntimePolicy:\n"
++            "    route_root: str\n"
++            "def prepare_route_proxy_runtime(policy=None): pass\n"
++        ),
++    )
++    smoke = _write_smoke(tmp_path)
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--smoke",
++            str(smoke),
++            "--repo-root",
++            str(tmp_path),
++            "--isolated-runtime-root",
++            str(tmp_path / "runtime-isolated"),
++            "--output",
++            str(tmp_path / "isolated_handler_execution_plan.jsonl"),
++            "--format",
++            "json",
++        ],
++        cwd=ROOT,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=True,
++    )
++    report = json.loads(completed.stdout)
++    assert report["schema"] == "missipy.route_handler.isolated_execution_plan.v1"
++    assert report["dry_run_only"] is True
++    assert report["handler_called"] is False
++    assert report["routeproxy_prepared"] is False
++    assert report["frames_written"] is False
+diff --git a/tests/rules/test_isolated_handler_execution_plan_0186_rule.py b/tests/rules/test_isolated_handler_execution_plan_0186_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_isolated_handler_execution_plan_0186_rule.py
+@@ -0,0 +1,83 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "build_isolated_handler_execution_plan.py"
++DOC = ROOT / "doc" / "architecture" / "ISOLATED_HANDLER_EXECUTION_PLAN_0186.md"
++RULE = ROOT / "doc" / "code-rules" / "0186_isolated_handler_execution_plan_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0186_CHANGED_FILES.md"
++
++
++def test_0186_tool_is_plan_only_and_does_not_execute_runtime() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    for token in [
++        "0186 is a planning/audit tool only",
++        "scheduler_route_handler_command_smoke.jsonl",
++        "isolated_handler_execution_plan.jsonl",
++        "RouteProxyRuntimePolicy",
++        "It does not import runtime handler modules",
++        "It does not import route_proxy_runtime_minimal",
++        "It does not call handle_scheduler_route_command",
++        "It does not call prepare_route_proxy_runtime",
++        "It does not request writer permits",
++        "It does not write RouteProxy or ControlProxy frames",
++        "It does not modify Scheduler.run",
++    ]:
++        assert token in source
++    assert "from runtime.scheduler_route_handler_minimal import" not in source
++    assert "from runtime.route_proxy_runtime_minimal import" not in source
++    assert "handle_scheduler_route_command(" not in source
++    assert "prepare_route_proxy_runtime(" not in source
++    assert "request_writer_permit(" not in source
++    assert "write_route_frame(" not in source
++
++
++def test_0186_doc_locks_isolated_execution_plan_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    for token in [
++        "0186 plans isolated handler execution, but does not execute it",
++        "The input is scheduler_route_handler_command_smoke.jsonl",
++        "The output is isolated_handler_execution_plan.jsonl",
++        "It resolves RouteProxyRuntimePolicy by AST only",
++        "It does not call prepare_route_proxy_runtime",
++        "It does not call handle_scheduler_route_command",
++        "A future patch may execute the handler only inside the isolated runtime root",
++    ]:
++        assert token in doc
++
++
++def test_0186_rule_blocks_routeproxy_preparation_and_frame_writes() -> None:
++    rule = RULE.read_text(encoding="utf-8")
++    for token in [
++        "Read scheduler_route_handler_command_smoke.jsonl from 0185",
++        "Build only isolated_handler_execution_plan.jsonl",
++        "Resolve RouteProxyRuntimePolicy by text/AST only",
++        "Do not import route_proxy_runtime_minimal",
++        "Do not call prepare_route_proxy_runtime",
++        "Do not call handle_scheduler_route_command",
++        "Do not request writer permits",
++        "Do not write ControlProxy or RouteProxy frames",
++    ]:
++        assert token in rule
++
++
++def test_0186_tool_has_no_network_imports() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    assert "--smoke" in source
++    assert "--isolated-runtime-root" in source
++    assert "--output" in source
++    assert "import requests" not in source
++    assert "from requests" not in source
++    assert "urllib" not in source
++
++
++def test_0186_manifest_lists_isolated_plan_files() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    for token in [
++        "tools/build_isolated_handler_execution_plan.py",
++        "tests/tools/test_build_isolated_handler_execution_plan_0186.py",
++        "tests/rules/test_isolated_handler_execution_plan_0186_rule.py",
++        "doc/architecture/ISOLATED_HANDLER_EXECUTION_PLAN_0186.md",
++        "doc/code-rules/0186_isolated_handler_execution_plan_rule.md",
++    ]:
++        assert token in manifest
+diff --git a/doc/architecture/ISOLATED_HANDLER_EXECUTION_PLAN_0186.md b/doc/architecture/ISOLATED_HANDLER_EXECUTION_PLAN_0186.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/ISOLATED_HANDLER_EXECUTION_PLAN_0186.md
+@@ -0,0 +1,64 @@
++# 0186 — Isolated handler execution plan
++
++## Decision
++
++0186 plans isolated handler execution, but does not execute it.
++
++The input is scheduler_route_handler_command_smoke.jsonl.
++The output is isolated_handler_execution_plan.jsonl.
++
++It resolves RouteProxyRuntimePolicy by AST only.
++It does not call prepare_route_proxy_runtime.
++It does not call handle_scheduler_route_command.
++
++A future patch may execute the handler only inside the isolated runtime root.
++
++## Why this exists
++
++0185 proves that an authorized request can be transformed into a real
++`SchedulerRouteHandlerCommand`.
++
++Calling `handle_scheduler_route_command` would invoke RouteProxyRuntime IO. Before
++that is allowed, the runtime root must be explicit, isolated, and reviewable.
++
++0186 reads the existing `route_proxy_runtime_minimal.py` surface as text/AST and
++detects how an isolated `RouteProxyRuntimePolicy` could be constructed later.
++
++## Boundary
++
++0186:
++
++- reads `scheduler_route_handler_command_smoke.jsonl`,
++- reads `src/runtime/route_proxy_runtime_minimal.py` as text/AST,
++- resolves `RouteProxyRuntimePolicy`,
++- resolves `prepare_route_proxy_runtime`,
++- selects a candidate isolated root field,
++- writes optional `isolated_handler_execution_plan.jsonl`.
++
++0186 does not:
++
++- import runtime handler modules,
++- import route_proxy_runtime_minimal,
++- call handle_scheduler_route_command,
++- call handle_scheduler_route_request,
++- call prepare_route_proxy_runtime,
++- request writer permits,
++- write RouteProxy frames,
++- write ControlProxy frames,
++- add a new runtime handler,
++- instantiate Scheduler,
++- modify Scheduler.run,
++- instantiate EventBus,
++- create a parallel bus,
++- call GitHub API,
++- use network,
++- execute conversion,
++- execute inference,
++- write SQL,
++- write Qdrant,
++- write directly to VisPy.
++
++## Authority
++
++Scheduler/policy/zone remain the authority.
++The isolated plan is not permission to execute outside the explicit runtime root.
+diff --git a/doc/code-rules/0186_isolated_handler_execution_plan_rule.md b/doc/code-rules/0186_isolated_handler_execution_plan_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0186_isolated_handler_execution_plan_rule.md
+@@ -0,0 +1,28 @@
++# 0186 isolated handler execution plan rule
++
++0186 plans a future isolated handler execution without running RouteProxyRuntime.
++
++Rules:
++
++- Read scheduler_route_handler_command_smoke.jsonl from 0185.
++- Build only isolated_handler_execution_plan.jsonl.
++- Resolve RouteProxyRuntimePolicy by text/AST only.
++- Do not import route_proxy_runtime_minimal.
++- Do not import runtime handler modules.
++- Do not call prepare_route_proxy_runtime.
++- Do not call handle_scheduler_route_command.
++- Do not call handle_scheduler_route_request.
++- Do not request writer permits.
++- Do not write ControlProxy or RouteProxy frames.
++- Do not add a new runtime handler.
++- Do not modify Scheduler.run.
++- Do not instantiate Scheduler.
++- Do not instantiate EventBus.
++- Do not create a parallel bus.
++- Do not call GitHub API.
++- Do not use network.
++- Do not execute conversion.
++- Do not execute inference.
++- Do not write SQL.
++- Do not write Qdrant.
++- Do not write directly to VisPy.
+diff --git a/doc/docs/architecture/runtime/186_isolated_handler_execution_plan.dot b/doc/docs/architecture/runtime/186_isolated_handler_execution_plan.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/186_isolated_handler_execution_plan.dot
+@@ -0,0 +1,19 @@
++digraph isolated_handler_execution_plan_0186 {
++  rankdir=LR;
++  label="0186 Isolated handler execution plan";
++  labelloc=t;
++
++  smoke [label="scheduler_route_handler_command_smoke.jsonl"];
++  runtime [label="route_proxy_runtime_minimal.py"];
++  ast [label="AST policy resolver"];
++  plan [label="isolated_handler_execution_plan.jsonl"];
++  future [label="future isolated handler smoke"];
++
++  smoke -> plan [label="command mapping"];
++  runtime -> ast [label="RouteProxyRuntimePolicy"];
++  ast -> plan [label="isolated root kwargs"];
++  plan -> future [label="later patch only"];
++
++  ast -> future [label="no runtime import", style=dashed];
++  plan -> future [label="does not grant execution", style=dashed];
++}
+diff --git a/doc/CHANGELOG_0186_ISOLATED_HANDLER_EXECUTION_PLAN.md b/doc/CHANGELOG_0186_ISOLATED_HANDLER_EXECUTION_PLAN.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0186_ISOLATED_HANDLER_EXECUTION_PLAN.md
+@@ -0,0 +1,20 @@
++# Changelog — 0186 Isolated handler execution plan
++
++## Added
++
++- Isolated handler execution planning from 0185 command-builder smoke output.
++- AST/text resolver for `RouteProxyRuntimePolicy` and RouteProxyRuntime surface
++  availability.
++- Optional `isolated_handler_execution_plan.jsonl` output.
++- Tests/rules locking that no RouteProxyRuntime import, preparation, writer
++  permit request, frame write, handler call, Scheduler modification, EventBus
++  instantiation, GitHub API, network, conversion, inference, SQL, Qdrant, or
++  VisPy write is introduced.
++
++## Not changed
++
++- No new runtime handler.
++- No Scheduler.run modification.
++- No route handler execution.
++- No RouteProxyRuntime preparation.
++- No ControlProxy/RouteProxy frame write.
+diff --git a/doc/manifests/MANIFEST_0186_CHANGED_FILES.md b/doc/manifests/MANIFEST_0186_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0186_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest — 0186 Isolated handler execution plan
++
++- PHASE0186_TEST_REPORT.md
++- tools/build_isolated_handler_execution_plan.py
++- tests/tools/test_build_isolated_handler_execution_plan_0186.py
++- tests/rules/test_isolated_handler_execution_plan_0186_rule.py
++- doc/architecture/ISOLATED_HANDLER_EXECUTION_PLAN_0186.md
++- doc/code-rules/0186_isolated_handler_execution_plan_rule.md
++- doc/docs/architecture/runtime/186_isolated_handler_execution_plan.dot
++- doc/CHANGELOG_0186_ISOLATED_HANDLER_EXECUTION_PLAN.md
++- doc/manifests/MANIFEST_0186_CHANGED_FILES.md

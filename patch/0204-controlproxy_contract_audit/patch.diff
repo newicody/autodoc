@@ -1,0 +1,910 @@
+diff --git a/PHASE0204_TEST_REPORT.md b/PHASE0204_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0204_TEST_REPORT.md
+@@ -0,0 +1,34 @@
++# Phase 0204 Test Report — ControlProxy contract audit
++
++Status: prepared.
++
++Scope:
++- Reads `controlled_scheduler_hook_smoke_acceptance.json`.
++- Produces `controlproxy_contract_audit.json`.
++- Audits existing code by AST/text only.
++- Applies `doc/code-rules/code_rule.md`.
++- Updates docs, graph, changelog, manifest, and rule.
++- Opens Bloc D.
++- No Scheduler.run execution.
++- No Scheduler.run modification.
++- No runtime import.
++- No handler call.
++- No RouteProxyRuntime preparation.
++- No read_route_frame call.
++- No writer permit request.
++- No frame write by 0204.
++- No Scheduler/EventBus instantiation.
++- No ControlProxy frame write.
++- No GitHub API/network.
++- No conversion/inference/SQL/Qdrant/VisPy writes.
++
++Validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/tools/test_audit_controlproxy_contract_surfaces_0204.py \
++  tests/rules/test_controlproxy_contract_audit_0204_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
+diff --git a/tools/audit_controlproxy_contract_surfaces.py b/tools/audit_controlproxy_contract_surfaces.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/audit_controlproxy_contract_surfaces.py
+@@ -0,0 +1,390 @@
++#!/usr/bin/env python3
++"""Audit existing ControlProxy contract surfaces after Bloc C.
++
++0204 is the Bloc D ControlProxy contract audit only.
++
++It reads controlled_scheduler_hook_smoke_acceptance.json from 0203, inspects
++existing source files by AST/text, and writes controlproxy_contract_audit.json.
++
++Reuse/adapt existing surfaces first.
++doc/code-rules/code_rule.md remains the primary rule.
++0204 must audit existing ControlProxy and RouteProxy contract surfaces before
++any stale/priority/zone smoke plan is allowed.
++
++0204 must not introduce a new runtime handler, adapter, bus, Scheduler,
++RouteProxy runtime, ControlProxy runtime, SQL backend, Qdrant backend, GitHub
++client, graph renderer, or inference path.
++
++0204 does not execute Scheduler.run.
++0204 does not import runtime handler modules.
++0204 does not call handle_scheduler_route_command.
++0204 does not call handle_scheduler_route_request.
++0204 does not call prepare_route_proxy_runtime.
++0204 does not call read_route_frame.
++0204 does not request writer permits.
++0204 does not call write_route_frame.
++0204 does not write ControlProxy or RouteProxy frames.
++0204 does not call GitHub API or use network.
++
++ControlProxy remains a contract and coordination surface, not business authority.
++Scheduler/policy/zone remain authority.
++RouteProxy remains the fast data-plane frame surface.
++"""
++
++from __future__ import annotations
++
++import argparse
++import ast
++import json
++from pathlib import Path
++from typing import Any, Mapping
++
++
++CONTROLPROXY_CONTRACT_AUDIT_SCHEMA = "missipy.controlproxy.contract_audit.v1"
++EXPECTED_ACCEPTANCE_SCHEMA = "missipy.scheduler.controlled_hook_smoke_acceptance.v1"
++DEFAULT_OUTPUT_NAME = "controlproxy_contract_audit.json"
++
++SURFACE_SPECS = (
++    {
++        "path": "src/runtime/controlproxy_scheduler_handler.py",
++        "role": "controlproxy_scheduler_existing_wrapper",
++        "required_symbols": (
++            "ControlProxySchedulerRouteRequestHandler",
++            "handle_scheduler_route_request",
++            "resolve_scheduler_route_request_handler",
++            "scheduler_route_request_payload",
++        ),
++        "required_tokens": ("ControlProxy", "SchedulerRouteRequest", "handle"),
++    },
++    {
++        "path": "src/runtime/scheduler_route_adapter.py",
++        "role": "scheduler_policy_request_adapter",
++        "required_symbols": (
++            "SchedulerRouteRequest",
++            "SchedulerRouteReply",
++            "scheduler_route_request_mapping",
++            "handle_scheduler_route_request",
++        ),
++        "required_tokens": ("policy_decision_id", "scope", "holder"),
++    },
++    {
++        "path": "src/runtime/scheduler_route_handler_minimal.py",
++        "role": "scheduler_command_to_routeproxy_contract",
++        "required_symbols": (
++            "SchedulerRouteHandlerCommand",
++            "build_single_frame_route_command",
++            "handle_scheduler_route_command",
++            "read_scheduler_route_handler_result_frames",
++        ),
++        "required_tokens": ("priority", "runtime_policy", "route_ref"),
++    },
++    {
++        "path": "src/runtime/route_proxy_runtime_minimal.py",
++        "role": "routeproxy_data_plane_stale_priority_zone_contract",
++        "required_symbols": (
++            "RouteProxyRuntimePolicy",
++            "prepare_route_proxy_runtime",
++            "request_writer_permit",
++            "write_route_frame",
++            "read_route_frame",
++            "mark_route_frame_stale",
++        ),
++        "required_tokens": ("stale", "priority", "route_root"),
++    },
++    {
++        "path": "src/runtime/shm_runtime_schema.py",
++        "role": "event_context_observation_schema",
++        "required_symbols": ("EventBusMessage", "ContextBusMessage", "RouteMessage"),
++        "required_tokens": ("topic", "schema", "payload"),
++    },
++    {
++        "path": "src/runtime/bus_visualization_adapter.py",
++        "role": "representation_only_graph_surface",
++        "required_symbols": (),
++        "required_tokens": ("graph", "edge", "node"),
++        "optional": True,
++    },
++)
++
++FALSE_ACCEPTANCE_FLAGS = (
++    "scheduler_run_executed",
++    "scheduler_run_modified",
++    "controlproxy_frames_written",
++    "scheduler_modified",
++    "eventbus_instantiated",
++    "network_used",
++)
++
++FALSE_NEW_SURFACE_FLAGS = (
++    "new_runtime_handler_added",
++    "new_adapter_added",
++    "new_bus_added",
++    "new_scheduler_added",
++    "new_routeproxy_runtime_added",
++    "new_controlproxy_runtime_added",
++    "new_sql_backend_added",
++    "new_qdrant_backend_added",
++    "new_github_client_added",
++    "new_graph_renderer_added",
++    "new_inference_path_added",
++)
++
++
++class ControlProxyContractAuditError(ValueError):
++    """Raised when ControlProxy contract audit input is unsafe."""
++
++
++def audit_controlproxy_contract_surfaces(
++    *,
++    acceptance_path: Path | str,
++    repo_root: Path | str,
++    output_path: Path | str | None = None,
++) -> dict[str, Any]:
++    """Audit existing ControlProxy/RouteProxy contract surfaces without imports."""
++
++    acceptance_file = Path(acceptance_path)
++    root = Path(repo_root)
++    acceptance = _read_json_file(acceptance_file)
++    issues: list[str] = []
++    warnings: list[str] = []
++
++    _audit_acceptance(acceptance, issues, warnings)
++
++    surface_reports = [_audit_surface(root=root, spec=spec) for spec in SURFACE_SPECS]
++    for report in surface_reports:
++        if report["optional"] and not report["exists"]:
++            warnings.append(f"optional representation surface missing: {report['path']}")
++            continue
++        if not report["exists"]:
++            issues.append(f"missing existing surface: {report['path']}")
++        for symbol in report["missing_required_symbols"]:
++            issues.append(f"missing required symbol {symbol} in {report['path']}")
++        for token in report["missing_required_tokens"]:
++            issues.append(f"missing required token {token} in {report['path']}")
++
++    recommended_contract = _recommended_contract(surface_reports)
++    if not recommended_contract:
++        issues.append("no recommended ControlProxy contract path found from existing surfaces")
++
++    if not root.exists():
++        issues.append("repo_root must exist")
++    if not root.is_dir():
++        issues.append("repo_root must be a directory")
++
++    target_runtime_root = Path(str(acceptance.get("target_runtime_root", "")))
++    final_output = Path(output_path) if output_path is not None else target_runtime_root / DEFAULT_OUTPUT_NAME
++    if final_output.name != DEFAULT_OUTPUT_NAME:
++        issues.append("output filename must be controlproxy_contract_audit.json")
++
++    provenance_repair_items = []
++    if isinstance(acceptance.get("provenance_repair_items"), list):
++        provenance_repair_items.extend(str(item) for item in acceptance.get("provenance_repair_items", []))
++
++    audit = {
++        "schema": CONTROLPROXY_CONTRACT_AUDIT_SCHEMA,
++        "bloc": "D",
++        "bloc_name": "controlproxy-contract-and-priority",
++        "acceptance_path": str(acceptance_file),
++        "acceptance_schema": acceptance.get("schema"),
++        "accepted_baseline": acceptance.get("accepted_baseline"),
++        "policy_decision_id": acceptance.get("policy_decision_id"),
++        "target_runtime_root": acceptance.get("target_runtime_root"),
++        "target_isolated_runtime_root": acceptance.get("target_isolated_runtime_root"),
++        "repo_root": str(root),
++        "surface_count": len(surface_reports),
++        "existing_surface_count": sum(1 for item in surface_reports if item["exists"]),
++        "surface_reports": surface_reports,
++        "recommended_contract": recommended_contract,
++        "controlproxy_contract_audit_success": not issues,
++        "stale_priority_zone_plan_allowed_next": not issues,
++        "next_recommended_patch": "0205-controlproxy_stale_priority_zone_smoke_plan",
++        "contract_decisions": [
++            "ControlProxy remains a coordination and contract surface, not business authority.",
++            "Scheduler/policy/zone remain authority.",
++            "RouteProxy remains the fast data-plane frame surface.",
++            "stale, priority, and zone behavior must be policy-scoped and auditable.",
++            "Any future ControlProxy frame write requires explicit phase unlock and acceptance.",
++        ],
++        "provenance_repair_items": provenance_repair_items,
++        "issues": issues,
++        "warnings": warnings,
++        "existing_surfaces_reused": True,
++        "new_runtime_handler_added": False,
++        "new_adapter_added": False,
++        "new_bus_added": False,
++        "new_scheduler_added": False,
++        "new_routeproxy_runtime_added": False,
++        "new_controlproxy_runtime_added": False,
++        "new_sql_backend_added": False,
++        "new_qdrant_backend_added": False,
++        "new_github_client_added": False,
++        "new_graph_renderer_added": False,
++        "new_inference_path_added": False,
++        "runtime_imports_executed_by_0204": False,
++        "scheduler_run_executed": False,
++        "handler_called_by_0204": False,
++        "routeproxy_prepared_by_0204": False,
++        "read_route_frame_called_by_0204": False,
++        "writer_permits_requested_by_0204": False,
++        "frames_written_by_0204": False,
++        "controlproxy_frames_written_by_0204": False,
++        "eventbus_instantiated_by_0204": False,
++        "network_used_by_0204": False,
++    }
++
++    if output_path is not None:
++        _write_audit(final_output, audit)
++
++    return audit
++
++
++def _audit_acceptance(acceptance: Mapping[str, Any], issues: list[str], warnings: list[str]) -> None:
++    if acceptance.get("schema") != EXPECTED_ACCEPTANCE_SCHEMA:
++        issues.append("P0203 acceptance schema mismatch")
++    if acceptance.get("controlled_scheduler_hook_smoke_accepted") is not True:
++        issues.append("controlled_scheduler_hook_smoke_accepted must be true")
++    if acceptance.get("bloc_c_complete") is not True:
++        issues.append("bloc_c_complete must be true")
++    if acceptance.get("next_bloc") != "D":
++        issues.append("next_bloc must be D")
++    if acceptance.get("issues") not in ([], None):
++        issues.append("P0203 acceptance issues must be empty")
++    if isinstance(acceptance.get("warnings"), list) and acceptance.get("warnings"):
++        warnings.extend(str(item) for item in acceptance.get("warnings", []))
++    if acceptance.get("existing_surfaces_reused") is not True:
++        issues.append("existing_surfaces_reused must be true")
++    for flag in FALSE_ACCEPTANCE_FLAGS:
++        if acceptance.get(flag) is not False:
++            issues.append(f"{flag} must be false")
++    for flag in FALSE_NEW_SURFACE_FLAGS:
++        if acceptance.get(flag) is not False:
++            issues.append(f"{flag} must be false")
++    if acceptance.get("frames_written_count") != 1:
++        issues.append("frames_written_count must be 1")
++    if acceptance.get("readback_count") != 1:
++        issues.append("readback_count must be 1")
++    if not isinstance(acceptance.get("policy_decision_id"), str) or not acceptance.get("policy_decision_id"):
++        issues.append("policy_decision_id must be present")
++
++
++def _audit_surface(*, root: Path, spec: Mapping[str, Any]) -> dict[str, Any]:
++    relative = str(spec["path"])
++    path = root / relative
++    optional = bool(spec.get("optional"))
++    exists = path.exists()
++    functions: list[str] = []
++    classes: list[str] = []
++    parse_error = ""
++    text = ""
++    if exists:
++        text = path.read_text(encoding="utf-8")
++        try:
++            tree = ast.parse(text, filename=relative)
++        except SyntaxError as exc:
++            parse_error = str(exc)
++        else:
++            for node in ast.walk(tree):
++                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
++                    functions.append(node.name)
++                elif isinstance(node, ast.ClassDef):
++                    classes.append(node.name)
++
++    symbols = set(functions) | set(classes)
++    required_symbols = tuple(spec.get("required_symbols", ()))
++    required_tokens = tuple(spec.get("required_tokens", ()))
++    missing_symbols = [symbol for symbol in required_symbols if symbol not in symbols and symbol not in text]
++    missing_tokens = [token for token in required_tokens if token not in text]
++    return {
++        "path": relative,
++        "role": spec.get("role"),
++        "optional": optional,
++        "exists": exists,
++        "parse_error": parse_error,
++        "function_count": len(functions),
++        "class_count": len(classes),
++        "functions": sorted(functions),
++        "classes": sorted(classes),
++        "required_symbols": list(required_symbols),
++        "required_tokens": list(required_tokens),
++        "matched_required_symbols": [
++            symbol for symbol in required_symbols if symbol in symbols or symbol in text
++        ],
++        "missing_required_symbols": missing_symbols,
++        "missing_required_tokens": missing_tokens,
++        "use_before_new_code": True,
++    }
++
++
++def _recommended_contract(surface_reports: list[Mapping[str, Any]]) -> dict[str, Any]:
++    by_path = {str(report.get("path")): report for report in surface_reports}
++    required = (
++        "src/runtime/controlproxy_scheduler_handler.py",
++        "src/runtime/scheduler_route_adapter.py",
++        "src/runtime/scheduler_route_handler_minimal.py",
++        "src/runtime/route_proxy_runtime_minimal.py",
++    )
++    for path in required:
++        report = by_path.get(path)
++        if not report or report.get("exists") is not True:
++            return {}
++        if report.get("missing_required_symbols") or report.get("missing_required_tokens"):
++            return {}
++    return {
++        "path": "scheduler authority -> ControlProxy contract wrapper -> RouteProxy data-plane",
++        "authority": "Scheduler/policy/zone",
++        "coordination_surface": "ControlProxy",
++        "data_plane": "RouteProxy",
++        "planned_next_patch": "0205-controlproxy_stale_priority_zone_smoke_plan",
++        "reuse_first": list(required),
++        "forbidden_until_explicit_unlock": [
++            "ControlProxy frame writes",
++            "Scheduler.run modification",
++            "production route writes",
++            "new ControlProxy runtime",
++            "new RouteProxy runtime",
++        ],
++    }
++
++
++def _read_json_file(path: Path) -> dict[str, Any]:
++    raw = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(raw, dict):
++        raise ControlProxyContractAuditError("input must be a JSON object")
++    return raw
++
++
++def _write_audit(path: Path, audit: dict[str, Any]) -> None:
++    if path.name != DEFAULT_OUTPUT_NAME:
++        raise ControlProxyContractAuditError("output filename must be controlproxy_contract_audit.json")
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(audit, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Audit ControlProxy contract surfaces.")
++    parser.add_argument("--acceptance", required=True, help="Path to controlled_scheduler_hook_smoke_acceptance.json.")
++    parser.add_argument("--repo-root", default=".", help="Repository root to inspect.")
++    parser.add_argument("--output", help="Optional controlproxy_contract_audit.json output path.")
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    args = parser.parse_args(argv)
++
++    audit = audit_controlproxy_contract_surfaces(
++        acceptance_path=Path(args.acceptance),
++        repo_root=Path(args.repo_root),
++        output_path=Path(args.output) if args.output else None,
++    )
++
++    if args.format == "json":
++        print(json.dumps(audit, indent=2, sort_keys=True))
++    else:
++        print(f"controlproxy_contract_audit_success: {audit['controlproxy_contract_audit_success']}")
++        print(f"stale_priority_zone_plan_allowed_next: {audit['stale_priority_zone_plan_allowed_next']}")
++        print(f"existing_surface_count: {audit['existing_surface_count']}")
++        print(f"next_recommended_patch: {audit['next_recommended_patch']}")
++        print(f"issues: {len(audit['issues'])}")
++        print(f"warnings: {len(audit['warnings'])}")
++    return 0 if audit["controlproxy_contract_audit_success"] else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_audit_controlproxy_contract_surfaces_0204.py b/tests/tools/test_audit_controlproxy_contract_surfaces_0204.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_audit_controlproxy_contract_surfaces_0204.py
+@@ -0,0 +1,157 @@
++from pathlib import Path
++import importlib.util
++import json
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "audit_controlproxy_contract_surfaces.py"
++
++
++def _load_tool_module():
++    spec = importlib.util.spec_from_file_location("audit_controlproxy_contract_surfaces_tool", TOOL)
++    assert spec is not None
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    assert spec.loader is not None
++    spec.loader.exec_module(module)
++    return module
++
++
++def _acceptance_fixture(tmp_path: Path) -> dict:
++    return {
++        "schema": "missipy.scheduler.controlled_hook_smoke_acceptance.v1",
++        "controlled_scheduler_hook_smoke_accepted": True,
++        "bloc_c_complete": True,
++        "next_bloc": "D",
++        "accepted_baseline": "controlled-scheduler-hook-routeproxy-write-read-v1",
++        "policy_decision_id": "policy:allow:scheduler-hook:manual0203-b",
++        "target_runtime_root": str(tmp_path / "runtime" / "dev-controlled"),
++        "target_isolated_runtime_root": str(tmp_path / "runtime" / "dev-controlled" / "routeproxy-isolated"),
++        "issues": [],
++        "warnings": [],
++        "existing_surfaces_reused": True,
++        "frames_written_count": 1,
++        "readback_count": 1,
++        "provenance_repair_items": [
++            "source_baseline_ref or source_entry_digest missing from P0200 acceptance; preserve this as a provenance repair item"
++        ],
++        "scheduler_run_executed": False,
++        "scheduler_run_modified": False,
++        "controlproxy_frames_written": False,
++        "scheduler_modified": False,
++        "eventbus_instantiated": False,
++        "network_used": False,
++        "new_runtime_handler_added": False,
++        "new_adapter_added": False,
++        "new_bus_added": False,
++        "new_scheduler_added": False,
++        "new_routeproxy_runtime_added": False,
++        "new_controlproxy_runtime_added": False,
++        "new_sql_backend_added": False,
++        "new_qdrant_backend_added": False,
++        "new_github_client_added": False,
++        "new_graph_renderer_added": False,
++        "new_inference_path_added": False,
++    }
++
++
++def _write_surface(root: Path, relative: str, source: str) -> None:
++    path = root / relative
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(source, encoding="utf-8")
++
++
++def _write_existing_surfaces(root: Path) -> None:
++    _write_surface(
++        root,
++        "src/runtime/controlproxy_scheduler_handler.py",
++        "class ControlProxySchedulerRouteRequestHandler:\n    def handle(self):\n        pass\n"
++        "def handle_scheduler_route_request():\n    pass\n"
++        "def resolve_scheduler_route_request_handler():\n    pass\n"
++        "def scheduler_route_request_payload():\n    pass\n"
++        "ControlProxy = 'ControlProxy'\nSchedulerRouteRequest = 'SchedulerRouteRequest'\n",
++    )
++    _write_surface(
++        root,
++        "src/runtime/scheduler_route_adapter.py",
++        "class SchedulerRouteRequest:\n    pass\n"
++        "class SchedulerRouteReply:\n    pass\n"
++        "def scheduler_route_request_mapping():\n    pass\n"
++        "def handle_scheduler_route_request():\n    pass\n"
++        "policy_decision_id = 'policy_decision_id'\nscope = 'scope'\nholder = 'holder'\n",
++    )
++    _write_surface(
++        root,
++        "src/runtime/scheduler_route_handler_minimal.py",
++        "class SchedulerRouteHandlerCommand:\n    pass\n"
++        "def build_single_frame_route_command():\n    pass\n"
++        "def handle_scheduler_route_command():\n    pass\n"
++        "def read_scheduler_route_handler_result_frames():\n    pass\n"
++        "priority = 'priority'\nruntime_policy = 'runtime_policy'\nroute_ref = 'route_ref'\n",
++    )
++    _write_surface(
++        root,
++        "src/runtime/route_proxy_runtime_minimal.py",
++        "class RouteProxyRuntimePolicy:\n    pass\n"
++        "def prepare_route_proxy_runtime():\n    pass\n"
++        "def request_writer_permit():\n    pass\n"
++        "def write_route_frame():\n    pass\n"
++        "def read_route_frame():\n    pass\n"
++        "def mark_route_frame_stale():\n    pass\n"
++        "stale = 'stale'\npriority = 'priority'\nroute_root = 'route_root'\n",
++    )
++    _write_surface(
++        root,
++        "src/runtime/shm_runtime_schema.py",
++        "class EventBusMessage:\n    pass\nclass ContextBusMessage:\n    pass\nclass RouteMessage:\n    pass\n"
++        "topic = 'topic'\nschema = 'schema'\npayload = 'payload'\n",
++    )
++    _write_surface(root, "src/runtime/bus_visualization_adapter.py", "graph = 'graph'\nedge = 'edge'\nnode = 'node'\n")
++
++
++def test_0204_audits_controlproxy_contract_surfaces(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    repo = tmp_path / "repo"
++    _write_existing_surfaces(repo)
++    acceptance_path = tmp_path / "controlled_scheduler_hook_smoke_acceptance.json"
++    output = tmp_path / "controlproxy_contract_audit.json"
++    acceptance_path.write_text(json.dumps(_acceptance_fixture(tmp_path), indent=2), encoding="utf-8")
++
++    audit = module.audit_controlproxy_contract_surfaces(
++        acceptance_path=acceptance_path,
++        repo_root=repo,
++        output_path=output,
++    )
++
++    assert audit["controlproxy_contract_audit_success"] is True
++    assert audit["stale_priority_zone_plan_allowed_next"] is True
++    assert audit["existing_surface_count"] == 6
++    assert audit["next_recommended_patch"] == "0205-controlproxy_stale_priority_zone_smoke_plan"
++    assert audit["recommended_contract"]["authority"] == "Scheduler/policy/zone"
++    assert audit["recommended_contract"]["coordination_surface"] == "ControlProxy"
++    assert audit["recommended_contract"]["data_plane"] == "RouteProxy"
++    assert audit["existing_surfaces_reused"] is True
++    assert audit["new_controlproxy_runtime_added"] is False
++    assert audit["runtime_imports_executed_by_0204"] is False
++    assert audit["frames_written_by_0204"] is False
++    assert audit["controlproxy_frames_written_by_0204"] is False
++    assert audit["provenance_repair_items"]
++    assert output.exists()
++
++
++def test_0204_rejects_missing_required_controlproxy_surface(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    repo = tmp_path / "repo"
++    _write_existing_surfaces(repo)
++    (repo / "src/runtime/controlproxy_scheduler_handler.py").unlink()
++    acceptance_path = tmp_path / "controlled_scheduler_hook_smoke_acceptance.json"
++    acceptance_path.write_text(json.dumps(_acceptance_fixture(tmp_path), indent=2), encoding="utf-8")
++
++    audit = module.audit_controlproxy_contract_surfaces(
++        acceptance_path=acceptance_path,
++        repo_root=repo,
++    )
++
++    assert audit["controlproxy_contract_audit_success"] is False
++    assert "missing existing surface: src/runtime/controlproxy_scheduler_handler.py" in audit["issues"]
+diff --git a/tests/rules/test_controlproxy_contract_audit_0204_rule.py b/tests/rules/test_controlproxy_contract_audit_0204_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_controlproxy_contract_audit_0204_rule.py
+@@ -0,0 +1,87 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "audit_controlproxy_contract_surfaces.py"
++DOC = ROOT / "doc" / "architecture" / "CONTROLPROXY_CONTRACT_AUDIT_0204.md"
++RULE = ROOT / "doc" / "code-rules" / "0204_controlproxy_contract_audit_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0204_CHANGED_FILES.md"
++
++
++def test_0204_tool_is_controlproxy_contract_audit_only() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    for token in [
++        "0204 is the Bloc D ControlProxy contract audit only",
++        "controlled_scheduler_hook_smoke_acceptance.json",
++        "controlproxy_contract_audit.json",
++        "Reuse/adapt existing surfaces first",
++        "0204 must audit existing ControlProxy and RouteProxy contract surfaces",
++        "0204 must not introduce a new runtime handler",
++        "0204 does not execute Scheduler.run",
++        "0204 does not import runtime handler modules",
++        "0204 does not call handle_scheduler_route_command",
++        "0204 does not call handle_scheduler_route_request",
++        "0204 does not call prepare_route_proxy_runtime",
++        "0204 does not call read_route_frame",
++        "0204 does not request writer permits",
++        "0204 does not call write_route_frame",
++        "0204 does not write ControlProxy or RouteProxy frames",
++        "0204 does not call GitHub API or use network",
++        "ControlProxy remains a contract and coordination surface, not business authority",
++        "Scheduler/policy/zone remain authority",
++        "RouteProxy remains the fast data-plane frame surface",
++        "src/runtime/controlproxy_scheduler_handler.py",
++        "src/runtime/route_proxy_runtime_minimal.py",
++        "0205-controlproxy_stale_priority_zone_smoke_plan",
++    ]:
++        assert token in source
++    assert "from runtime." not in source
++    assert "import runtime." not in source
++    assert "import requests" not in source
++    assert "from requests" not in source
++
++
++def test_0204_doc_locks_controlproxy_contract_audit_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    for token in [
++        "0204 opens Bloc D with a ControlProxy contract audit",
++        "The input is controlled_scheduler_hook_smoke_acceptance.json",
++        "The output is controlproxy_contract_audit.json",
++        "Reuse/adapt existing surfaces first",
++        "doc/code-rules/code_rule.md remains the primary rule",
++        "0204 does not write ControlProxy or RouteProxy frames",
++        "ControlProxy is not business authority",
++        "Scheduler/policy/zone remain authority",
++        "The next recommended patch is P0205 ControlProxy stale priority zone smoke plan",
++    ]:
++        assert token in doc
++
++
++def test_0204_rule_requires_controlproxy_contract_audit_only() -> None:
++    rule = RULE.read_text(encoding="utf-8")
++    for token in [
++        "Read controlled_scheduler_hook_smoke_acceptance.json from 0203",
++        "Audit existing ControlProxy and RouteProxy contract surfaces before planning stale priority zone behavior",
++        "Reuse controlproxy_scheduler_handler.py",
++        "Reuse route_proxy_runtime_minimal.py",
++        "ControlProxy is a coordination surface, not business authority",
++        "Scheduler/policy/zone remain authority",
++        "Do not add a new ControlProxy runtime",
++        "Do not add a new runtime handler",
++        "Do not write ControlProxy frames in 0204",
++        "Do not write RouteProxy frames in 0204",
++        "Allow P0205 to plan stale priority zone behavior only after audit",
++    ]:
++        assert token in rule
++
++
++def test_0204_manifest_lists_controlproxy_contract_files() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    for token in [
++        "tools/audit_controlproxy_contract_surfaces.py",
++        "tests/tools/test_audit_controlproxy_contract_surfaces_0204.py",
++        "tests/rules/test_controlproxy_contract_audit_0204_rule.py",
++        "doc/architecture/CONTROLPROXY_CONTRACT_AUDIT_0204.md",
++        "doc/code-rules/0204_controlproxy_contract_audit_rule.md",
++    ]:
++        assert token in manifest
+diff --git a/doc/architecture/CONTROLPROXY_CONTRACT_AUDIT_0204.md b/doc/architecture/CONTROLPROXY_CONTRACT_AUDIT_0204.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_CONTRACT_AUDIT_0204.md
+@@ -0,0 +1,87 @@
++# 0204 — ControlProxy contract audit
++
++## Decision
++
++0204 opens Bloc D with a ControlProxy contract audit.
++
++The input is controlled_scheduler_hook_smoke_acceptance.json.
++The output is controlproxy_contract_audit.json.
++
++Reuse/adapt existing surfaces first.
++doc/code-rules/code_rule.md remains the primary rule.
++docs, graph, changelog, manifest, and rule are updated with the patch.
++
++0204 does not write ControlProxy or RouteProxy frames.
++ControlProxy is not business authority.
++Scheduler/policy/zone remain authority.
++The next recommended patch is P0205 ControlProxy stale priority zone smoke plan.
++
++## Why this exists
++
++Bloc C accepted a controlled Scheduler hook smoke without executing or modifying
++Scheduler.run. Bloc D now needs to clarify the ControlProxy contract before any
++stale, priority, or zone behavior is planned.
++
++## Existing-surface reuse decision
++
++0204 audits existing code by AST/text only.
++
++Candidate surfaces:
++
++- `src/runtime/controlproxy_scheduler_handler.py`,
++- `src/runtime/scheduler_route_adapter.py`,
++- `src/runtime/scheduler_route_handler_minimal.py`,
++- `src/runtime/route_proxy_runtime_minimal.py`,
++- `src/runtime/shm_runtime_schema.py`,
++- `src/runtime/bus_visualization_adapter.py`.
++
++The expected contract is:
++
++```text
++Scheduler authority -> ControlProxy contract wrapper -> RouteProxy data-plane
++```
++
++## Boundary
++
++0204:
++
++- reads `controlled_scheduler_hook_smoke_acceptance.json`,
++- verifies Bloc C is accepted,
++- inspects existing ControlProxy and RouteProxy surfaces,
++- records required functions/classes/tokens,
++- records contract decisions,
++- writes optional `controlproxy_contract_audit.json`.
++
++0204 does not:
++
++- execute Scheduler.run,
++- import runtime handler modules,
++- call handle_scheduler_route_command,
++- call handle_scheduler_route_request,
++- call prepare_route_proxy_runtime,
++- call read_route_frame,
++- request writer permits,
++- call write_route_frame,
++- instantiate Scheduler,
++- instantiate EventBus,
++- create a parallel bus,
++- write ControlProxy or RouteProxy frames,
++- call GitHub API,
++- use network,
++- execute conversion,
++- execute inference,
++- write SQL,
++- write Qdrant,
++- write directly to VisPy.
++
++## Contract decisions
++
++- ControlProxy remains a coordination and contract surface, not business authority.
++- Scheduler/policy/zone remain authority.
++- RouteProxy remains the fast data-plane frame surface.
++- stale, priority, and zone behavior must be policy-scoped and auditable.
++- Any future ControlProxy frame write requires explicit phase unlock and acceptance.
++
++## Next
++
++If 0204 succeeds, P0205 may plan stale priority zone behavior.
+diff --git a/doc/code-rules/0204_controlproxy_contract_audit_rule.md b/doc/code-rules/0204_controlproxy_contract_audit_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0204_controlproxy_contract_audit_rule.md
+@@ -0,0 +1,51 @@
++# 0204 ControlProxy contract audit rule
++
++0204 audits existing ControlProxy and RouteProxy contract surfaces only.
++
++Rules:
++
++- Read controlled_scheduler_hook_smoke_acceptance.json from 0203.
++- Audit existing ControlProxy and RouteProxy contract surfaces before planning stale priority zone behavior.
++- Apply doc/code-rules/code_rule.md as the primary rule.
++- Keep docs, graph, changelog, manifest, and rule updated with the patch.
++- Reuse controlproxy_scheduler_handler.py.
++- Reuse route_proxy_runtime_minimal.py.
++- Reuse scheduler_route_adapter.py.
++- Reuse scheduler_route_handler_minimal.py.
++- Reuse shm_runtime_schema.py for observation schema only.
++- ControlProxy is a coordination surface, not business authority.
++- Scheduler/policy/zone remain authority.
++- RouteProxy remains the fast data-plane frame surface.
++- Do not add a new ControlProxy runtime.
++- Do not add a new RouteProxy runtime.
++- Do not add a new runtime handler.
++- Do not add a new adapter.
++- Do not add a new bus.
++- Do not add a new Scheduler.
++- Do not add a new SQL backend.
++- Do not add a new Qdrant backend.
++- Do not add a new GitHub client.
++- Do not add a new graph renderer.
++- Do not add a new inference path.
++- Do not execute Scheduler.run in 0204.
++- Do not modify Scheduler.run in 0204.
++- Do not import runtime handler modules.
++- Do not call handle_scheduler_route_command.
++- Do not call handle_scheduler_route_request.
++- Do not call prepare_route_proxy_runtime.
++- Do not call read_route_frame.
++- Do not request writer permits.
++- Do not call write_route_frame.
++- Do not write ControlProxy frames in 0204.
++- Do not write RouteProxy frames in 0204.
++- Do not instantiate Scheduler.
++- Do not instantiate EventBus.
++- Do not create a parallel bus.
++- Do not call GitHub API.
++- Do not use network.
++- Do not execute conversion.
++- Do not execute inference.
++- Do not write SQL.
++- Do not write Qdrant.
++- Do not write directly to VisPy.
++- Allow P0205 to plan stale priority zone behavior only after audit.
+diff --git a/doc/docs/architecture/runtime/204_controlproxy_contract_audit.dot b/doc/docs/architecture/runtime/204_controlproxy_contract_audit.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/204_controlproxy_contract_audit.dot
+@@ -0,0 +1,18 @@
++digraph controlproxy_contract_audit_0204 {
++  rankdir=LR;
++  label="0204 ControlProxy contract audit";
++  labelloc=t;
++
++  acceptance [label="P0203 controlled Scheduler hook acceptance"];
++  audit [label="controlproxy_contract_audit.json"];
++  controlproxy [label="controlproxy_scheduler_handler.py"];
++  routeproxy [label="route_proxy_runtime_minimal.py"];
++  authority [label="Scheduler / policy / zone authority"];
++  p0205 [label="P0205 stale priority zone plan"];
++
++  acceptance -> audit [label="Bloc C complete"];
++  controlproxy -> audit [label="AST/text only"];
++  routeproxy -> audit [label="AST/text only"];
++  authority -> audit [label="authority contract"];
++  audit -> p0205 [label="if clean"];
++}
+diff --git a/doc/CHANGELOG_0204_CONTROLPROXY_CONTRACT_AUDIT.md b/doc/CHANGELOG_0204_CONTROLPROXY_CONTRACT_AUDIT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0204_CONTROLPROXY_CONTRACT_AUDIT.md
+@@ -0,0 +1,21 @@
++# Changelog — 0204 ControlProxy contract audit
++
++## Added
++
++- Bloc D ControlProxy contract audit.
++- AST/text audit of existing ControlProxy/RouteProxy contract candidates.
++- Contract decision: ControlProxy is coordination, not business authority.
++- Contract decision: Scheduler/policy/zone remain authority.
++- Contract decision: RouteProxy remains fast data-plane frame surface.
++- Next patch direction for stale/priority/zone planning.
++- Documentation, graph, changelog, manifest, and code-rule entry for the patch.
++
++## Not changed
++
++- No Scheduler.run execution or modification.
++- No runtime handler import.
++- No runtime handler call.
++- No new adapter, bus, Scheduler, RouteProxy runtime, ControlProxy runtime, SQL
++  backend, Qdrant backend, GitHub client, graph renderer, or inference path.
++- No ControlProxy or RouteProxy frame write.
++- No production route write.
+diff --git a/doc/manifests/MANIFEST_0204_CHANGED_FILES.md b/doc/manifests/MANIFEST_0204_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0204_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest — 0204 ControlProxy contract audit
++
++- PHASE0204_TEST_REPORT.md
++- tools/audit_controlproxy_contract_surfaces.py
++- tests/tools/test_audit_controlproxy_contract_surfaces_0204.py
++- tests/rules/test_controlproxy_contract_audit_0204_rule.py
++- doc/architecture/CONTROLPROXY_CONTRACT_AUDIT_0204.md
++- doc/code-rules/0204_controlproxy_contract_audit_rule.md
++- doc/docs/architecture/runtime/204_controlproxy_contract_audit.dot
++- doc/CHANGELOG_0204_CONTROLPROXY_CONTRACT_AUDIT.md
++- doc/manifests/MANIFEST_0204_CHANGED_FILES.md

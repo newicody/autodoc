@@ -1,0 +1,464 @@
+diff --git a/PHASE0227_FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT_TEST_REPORT.md b/PHASE0227_FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT_TEST_REPORT.md
+new file mode 100644
+index 0000000..ada4dba
+--- /dev/null
++++ b/PHASE0227_FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT_TEST_REPORT.md
+@@ -0,0 +1,23 @@
++# Phase 0227 test report — functional resumption supervision gate contract
++
++Validation scope:
++
++- Documentation and rule-only patch.
++- No runtime code added.
++- Rule tests assert that functional implementation cannot resume until the EventBus/passive-supervisor path, reuse audit, and forbidden parallel paths are explicitly preserved.
++
++Expected validation commands:
++
++```bash
++python -m compileall -q tests
++python -m pytest -q tests/rules/test_functional_resumption_supervision_gate_contract_0227_rule.py
++```
++
++Sandbox validation:
++
++```text
++git apply --check : OK
++git apply : OK
++compileall tests : OK
++pytest targeted : OK
++```
+diff --git a/doc/CHANGELOG_0227_FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT.md b/doc/CHANGELOG_0227_FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT.md
+new file mode 100644
+index 0000000..eb79a26
+--- /dev/null
++++ b/doc/CHANGELOG_0227_FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT.md
+@@ -0,0 +1,19 @@
++# Changelog — 0227 functional resumption supervision gate contract
++
++## Added
++
++- Documented the acceptance gate required before resuming functional supervisor/EventBus implementation.
++- Locked the requirement to audit and reuse existing EventBus, Scheduler, passive-supervisor, proxy, SHM, and policy surfaces before adding runtime code.
++- Added explicit no-go rules for parallel bridges, mandatory `events.jsonl`, status-file-first paths, new buses, Scheduler wrappers, and hidden policy/proxy/SHM control.
++- Added a DOT diagram for the functional resumption gate and its forbidden bypasses.
++- Added a rule test covering the gate vocabulary and forbidden paths.
++
++## Not changed
++
++- No runtime code.
++- No new EventBus.
++- No Scheduler changes.
++- No `Scheduler.run()` usage.
++- No proxy/SHM/policy control.
++- No SQL/Qdrant/GitHub mutation.
++- No VisPy dependency.
+diff --git a/doc/architecture/FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT_0227.md b/doc/architecture/FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT_0227.md
+new file mode 100644
+index 0000000..5d6fba9
+--- /dev/null
++++ b/doc/architecture/FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT_0227.md
+@@ -0,0 +1,223 @@
++# Functional resumption supervision gate contract — 0227
++
++## Decision
++
++Functional implementation may resume only after the passive-supervision contracts are treated as the canonical boundary.
++
++The target runtime path remains:
++
++```text
++Scheduler / RouteProxy / ControlProxy / SHM / Policy / GitHub / SQL / Qdrant
++  -> EventBus
++  -> PassiveSupervisorSink
++  -> CellularState
++  -> optional snapshot / optional audit / future VisPy view
++```
++
++This patch does not implement that path. It defines the gate that any next functional patch must pass before code is added.
++
++## Why this gate exists
++
++Several candidate directions were rejected before they became permanent architecture:
++
++```text
++status JSON first
++mandatory events.jsonl bridge
++parallel EventBus
++new scheduler wrapper
++supervisor-owned runtime control
++VisPy in the critical path
++```
++
++The gate prevents those rejected directions from returning under another name.
++
++## Mandatory pre-implementation audit
++
++Before the next functional patch modifies runtime code, it must inspect the existing repository surfaces and identify reuse targets.
++
++The audit must cover at least:
++
++```text
++existing EventBus implementation or event dispatch surface
++existing Scheduler event/emission surface
++existing passive supervisor / cellular snapshot module from 0220
++existing route/control proxy status or event surfaces
++existing SHM status/ring/event surfaces
++existing policy gate/decision event surfaces
++existing GitHub artifact/source-candidate/data-flow contract files
++existing SQL/Qdrant recall/projection contract files
++```
++
++A new runtime module is allowed only when the audit proves that no existing surface can be safely extended. The reason must be written in the patch documentation.
++
++## Mandatory reuse rule
++
++The next functional patch must prefer extension over invention.
++
++Preferred order:
++
++```text
++1. extend existing passive-supervisor module
++2. add a small sink class/function inside the existing supervision surface
++3. add tests around direct EventBus event acceptance
++4. add optional snapshot/audit helpers only if they remain outputs
++5. add a new module only after documenting why existing files cannot host it
++```
++
++Forbidden default approach:
++
++```text
++create new bridge subsystem
++create new bus facade
++create new scheduler adapter that wraps Scheduler.run()
++create file-first replay path as live runtime
++create proxy/SHM/policy controller inside supervision
++```
++
++## Required functional shape
++
++The next functional patch should target the smallest useful shape:
++
++```text
++PassiveSupervisorSink.accept(event)
++PassiveSupervisorSink.snapshot()
++optional PassiveSupervisorSink.write_snapshot(path)
++optional audit writer behind an explicit flag/configuration
++```
++
++The sink must accept canonical EventBus events directly. If field normalization is needed, it must be a thin boundary normalization, not a second event grammar.
++
++## Scheduler boundary
++
++The Scheduler remains the upstream orchestration authority.
++
++Allowed:
++
++```text
++Scheduler emits an EventBus event
++Scheduler exposes an already-produced event to the EventBus
++PassiveSupervisorSink observes the resulting event
++```
++
++Forbidden:
++
++```text
++PassiveSupervisorSink calls Scheduler.run()
++PassiveSupervisorSink wraps Scheduler.run()
++PassiveSupervisorSink dispatches Scheduler handlers
++PassiveSupervisorSink changes Scheduler policy, priority, or order
++```
++
++## Proxy / SHM / policy boundary
++
++The runtime surfaces may emit observable events:
++
++```text
++RouteProxy route changed
++ControlProxy lease or priority changed
++SHM ring state observed by owning component
++Policy decision allowed / blocked / deferred
++```
++
++The supervisor may update cellular state from those events.
++
++It must not:
++
++```text
++change a route
++claim or release a lease
++write to SHM
++read raw /dev/shm as a required live path
++make or override a policy decision
++```
++
++## Data-flow boundary
++
++GitHub, SourceCandidate, SQL, Qdrant, rehydration, and pushback may all produce events that are visible in the same cellular state.
++
++The supervisor observes refs such as:
++
++```text
++artifact_ref
++source_candidate_ref
++sql_ref
++qdrant_ref
++handoff_ref
++pushback_ref
++```
++
++It must not perform:
++
++```text
++GitHub API mutation
++SourceCandidate promotion/rejection
++SQL read/write
++Qdrant query/write
++rehydration execution
++pushback publication
++```
++
++## Cellular topology requirement
++
++Functional code must preserve the topology concept from 0225.
++
++Cells may be grouped by localization, surface, route, context, owner, or runtime zone. A cell may appear to move when data, a lease, an artifact, a context, or a reference is transmitted elsewhere.
++
++That movement is an observed projection only. It does not transfer authority to the supervisor.
++
++## Snapshot / audit / replay requirement
++
++The live path must stay:
++
++```text
++EventBus -> PassiveSupervisorSink -> CellularState
++```
++
++Allowed optional outputs:
++
++```text
++CellularState -> snapshot.json
++PassiveSupervisorSink -> events.jsonl audit
++```
++
++Allowed test harness:
++
++```text
++events.jsonl fixture -> replay harness -> PassiveSupervisorSink
++```
++
++Forbidden live path:
++
++```text
++EventBus -> events.jsonl -> supervisor
++status.json -> supervisor as primary source
++snapshot.json -> live runtime state owner
++```
++
++## Acceptance criteria for the next functional patch
++
++The next runtime patch must prove:
++
++```text
++no Scheduler.run usage
++no new EventBus unless audit-approved
++no mandatory events.jsonl/status.json path
++no proxy/SHM/policy control
++no SQL/Qdrant/GitHub mutation
++canonical EventBus event accepted directly
++CellularState updated in memory
++snapshot available on demand
++optional audit remains optional
++rule tests updated
++changelog and manifest updated
++```
++
++## Stop condition
++
++If implementation requires a large adapter or duplicate event grammar, stop and update the EventBus event contract first.
++
++If implementation requires a new module, stop and document the audit result explaining why existing supervision/EventBus surfaces cannot be extended.
++
++## Principle
++
++The functional resumption must make the existing system visible. It must not create a second system.
+diff --git a/doc/code-rules/0227_functional_resumption_supervision_gate_contract_rule.md b/doc/code-rules/0227_functional_resumption_supervision_gate_contract_rule.md
+new file mode 100644
+index 0000000..d7d9b60
+--- /dev/null
++++ b/doc/code-rules/0227_functional_resumption_supervision_gate_contract_rule.md
+@@ -0,0 +1,38 @@
++# Code rule — 0227 functional resumption supervision gate contract
++
++Before resuming runtime implementation of passive supervision, every patch must pass the functional resumption gate.
++
++Required:
++
++```text
++reuse existing EventBus and passive-supervisor surfaces when possible
++keep Scheduler as upstream orchestration authority
++keep EventBus as the canonical live transport
++keep PassiveSupervisorSink downstream-only
++keep CellularState as an in-memory projection
++keep snapshot/audit/replay optional
++update changelog, manifest, rules, and tests
++```
++
++Forbidden unless a prior audit documents why no existing surface can be reused:
++
++```text
++new EventBus
++parallel bridge subsystem
++new scheduler wrapper
++mandatory events.jsonl live path
++status JSON as primary live input
++snapshot.json as runtime state owner
++```
++
++Always forbidden for passive supervision:
++
++```text
++Scheduler.run()
++proxy control
++SHM mutation
++required raw /dev/shm read path
++policy decision or override
++SQL/Qdrant/GitHub mutation
++VisPy in the critical runtime path
++```
+diff --git a/doc/docs/architecture/runtime/227_functional_resumption_supervision_gate_contract.dot b/doc/docs/architecture/runtime/227_functional_resumption_supervision_gate_contract.dot
+new file mode 100644
+index 0000000..d06a188
+--- /dev/null
++++ b/doc/docs/architecture/runtime/227_functional_resumption_supervision_gate_contract.dot
+@@ -0,0 +1,38 @@
++digraph functional_resumption_supervision_gate_contract_0227 {
++  rankdir=LR;
++  node [shape=box];
++
++  Scheduler [label="Scheduler\nupstream authority"];
++  RuntimeSurfaces [label="RouteProxy / ControlProxy / SHM / Policy"];
++  DataSurfaces [label="GitHub / SourceCandidate / SQL / Qdrant / Rehydrate / Pushback"];
++  EventBus [label="EventBus\ncanonical live transport"];
++  Gate [label="0227 functional resumption gate\naudit + reuse required"];
++  Sink [label="PassiveSupervisorSink\ndownstream-only"];
++  State [label="CellularState\nin-memory projection"];
++  Snapshot [label="snapshot\noptional output"];
++  Audit [label="events.jsonl\noptional audit/replay"];
++  VisPy [label="VisPy later\nview only"];
++
++  Scheduler -> EventBus;
++  RuntimeSurfaces -> EventBus;
++  DataSurfaces -> EventBus;
++  EventBus -> Gate;
++  Gate -> Sink;
++  Sink -> State;
++  State -> Snapshot [style=dashed];
++  Sink -> Audit [style=dashed];
++  Snapshot -> VisPy [style=dashed];
++  State -> VisPy [style=dashed];
++
++  ForbiddenBus [label="new/parallel EventBus", shape=octagon];
++  ForbiddenRun [label="Scheduler.run / wrapper", shape=octagon];
++  ForbiddenFiles [label="mandatory status/events/snapshot path", shape=octagon];
++  ForbiddenControl [label="proxy / SHM / policy control", shape=octagon];
++  ForbiddenData [label="SQL/Qdrant/GitHub mutation", shape=octagon];
++
++  Gate -> ForbiddenBus [style=dotted, label="reject"];
++  Gate -> ForbiddenRun [style=dotted, label="reject"];
++  Gate -> ForbiddenFiles [style=dotted, label="reject"];
++  Gate -> ForbiddenControl [style=dotted, label="reject"];
++  Gate -> ForbiddenData [style=dotted, label="reject"];
++}
+diff --git a/doc/manifests/MANIFEST_0227_FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT_CHANGED_FILES.md b/doc/manifests/MANIFEST_0227_FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1c59131
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0227_FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT_CHANGED_FILES.md
+@@ -0,0 +1,15 @@
++# Manifest — 0227 functional resumption supervision gate contract
++
++Added files:
++
++```text
++PHASE0227_FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT_TEST_REPORT.md
++doc/architecture/FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT_0227.md
++doc/code-rules/0227_functional_resumption_supervision_gate_contract_rule.md
++doc/docs/architecture/runtime/227_functional_resumption_supervision_gate_contract.dot
++doc/CHANGELOG_0227_FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT.md
++doc/manifests/MANIFEST_0227_FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT_CHANGED_FILES.md
++tests/rules/test_functional_resumption_supervision_gate_contract_0227_rule.py
++```
++
++No runtime files changed.
+diff --git a/tests/rules/test_functional_resumption_supervision_gate_contract_0227_rule.py b/tests/rules/test_functional_resumption_supervision_gate_contract_0227_rule.py
+new file mode 100644
+index 0000000..2b5428f
+--- /dev/null
++++ b/tests/rules/test_functional_resumption_supervision_gate_contract_0227_rule.py
+@@ -0,0 +1,66 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++DOC = ROOT / "doc" / "architecture" / "FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT_0227.md"
++RULE = ROOT / "doc" / "code-rules" / "0227_functional_resumption_supervision_gate_contract_rule.md"
++DOT = ROOT / "doc" / "docs" / "architecture" / "runtime" / "227_functional_resumption_supervision_gate_contract.dot"
++CHANGELOG = ROOT / "doc" / "CHANGELOG_0227_FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0227_FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT_CHANGED_FILES.md"
++REPORT = ROOT / "PHASE0227_FUNCTIONAL_RESUMPTION_SUPERVISION_GATE_CONTRACT_TEST_REPORT.md"
++
++
++def _read(path: Path) -> str:
++    return path.read_text(encoding="utf-8")
++
++
++def test_0227_contract_files_exist() -> None:
++    for path in (DOC, RULE, DOT, CHANGELOG, MANIFEST, REPORT):
++        assert path.exists(), path
++
++
++def test_0227_contract_requires_audit_and_reuse_before_runtime_code() -> None:
++    text = _read(DOC)
++    assert "Mandatory pre-implementation audit" in text
++    assert "existing EventBus implementation" in text
++    assert "existing Scheduler event/emission surface" in text
++    assert "existing passive supervisor / cellular snapshot module from 0220" in text
++    assert "A new runtime module is allowed only when the audit proves" in text
++    assert "prefer extension over invention" in text
++
++
++def test_0227_contract_keeps_direct_eventbus_path_and_optional_outputs() -> None:
++    text = _read(DOC)
++    assert "EventBus -> PassiveSupervisorSink -> CellularState" in text
++    assert "snapshot.json" in text
++    assert "events.jsonl audit" in text
++    assert "optional" in text
++    assert "status.json -> supervisor as primary source" in text
++    assert "snapshot.json -> live runtime state owner" in text
++
++
++def test_0227_rule_forbids_parallel_runtime_and_authority_leaks() -> None:
++    text = _read(RULE)
++    required = [
++        "new EventBus",
++        "parallel bridge subsystem",
++        "new scheduler wrapper",
++        "mandatory events.jsonl live path",
++        "status JSON as primary live input",
++        "Scheduler.run()",
++        "proxy control",
++        "SHM mutation",
++        "policy decision or override",
++        "SQL/Qdrant/GitHub mutation",
++        "VisPy in the critical runtime path",
++    ]
++    for needle in required:
++        assert needle in text
++
++
++def test_0227_dot_documents_gate_and_rejections() -> None:
++    text = _read(DOT)
++    assert "0227 functional resumption gate" in text
++    assert "EventBus" in text
++    assert "PassiveSupervisorSink" in text
++    assert "CellularState" in text
++    assert "reject" in text

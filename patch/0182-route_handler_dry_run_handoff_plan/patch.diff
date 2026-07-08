@@ -1,0 +1,636 @@
+diff --git a/PHASE0182_TEST_REPORT.md b/PHASE0182_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0182_TEST_REPORT.md
+@@ -0,0 +1,26 @@
++# Phase 0182 Test Report — Route handler dry-run handoff plan
++
++Status: prepared.
++
++Scope:
++- Reads `scheduler.route_requests.jsonl`.
++- Reads handler file as text/AST.
++- Builds optional `route_handler_dry_run_plan.jsonl`.
++- No handler import.
++- No handler call.
++- No Scheduler modification.
++- No EventBus instantiation.
++- No ControlProxy/RouteProxy frame write.
++- No GitHub API/network.
++- No conversion/inference/SQL/Qdrant/VisPy writes.
++
++Validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/tools/test_build_route_handler_dry_run_handoff_plan_0182.py \
++  tests/rules/test_route_handler_dry_run_handoff_plan_0182_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
+diff --git a/tools/build_route_handler_dry_run_handoff_plan.py b/tools/build_route_handler_dry_run_handoff_plan.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/build_route_handler_dry_run_handoff_plan.py
+@@ -0,0 +1,225 @@
++#!/usr/bin/env python3
++"""Build a dry-run route handler handoff plan.
++
++0182 is a planning tool only.
++
++It reads scheduler.route_requests.jsonl, validates queued items through the
++existing queue reader, inspects the existing route handler file as text/AST, and
++optionally writes route_handler_dry_run_plan.jsonl.
++
++It does not import runtime handler modules.
++It does not call handle_scheduler_route_request.
++It does not modify Scheduler.run.
++It does not instantiate Scheduler.
++It does not instantiate EventBus.
++It does not write RouteProxy or ControlProxy frames.
++"""
++
++from __future__ import annotations
++
++import argparse
++import ast
++import json
++from pathlib import Path
++import sys
++from typing import Any, Mapping
++
++ROOT = Path(__file__).resolve().parents[1]
++SRC = ROOT / "src"
++if str(SRC) not in sys.path:
++    sys.path.insert(0, str(SRC))
++
++from context.authorized_route_request_queue import iter_authorized_route_request_queue  # noqa: E402
++
++
++ROUTE_HANDLER_DRY_RUN_HANDOFF_PLAN_SCHEMA = "missipy.route_handler.dry_run_handoff_plan.v1"
++DEFAULT_HANDLER_FILE = "src/runtime/scheduler_route_handler_minimal.py"
++DEFAULT_HANDLER_SYMBOL = "handle_scheduler_route_request"
++DEFAULT_OUTPUT_NAME = "route_handler_dry_run_plan.jsonl"
++
++
++class RouteHandlerDryRunHandoffPlanError(ValueError):
++    """Raised when the dry-run handoff plan cannot be built safely."""
++
++
++def build_route_handler_dry_run_handoff_plan(
++    *,
++    queue_path: Path | str,
++    repo_root: Path | str,
++    output_path: Path | str | None = None,
++    handler_file: str = DEFAULT_HANDLER_FILE,
++    handler_symbol: str = DEFAULT_HANDLER_SYMBOL,
++) -> dict[str, Any]:
++    """Build a dry-run handoff plan without executing route handling."""
++
++    root = Path(repo_root)
++    queue = Path(queue_path)
++    handler = _inspect_handler_signature(root, handler_file, handler_symbol)
++    requests = list(iter_authorized_route_request_queue(queue))
++
++    items: list[dict[str, Any]] = []
++    for index, request in enumerate(requests, start=1):
++        issues: list[str] = []
++        if not request.authorized:
++            issues.append("request is not authorized")
++        if not request.policy_decision_id:
++            issues.append("missing policy_decision_id")
++        if not handler["function_found"]:
++            issues.append("handler function not found")
++        if not handler["ast_parse_ok"]:
++            issues.append("handler file does not parse")
++        if not handler["exists"]:
++            issues.append("handler file missing")
++
++        items.append(
++            {
++                "index": index,
++                "request_id": request.request_id,
++                "route_id": request.route_id,
++                "task_id": request.task_id,
++                "authorized": request.authorized,
++                "policy_decision_id": request.policy_decision_id,
++                "handler_file": handler_file,
++                "handler_symbol": handler_symbol,
++                "handler_signature": handler["signature"],
++                "ready_for_later_handler_call": not issues,
++                "issues": issues,
++            }
++        )
++
++    if output_path is not None:
++        _write_plan_jsonl(Path(output_path), items)
++
++    ready_count = sum(1 for item in items if item["ready_for_later_handler_call"])
++    return {
++        "schema": ROUTE_HANDLER_DRY_RUN_HANDOFF_PLAN_SCHEMA,
++        "queue_path": str(queue),
++        "output_path": str(output_path) if output_path is not None else None,
++        "handler": handler,
++        "item_count": len(items),
++        "ready_count": ready_count,
++        "blocked_count": len(items) - ready_count,
++        "items": items,
++        "dry_run_only": True,
++        "runtime_imports_executed": False,
++        "handler_called": False,
++        "scheduler_modified": False,
++        "frames_written": False,
++    }
++
++
++def _inspect_handler_signature(repo_root: Path, handler_file: str, handler_symbol: str) -> dict[str, Any]:
++    path = _safe_repo_file(repo_root, handler_file)
++    if not path.exists():
++        return {
++            "path": handler_file,
++            "exists": False,
++            "ast_parse_ok": False,
++            "function_found": False,
++            "signature": None,
++            "imports_detected": [],
++        }
++
++    text = path.read_text(encoding="utf-8")
++    try:
++        tree = ast.parse(text, filename=str(path))
++    except SyntaxError:
++        return {
++            "path": handler_file,
++            "exists": True,
++            "ast_parse_ok": False,
++            "function_found": False,
++            "signature": None,
++            "imports_detected": [],
++        }
++
++    signature = None
++    function_found = False
++    for node in ast.walk(tree):
++        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == handler_symbol:
++            function_found = True
++            signature = _function_signature(node)
++            break
++
++    return {
++        "path": handler_file,
++        "exists": True,
++        "ast_parse_ok": True,
++        "function_found": function_found,
++        "signature": signature,
++        "imports_detected": sorted(_ast_imports(tree)),
++    }
++
++
++def _function_signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, Any]:
++    args = node.args
++    positional = [arg.arg for arg in args.posonlyargs + args.args]
++    keyword_only = [arg.arg for arg in args.kwonlyargs]
++    vararg = args.vararg.arg if args.vararg else None
++    kwarg = args.kwarg.arg if args.kwarg else None
++    return {
++        "name": node.name,
++        "positional": positional,
++        "keyword_only": keyword_only,
++        "vararg": vararg,
++        "kwarg": kwarg,
++        "arg_count": len(positional) + len(keyword_only),
++    }
++
++
++def _ast_imports(tree: ast.AST) -> set[str]:
++    imports: set[str] = set()
++    for node in ast.walk(tree):
++        if isinstance(node, ast.Import):
++            imports.update(alias.name for alias in node.names)
++        elif isinstance(node, ast.ImportFrom):
++            imports.add(node.module or "")
++    return imports
++
++
++def _write_plan_jsonl(path: Path, items: list[Mapping[str, Any]]) -> None:
++    if path.name != DEFAULT_OUTPUT_NAME:
++        raise RouteHandlerDryRunHandoffPlanError("output filename must be route_handler_dry_run_plan.jsonl")
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with path.open("w", encoding="utf-8") as handle:
++        for item in items:
++            handle.write(json.dumps(dict(item), sort_keys=True, separators=(",", ":")) + "\n")
++
++
++def _safe_repo_file(repo_root: Path, relative: str) -> Path:
++    if not relative or relative.startswith("/") or "\\" in relative or ".." in relative.split("/"):
++        raise RouteHandlerDryRunHandoffPlanError("handler_file must be a safe repo-relative path")
++    return repo_root / relative
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Build a dry-run route handler handoff plan.")
++    parser.add_argument("--queue", required=True, help="Path to scheduler.route_requests.jsonl.")
++    parser.add_argument("--repo-root", default=str(ROOT), help="Repository root.")
++    parser.add_argument("--output", help="Optional route_handler_dry_run_plan.jsonl output path.")
++    parser.add_argument("--handler-file", default=DEFAULT_HANDLER_FILE)
++    parser.add_argument("--handler-symbol", default=DEFAULT_HANDLER_SYMBOL)
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    args = parser.parse_args(argv)
++
++    report = build_route_handler_dry_run_handoff_plan(
++        queue_path=Path(args.queue),
++        repo_root=Path(args.repo_root),
++        output_path=Path(args.output) if args.output else None,
++        handler_file=args.handler_file,
++        handler_symbol=args.handler_symbol,
++    )
++
++    if args.format == "json":
++        print(json.dumps(report, indent=2, sort_keys=True))
++    else:
++        print(f"item_count: {report['item_count']}")
++        print(f"ready_count: {report['ready_count']}")
++        print(f"blocked_count: {report['blocked_count']}")
++        print("dry_run_only: True")
++        print("handler_called: False")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_build_route_handler_dry_run_handoff_plan_0182.py b/tests/tools/test_build_route_handler_dry_run_handoff_plan_0182.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_build_route_handler_dry_run_handoff_plan_0182.py
+@@ -0,0 +1,125 @@
++from pathlib import Path
++import importlib.util
++import json
++import subprocess
++import sys
++
++from context.authorized_route_request_queue import append_authorized_route_requests_from_context_bus
++from context.github_artifact_dataset_bus_observation import append_github_artifact_dataset_bus_observation
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "build_route_handler_dry_run_handoff_plan.py"
++
++
++def _load_tool_module():
++    spec = importlib.util.spec_from_file_location("build_route_handler_dry_run_handoff_plan_tool", TOOL)
++    assert spec is not None
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    assert spec.loader is not None
++    spec.loader.exec_module(module)
++    return module
++
++
++def _observation() -> dict[str, object]:
++    return {
++        "report_ref": "report:github-artifact:0182",
++        "repository": "newicody/autodoc-ideas",
++        "run_id": "run0182",
++        "artifact_id": "artifact0182",
++        "status": "queued",
++        "dataset_root_ref": "server-dataset:github-artifacts",
++        "raw_count": 1,
++        "queued_count": 1,
++        "failed_count": 0,
++        "occurred_at": "2026-07-07T00:00:00Z",
++    }
++
++
++def _write_fake_handler(root: Path) -> None:
++    path = root / "src/runtime/scheduler_route_handler_minimal.py"
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(
++        (
++            "def handle_scheduler_route_request(request, *, runtime_root=None):\n"
++            "    raise AssertionError('must not execute in dry-run test')\n"
++        ),
++        encoding="utf-8",
++    )
++
++
++def _write_queue(root: Path) -> str:
++    append_github_artifact_dataset_bus_observation(runtime_root=root, raw=_observation())
++    handoff = append_authorized_route_requests_from_context_bus(
++        context_bus_path=root / "context.bus.jsonl",
++        runtime_root=root,
++        policy_decision_id="policy:allow:github-artifact:0182",
++    )
++    return handoff.queue_path
++
++
++def test_0182_builds_dry_run_handoff_plan_without_handler_call(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    _write_fake_handler(tmp_path)
++    queue_path = _write_queue(tmp_path)
++
++    report = module.build_route_handler_dry_run_handoff_plan(
++        queue_path=queue_path,
++        repo_root=tmp_path,
++        output_path=tmp_path / "route_handler_dry_run_plan.jsonl",
++    )
++
++    assert report["item_count"] == 1
++    assert report["ready_count"] == 1
++    assert report["dry_run_only"] is True
++    assert report["handler_called"] is False
++    assert report["runtime_imports_executed"] is False
++    assert report["handler"]["function_found"] is True
++    assert report["items"][0]["ready_for_later_handler_call"] is True
++    assert (tmp_path / "route_handler_dry_run_plan.jsonl").exists()
++
++
++def test_0182_blocks_when_handler_function_missing(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    path = tmp_path / "src/runtime/scheduler_route_handler_minimal.py"
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text("def other_function(): pass\n", encoding="utf-8")
++    queue_path = _write_queue(tmp_path)
++
++    report = module.build_route_handler_dry_run_handoff_plan(queue_path=queue_path, repo_root=tmp_path)
++
++    assert report["item_count"] == 1
++    assert report["ready_count"] == 0
++    assert report["blocked_count"] == 1
++    assert "handler function not found" in report["items"][0]["issues"]
++
++
++def test_0182_cli_outputs_json(tmp_path: Path) -> None:
++    _write_fake_handler(tmp_path)
++    queue_path = _write_queue(tmp_path)
++
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--queue",
++            queue_path,
++            "--repo-root",
++            str(tmp_path),
++            "--output",
++            str(tmp_path / "route_handler_dry_run_plan.jsonl"),
++            "--format",
++            "json",
++        ],
++        cwd=ROOT,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=True,
++    )
++    report = json.loads(completed.stdout)
++    assert report["schema"] == "missipy.route_handler.dry_run_handoff_plan.v1"
++    assert report["dry_run_only"] is True
++    assert report["handler_called"] is False
++    assert report["frames_written"] is False
+diff --git a/tests/rules/test_route_handler_dry_run_handoff_plan_0182_rule.py b/tests/rules/test_route_handler_dry_run_handoff_plan_0182_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_route_handler_dry_run_handoff_plan_0182_rule.py
+@@ -0,0 +1,78 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "build_route_handler_dry_run_handoff_plan.py"
++DOC = ROOT / "doc" / "architecture" / "ROUTE_HANDLER_DRY_RUN_HANDOFF_PLAN_0182.md"
++RULE = ROOT / "doc" / "code-rules" / "0182_route_handler_dry_run_handoff_plan_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0182_CHANGED_FILES.md"
++
++
++def test_0182_tool_is_dry_run_plan_only() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    for token in [
++        "0182 is a planning tool only",
++        "scheduler.route_requests.jsonl",
++        "route_handler_dry_run_plan.jsonl",
++        "It does not import runtime handler modules",
++        "It does not call handle_scheduler_route_request",
++        "It does not modify Scheduler.run",
++        "It does not instantiate Scheduler",
++        "It does not instantiate EventBus",
++        "It does not write RouteProxy or ControlProxy frames",
++        "ast.parse",
++    ]:
++        assert token in source
++    assert "handle_scheduler_route_request(" not in source
++    assert "from runtime.scheduler_route_handler_minimal import" not in source
++    assert "from kernel.scheduler import Scheduler" not in source
++    assert "from kernel.event_bus import EventBus" not in source
++
++
++def test_0182_doc_locks_handoff_plan_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    for token in [
++        "0182 builds a dry-run handoff plan, not a handler call",
++        "The input is scheduler.route_requests.jsonl",
++        "The output is route_handler_dry_run_plan.jsonl",
++        "It reads the handler file as AST only",
++        "It does not import the handler module",
++        "It does not call handle_scheduler_route_request",
++        "A future patch may consume the plan only after review",
++    ]:
++        assert token in doc
++
++
++def test_0182_rule_blocks_execution_and_new_handler() -> None:
++    rule = RULE.read_text(encoding="utf-8")
++    for token in [
++        "Read scheduler.route_requests.jsonl from 0179",
++        "Build only route_handler_dry_run_plan.jsonl",
++        "Do not call handle_scheduler_route_request",
++        "Do not import runtime handler modules",
++        "Do not add a new runtime handler",
++        "Do not modify Scheduler.run",
++        "Do not write ControlProxy or RouteProxy frames",
++    ]:
++        assert token in rule
++
++
++def test_0182_tool_has_no_network_imports() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    assert "--queue" in source
++    assert "--output" in source
++    assert "import requests" not in source
++    assert "from requests" not in source
++    assert "urllib" not in source
++
++
++def test_0182_manifest_lists_handoff_plan_files() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    for token in [
++        "tools/build_route_handler_dry_run_handoff_plan.py",
++        "tests/tools/test_build_route_handler_dry_run_handoff_plan_0182.py",
++        "tests/rules/test_route_handler_dry_run_handoff_plan_0182_rule.py",
++        "doc/architecture/ROUTE_HANDLER_DRY_RUN_HANDOFF_PLAN_0182.md",
++        "doc/code-rules/0182_route_handler_dry_run_handoff_plan_rule.md",
++    ]:
++        assert token in manifest
+diff --git a/doc/architecture/ROUTE_HANDLER_DRY_RUN_HANDOFF_PLAN_0182.md b/doc/architecture/ROUTE_HANDLER_DRY_RUN_HANDOFF_PLAN_0182.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/ROUTE_HANDLER_DRY_RUN_HANDOFF_PLAN_0182.md
+@@ -0,0 +1,57 @@
++# 0182 — Route handler dry-run handoff plan
++
++## Decision
++
++0182 builds a dry-run handoff plan, not a handler call.
++
++The input is scheduler.route_requests.jsonl.
++The output is route_handler_dry_run_plan.jsonl.
++
++It reads the handler file as AST only.
++It does not import the handler module.
++It does not call handle_scheduler_route_request.
++
++A future patch may consume the plan only after review.
++
++## Why this exists
++
++0179 writes authorized SchedulerRouteRequest entries.
++0180 validates the route request queue.
++0181 audits handler surface files.
++
++0182 connects those audit results into a reviewable dry-run handoff plan without
++executing the handler. This gives a concrete staging artifact before any future
++route handler call is allowed.
++
++## Boundary
++
++0182:
++
++- reads `scheduler.route_requests.jsonl`,
++- validates queued entries through the existing queue reader,
++- reads `src/runtime/scheduler_route_handler_minimal.py` as text/AST,
++- extracts the `handle_scheduler_route_request` signature,
++- writes optional `route_handler_dry_run_plan.jsonl`.
++
++0182 does not:
++
++- import runtime handler modules,
++- call handle_scheduler_route_request,
++- add a new runtime handler,
++- instantiate Scheduler,
++- modify Scheduler.run,
++- instantiate EventBus,
++- create a parallel bus,
++- write ControlProxy or RouteProxy frames,
++- call GitHub API,
++- use network,
++- execute conversion,
++- execute inference,
++- write SQL,
++- write Qdrant,
++- write directly to VisPy.
++
++## Authority
++
++Scheduler/policy/zone remain the authority.
++The handoff plan is not permission to execute.
+diff --git a/doc/code-rules/0182_route_handler_dry_run_handoff_plan_rule.md b/doc/code-rules/0182_route_handler_dry_run_handoff_plan_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0182_route_handler_dry_run_handoff_plan_rule.md
+@@ -0,0 +1,24 @@
++# 0182 route handler dry-run handoff plan rule
++
++0182 builds a reviewable handoff plan only.
++
++Rules:
++
++- Read scheduler.route_requests.jsonl from 0179.
++- Build only route_handler_dry_run_plan.jsonl.
++- Inspect the handler file as AST/text only.
++- Do not call handle_scheduler_route_request.
++- Do not import runtime handler modules.
++- Do not add a new runtime handler.
++- Do not modify Scheduler.run.
++- Do not instantiate Scheduler.
++- Do not instantiate EventBus.
++- Do not create a parallel bus.
++- Do not write ControlProxy or RouteProxy frames.
++- Do not call GitHub API.
++- Do not use network.
++- Do not execute conversion.
++- Do not execute inference.
++- Do not write SQL.
++- Do not write Qdrant.
++- Do not write directly to VisPy.
+diff --git a/doc/docs/architecture/runtime/182_route_handler_dry_run_handoff_plan.dot b/doc/docs/architecture/runtime/182_route_handler_dry_run_handoff_plan.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/182_route_handler_dry_run_handoff_plan.dot
+@@ -0,0 +1,19 @@
++digraph route_handler_dry_run_handoff_plan_0182 {
++  rankdir=LR;
++  label="0182 Route handler dry-run handoff plan";
++  labelloc=t;
++
++  queue [label="scheduler.route_requests.jsonl"];
++  handler_file [label="scheduler_route_handler_minimal.py"];
++  ast [label="AST signature extraction"];
++  plan [label="route_handler_dry_run_plan.jsonl"];
++  future_call [label="future reviewed handler call"];
++
++  queue -> plan [label="authorized request metadata"];
++  handler_file -> ast;
++  ast -> plan [label="signature only"];
++  plan -> future_call [label="later patch only"];
++
++  ast -> future_call [label="forbidden execution", style=dashed];
++  plan -> future_call [label="does not grant execution", style=dashed];
++}
+diff --git a/doc/CHANGELOG_0182_ROUTE_HANDLER_DRY_RUN_HANDOFF_PLAN.md b/doc/CHANGELOG_0182_ROUTE_HANDLER_DRY_RUN_HANDOFF_PLAN.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0182_ROUTE_HANDLER_DRY_RUN_HANDOFF_PLAN.md
+@@ -0,0 +1,17 @@
++# Changelog — 0182 Route handler dry-run handoff plan
++
++## Added
++
++- Dry-run handoff planner from `scheduler.route_requests.jsonl` to optional
++  `route_handler_dry_run_plan.jsonl`.
++- AST signature extraction for `handle_scheduler_route_request`.
++- Tests/rules locking that no handler import, handler call, Scheduler
++  modification, EventBus instantiation, frame write, GitHub API, network,
++  conversion, inference, SQL, Qdrant, or VisPy write is introduced.
++
++## Not changed
++
++- No new runtime handler.
++- No Scheduler.run modification.
++- No route handler execution.
++- No ControlProxy/RouteProxy frame write.
+diff --git a/doc/manifests/MANIFEST_0182_CHANGED_FILES.md b/doc/manifests/MANIFEST_0182_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0182_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest — 0182 Route handler dry-run handoff plan
++
++- PHASE0182_TEST_REPORT.md
++- tools/build_route_handler_dry_run_handoff_plan.py
++- tests/tools/test_build_route_handler_dry_run_handoff_plan_0182.py
++- tests/rules/test_route_handler_dry_run_handoff_plan_0182_rule.py
++- doc/architecture/ROUTE_HANDLER_DRY_RUN_HANDOFF_PLAN_0182.md
++- doc/code-rules/0182_route_handler_dry_run_handoff_plan_rule.md
++- doc/docs/architecture/runtime/182_route_handler_dry_run_handoff_plan.dot
++- doc/CHANGELOG_0182_ROUTE_HANDLER_DRY_RUN_HANDOFF_PLAN.md
++- doc/manifests/MANIFEST_0182_CHANGED_FILES.md

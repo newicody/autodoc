@@ -1,0 +1,946 @@
+diff --git a/PHASE0216_TEST_REPORT.md b/PHASE0216_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0216_TEST_REPORT.md
+@@ -0,0 +1,37 @@
++# Phase 0216 Test Report — Prototype live readiness audit
++
++Status: prepared.
++
++Scope:
++- Reads `controlled_context_recall_integration_acceptance.json`.
++- Produces `prototype_live_readiness_audit.json`.
++- Checks selected surfaces exist.
++- Defines live controlled prototype requirements.
++- Records P0218 true flags.
++- Allows optional localhost Qdrant probe.
++- Applies `doc/code-rules/code_rule.md`.
++- Updates docs, graph, changelog, manifest, and rule.
++- Opens Bloc H.
++- No SQL write/read.
++- No Qdrant upsert/query.
++- No semantic recall execution.
++- No new SQL/Qdrant backend.
++- No new inference path.
++- No Scheduler.run execution.
++- No Scheduler.run modification.
++- No runtime import.
++- No handler call.
++- No frame write by 0216.
++- No ControlProxy frame write.
++- No GitHub API/external network.
++
++Validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/tools/test_audit_prototype_live_readiness_0216.py \
++  tests/rules/test_prototype_live_readiness_audit_0216_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
+diff --git a/tools/audit_prototype_live_readiness.py b/tools/audit_prototype_live_readiness.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/audit_prototype_live_readiness.py
+@@ -0,0 +1,439 @@
++#!/usr/bin/env python3
++"""Audit prototype live readiness after Bloc G controlled integration acceptance.
++
++0216 is the Bloc H prototype live readiness audit.
++
++It reads controlled_context_recall_integration_acceptance.json from 0215, checks
++selected repository surfaces, records live execution requirements, optionally
++probes a local Qdrant endpoint, and writes prototype_live_readiness_audit.json.
++
++Reuse/adapt existing surfaces first.
++doc/code-rules/code_rule.md remains the primary rule.
++0216 must prepare a real controlled prototype execution path, not another
++contract-only smoke loop.
++
++0216 allows local readiness probing only when explicitly requested.
++0216 does not perform live Qdrant recall.
++0216 does not upsert Qdrant points.
++0216 does not query Qdrant collections for semantic results.
++0216 does not read SQL records.
++0216 does not write SQL.
++0216 does not write Qdrant.
++0216 does not add a new SQL backend.
++0216 does not add a new Qdrant backend.
++0216 does not add a new inference path.
++0216 does not rewrite runtime history.
++0216 does not execute Scheduler.run.
++0216 does not modify Scheduler.run.
++0216 does not import runtime handler modules.
++0216 does not write ControlProxy or RouteProxy frames.
++0216 does not call GitHub API.
++
++Bloc H target is a live controlled prototype:
++context/query -> vector -> Qdrant upsert -> Qdrant query -> sql_ref -> SQL read
++-> rehydrate -> response artifact.
++P0218 must produce true flags for SQL write/read, Qdrant upsert/query,
++rehydration, response artifact, and prototype_success.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import socket
++import urllib.error
++import urllib.parse
++import urllib.request
++from pathlib import Path
++from typing import Any, Mapping
++
++
++PROTOTYPE_LIVE_READINESS_AUDIT_SCHEMA = "missipy.prototype.live_readiness_audit.v1"
++EXPECTED_ACCEPTANCE_SCHEMA = "missipy.context_recall.controlled_integration_acceptance.v1"
++DEFAULT_OUTPUT_NAME = "prototype_live_readiness_audit.json"
++DEFAULT_QDRANT_URL = "http://127.0.0.1:6333"
++
++FALSE_ACCEPTANCE_FLAGS = (
++    "live_qdrant_query_executed_by_0215",
++    "qdrant_queried_by_0215",
++    "sql_record_read_by_0215",
++    "recall_executed_by_0215",
++    "sql_write_allowed_by_0215",
++    "qdrant_write_allowed_by_0215",
++    "sql_written_by_0215",
++    "qdrant_written_by_0215",
++    "runtime_imports_executed_by_0215",
++    "scheduler_run_executed",
++    "scheduler_run_modified",
++    "handler_called_by_0215",
++    "routeproxy_prepared_by_0215",
++    "read_route_frame_called_by_0215",
++    "writer_permits_requested_by_0215",
++    "frames_written_by_0215",
++    "controlproxy_frames_written_by_0215",
++    "eventbus_instantiated_by_0215",
++    "network_used_by_0215",
++    "runtime_history_rewritten_by_0215",
++)
++
++FALSE_NEW_SURFACE_FLAGS = (
++    "new_runtime_handler_added",
++    "new_adapter_added",
++    "new_bus_added",
++    "new_scheduler_added",
++    "new_controlproxy_runtime_added",
++    "new_routeproxy_runtime_added",
++    "new_sql_backend_added",
++    "new_qdrant_backend_added",
++    "new_github_client_added",
++    "new_graph_renderer_added",
++    "new_inference_path_added",
++)
++
++
++class PrototypeLiveReadinessAuditError(ValueError):
++    """Raised when prototype live readiness audit input is unsafe."""
++
++
++def audit_prototype_live_readiness(
++    *,
++    context_recall_acceptance_path: Path | str,
++    repo_root: Path | str,
++    output_path: Path | str | None = None,
++    qdrant_url: str = DEFAULT_QDRANT_URL,
++    probe_local_qdrant: bool = False,
++    timeout_seconds: float = 2.0,
++) -> dict[str, Any]:
++    """Audit readiness for the first real controlled prototype execution."""
++
++    acceptance_path = Path(context_recall_acceptance_path)
++    root = Path(repo_root)
++    acceptance = _read_json_file(acceptance_path)
++    issues: list[str] = []
++    warnings: list[str] = []
++
++    _audit_context_recall_acceptance(acceptance, issues, warnings)
++
++    if not root.exists():
++        issues.append("repo_root must exist")
++    if not root.is_dir():
++        issues.append("repo_root must be a directory")
++
++    target_runtime_root = Path(str(acceptance.get("target_runtime_root", "")))
++    if not target_runtime_root.is_absolute():
++        issues.append("target_runtime_root must be absolute")
++    prototype_live_root = target_runtime_root / "prototype-live"
++    final_output = Path(output_path) if output_path is not None else target_runtime_root / DEFAULT_OUTPUT_NAME
++    if final_output.name != DEFAULT_OUTPUT_NAME:
++        issues.append("output filename must be prototype_live_readiness_audit.json")
++    if target_runtime_root.is_absolute() and final_output.is_absolute():
++        if not _is_within_or_equal(final_output, target_runtime_root):
++            issues.append("prototype live readiness output must be inside target_runtime_root")
++
++    selected_surfaces = _selected_surfaces(acceptance)
++    _audit_selected_surfaces(root, selected_surfaces, issues)
++
++    local_qdrant = _validate_local_qdrant_url(qdrant_url)
++    if not local_qdrant["is_local"]:
++        issues.append("qdrant_url must target localhost or 127.0.0.1 for controlled prototype")
++    qdrant_probe = _qdrant_probe(qdrant_url, timeout_seconds) if probe_local_qdrant else {
++        "probe_requested": False,
++        "probe_success": False,
++        "status": "not_requested",
++        "url": qdrant_url,
++        "local_only": local_qdrant,
++    }
++    if probe_local_qdrant and qdrant_probe["probe_success"] is not True:
++        warnings.append("local Qdrant probe failed; configure/start Qdrant before P0218 live execution")
++
++    sql_ref = str(acceptance.get("sql_ref", ""))
++    qdrant_payload = acceptance.get("qdrant_payload")
++    if not isinstance(qdrant_payload, Mapping) or qdrant_payload.get("sql_ref") != sql_ref:
++        issues.append("qdrant_payload.sql_ref must match sql_ref")
++    if not sql_ref:
++        issues.append("sql_ref must be present")
++
++    live_requirements = {
++        "prototype_live_root": str(prototype_live_root),
++        "qdrant_url": qdrant_url,
++        "qdrant_collection": "autodoc_prototype_live",
++        "sql_dev_store": str(prototype_live_root / "prototype_live_sql.jsonl"),
++        "response_artifact": str(prototype_live_root / "prototype_live_response.json"),
++        "vector_dimension": 4,
++        "vector_mode": "deterministic_test_vector_until_embedding_backend_is_explicitly_selected",
++        "must_write_sql_by_p0218": True,
++        "must_upsert_qdrant_by_p0218": True,
++        "must_query_qdrant_by_p0218": True,
++        "must_read_sql_by_p0218": True,
++        "must_rehydrate_by_p0218": True,
++        "must_write_response_artifact_by_p0218": True,
++        "must_set_prototype_success_by_p0218": True,
++    }
++
++    audit_success = not issues
++    audit = {
++        "schema": PROTOTYPE_LIVE_READINESS_AUDIT_SCHEMA,
++        "bloc": "H",
++        "bloc_name": "prototype-closure",
++        "context_recall_acceptance_path": str(acceptance_path),
++        "context_recall_acceptance_schema": acceptance.get("schema"),
++        "accepted_baseline": acceptance.get("accepted_baseline"),
++        "integration_digest": acceptance.get("integration_digest"),
++        "projection_digest": acceptance.get("projection_digest"),
++        "sql_ref": sql_ref,
++        "qdrant_payload": qdrant_payload,
++        "target_runtime_root": acceptance.get("target_runtime_root"),
++        "target_isolated_runtime_root": acceptance.get("target_isolated_runtime_root"),
++        "prototype_live_root": str(prototype_live_root),
++        "repo_root": str(root),
++        "selected_surfaces": selected_surfaces,
++        "live_requirements": live_requirements,
++        "qdrant_local_probe": qdrant_probe,
++        "prototype_live_readiness_audit_success": audit_success,
++        "prototype_live_execution_plan_allowed_next": audit_success,
++        "planned_next_patch": "0217-prototype_live_execution_plan",
++        "target_path": "context/query -> vector -> Qdrant upsert -> Qdrant query -> sql_ref -> SQL read -> rehydrate -> response artifact",
++        "p0218_required_true_flags": [
++            "sql_written_by_0218",
++            "qdrant_written_by_0218",
++            "qdrant_queried_by_0218",
++            "sql_record_read_by_0218",
++            "rehydration_executed_by_0218",
++            "response_artifact_written_by_0218",
++            "prototype_success",
++        ],
++        "live_boundary": {
++            "local_qdrant_only": True,
++            "external_network_allowed": False,
++            "github_api_allowed": False,
++            "scheduler_run_allowed": False,
++            "new_sql_backend_allowed": False,
++            "new_qdrant_backend_allowed": False,
++            "controlled_sql_write_required_by_p0218": True,
++            "controlled_qdrant_write_required_by_p0218": True,
++            "controlled_qdrant_query_required_by_p0218": True,
++            "controlled_sql_read_required_by_p0218": True,
++        },
++        "issues": issues,
++        "warnings": warnings,
++        "existing_surfaces_reused": True,
++        "new_runtime_handler_added": False,
++        "new_adapter_added": False,
++        "new_bus_added": False,
++        "new_scheduler_added": False,
++        "new_controlproxy_runtime_added": False,
++        "new_routeproxy_runtime_added": False,
++        "new_sql_backend_added": False,
++        "new_qdrant_backend_added": False,
++        "new_github_client_added": False,
++        "new_graph_renderer_added": False,
++        "new_inference_path_added": False,
++        "runtime_imports_executed_by_0216": False,
++        "scheduler_run_executed": False,
++        "scheduler_run_modified": False,
++        "handler_called_by_0216": False,
++        "routeproxy_prepared_by_0216": False,
++        "read_route_frame_called_by_0216": False,
++        "writer_permits_requested_by_0216": False,
++        "frames_written_by_0216": False,
++        "controlproxy_frames_written_by_0216": False,
++        "eventbus_instantiated_by_0216": False,
++        "network_used_by_0216": bool(probe_local_qdrant),
++        "external_network_used_by_0216": False,
++        "qdrant_local_probe_executed_by_0216": bool(probe_local_qdrant),
++        "live_qdrant_query_executed_by_0216": False,
++        "qdrant_queried_by_0216": False,
++        "sql_record_read_by_0216": False,
++        "recall_executed_by_0216": False,
++        "sql_write_allowed_by_0216": False,
++        "qdrant_write_allowed_by_0216": False,
++        "sql_written_by_0216": False,
++        "qdrant_written_by_0216": False,
++        "runtime_history_rewritten_by_0216": False,
++    }
++
++    if output_path is not None:
++        _write_audit(final_output, audit)
++
++    return audit
++
++
++def _audit_context_recall_acceptance(
++    acceptance: Mapping[str, Any],
++    issues: list[str],
++    warnings: list[str],
++) -> None:
++    if acceptance.get("schema") != EXPECTED_ACCEPTANCE_SCHEMA:
++        issues.append("P0215 controlled context recall integration acceptance schema mismatch")
++    if acceptance.get("controlled_context_recall_integration_accepted") is not True:
++        issues.append("controlled_context_recall_integration_accepted must be true")
++    if acceptance.get("context_recall_integration_contract_accepted") is not True:
++        issues.append("context_recall_integration_contract_accepted must be true")
++    if acceptance.get("bloc_g_complete") is not True:
++        issues.append("bloc_g_complete must be true")
++    if acceptance.get("next_bloc") != "H":
++        issues.append("next_bloc must be H")
++    if acceptance.get("issues") not in ([], None):
++        issues.append("P0215 controlled context recall integration acceptance issues must be empty")
++    if isinstance(acceptance.get("warnings"), list) and acceptance.get("warnings"):
++        warnings.extend(str(item) for item in acceptance.get("warnings", []))
++    if acceptance.get("payload_contains_sql_ref") is not True:
++        issues.append("payload_contains_sql_ref must be true")
++    if acceptance.get("rehydration_required") is not True:
++        issues.append("rehydration_required must be true")
++    if not isinstance(acceptance.get("integration_digest"), str) or not acceptance.get("integration_digest"):
++        issues.append("integration_digest must be present")
++    if acceptance.get("existing_surfaces_reused") is not True:
++        issues.append("existing_surfaces_reused must be true")
++    for flag in FALSE_ACCEPTANCE_FLAGS:
++        if acceptance.get(flag) is not False:
++            issues.append(f"{flag} must be false")
++    for flag in FALSE_NEW_SURFACE_FLAGS:
++        if acceptance.get(flag) is not False:
++            issues.append(f"{flag} must be false")
++
++
++def _selected_surfaces(acceptance: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
++    selected = acceptance.get("selected_surfaces")
++    if not isinstance(selected, Mapping):
++        return {}
++    return {
++        "context_query_surface": _surface_mapping(selected.get("context_query_surface")),
++        "recall_surface": _surface_mapping(selected.get("recall_surface")),
++        "rehydrate_surface": _surface_mapping(selected.get("rehydrate_surface")),
++        "response_surface": _surface_mapping(selected.get("response_surface")),
++        "projection_surface": _surface_mapping(selected.get("projection_surface")),
++    }
++
++
++def _surface_mapping(value: Any) -> dict[str, Any]:
++    if not isinstance(value, Mapping):
++        return {}
++    tokens = value.get("matched_tokens")
++    return {
++        "path": str(value.get("path", "")),
++        "matched_tokens": [str(token) for token in tokens] if isinstance(tokens, list) else [],
++        "use_before_new_code": bool(value.get("use_before_new_code")),
++    }
++
++
++def _audit_selected_surfaces(root: Path, selected_surfaces: Mapping[str, Mapping[str, Any]], issues: list[str]) -> None:
++    for name in ("context_query_surface", "recall_surface", "rehydrate_surface", "response_surface", "projection_surface"):
++        surface = selected_surfaces.get(name)
++        if not isinstance(surface, Mapping):
++            issues.append(f"{name} must be present")
++            continue
++        path = surface.get("path")
++        if not isinstance(path, str) or not path:
++            issues.append(f"{name} path must be present")
++            continue
++        if Path(path).is_absolute():
++            issues.append(f"{name} path must be repository-relative")
++            continue
++        if ".." in Path(path).parts:
++            issues.append(f"{name} path must not escape repo root")
++            continue
++        if not (root / path).exists():
++            issues.append(f"{name} path must exist: {path}")
++        if surface.get("use_before_new_code") is not True:
++            issues.append(f"{name} must be marked use_before_new_code")
++
++
++def _validate_local_qdrant_url(url: str) -> dict[str, Any]:
++    parsed = urllib.parse.urlparse(url)
++    host = parsed.hostname or ""
++    return {
++        "url": url,
++        "scheme": parsed.scheme,
++        "host": host,
++        "port": parsed.port,
++        "is_local": parsed.scheme in {"http", "https"} and host in {"127.0.0.1", "localhost", "::1"},
++    }
++
++
++def _qdrant_probe(url: str, timeout_seconds: float) -> dict[str, Any]:
++    local = _validate_local_qdrant_url(url)
++    result = {
++        "probe_requested": True,
++        "probe_success": False,
++        "status": "",
++        "url": url,
++        "collections_url": url.rstrip("/") + "/collections",
++        "local_only": local,
++        "error": "",
++    }
++    if not local["is_local"]:
++        result["status"] = "rejected_non_local"
++        result["error"] = "qdrant_url must be localhost/127.0.0.1"
++        return result
++    try:
++        request = urllib.request.Request(result["collections_url"], method="GET")
++        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
++            body = response.read(1024).decode("utf-8", errors="replace")
++            result["http_status"] = response.status
++            result["body_preview"] = body[:200]
++            result["probe_success"] = 200 <= response.status < 500
++            result["status"] = "ok" if result["probe_success"] else "bad_status"
++    except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as exc:
++        result["status"] = "error"
++        result["error"] = str(exc)
++    return result
++
++
++def _read_json_file(path: Path) -> dict[str, Any]:
++    raw = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(raw, dict):
++        raise PrototypeLiveReadinessAuditError("input must be a JSON object")
++    return raw
++
++
++def _write_audit(path: Path, audit: dict[str, Any]) -> None:
++    if path.name != DEFAULT_OUTPUT_NAME:
++        raise PrototypeLiveReadinessAuditError("output filename must be prototype_live_readiness_audit.json")
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(audit, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++
++def _is_within_or_equal(path: Path, root: Path) -> bool:
++    try:
++        path.resolve().relative_to(root.resolve())
++    except ValueError:
++        return False
++    return True
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Audit prototype live readiness.")
++    parser.add_argument("--context-recall-acceptance", required=True, help="Path to controlled_context_recall_integration_acceptance.json.")
++    parser.add_argument("--repo-root", default=".", help="Repository root.")
++    parser.add_argument("--output", help="Optional prototype_live_readiness_audit.json output path.")
++    parser.add_argument("--qdrant-url", default=DEFAULT_QDRANT_URL, help="Local Qdrant URL; localhost only.")
++    parser.add_argument("--probe-local-qdrant", action="store_true", help="Probe local Qdrant /collections endpoint.")
++    parser.add_argument("--timeout-seconds", type=float, default=2.0, help="Local Qdrant probe timeout.")
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    args = parser.parse_args(argv)
++
++    audit = audit_prototype_live_readiness(
++        context_recall_acceptance_path=Path(args.context_recall_acceptance),
++        repo_root=Path(args.repo_root),
++        output_path=Path(args.output) if args.output else None,
++        qdrant_url=args.qdrant_url,
++        probe_local_qdrant=args.probe_local_qdrant,
++        timeout_seconds=args.timeout_seconds,
++    )
++
++    if args.format == "json":
++        print(json.dumps(audit, indent=2, sort_keys=True))
++    else:
++        print(f"prototype_live_readiness_audit_success: {audit['prototype_live_readiness_audit_success']}")
++        print(f"prototype_live_execution_plan_allowed_next: {audit['prototype_live_execution_plan_allowed_next']}")
++        print(f"qdrant_local_probe_executed_by_0216: {audit['qdrant_local_probe_executed_by_0216']}")
++        print(f"qdrant_local_probe_success: {audit['qdrant_local_probe']['probe_success']}")
++        print(f"planned_next_patch: {audit['planned_next_patch']}")
++        print(f"issues: {len(audit['issues'])}")
++        print(f"warnings: {len(audit['warnings'])}")
++    return 0 if audit["prototype_live_readiness_audit_success"] else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_audit_prototype_live_readiness_0216.py b/tests/tools/test_audit_prototype_live_readiness_0216.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_audit_prototype_live_readiness_0216.py
+@@ -0,0 +1,181 @@
++from pathlib import Path
++import importlib.util
++import json
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "audit_prototype_live_readiness.py"
++
++
++def _load_tool_module():
++    spec = importlib.util.spec_from_file_location("audit_prototype_live_readiness_tool", TOOL)
++    assert spec is not None
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    assert spec.loader is not None
++    spec.loader.exec_module(module)
++    return module
++
++
++def _surface(path: str, tokens: list[str]) -> dict:
++    return {"path": path, "matched_tokens": tokens, "use_before_new_code": True}
++
++
++def _acceptance_fixture(tmp_path: Path, *, accepted: bool = True) -> dict:
++    runtime = tmp_path / "runtime" / "dev-controlled"
++    sql_ref = "baseline:controlled-dev-routeproxy-write-read-v1:3195a2fcf10586d5"
++    return {
++        "schema": "missipy.context_recall.controlled_integration_acceptance.v1",
++        "controlled_context_recall_integration_accepted": accepted,
++        "context_recall_integration_contract_accepted": accepted,
++        "bloc_g_complete": accepted,
++        "next_bloc": "H",
++        "accepted_baseline": "controlled-context-recall-integration-contract-v1",
++        "integration_digest": "db7ec32ee5de42c32850d77d4c2cffa42c8125f4354c3ca4397391ea619a1bd1",
++        "projection_digest": "664d37d9325811349ade719e09a089df43759c439a2dc01b998e7c8365f5caca",
++        "sql_ref": sql_ref,
++        "qdrant_payload": {"sql_ref": sql_ref},
++        "payload_contains_sql_ref": True,
++        "rehydration_required": True,
++        "target_runtime_root": str(runtime),
++        "target_isolated_runtime_root": str(runtime / "routeproxy-isolated"),
++        "issues": [] if accepted else ["not accepted"],
++        "warnings": [],
++        "existing_surfaces_reused": True,
++        "selected_surfaces": {
++            "context_query_surface": _surface("src/context/artifact_intake_contract.py", ["artifact", "query"]),
++            "recall_surface": _surface("src/context/context_graph_export.py", ["Qdrant", "qdrant", "recall", "vector"]),
++            "rehydrate_surface": _surface("tools/accept_controlled_sql_qdrant_projection.py", ["rehydrate", "sql_ref"]),
++            "response_surface": _surface("src/context/github_project_push_frame.py", ["artifact", "response"]),
++            "projection_surface": _surface("tools/accept_controlled_sql_qdrant_projection.py", ["controlled_sql_qdrant_projection_acceptance", "qdrant_payload", "sql_ref"]),
++        },
++        "live_qdrant_query_executed_by_0215": False,
++        "qdrant_queried_by_0215": False,
++        "sql_record_read_by_0215": False,
++        "recall_executed_by_0215": False,
++        "sql_write_allowed_by_0215": False,
++        "qdrant_write_allowed_by_0215": False,
++        "sql_written_by_0215": False,
++        "qdrant_written_by_0215": False,
++        "runtime_imports_executed_by_0215": False,
++        "scheduler_run_executed": False,
++        "scheduler_run_modified": False,
++        "handler_called_by_0215": False,
++        "routeproxy_prepared_by_0215": False,
++        "read_route_frame_called_by_0215": False,
++        "writer_permits_requested_by_0215": False,
++        "frames_written_by_0215": False,
++        "controlproxy_frames_written_by_0215": False,
++        "eventbus_instantiated_by_0215": False,
++        "network_used_by_0215": False,
++        "runtime_history_rewritten_by_0215": False,
++        "new_runtime_handler_added": False,
++        "new_adapter_added": False,
++        "new_bus_added": False,
++        "new_scheduler_added": False,
++        "new_controlproxy_runtime_added": False,
++        "new_routeproxy_runtime_added": False,
++        "new_sql_backend_added": False,
++        "new_qdrant_backend_added": False,
++        "new_github_client_added": False,
++        "new_graph_renderer_added": False,
++        "new_inference_path_added": False,
++    }
++
++
++def _write_repo_surfaces(repo: Path) -> None:
++    (repo / "src/context").mkdir(parents=True)
++    (repo / "tools").mkdir(parents=True)
++    (repo / "src/context/artifact_intake_contract.py").write_text("artifact query\n", encoding="utf-8")
++    (repo / "src/context/context_graph_export.py").write_text("Qdrant qdrant recall vector\n", encoding="utf-8")
++    (repo / "tools/accept_controlled_sql_qdrant_projection.py").write_text(
++        "rehydrate sql_ref controlled_sql_qdrant_projection_acceptance qdrant_payload\n",
++        encoding="utf-8",
++    )
++    (repo / "src/context/github_project_push_frame.py").write_text("artifact response\n", encoding="utf-8")
++
++
++def test_0216_audits_prototype_live_readiness_without_writes(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    repo = tmp_path / "repo"
++    _write_repo_surfaces(repo)
++    acceptance = _acceptance_fixture(tmp_path)
++    runtime = Path(acceptance["target_runtime_root"])
++    runtime.mkdir(parents=True)
++    acceptance_path = runtime / "controlled_context_recall_integration_acceptance.json"
++    output = runtime / "prototype_live_readiness_audit.json"
++    acceptance_path.write_text(json.dumps(acceptance, indent=2), encoding="utf-8")
++
++    audit = module.audit_prototype_live_readiness(
++        context_recall_acceptance_path=acceptance_path,
++        repo_root=repo,
++        output_path=output,
++        qdrant_url="http://127.0.0.1:6333",
++        probe_local_qdrant=False,
++    )
++
++    assert audit["prototype_live_readiness_audit_success"] is True
++    assert audit["prototype_live_execution_plan_allowed_next"] is True
++    assert audit["planned_next_patch"] == "0217-prototype_live_execution_plan"
++    assert audit["target_path"] == "context/query -> vector -> Qdrant upsert -> Qdrant query -> sql_ref -> SQL read -> rehydrate -> response artifact"
++    assert audit["live_requirements"]["must_write_sql_by_p0218"] is True
++    assert audit["live_requirements"]["must_upsert_qdrant_by_p0218"] is True
++    assert audit["live_requirements"]["must_query_qdrant_by_p0218"] is True
++    assert audit["live_requirements"]["must_read_sql_by_p0218"] is True
++    assert audit["live_requirements"]["must_rehydrate_by_p0218"] is True
++    assert audit["live_requirements"]["must_write_response_artifact_by_p0218"] is True
++    assert audit["p0218_required_true_flags"] == [
++        "sql_written_by_0218",
++        "qdrant_written_by_0218",
++        "qdrant_queried_by_0218",
++        "sql_record_read_by_0218",
++        "rehydration_executed_by_0218",
++        "response_artifact_written_by_0218",
++        "prototype_success",
++    ]
++    assert audit["qdrant_local_probe_executed_by_0216"] is False
++    assert audit["sql_written_by_0216"] is False
++    assert audit["qdrant_written_by_0216"] is False
++    assert output.exists()
++
++
++def test_0216_rejects_non_local_qdrant_url(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    repo = tmp_path / "repo"
++    _write_repo_surfaces(repo)
++    acceptance = _acceptance_fixture(tmp_path)
++    runtime = Path(acceptance["target_runtime_root"])
++    runtime.mkdir(parents=True)
++    acceptance_path = runtime / "controlled_context_recall_integration_acceptance.json"
++    acceptance_path.write_text(json.dumps(acceptance, indent=2), encoding="utf-8")
++
++    audit = module.audit_prototype_live_readiness(
++        context_recall_acceptance_path=acceptance_path,
++        repo_root=repo,
++        qdrant_url="https://example.com:6333",
++        probe_local_qdrant=False,
++    )
++
++    assert audit["prototype_live_readiness_audit_success"] is False
++    assert "qdrant_url must target localhost or 127.0.0.1 for controlled prototype" in audit["issues"]
++
++
++def test_0216_rejects_unaccepted_context_recall_acceptance(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    repo = tmp_path / "repo"
++    _write_repo_surfaces(repo)
++    acceptance = _acceptance_fixture(tmp_path, accepted=False)
++    runtime = Path(acceptance["target_runtime_root"])
++    runtime.mkdir(parents=True)
++    acceptance_path = runtime / "controlled_context_recall_integration_acceptance.json"
++    acceptance_path.write_text(json.dumps(acceptance, indent=2), encoding="utf-8")
++
++    audit = module.audit_prototype_live_readiness(
++        context_recall_acceptance_path=acceptance_path,
++        repo_root=repo,
++    )
++
++    assert audit["prototype_live_readiness_audit_success"] is False
++    assert "controlled_context_recall_integration_accepted must be true" in audit["issues"]
++    assert "context_recall_integration_contract_accepted must be true" in audit["issues"]
+diff --git a/tests/rules/test_prototype_live_readiness_audit_0216_rule.py b/tests/rules/test_prototype_live_readiness_audit_0216_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_prototype_live_readiness_audit_0216_rule.py
+@@ -0,0 +1,76 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "audit_prototype_live_readiness.py"
++DOC = ROOT / "doc" / "architecture" / "PROTOTYPE_LIVE_READINESS_AUDIT_0216.md"
++RULE = ROOT / "doc" / "code-rules" / "0216_prototype_live_readiness_audit_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0216_CHANGED_FILES.md"
++
++
++def test_0216_tool_is_live_readiness_not_contract_only_smoke() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    for token in [
++        "0216 is the Bloc H prototype live readiness audit",
++        "controlled_context_recall_integration_acceptance.json",
++        "prototype_live_readiness_audit.json",
++        "Reuse/adapt existing surfaces first",
++        "0216 must prepare a real controlled prototype execution path, not another",
++        "0216 allows local readiness probing only when explicitly requested",
++        "0216 does not upsert Qdrant points",
++        "0216 does not query Qdrant collections for semantic results",
++        "0216 does not read SQL records",
++        "0216 does not write SQL",
++        "0216 does not write Qdrant",
++        "Bloc H target is a live controlled prototype",
++        "P0218 must produce true flags for SQL write/read, Qdrant upsert/query",
++        "0217-prototype_live_execution_plan",
++    ]:
++        assert token in source
++    assert "import requests" not in source
++    assert "from requests" not in source
++    assert "github.com" not in source
++
++
++def test_0216_doc_locks_live_readiness_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    for token in [
++        "0216 opens Bloc H with prototype live readiness audit",
++        "The input is controlled_context_recall_integration_acceptance.json",
++        "The output is prototype_live_readiness_audit.json",
++        "This is not another contract-only smoke loop",
++        "P0218 must produce true flags",
++        "context/query -> vector -> Qdrant upsert -> Qdrant query -> sql_ref -> SQL read -> rehydrate -> response artifact",
++        "0216 does not write SQL or Qdrant",
++        "0216 may optionally probe localhost Qdrant",
++    ]:
++        assert token in doc
++
++
++def test_0216_rule_requires_live_readiness_without_writes() -> None:
++    rule = RULE.read_text(encoding="utf-8")
++    for token in [
++        "Read controlled_context_recall_integration_acceptance.json from 0215",
++        "Audit prototype live readiness",
++        "Do not create another contract-only smoke loop",
++        "Require P0218 true flags",
++        "Only localhost Qdrant probe may be allowed in 0216",
++        "Do not write SQL in 0216",
++        "Do not write Qdrant in 0216",
++        "Do not query Qdrant semantic results in 0216",
++        "Do not read SQL records in 0216",
++        "Allow P0217 to plan live prototype execution",
++    ]:
++        assert token in rule
++
++
++def test_0216_manifest_lists_live_readiness_files() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    for token in [
++        "tools/audit_prototype_live_readiness.py",
++        "tests/tools/test_audit_prototype_live_readiness_0216.py",
++        "tests/rules/test_prototype_live_readiness_audit_0216_rule.py",
++        "doc/architecture/PROTOTYPE_LIVE_READINESS_AUDIT_0216.md",
++        "doc/code-rules/0216_prototype_live_readiness_audit_rule.md",
++    ]:
++        assert token in manifest
+diff --git a/doc/architecture/PROTOTYPE_LIVE_READINESS_AUDIT_0216.md b/doc/architecture/PROTOTYPE_LIVE_READINESS_AUDIT_0216.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/PROTOTYPE_LIVE_READINESS_AUDIT_0216.md
+@@ -0,0 +1,78 @@
++# 0216 — Prototype live readiness audit
++
++## Decision
++
++0216 opens Bloc H with prototype live readiness audit.
++
++The input is controlled_context_recall_integration_acceptance.json.
++The output is prototype_live_readiness_audit.json.
++
++Reuse/adapt existing surfaces first.
++doc/code-rules/code_rule.md remains the primary rule.
++docs, graph, changelog, manifest, and rule are updated with the patch.
++
++This is not another contract-only smoke loop.
++P0218 must produce true flags.
++
++Target path:
++
++```text
++context/query -> vector -> Qdrant upsert -> Qdrant query -> sql_ref -> SQL read -> rehydrate -> response artifact
++```
++
++## Why this exists
++
++Bloc G proved the integration contract, but did not execute live Qdrant or SQL.
++Bloc H must prepare a real controlled prototype execution. P0216 records the live
++requirements and keeps the boundary safe.
++
++## Boundary
++
++0216:
++
++- reads `controlled_context_recall_integration_acceptance.json`,
++- verifies Bloc G is complete,
++- checks selected surfaces exist,
++- defines `runtime/dev-controlled/prototype-live`,
++- records local Qdrant and dev SQL requirements,
++- records P0218 required true flags,
++- may optionally probe localhost Qdrant,
++- writes optional `prototype_live_readiness_audit.json`.
++
++0216 does not write SQL or Qdrant.
++0216 may optionally probe localhost Qdrant.
++
++0216 does not:
++
++- perform live Qdrant recall,
++- upsert Qdrant points,
++- query Qdrant semantic results,
++- read SQL records,
++- add a new SQL backend,
++- add a new Qdrant backend,
++- add a new inference path,
++- rewrite runtime history,
++- execute Scheduler.run,
++- modify Scheduler.run,
++- import runtime handler modules,
++- write ControlProxy or RouteProxy frames,
++- call GitHub API,
++- use external network.
++
++## P0218 required true flags
++
++P0218 must produce true flags:
++
++```text
++sql_written_by_0218
++qdrant_written_by_0218
++qdrant_queried_by_0218
++sql_record_read_by_0218
++rehydration_executed_by_0218
++response_artifact_written_by_0218
++prototype_success
++```
++
++## Next
++
++If 0216 succeeds, P0217 may plan live prototype execution.
+diff --git a/doc/code-rules/0216_prototype_live_readiness_audit_rule.md b/doc/code-rules/0216_prototype_live_readiness_audit_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0216_prototype_live_readiness_audit_rule.md
+@@ -0,0 +1,28 @@
++# 0216 prototype live readiness audit rule
++
++0216 audits prototype live readiness.
++
++Rules:
++
++- Read controlled_context_recall_integration_acceptance.json from 0215.
++- Audit prototype live readiness.
++- Do not create another contract-only smoke loop.
++- Require P0218 true flags.
++- Only localhost Qdrant probe may be allowed in 0216.
++- Apply doc/code-rules/code_rule.md as the primary rule.
++- Keep docs, graph, changelog, manifest, and rule updated with the patch.
++- Do not write SQL in 0216.
++- Do not write Qdrant in 0216.
++- Do not query Qdrant semantic results in 0216.
++- Do not read SQL records in 0216.
++- Do not add a new SQL backend.
++- Do not add a new Qdrant backend.
++- Do not add a new inference path.
++- Do not rewrite runtime history.
++- Do not execute Scheduler.run.
++- Do not modify Scheduler.run.
++- Do not import runtime handler modules.
++- Do not write ControlProxy or RouteProxy frames.
++- Do not call GitHub API.
++- Do not use external network.
++- Allow P0217 to plan live prototype execution.
+diff --git a/doc/docs/architecture/runtime/216_prototype_live_readiness_audit.dot b/doc/docs/architecture/runtime/216_prototype_live_readiness_audit.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/216_prototype_live_readiness_audit.dot
+@@ -0,0 +1,20 @@
++digraph prototype_live_readiness_audit_0216 {
++  rankdir=LR;
++  label="0216 Prototype live readiness audit";
++  labelloc=t;
++
++  acceptance [label="controlled_context_recall_integration_acceptance.json"];
++  surfaces [label="existing selected surfaces"];
++  qdrant [label="optional localhost Qdrant probe"];
++  requirements [label="P0218 required true flags"];
++  audit [label="prototype_live_readiness_audit.json"];
++  p0217 [label="P0217 live execution plan"];
++  p0218 [label="P0218 live execution"];
++
++  acceptance -> audit [label="Bloc G complete"];
++  surfaces -> audit [label="check"];
++  qdrant -> audit [label="optional"];
++  requirements -> audit [label="record"];
++  audit -> p0217 [label="plan"];
++  p0217 -> p0218 [label="execute live"];
++}
+diff --git a/doc/CHANGELOG_0216_PROTOTYPE_LIVE_READINESS_AUDIT.md b/doc/CHANGELOG_0216_PROTOTYPE_LIVE_READINESS_AUDIT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0216_PROTOTYPE_LIVE_READINESS_AUDIT.md
+@@ -0,0 +1,22 @@
++# Changelog — 0216 Prototype live readiness audit
++
++## Added
++
++- Bloc H prototype live readiness audit.
++- Live controlled prototype requirements.
++- Optional localhost-only Qdrant readiness probe.
++- P0218 required true flags for SQL write/read, Qdrant upsert/query, rehydrate,
++  response artifact, and prototype success.
++- Documentation, graph, changelog, manifest, and code-rule entry for the patch.
++
++## Not changed
++
++- No SQL write/read.
++- No Qdrant upsert/query.
++- No semantic recall execution.
++- No new SQL/Qdrant backend.
++- No new inference path.
++- No Scheduler.run execution or modification.
++- No runtime handler import or call.
++- No ControlProxy or RouteProxy frame write.
++- No GitHub API/external network call.
+diff --git a/doc/manifests/MANIFEST_0216_CHANGED_FILES.md b/doc/manifests/MANIFEST_0216_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0216_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest — 0216 Prototype live readiness audit
++
++- PHASE0216_TEST_REPORT.md
++- tools/audit_prototype_live_readiness.py
++- tests/tools/test_audit_prototype_live_readiness_0216.py
++- tests/rules/test_prototype_live_readiness_audit_0216_rule.py
++- doc/architecture/PROTOTYPE_LIVE_READINESS_AUDIT_0216.md
++- doc/code-rules/0216_prototype_live_readiness_audit_rule.md
++- doc/docs/architecture/runtime/216_prototype_live_readiness_audit.dot
++- doc/CHANGELOG_0216_PROTOTYPE_LIVE_READINESS_AUDIT.md
++- doc/manifests/MANIFEST_0216_CHANGED_FILES.md

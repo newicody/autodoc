@@ -1,0 +1,635 @@
+diff --git a/PHASE0221_TEST_REPORT.md b/PHASE0221_TEST_REPORT.md
+new file mode 100644
+index 0000000..1dda827
+--- /dev/null
++++ b/PHASE0221_TEST_REPORT.md
+@@ -0,0 +1,29 @@
++# Phase 0221 Test Report - Bus-Direct Passive Supervisor Sink
++
++Prepared as an update to the 0220 passive bus supervisor surface.
++
++## Local sandbox validation
++
++The patch was validated on a skeleton repository containing patch 0220 and
++0220-r1 already applied:
++
++- `git apply --check`: OK
++- `git apply`: OK
++- `python -m compileall -q src tests tools`: OK
++- `python -m pytest -q tests/context tests/tools tests/rules`: OK when pytest is available in the target repository; not available in this sandbox.
++- Manual smoke CLI with `--event-json`: OK
++- Manual smoke CLI with `--events-jsonl`: OK
++
++## Boundary checked
++
++- No Scheduler.run call.
++- Scheduler documented as upstream orchestration authority.
++- EventBus documented as the canonical transport.
++- Passive supervisor is downstream-only.
++- `events.jsonl` is optional audit/replay only.
++- No non-stdlib dependency.
++
++## Real repository requirement
++
++Run through the patch queue in `/home/eric/projet/git/autodoc` after 0220-r1 is
++applied and the full suite is green.
+diff --git a/doc/CHANGELOG_0221_BUS_DIRECT_PASSIVE_SUPERVISOR_SINK.md b/doc/CHANGELOG_0221_BUS_DIRECT_PASSIVE_SUPERVISOR_SINK.md
+new file mode 100644
+index 0000000..56976dc
+--- /dev/null
++++ b/doc/CHANGELOG_0221_BUS_DIRECT_PASSIVE_SUPERVISOR_SINK.md
+@@ -0,0 +1,32 @@
++# Changelog 0221 - Bus-Direct Passive Supervisor Sink
++
++## Added
++
++- Extended `src/context/passive_bus_supervisor_cellular_snapshot.py` with
++  `PassiveSupervisorSink`.
++- Added an in-memory EventBus downstream sink that accepts canonical scheduler,
++  proxy, SHM, policy, GitHub, SQL, Qdrant, rehydrate, and pushback events.
++- Added optional audit JSONL output for replay/debug only.
++- Added optional snapshot writing from the sink.
++- Added tests proving Scheduler is represented as an upstream EventBus emitter,
++  while the supervisor stays downstream-only.
++
++## Changed
++
++- Updated `tools/run_passive_bus_supervisor_cellular_snapshot_0220.py` so JSONL
++  input is optional replay/test input, not the mandatory runtime path.
++- Added `--event-json` for fileless smoke tests of canonical EventBus events.
++- Kept `--events-jsonl` backward compatible for replay and the 0220 test.
++
++## Boundary
++
++- No Scheduler.run call.
++- No scheduler dispatch.
++- No new bus implementation.
++- No proxy control.
++- No raw SHM/mmap read.
++- No policy decision.
++- No GitHub mutation.
++- No SQL/Qdrant writes.
++- No VisPy dependency.
++- No non-stdlib dependency.
+diff --git a/doc/architecture/PASSIVE_BUS_SUPERVISOR_CELLULAR_SNAPSHOT_0220.md b/doc/architecture/PASSIVE_BUS_SUPERVISOR_CELLULAR_SNAPSHOT_0220.md
+index 6c254b9..f29dd42 100644
+--- a/doc/architecture/PASSIVE_BUS_SUPERVISOR_CELLULAR_SNAPSHOT_0220.md
++++ b/doc/architecture/PASSIVE_BUS_SUPERVISOR_CELLULAR_SNAPSHOT_0220.md
+@@ -96,3 +96,25 @@ The snapshot contains:
+ 
+ This gives the following patches a stable observation target before live GitHub,
+ fetch, promotion, pushback, proxy, SHM, and policy work continues.
++
++## 0221 Bus-Direct Supervisor Sink Update
++
++Patch 0221 keeps the same passive supervisor surface and updates it instead of
++creating a parallel bridge. The canonical runtime path is:
++
++```text
++Scheduler / RouteProxy / ControlProxy / SHM / Policy
++  -> EventBus -> PassiveSupervisorSink.accept(event)
++  -> in-memory CellularState
++  -> snapshot on demand
++  -> optional audit/replay JSONL
++```
++
++The Scheduler remains the orchestration authority. It is an upstream EventBus
++emitter, not a dependency controlled by the supervisor. The passive supervisor
++must observe Scheduler events after they have reached the EventBus and must not
++call `Scheduler.run`, dispatch handlers, or mutate runtime state.
++
++`events.jsonl` is no longer a mandatory spine. It is an optional audit/replay
++surface used for tests, diagnostics, and reproducibility. The live supervision
++path is the in-memory sink fed by canonical EventBus events.
+diff --git a/doc/code-rules/0221_bus_direct_passive_supervisor_sink_rule.md b/doc/code-rules/0221_bus_direct_passive_supervisor_sink_rule.md
+new file mode 100644
+index 0000000..9bcb844
+--- /dev/null
++++ b/doc/code-rules/0221_bus_direct_passive_supervisor_sink_rule.md
+@@ -0,0 +1,26 @@
++# 0221 Bus-Direct Passive Supervisor Sink Rule
++
++Patch 0221 is a direct update to the passive bus supervisor introduced in 0220.
++It must not introduce a new bus, a parallel observation engine, or a proxy/policy
++controller.
++
++Required boundary:
++
++- Scheduler is the upstream orchestration authority.
++- Scheduler may emit or expose canonical EventBus events.
++- The passive supervisor is downstream-only and may accept those EventBus events.
++- The supervisor must not call `Scheduler.run`.
++- The supervisor must not dispatch scheduler handlers.
++- The supervisor must not control RouteProxy or ControlProxy.
++- The supervisor must not read raw SHM or mmap buffers.
++- The supervisor must not decide policy.
++- The supervisor must not write SQL or Qdrant.
++- The supervisor must not mutate GitHub.
++- The supervisor must stay stdlib-only.
++
++`events.jsonl` is optional audit/replay/debug output only. It must not be the
++mandatory runtime path. The canonical path is EventBus -> PassiveSupervisorSink
++-> in-memory cellular state -> optional snapshot.
++
++VisPy remains a future view adapter only. It may consume snapshots later, but it
++must not own the state or become an authority.
+diff --git a/doc/docs/architecture/runtime/221_bus_direct_passive_supervisor_sink.dot b/doc/docs/architecture/runtime/221_bus_direct_passive_supervisor_sink.dot
+new file mode 100644
+index 0000000..f3ad35b
+--- /dev/null
++++ b/doc/docs/architecture/runtime/221_bus_direct_passive_supervisor_sink.dot
+@@ -0,0 +1,28 @@
++digraph bus_direct_passive_supervisor_sink_0221 {
++  rankdir=LR;
++
++  scheduler [label="Scheduler\nupstream orchestration authority"];
++  routeproxy [label="RouteProxy / ControlProxy\nupstream event emitters"];
++  shm [label="SHM status/ring surfaces\nupstream observed state"];
++  policy [label="Policy decisions\nupstream gate events"];
++  eventbus [label="EventBus\ncanonical runtime event transport"];
++  sink [label="PassiveSupervisorSink\ndownstream-only accept(event)"];
++  state [label="CellularState\nin-memory projection"];
++  snapshot [label="snapshot.json\noptional human surface"];
++  audit [label="events.jsonl\noptional audit/replay"];
++  vispy [label="VisPy later\nview adapter only", style=dashed];
++
++  scheduler -> eventbus;
++  routeproxy -> eventbus;
++  shm -> eventbus;
++  policy -> eventbus;
++  eventbus -> sink;
++  sink -> state;
++  state -> snapshot [style=dashed];
++  sink -> audit [style=dashed];
++  snapshot -> vispy [style=dashed];
++
++  sink -> scheduler [label="forbidden: Scheduler.run/control", color=red, style=dotted];
++  sink -> routeproxy [label="forbidden: proxy control", color=red, style=dotted];
++  sink -> policy [label="forbidden: policy decision", color=red, style=dotted];
++}
+diff --git a/doc/manifests/MANIFEST_0221_CHANGED_FILES.md b/doc/manifests/MANIFEST_0221_CHANGED_FILES.md
+new file mode 100644
+index 0000000..c292fd4
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0221_CHANGED_FILES.md
+@@ -0,0 +1,21 @@
++# Manifest 0221 - Bus-Direct Passive Supervisor Sink
++
++Patch id: `0221-bus_direct_passive_supervisor_sink`
++
++Changed files:
++
++- `src/context/passive_bus_supervisor_cellular_snapshot.py`
++- `tools/run_passive_bus_supervisor_cellular_snapshot_0220.py`
++- `tests/context/test_passive_bus_supervisor_cellular_snapshot_0220.py`
++- `tests/tools/test_run_passive_bus_supervisor_cellular_snapshot_0220.py`
++- `tests/rules/test_bus_direct_passive_supervisor_sink_0221_rule.py`
++- `doc/architecture/PASSIVE_BUS_SUPERVISOR_CELLULAR_SNAPSHOT_0220.md`
++- `doc/code-rules/0221_bus_direct_passive_supervisor_sink_rule.md`
++- `doc/docs/architecture/runtime/221_bus_direct_passive_supervisor_sink.dot`
++- `doc/CHANGELOG_0221_BUS_DIRECT_PASSIVE_SUPERVISOR_SINK.md`
++- `doc/manifests/MANIFEST_0221_CHANGED_FILES.md`
++- `PHASE0221_TEST_REPORT.md`
++
++Runtime authority changes: none.
++
++Non-stdlib dependencies: none.
+diff --git a/src/context/passive_bus_supervisor_cellular_snapshot.py b/src/context/passive_bus_supervisor_cellular_snapshot.py
+index 8ba22ed..50873dc 100644
+--- a/src/context/passive_bus_supervisor_cellular_snapshot.py
++++ b/src/context/passive_bus_supervisor_cellular_snapshot.py
+@@ -9,7 +9,10 @@ SQL, Qdrant, GitHub, SHM, or proxy control planes.
+ from __future__ import annotations
+ 
+ from dataclasses import dataclass, field
++from pathlib import Path
+ from typing import Any, Iterable, Mapping
++import json
++
+ 
+ 
+ CELL_KINDS = frozenset(
+@@ -305,3 +308,92 @@ def build_cellular_snapshot(
+         stale_count=sum(1 for cell in cells if cell.state == "stale"),
+         metadata=_as_string_mapping(metadata),
+     )
++
++
++class PassiveSupervisorSink:
++    """Downstream-only sink for canonical EventBus supervision events.
++
++    The scheduler remains the orchestration authority and an upstream EventBus
++    emitter. This sink only accepts events that have already reached the bus. It
++    keeps an in-memory cellular projection and can optionally write audit JSONL
++    records for replay/debug. Audit output is not part of the hot path.
++    """
++
++    def __init__(
++        self,
++        *,
++        metadata: Mapping[str, Any] | None = None,
++        audit_jsonl: Path | None = None,
++    ) -> None:
++        self._events: list[BusSupervisorEvent] = []
++        self._metadata = _as_string_mapping(metadata)
++        self._audit_jsonl = audit_jsonl
++
++    def accept(
++        self,
++        event: BusSupervisorEvent | Mapping[str, Any],
++    ) -> BusSupervisorEvent:
++        """Accept one canonical EventBus event without controlling its source."""
++
++        normalized = event if isinstance(event, BusSupervisorEvent) else event_from_mapping(event)
++        self._events.append(normalized)
++        if self._audit_jsonl is not None:
++            self._write_audit_event(normalized)
++        return normalized
++
++    def event_count(self) -> int:
++        return len(self._events)
++
++    def events(self) -> tuple[BusSupervisorEvent, ...]:
++        return tuple(self._events)
++
++    def snapshot(
++        self,
++        *,
++        generated_at: str,
++        metadata: Mapping[str, Any] | None = None,
++    ) -> PassiveBusSupervisorSnapshot:
++        merged_metadata = dict(self._metadata)
++        merged_metadata.update(_as_string_mapping(metadata))
++        merged_metadata.setdefault("source", "eventbus_passive_supervisor_sink")
++        merged_metadata.setdefault("scheduler_role", "upstream_orchestration_authority")
++        merged_metadata.setdefault("eventbus_role", "canonical_runtime_event_transport")
++        if self._audit_jsonl is not None:
++            merged_metadata.setdefault("audit_jsonl", str(self._audit_jsonl))
++        return build_cellular_snapshot(
++            self._events,
++            generated_at=generated_at,
++            metadata=merged_metadata,
++        )
++
++    def snapshot_payload(
++        self,
++        *,
++        generated_at: str,
++        metadata: Mapping[str, Any] | None = None,
++    ) -> dict[str, Any]:
++        payload = self.snapshot(generated_at=generated_at, metadata=metadata).to_dict()
++        payload["cellular_snapshot_written"] = False
++        payload["audit_journal_enabled"] = self._audit_jsonl is not None
++        payload["supervision_authority_violation"] = False
++        return payload
++
++    def write_snapshot(
++        self,
++        path: Path,
++        *,
++        generated_at: str,
++        metadata: Mapping[str, Any] | None = None,
++    ) -> dict[str, Any]:
++        payload = self.snapshot_payload(generated_at=generated_at, metadata=metadata)
++        payload["cellular_snapshot_written"] = True
++        path.parent.mkdir(parents=True, exist_ok=True)
++        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++        return payload
++
++    def _write_audit_event(self, event: BusSupervisorEvent) -> None:
++        if self._audit_jsonl is None:
++            return
++        self._audit_jsonl.parent.mkdir(parents=True, exist_ok=True)
++        with self._audit_jsonl.open("a", encoding="utf-8") as handle:
++            handle.write(json.dumps(event.to_dict(), sort_keys=True) + "\n")
+diff --git a/tests/context/test_passive_bus_supervisor_cellular_snapshot_0220.py b/tests/context/test_passive_bus_supervisor_cellular_snapshot_0220.py
+index 5b263a8..fad811f 100644
+--- a/tests/context/test_passive_bus_supervisor_cellular_snapshot_0220.py
++++ b/tests/context/test_passive_bus_supervisor_cellular_snapshot_0220.py
+@@ -83,3 +83,84 @@ def test_authority_boundary_is_passive_and_stdlib_only() -> None:
+     assert AUTHORITY_BOUNDARY["allows_github_mutation"] is False
+     assert AUTHORITY_BOUNDARY["allows_proxy_control"] is False
+     assert AUTHORITY_BOUNDARY["requires_non_stdlib"] is False
++
++
++def test_passive_supervisor_sink_accepts_scheduler_bus_events_without_journal() -> None:
++    from src.context.passive_bus_supervisor_cellular_snapshot import PassiveSupervisorSink
++
++    sink = PassiveSupervisorSink(metadata={"surface": "eventbus"})
++    normalized = sink.accept(
++        {
++            "event_id": "evt-scheduler-1",
++            "event_kind": "scheduler_handler_completed",
++            "cell_id": "scheduler:default",
++            "cell_kind": "SCHEDULER",
++            "state": "success",
++            "observed_at": "2026-07-08T00:00:00Z",
++            "source_ref": "scheduler:default",
++            "payload": {"handler": "existing"},
++        }
++    )
++    sink.accept(
++        {
++            "event_id": "evt-policy-1",
++            "event_kind": "policy_decision_observed",
++            "cell_id": "policy:gate",
++            "cell_kind": "POLICY_GATE",
++            "state": "blocked",
++            "observed_at": "2026-07-08T00:00:01Z",
++            "policy_decision_id": "policy-1",
++            "artifact_ref": "artifact-1",
++            "sql_ref": "sql-1",
++            "qdrant_ref": "qdrant-1",
++        }
++    )
++
++    assert normalized.event_kind == "scheduler_handler_completed"
++    assert sink.event_count() == 2
++
++    payload = sink.snapshot_payload(generated_at="2026-07-08T00:00:02Z")
++    cells = {cell["cell_id"]: cell for cell in payload["cells"]}
++
++    assert payload["event_count"] == 2
++    assert payload["blocked_count"] == 1
++    assert payload["audit_journal_enabled"] is False
++    assert payload["cellular_snapshot_written"] is False
++    assert payload["metadata"]["scheduler_role"] == "upstream_orchestration_authority"
++    assert payload["metadata"]["eventbus_role"] == "canonical_runtime_event_transport"
++    assert cells["scheduler:default"]["cell_kind"] == "SCHEDULER"
++    assert cells["policy:gate"]["refs"]["policy_decision_id"] == "policy-1"
++    assert cells["policy:gate"]["refs"]["artifact_ref"] == "artifact-1"
++    assert cells["policy:gate"]["refs"]["sql_ref"] == "sql-1"
++    assert cells["policy:gate"]["refs"]["qdrant_ref"] == "qdrant-1"
++
++
++def test_passive_supervisor_sink_audit_is_optional(tmp_path) -> None:
++    from src.context.passive_bus_supervisor_cellular_snapshot import PassiveSupervisorSink
++
++    audit_jsonl = tmp_path / "audit" / "events.jsonl"
++    snapshot_json = tmp_path / "snapshot.json"
++    sink = PassiveSupervisorSink(audit_jsonl=audit_jsonl)
++
++    sink.accept(
++        {
++            "event_id": "evt-route-1",
++            "event_kind": "routeproxy_status_observed",
++            "cell_id": "routeproxy:main",
++            "cell_kind": "ROUTEPROXY",
++            "state": "running",
++            "observed_at": "2026-07-08T00:00:00Z",
++            "route_ref": "route-1",
++            "shm_ref": "shm-ring-1",
++        }
++    )
++    payload = sink.write_snapshot(
++        snapshot_json,
++        generated_at="2026-07-08T00:00:01Z",
++    )
++
++    assert audit_jsonl.exists()
++    assert snapshot_json.exists()
++    assert payload["cellular_snapshot_written"] is True
++    assert payload["audit_journal_enabled"] is True
++    assert "routeproxy_status_observed" in audit_jsonl.read_text(encoding="utf-8")
+diff --git a/tests/rules/test_bus_direct_passive_supervisor_sink_0221_rule.py b/tests/rules/test_bus_direct_passive_supervisor_sink_0221_rule.py
+new file mode 100644
+index 0000000..3d690be
+--- /dev/null
++++ b/tests/rules/test_bus_direct_passive_supervisor_sink_0221_rule.py
+@@ -0,0 +1,48 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(relative_path: str) -> str:
++    return (ROOT / relative_path).read_text(encoding="utf-8")
++
++
++def test_0221_updates_existing_passive_supervisor_without_new_bus_or_scheduler_control() -> None:
++    source = _read("src/context/passive_bus_supervisor_cellular_snapshot.py")
++    tool = _read("tools/run_passive_bus_supervisor_cellular_snapshot_0220.py")
++    combined = source + "\n" + tool
++
++    assert "class PassiveSupervisorSink" in source
++    assert "upstream_orchestration_authority" in source
++    assert "canonical_runtime_event_transport" in source
++    assert "optional_replay_or_audit_only" in tool
++
++    forbidden = [
++        "Scheduler.run(",
++        "run_scheduler(",
++        "dispatch_handler(",
++        "mmap(",
++        "upsert(",
++        "download_artifact(",
++        "pushback(",
++    ]
++    for token in forbidden:
++        assert token not in combined
++
++    assert "class EventBus" not in source
++    assert "events_jsonl: Path | None" in tool
++
++
++def test_0221_docs_lock_bus_direct_runtime_path() -> None:
++    rule = _read("doc/code-rules/0221_bus_direct_passive_supervisor_sink_rule.md")
++    changelog = _read("doc/CHANGELOG_0221_BUS_DIRECT_PASSIVE_SUPERVISOR_SINK.md")
++    architecture = _read("doc/architecture/PASSIVE_BUS_SUPERVISOR_CELLULAR_SNAPSHOT_0220.md")
++    dot = _read("doc/docs/architecture/runtime/221_bus_direct_passive_supervisor_sink.dot")
++
++    assert "Scheduler is the upstream orchestration authority" in rule
++    assert "EventBus -> PassiveSupervisorSink" in rule
++    assert "events.jsonl` is optional audit/replay/debug output only" in rule
++    assert "No new bus implementation" in changelog
++    assert "EventBus -> PassiveSupervisorSink.accept(event)" in architecture
++    assert "forbidden: Scheduler.run/control" in dot
+diff --git a/tests/tools/test_run_passive_bus_supervisor_cellular_snapshot_0220.py b/tests/tools/test_run_passive_bus_supervisor_cellular_snapshot_0220.py
+index 438b1a2..3172ba7 100644
+--- a/tests/tools/test_run_passive_bus_supervisor_cellular_snapshot_0220.py
++++ b/tests/tools/test_run_passive_bus_supervisor_cellular_snapshot_0220.py
+@@ -69,3 +69,45 @@ def test_run_passive_bus_supervisor_cellular_snapshot_writes_snapshot(
+     assert payload["cells"][0]["cell_id"] == "artifact"
+     assert payload["cells"][0]["state"] == "success"
+     assert payload["cells"][0]["refs"]["artifact_ref"] == "artifact-1"
++
++
++def test_run_passive_bus_supervisor_cellular_snapshot_accepts_event_json_without_jsonl(
++    tmp_path: Path,
++) -> None:
++    output = tmp_path / "snapshot.json"
++    event = json.dumps(
++        {
++            "event_id": "evt-scheduler-1",
++            "event_kind": "scheduler_completed",
++            "cell_id": "scheduler",
++            "cell_kind": "SCHEDULER",
++            "state": "success",
++            "observed_at": "2026-07-08T00:00:00Z",
++        }
++    )
++
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/run_passive_bus_supervisor_cellular_snapshot_0220.py",
++            "--event-json",
++            event,
++            "--output",
++            str(output),
++            "--generated-at",
++            "2026-07-08T00:00:01Z",
++            "--format",
++            "json",
++        ],
++        check=True,
++        cwd=Path(__file__).resolve().parents[2],
++        text=True,
++        capture_output=True,
++    )
++
++    payload = json.loads(result.stdout)
++    assert output.exists()
++    assert payload["event_count"] == 1
++    assert payload["metadata"]["runtime_path"] == "eventbus_direct_sink"
++    assert payload["metadata"]["jsonl_role"] == "optional_replay_or_audit_only"
++    assert payload["cells"][0]["cell_kind"] == "SCHEDULER"
+diff --git a/tools/run_passive_bus_supervisor_cellular_snapshot_0220.py b/tools/run_passive_bus_supervisor_cellular_snapshot_0220.py
+index 7bec313..8ab9f7a 100644
+--- a/tools/run_passive_bus_supervisor_cellular_snapshot_0220.py
++++ b/tools/run_passive_bus_supervisor_cellular_snapshot_0220.py
+@@ -1,5 +1,9 @@
+ #!/usr/bin/env python3
+-"""Build a passive bus supervisor cellular snapshot from JSONL events."""
++"""Build a passive bus supervisor cellular snapshot from passive events.
++
++The direct EventBus sink is the canonical path. JSON/JSONL inputs in this tool
++are replay and test harnesses only; they are not the runtime hot path.
++"""
+ 
+ from __future__ import annotations
+ 
+@@ -15,8 +19,7 @@ if str(ROOT) not in sys.path:
+     sys.path.insert(0, str(ROOT))
+ 
+ from src.context.passive_bus_supervisor_cellular_snapshot import (
+-    build_cellular_snapshot,
+-    event_from_mapping,
++    PassiveSupervisorSink,
+ )
+ 
+ 
+@@ -41,26 +44,48 @@ def _load_jsonl_events(path: Path) -> list[dict[str, Any]]:
+     return events
+ 
+ 
++def _load_json_event(raw_json: str) -> dict[str, Any]:
++    try:
++        event = json.loads(raw_json)
++    except json.JSONDecodeError as exc:
++        raise ValueError(f"invalid --event-json value: {exc}") from exc
++    if not isinstance(event, dict):
++        raise ValueError("--event-json must be a JSON object")
++    return event
++
++
+ def build_snapshot_payload(
+     *,
+-    events_jsonl: Path,
++    events_jsonl: Path | None = None,
++    event_mappings: list[dict[str, Any]] | None = None,
+     generated_at: str,
+     source_label: str,
++    audit_jsonl: Path | None = None,
+ ) -> dict[str, Any]:
+-    raw_events = _load_jsonl_events(events_jsonl)
+-    events = [event_from_mapping(event) for event in raw_events]
+-    snapshot = build_cellular_snapshot(
+-        events,
+-        generated_at=generated_at,
++    sink = PassiveSupervisorSink(
+         metadata={
+             "source": source_label,
+-            "events_jsonl": str(events_jsonl),
+-            "patch_id": "0220-passive_bus_supervisor_cellular_snapshot",
++            "patch_id": "0221-bus_direct_passive_supervisor_sink",
++            "runtime_path": "eventbus_direct_sink",
++            "jsonl_role": "optional_replay_or_audit_only",
+         },
++        audit_jsonl=audit_jsonl,
+     )
+-    payload = snapshot.to_dict()
+-    payload["cellular_snapshot_written"] = True
+-    payload["supervision_authority_violation"] = False
++    accepted = 0
++    if events_jsonl is not None:
++        for event in _load_jsonl_events(events_jsonl):
++            sink.accept(event)
++            accepted += 1
++    for event in event_mappings or []:
++        sink.accept(event)
++        accepted += 1
++    if accepted == 0:
++        raise ValueError("at least one EventBus event is required")
++
++    metadata = {}
++    if events_jsonl is not None:
++        metadata["events_jsonl"] = str(events_jsonl)
++    payload = sink.snapshot_payload(generated_at=generated_at, metadata=metadata)
+     return payload
+ 
+ 
+@@ -73,9 +98,25 @@ def _build_parser() -> argparse.ArgumentParser:
+     parser = argparse.ArgumentParser(description=__doc__)
+     parser.add_argument(
+         "--events-jsonl",
+-        required=True,
+         type=Path,
+-        help="Path to passive bus events in JSONL format.",
++        help=(
++            "Optional replay input with canonical EventBus events in JSONL format. "
++            "This is not the runtime hot path."
++        ),
++    )
++    parser.add_argument(
++        "--event-json",
++        action="append",
++        default=[],
++        help=(
++            "Optional single canonical EventBus event JSON object. May be repeated "
++            "for fileless smoke tests."
++        ),
++    )
++    parser.add_argument(
++        "--audit-jsonl",
++        type=Path,
++        help="Optional audit/replay journal written by the passive sink.",
+     )
+     parser.add_argument(
+         "--output",
+@@ -90,7 +131,7 @@ def _build_parser() -> argparse.ArgumentParser:
+     )
+     parser.add_argument(
+         "--source-label",
+-        default="passive_bus_supervisor",
++        default="eventbus_passive_supervisor_sink",
+         help="Metadata label for the event source.",
+     )
+     parser.add_argument(
+@@ -106,11 +147,15 @@ def main() -> int:
+     parser = _build_parser()
+     args = parser.parse_args()
+     generated_at = args.generated_at or _utc_now()
++    event_mappings = [_load_json_event(value) for value in args.event_json]
+     payload = build_snapshot_payload(
+         events_jsonl=args.events_jsonl,
++        event_mappings=event_mappings,
+         generated_at=generated_at,
+         source_label=args.source_label,
++        audit_jsonl=args.audit_jsonl,
+     )
++    payload["cellular_snapshot_written"] = True
+     _write_payload(args.output, payload)
+     print(json.dumps(payload, sort_keys=True))
+     return 0

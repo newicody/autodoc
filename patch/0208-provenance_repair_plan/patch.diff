@@ -1,0 +1,751 @@
+diff --git a/PHASE0208_TEST_REPORT.md b/PHASE0208_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0208_TEST_REPORT.md
+@@ -0,0 +1,34 @@
++# Phase 0208 Test Report — Provenance repair plan
++
++Status: prepared.
++
++Scope:
++- Reads `provenance_repair_audit.json`.
++- Produces `provenance_repair_plan.json`.
++- Selects `source_baseline_ref` candidate.
++- Selects `source_entry_digest` candidate.
++- Plans forward-only provenance repair.
++- Applies `doc/code-rules/code_rule.md`.
++- Updates docs, graph, changelog, manifest, and rule.
++- No provenance repair write.
++- No runtime history rewrite.
++- No SQL/Qdrant write.
++- No Scheduler.run execution.
++- No Scheduler.run modification.
++- No runtime import.
++- No handler call.
++- No mark_route_frame_stale call.
++- No frame write by 0208.
++- No ControlProxy frame write.
++- No GitHub API/network.
++
++Validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/tools/test_plan_provenance_repair_0208.py \
++  tests/rules/test_provenance_repair_plan_0208_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
+diff --git a/tools/plan_provenance_repair.py b/tools/plan_provenance_repair.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/plan_provenance_repair.py
+@@ -0,0 +1,311 @@
++#!/usr/bin/env python3
++"""Plan forward-only provenance repair from the 0207 audit.
++
++0208 is the Bloc E provenance repair plan only.
++
++It reads provenance_repair_audit.json from 0207 and writes
++provenance_repair_plan.json.
++
++Reuse/adapt existing surfaces first.
++doc/code-rules/code_rule.md remains the primary rule.
++0208 must plan a forward-only provenance repair before any provenance repair
++acceptance write is allowed.
++
++0208 does not repair source_baseline_ref.
++0208 does not repair source_entry_digest.
++0208 does not rewrite controlled_dev_routeproxy_smoke_post_execution_acceptance.json.
++0208 does not rewrite runtime history.
++0208 does not write SQL.
++0208 does not write Qdrant.
++0208 does not execute Scheduler.run.
++0208 does not modify Scheduler.run.
++0208 does not import runtime handler modules.
++0208 does not call handle_scheduler_route_command.
++0208 does not call handle_scheduler_route_request.
++0208 does not call prepare_route_proxy_runtime.
++0208 does not call mark_route_frame_stale.
++0208 does not call read_route_frame.
++0208 does not request writer permits.
++0208 does not call write_route_frame.
++0208 does not write ControlProxy or RouteProxy frames.
++0208 does not call GitHub API or use network.
++
++0208 selects source_baseline_ref and source_entry_digest candidates but writes
++only a plan. The repair itself is deferred to P0209.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++from typing import Any, Mapping
++
++
++PROVENANCE_REPAIR_PLAN_SCHEMA = "missipy.provenance.repair_plan.v1"
++EXPECTED_AUDIT_SCHEMA = "missipy.provenance.repair_audit.v1"
++DEFAULT_OUTPUT_NAME = "provenance_repair_plan.json"
++TARGET_SOURCE_ARTIFACT = "controlled_dev_routeproxy_smoke_post_execution_acceptance.json"
++REGISTRY_ARTIFACT = "controlled_dev_routeproxy_smoke_registry.jsonl"
++
++FALSE_AUDIT_FLAGS = (
++    "execution_allowed_by_0207",
++    "sql_write_allowed_by_0207",
++    "qdrant_write_allowed_by_0207",
++    "runtime_history_rewrite_allowed_by_0207",
++    "runtime_imports_executed_by_0207",
++    "scheduler_run_executed",
++    "scheduler_run_modified",
++    "handler_called_by_0207",
++    "routeproxy_prepared_by_0207",
++    "mark_route_frame_stale_called_by_0207",
++    "read_route_frame_called_by_0207",
++    "writer_permits_requested_by_0207",
++    "frames_written_by_0207",
++    "controlproxy_frames_written_by_0207",
++    "eventbus_instantiated_by_0207",
++    "network_used_by_0207",
++    "sql_written_by_0207",
++    "qdrant_written_by_0207",
++)
++
++FALSE_NEW_SURFACE_FLAGS = (
++    "new_runtime_handler_added",
++    "new_adapter_added",
++    "new_bus_added",
++    "new_scheduler_added",
++    "new_controlproxy_runtime_added",
++    "new_routeproxy_runtime_added",
++    "new_sql_backend_added",
++    "new_qdrant_backend_added",
++    "new_github_client_added",
++    "new_graph_renderer_added",
++    "new_inference_path_added",
++)
++
++
++class ProvenanceRepairPlanError(ValueError):
++    """Raised when provenance repair planning is unsafe."""
++
++
++def plan_forward_only_provenance_repair(
++    *,
++    provenance_repair_audit_path: Path | str,
++    output_path: Path | str | None = None,
++) -> dict[str, Any]:
++    """Plan forward-only provenance repair without writing repaired provenance."""
++
++    audit_path = Path(provenance_repair_audit_path)
++    audit = _read_json_file(audit_path)
++    issues: list[str] = []
++    warnings: list[str] = []
++
++    _audit_repair_audit(audit, issues, warnings)
++
++    target_runtime_root = Path(str(audit.get("target_runtime_root", "")))
++    if not target_runtime_root.is_absolute():
++        issues.append("target_runtime_root must be absolute")
++    final_output = Path(output_path) if output_path is not None else target_runtime_root / DEFAULT_OUTPUT_NAME
++    if final_output.name != DEFAULT_OUTPUT_NAME:
++        issues.append("output filename must be provenance_repair_plan.json")
++
++    candidates = audit.get("candidate_provenance_refs")
++    if not isinstance(candidates, list):
++        candidates = []
++        issues.append("candidate_provenance_refs must be a list")
++
++    planned_source_baseline_ref = _select_candidate(
++        candidates,
++        artifact=TARGET_SOURCE_ARTIFACT,
++        field="controlled_dev_baseline_ref",
++    )
++    planned_source_entry_digest = _select_candidate(
++        candidates,
++        artifact=REGISTRY_ARTIFACT,
++        field="entry_digest",
++    )
++    registry_entry_ref = _select_candidate(candidates, artifact=REGISTRY_ARTIFACT, field="entry_ref")
++
++    if not planned_source_baseline_ref:
++        issues.append("missing planned source_baseline_ref candidate")
++    if not planned_source_entry_digest:
++        issues.append("missing planned source_entry_digest candidate")
++
++    repair_items = list(audit.get("repair_items", [])) if isinstance(audit.get("repair_items"), list) else []
++    if not repair_items:
++        issues.append("repair_items must be present")
++
++    plan = {
++        "schema": PROVENANCE_REPAIR_PLAN_SCHEMA,
++        "bloc": "E",
++        "bloc_name": "sql-qdrant-provenance-repair",
++        "provenance_repair_audit_path": str(audit_path),
++        "provenance_repair_audit_schema": audit.get("schema"),
++        "target_runtime_root": audit.get("target_runtime_root"),
++        "target_isolated_runtime_root": audit.get("target_isolated_runtime_root"),
++        "source_artifact": TARGET_SOURCE_ARTIFACT,
++        "registry_artifact": REGISTRY_ARTIFACT,
++        "missing_fields": [
++            "source_baseline_ref",
++            "source_entry_digest",
++        ],
++        "repair_strategy": "forward_only_artifact",
++        "planned_output": "provenance_repair_acceptance.json",
++        "planned_next_patch": "0209-forward_only_provenance_repair_acceptance",
++        "provenance_repair_plan_ready": not issues,
++        "provenance_repair_required": bool(audit.get("provenance_repair_required")),
++        "source_baseline_ref_missing": bool(audit.get("source_baseline_ref_missing")),
++        "source_entry_digest_missing": bool(audit.get("source_entry_digest_missing")),
++        "planned_source_baseline_ref": planned_source_baseline_ref,
++        "planned_source_baseline_ref_source": {
++            "artifact": TARGET_SOURCE_ARTIFACT,
++            "field": "controlled_dev_baseline_ref",
++        },
++        "planned_source_entry_digest": planned_source_entry_digest,
++        "planned_source_entry_digest_source": {
++            "artifact": REGISTRY_ARTIFACT,
++            "field": "entry_digest",
++        },
++        "planned_registry_entry_ref": registry_entry_ref,
++        "repair_items": repair_items,
++        "candidate_provenance_refs": candidates,
++        "repair_output_mode": "append-only forward artifact",
++        "runtime_history_rewrite_allowed_by_0208": False,
++        "execution_allowed_by_0208": False,
++        "sql_write_allowed_by_0208": False,
++        "qdrant_write_allowed_by_0208": False,
++        "provenance_repair_write_allowed_by_0208": False,
++        "p0209_may_write_forward_only_provenance_repair": not issues,
++        "p0209_execution_unlock_requirements": [
++            "explicit forward-only provenance repair acceptance patch",
++            "write provenance_repair_acceptance.json only",
++            "do not rewrite historical runtime artifacts",
++            "do not write SQL directly",
++            "do not write Qdrant directly",
++            "include source_baseline_ref proof",
++            "include source_entry_digest proof",
++            "close Bloc E only after acceptance",
++        ],
++        "repair_boundaries": [
++            "P0208 does not repair source_baseline_ref.",
++            "P0208 does not repair source_entry_digest.",
++            "P0208 does not rewrite runtime history.",
++            "P0208 does not write SQL.",
++            "P0208 does not write Qdrant.",
++            "P0208 only plans a forward-only provenance repair.",
++        ],
++        "issues": issues,
++        "warnings": warnings,
++        "existing_surfaces_reused": True,
++        "new_runtime_handler_added": False,
++        "new_adapter_added": False,
++        "new_bus_added": False,
++        "new_scheduler_added": False,
++        "new_controlproxy_runtime_added": False,
++        "new_routeproxy_runtime_added": False,
++        "new_sql_backend_added": False,
++        "new_qdrant_backend_added": False,
++        "new_github_client_added": False,
++        "new_graph_renderer_added": False,
++        "new_inference_path_added": False,
++        "runtime_imports_executed_by_0208": False,
++        "scheduler_run_executed": False,
++        "scheduler_run_modified": False,
++        "handler_called_by_0208": False,
++        "routeproxy_prepared_by_0208": False,
++        "mark_route_frame_stale_called_by_0208": False,
++        "read_route_frame_called_by_0208": False,
++        "writer_permits_requested_by_0208": False,
++        "frames_written_by_0208": False,
++        "controlproxy_frames_written_by_0208": False,
++        "eventbus_instantiated_by_0208": False,
++        "network_used_by_0208": False,
++        "sql_written_by_0208": False,
++        "qdrant_written_by_0208": False,
++    }
++
++    if output_path is not None:
++        _write_plan(final_output, plan)
++
++    return plan
++
++
++def _audit_repair_audit(audit: Mapping[str, Any], issues: list[str], warnings: list[str]) -> None:
++    if audit.get("schema") != EXPECTED_AUDIT_SCHEMA:
++        issues.append("provenance repair audit schema mismatch")
++    if audit.get("provenance_repair_audit_success") is not True:
++        issues.append("provenance_repair_audit_success must be true")
++    if audit.get("provenance_repair_required") is not True:
++        issues.append("provenance_repair_required must be true")
++    if audit.get("source_baseline_ref_missing") is not True:
++        issues.append("source_baseline_ref_missing must be true")
++    if audit.get("source_entry_digest_missing") is not True:
++        issues.append("source_entry_digest_missing must be true")
++    if audit.get("provenance_repair_plan_allowed_next") is not True:
++        issues.append("provenance_repair_plan_allowed_next must be true")
++    if audit.get("planned_next_patch") != "0208-provenance_repair_plan":
++        issues.append("planned_next_patch must be 0208-provenance_repair_plan")
++    if audit.get("issues") not in ([], None):
++        issues.append("provenance repair audit issues must be empty")
++    if isinstance(audit.get("warnings"), list) and audit.get("warnings"):
++        warnings.extend(str(item) for item in audit.get("warnings", []))
++    for flag in FALSE_AUDIT_FLAGS:
++        if audit.get(flag) is not False:
++            issues.append(f"{flag} must be false")
++    for flag in FALSE_NEW_SURFACE_FLAGS:
++        if audit.get(flag) is not False:
++            issues.append(f"{flag} must be false")
++
++
++def _select_candidate(candidates: list[Any], *, artifact: str, field: str) -> str:
++    for candidate in candidates:
++        if not isinstance(candidate, Mapping):
++            continue
++        if candidate.get("artifact") == artifact and candidate.get("field") == field:
++            value = candidate.get("value")
++            if isinstance(value, str) and value:
++                return value
++    return ""
++
++
++def _read_json_file(path: Path) -> dict[str, Any]:
++    raw = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(raw, dict):
++        raise ProvenanceRepairPlanError("input must be a JSON object")
++    return raw
++
++
++def _write_plan(path: Path, plan: dict[str, Any]) -> None:
++    if path.name != DEFAULT_OUTPUT_NAME:
++        raise ProvenanceRepairPlanError("output filename must be provenance_repair_plan.json")
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Plan forward-only provenance repair.")
++    parser.add_argument("--provenance-repair-audit", required=True, help="Path to provenance_repair_audit.json.")
++    parser.add_argument("--output", help="Optional provenance_repair_plan.json output path.")
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    args = parser.parse_args(argv)
++
++    plan = plan_forward_only_provenance_repair(
++        provenance_repair_audit_path=Path(args.provenance_repair_audit),
++        output_path=Path(args.output) if args.output else None,
++    )
++
++    if args.format == "json":
++        print(json.dumps(plan, indent=2, sort_keys=True))
++    else:
++        print(f"provenance_repair_plan_ready: {plan['provenance_repair_plan_ready']}")
++        print(f"planned_source_baseline_ref: {plan['planned_source_baseline_ref']}")
++        print(f"planned_source_entry_digest: {plan['planned_source_entry_digest']}")
++        print(f"p0209_may_write_forward_only_provenance_repair: {plan['p0209_may_write_forward_only_provenance_repair']}")
++        print(f"planned_next_patch: {plan['planned_next_patch']}")
++        print(f"issues: {len(plan['issues'])}")
++        print(f"warnings: {len(plan['warnings'])}")
++    return 0 if plan["provenance_repair_plan_ready"] else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_plan_provenance_repair_0208.py b/tests/tools/test_plan_provenance_repair_0208.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_plan_provenance_repair_0208.py
+@@ -0,0 +1,126 @@
++from pathlib import Path
++import importlib.util
++import json
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "plan_provenance_repair.py"
++
++
++def _load_tool_module():
++    spec = importlib.util.spec_from_file_location("plan_provenance_repair_tool", TOOL)
++    assert spec is not None
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    assert spec.loader is not None
++    spec.loader.exec_module(module)
++    return module
++
++
++def _audit_fixture(tmp_path: Path, *, success: bool = True) -> dict:
++    return {
++        "schema": "missipy.provenance.repair_audit.v1",
++        "bloc": "E",
++        "bloc_name": "sql-qdrant-provenance-repair",
++        "target_runtime_root": str(tmp_path / "runtime" / "dev-controlled"),
++        "target_isolated_runtime_root": str(tmp_path / "runtime" / "dev-controlled" / "routeproxy-isolated"),
++        "provenance_repair_audit_success": success,
++        "provenance_repair_required": True,
++        "source_baseline_ref_missing": True,
++        "source_entry_digest_missing": True,
++        "provenance_repair_plan_allowed_next": success,
++        "planned_next_patch": "0208-provenance_repair_plan",
++        "issues": [] if success else ["provenance_repair_audit_success must be true"],
++        "warnings": ["source_baseline_ref or source_entry_digest missing"],
++        "repair_items": [
++            "repair source_baseline_ref in a forward-only provenance repair artifact",
++            "repair source_entry_digest in a forward-only provenance repair artifact",
++        ],
++        "candidate_provenance_refs": [
++            {
++                "artifact": "controlled_dev_routeproxy_smoke_post_execution_acceptance.json",
++                "field": "controlled_dev_baseline_ref",
++                "value": "baseline:controlled-dev-routeproxy-write-read-v1:3195a2fcf10586d5",
++            },
++            {
++                "artifact": "controlled_dev_routeproxy_smoke_registry.jsonl",
++                "field": "entry_ref",
++                "value": "controlled-dev-registry:bfe63428faeea56a",
++            },
++            {
++                "artifact": "controlled_dev_routeproxy_smoke_registry.jsonl",
++                "field": "entry_digest",
++                "value": "bfe63428faeea56a7fc90c18e692356f1f1aec60c8d24dd27a62f95edaff3855",
++            },
++        ],
++        "execution_allowed_by_0207": False,
++        "sql_write_allowed_by_0207": False,
++        "qdrant_write_allowed_by_0207": False,
++        "runtime_history_rewrite_allowed_by_0207": False,
++        "runtime_imports_executed_by_0207": False,
++        "scheduler_run_executed": False,
++        "scheduler_run_modified": False,
++        "handler_called_by_0207": False,
++        "routeproxy_prepared_by_0207": False,
++        "mark_route_frame_stale_called_by_0207": False,
++        "read_route_frame_called_by_0207": False,
++        "writer_permits_requested_by_0207": False,
++        "frames_written_by_0207": False,
++        "controlproxy_frames_written_by_0207": False,
++        "eventbus_instantiated_by_0207": False,
++        "network_used_by_0207": False,
++        "sql_written_by_0207": False,
++        "qdrant_written_by_0207": False,
++        "new_runtime_handler_added": False,
++        "new_adapter_added": False,
++        "new_bus_added": False,
++        "new_scheduler_added": False,
++        "new_controlproxy_runtime_added": False,
++        "new_routeproxy_runtime_added": False,
++        "new_sql_backend_added": False,
++        "new_qdrant_backend_added": False,
++        "new_github_client_added": False,
++        "new_graph_renderer_added": False,
++        "new_inference_path_added": False,
++    }
++
++
++def test_0208_plans_forward_only_provenance_repair(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    audit_path = tmp_path / "provenance_repair_audit.json"
++    output = tmp_path / "provenance_repair_plan.json"
++    audit_path.write_text(json.dumps(_audit_fixture(tmp_path), indent=2), encoding="utf-8")
++
++    plan = module.plan_forward_only_provenance_repair(
++        provenance_repair_audit_path=audit_path,
++        output_path=output,
++    )
++
++    assert plan["provenance_repair_plan_ready"] is True
++    assert plan["repair_strategy"] == "forward_only_artifact"
++    assert plan["planned_source_baseline_ref"] == "baseline:controlled-dev-routeproxy-write-read-v1:3195a2fcf10586d5"
++    assert plan["planned_source_entry_digest"] == "bfe63428faeea56a7fc90c18e692356f1f1aec60c8d24dd27a62f95edaff3855"
++    assert plan["planned_registry_entry_ref"] == "controlled-dev-registry:bfe63428faeea56a"
++    assert plan["runtime_history_rewrite_allowed_by_0208"] is False
++    assert plan["sql_write_allowed_by_0208"] is False
++    assert plan["qdrant_write_allowed_by_0208"] is False
++    assert plan["provenance_repair_write_allowed_by_0208"] is False
++    assert plan["p0209_may_write_forward_only_provenance_repair"] is True
++    assert plan["planned_next_patch"] == "0209-forward_only_provenance_repair_acceptance"
++    assert plan["sql_written_by_0208"] is False
++    assert plan["qdrant_written_by_0208"] is False
++    assert output.exists()
++
++
++def test_0208_rejects_failed_audit(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    audit_path = tmp_path / "provenance_repair_audit.json"
++    audit_path.write_text(json.dumps(_audit_fixture(tmp_path, success=False), indent=2), encoding="utf-8")
++
++    plan = module.plan_forward_only_provenance_repair(provenance_repair_audit_path=audit_path)
++
++    assert plan["provenance_repair_plan_ready"] is False
++    assert plan["p0209_may_write_forward_only_provenance_repair"] is False
++    assert "provenance_repair_audit_success must be true" in plan["issues"]
++    assert "provenance_repair_plan_allowed_next must be true" in plan["issues"]
+diff --git a/tests/rules/test_provenance_repair_plan_0208_rule.py b/tests/rules/test_provenance_repair_plan_0208_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_provenance_repair_plan_0208_rule.py
+@@ -0,0 +1,80 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "plan_provenance_repair.py"
++DOC = ROOT / "doc" / "architecture" / "PROVENANCE_REPAIR_PLAN_0208.md"
++RULE = ROOT / "doc" / "code-rules" / "0208_provenance_repair_plan_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0208_CHANGED_FILES.md"
++
++
++def test_0208_tool_is_forward_only_plan_only() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    for token in [
++        "0208 is the Bloc E provenance repair plan only",
++        "provenance_repair_audit.json",
++        "provenance_repair_plan.json",
++        "Reuse/adapt existing surfaces first",
++        "0208 must plan a forward-only provenance repair",
++        "0208 does not repair source_baseline_ref",
++        "0208 does not repair source_entry_digest",
++        "0208 does not rewrite controlled_dev_routeproxy_smoke_post_execution_acceptance.json",
++        "0208 does not rewrite runtime history",
++        "0208 does not write SQL",
++        "0208 does not write Qdrant",
++        "0208 does not execute Scheduler.run",
++        "0208 does not call mark_route_frame_stale",
++        "0208 does not write ControlProxy or RouteProxy frames",
++        "0208 selects source_baseline_ref and source_entry_digest candidates",
++        "0209-forward_only_provenance_repair_acceptance",
++    ]:
++        assert token in source
++    assert "from runtime." not in source
++    assert "import runtime." not in source
++    assert "import requests" not in source
++    assert "from requests" not in source
++
++
++def test_0208_doc_locks_forward_only_plan_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    for token in [
++        "0208 creates a forward-only provenance repair plan",
++        "The input is provenance_repair_audit.json",
++        "The output is provenance_repair_plan.json",
++        "Reuse/adapt existing surfaces first",
++        "doc/code-rules/code_rule.md remains the primary rule",
++        "0208 does not repair provenance",
++        "0208 does not rewrite runtime history",
++        "0208 does not write SQL or Qdrant",
++        "P0209 may write the forward-only provenance repair acceptance",
++    ]:
++        assert token in doc
++
++
++def test_0208_rule_requires_plan_only() -> None:
++    rule = RULE.read_text(encoding="utf-8")
++    for token in [
++        "Read provenance_repair_audit.json from 0207",
++        "Plan forward-only provenance repair only",
++        "Select source_baseline_ref candidate",
++        "Select source_entry_digest candidate",
++        "Do not repair source_baseline_ref in 0208",
++        "Do not repair source_entry_digest in 0208",
++        "Do not rewrite runtime history in 0208",
++        "Do not write SQL in 0208",
++        "Do not write Qdrant in 0208",
++        "Allow P0209 to write provenance_repair_acceptance.json only",
++    ]:
++        assert token in rule
++
++
++def test_0208_manifest_lists_provenance_plan_files() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    for token in [
++        "tools/plan_provenance_repair.py",
++        "tests/tools/test_plan_provenance_repair_0208.py",
++        "tests/rules/test_provenance_repair_plan_0208_rule.py",
++        "doc/architecture/PROVENANCE_REPAIR_PLAN_0208.md",
++        "doc/code-rules/0208_provenance_repair_plan_rule.md",
++    ]:
++        assert token in manifest
+diff --git a/doc/architecture/PROVENANCE_REPAIR_PLAN_0208.md b/doc/architecture/PROVENANCE_REPAIR_PLAN_0208.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/PROVENANCE_REPAIR_PLAN_0208.md
+@@ -0,0 +1,64 @@
++# 0208 — Provenance repair plan
++
++## Decision
++
++0208 creates a forward-only provenance repair plan.
++
++The input is provenance_repair_audit.json.
++The output is provenance_repair_plan.json.
++
++Reuse/adapt existing surfaces first.
++doc/code-rules/code_rule.md remains the primary rule.
++docs, graph, changelog, manifest, and rule are updated with the patch.
++
++0208 does not repair provenance.
++0208 does not rewrite runtime history.
++0208 does not write SQL or Qdrant.
++P0209 may write the forward-only provenance repair acceptance.
++
++## Why this exists
++
++0207 proved that `source_baseline_ref` and `source_entry_digest` are missing
++from the P0200 post-execution acceptance artifact, while candidate values exist
++elsewhere in the runtime chain.
++
++0208 selects those candidates and records the repair strategy without writing the
++repair itself.
++
++## Selected candidates
++
++- `source_baseline_ref` comes from
++  `controlled_dev_routeproxy_smoke_post_execution_acceptance.json` field
++  `controlled_dev_baseline_ref`.
++- `source_entry_digest` comes from
++  `controlled_dev_routeproxy_smoke_registry.jsonl` field `entry_digest`.
++
++## Boundary
++
++0208:
++
++- reads `provenance_repair_audit.json`,
++- selects `source_baseline_ref` candidate,
++- selects `source_entry_digest` candidate,
++- records `forward_only_artifact` repair strategy,
++- writes optional `provenance_repair_plan.json`.
++
++0208 does not:
++
++- repair `source_baseline_ref`,
++- repair `source_entry_digest`,
++- rewrite `controlled_dev_routeproxy_smoke_post_execution_acceptance.json`,
++- rewrite runtime history,
++- write SQL,
++- write Qdrant,
++- execute Scheduler.run,
++- modify Scheduler.run,
++- import runtime handler modules,
++- call mark_route_frame_stale,
++- write ControlProxy or RouteProxy frames,
++- call GitHub API,
++- use network.
++
++## Next
++
++If 0208 succeeds, P0209 may write `provenance_repair_acceptance.json` only.
+diff --git a/doc/code-rules/0208_provenance_repair_plan_rule.md b/doc/code-rules/0208_provenance_repair_plan_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0208_provenance_repair_plan_rule.md
+@@ -0,0 +1,34 @@
++# 0208 provenance repair plan rule
++
++0208 plans forward-only provenance repair only.
++
++Rules:
++
++- Read provenance_repair_audit.json from 0207.
++- Plan forward-only provenance repair only.
++- Select source_baseline_ref candidate.
++- Select source_entry_digest candidate.
++- Apply doc/code-rules/code_rule.md as the primary rule.
++- Keep docs, graph, changelog, manifest, and rule updated with the patch.
++- Do not repair source_baseline_ref in 0208.
++- Do not repair source_entry_digest in 0208.
++- Do not rewrite runtime history in 0208.
++- Do not rewrite controlled_dev_routeproxy_smoke_post_execution_acceptance.json.
++- Do not write SQL in 0208.
++- Do not write Qdrant in 0208.
++- Do not add a new SQL backend.
++- Do not add a new Qdrant backend.
++- Do not add a new runtime handler.
++- Do not add a new adapter.
++- Do not add a new bus.
++- Do not add a new Scheduler.
++- Do not add a new ControlProxy runtime.
++- Do not add a new RouteProxy runtime.
++- Do not call GitHub API.
++- Do not use network.
++- Do not execute Scheduler.run.
++- Do not modify Scheduler.run.
++- Do not import runtime handler modules.
++- Do not call mark_route_frame_stale.
++- Do not write ControlProxy or RouteProxy frames.
++- Allow P0209 to write provenance_repair_acceptance.json only.
+diff --git a/doc/docs/architecture/runtime/208_provenance_repair_plan.dot b/doc/docs/architecture/runtime/208_provenance_repair_plan.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/208_provenance_repair_plan.dot
+@@ -0,0 +1,17 @@
++digraph provenance_repair_plan_0208 {
++  rankdir=LR;
++  label="0208 Provenance repair plan";
++  labelloc=t;
++
++  audit [label="provenance_repair_audit.json"];
++  plan [label="provenance_repair_plan.json"];
++  baseline [label="source_baseline_ref candidate"];
++  digest [label="source_entry_digest candidate"];
++  p0209 [label="P0209 repair acceptance"];
++
++  audit -> baseline [label="select"];
++  audit -> digest [label="select"];
++  baseline -> plan;
++  digest -> plan;
++  plan -> p0209 [label="forward-only write"];
++}
+diff --git a/doc/CHANGELOG_0208_PROVENANCE_REPAIR_PLAN.md b/doc/CHANGELOG_0208_PROVENANCE_REPAIR_PLAN.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0208_PROVENANCE_REPAIR_PLAN.md
+@@ -0,0 +1,20 @@
++# Changelog — 0208 Provenance repair plan
++
++## Added
++
++- Bloc E forward-only provenance repair plan.
++- Selection of `source_baseline_ref` candidate.
++- Selection of `source_entry_digest` candidate.
++- Explicit P0209 unlock requirements.
++- Documentation, graph, changelog, manifest, and code-rule entry for the patch.
++
++## Not changed
++
++- No provenance repair write.
++- No runtime history rewrite.
++- No SQL write.
++- No Qdrant write.
++- No Scheduler.run execution or modification.
++- No runtime handler import or call.
++- No ControlProxy or RouteProxy frame write.
++- No network/GitHub call.
+diff --git a/doc/manifests/MANIFEST_0208_CHANGED_FILES.md b/doc/manifests/MANIFEST_0208_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0208_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest — 0208 Provenance repair plan
++
++- PHASE0208_TEST_REPORT.md
++- tools/plan_provenance_repair.py
++- tests/tools/test_plan_provenance_repair_0208.py
++- tests/rules/test_provenance_repair_plan_0208_rule.py
++- doc/architecture/PROVENANCE_REPAIR_PLAN_0208.md
++- doc/code-rules/0208_provenance_repair_plan_rule.md
++- doc/docs/architecture/runtime/208_provenance_repair_plan.dot
++- doc/CHANGELOG_0208_PROVENANCE_REPAIR_PLAN.md
++- doc/manifests/MANIFEST_0208_CHANGED_FILES.md

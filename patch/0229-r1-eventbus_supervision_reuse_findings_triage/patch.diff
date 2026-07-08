@@ -1,0 +1,699 @@
+diff --git a/newroot/PHASE0229_EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE_TEST_REPORT.md b/PHASE0229_EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE_TEST_REPORT.md
+new file mode 100644
+index 0000000..a917408
+--- /dev/null
++++ b/PHASE0229_EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE_TEST_REPORT.md
+@@ -0,0 +1,13 @@
++# PHASE0229 test report — EventBus supervision reuse findings triage
++
++Validation performed on a generated patch skeleton:
++
++```text
++git apply --check: OK
++git apply: OK
++compileall tools tests: OK
++pytest targeted tests: OK
++smoke CLI summary/output: OK
++```
++
++The tool is read-only over the 0228 JSON report and does not call runtime surfaces.
+diff --git a/newroot/doc/CHANGELOG_0229_EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE.md b/doc/CHANGELOG_0229_EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE.md
+new file mode 100644
+index 0000000..bc90723
+--- /dev/null
++++ b/doc/CHANGELOG_0229_EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE.md
+@@ -0,0 +1,5 @@
++# Changelog 0229 — EventBus supervision reuse findings triage
++
++- Added a read-only triage tool for the 0228 reuse audit JSON report.
++- Classified forbidden evidence into doc/test/trace findings and runtime-review findings.
++- Added tests and architecture/code-rule documentation to prevent functional work from resuming while runtime evidence remains unresolved.
+diff --git a/newroot/doc/architecture/EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE_0229.md b/doc/architecture/EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE_0229.md
+new file mode 100644
+index 0000000..417dee5
+--- /dev/null
++++ b/doc/architecture/EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE_0229.md
+@@ -0,0 +1,60 @@
++# 0229 — EventBus supervision reuse findings triage
++
++## Purpose
++
++Patch 0228 added a read-only reuse audit before resuming functional supervision work. A summary can report that EventBus, Scheduler, passive supervision and runtime/data surfaces exist, while also reporting `forbidden_runtime_evidence_count`.
++
++Patch 0229 makes that result actionable without starting runtime implementation.
++
++It classifies forbidden evidence into:
++
++```text
++allowed_doc_test_trace
++runtime_review_required
++review_required
++unknown_review_required
++```
++
++Only findings in runtime/review categories block the next functional patch.
++
++## Canonical next path
++
++The desired functional path remains:
++
++```text
++EventBus -> PassiveSupervisorSink -> CellularState
++
++Scheduler / RouteProxy / ControlProxy / SHM / Policy / GitHub / SQL / Qdrant
++  -> EventBus
++  -> PassiveSupervisorSink
++  -> CellularState
++```
++
++The triage tool does not implement that path. It only decides whether the repository is ready for the next implementation patch.
++
++## Authority boundary
++
++The triage is read-only over a JSON report. It must not:
++
++```text
++call Scheduler.run()
++create a new EventBus
++control RouteProxy or ControlProxy
++read or mutate raw SHM
++make policy decisions
++write SQL
++write Qdrant
++mutate GitHub
++turn events.jsonl into the live runtime path
++```
++
++## Expected usage
++
++```bash
++python tools/triage_eventbus_supervision_reuse_findings_0229.py \
++  --report .var/reports/eventbus_supervision_reuse_0228.json \
++  --output .var/reports/eventbus_supervision_reuse_findings_triage_0229.json \
++  --format summary
++```
++
++If `may_resume_functional_supervision_patch` is true, the next patch may implement the direct sink by reusing existing surfaces. If it is false, the runtime review findings must be inspected first.
+diff --git a/newroot/doc/code-rules/0229_eventbus_supervision_reuse_findings_triage_rule.md b/doc/code-rules/0229_eventbus_supervision_reuse_findings_triage_rule.md
+new file mode 100644
+index 0000000..50e128d
+--- /dev/null
++++ b/doc/code-rules/0229_eventbus_supervision_reuse_findings_triage_rule.md
+@@ -0,0 +1,17 @@
++# Code rule 0229 — EventBus supervision reuse findings triage
++
++The 0229 triage is a read-only gate over the 0228 reuse audit report.
++
++It must not call Scheduler.run.
++
++It must not create a new EventBus.
++
++It must not turn events.jsonl into the live path.
++
++It must not control RouteProxy or ControlProxy.
++
++It must not mutate SHM, SQL, Qdrant, GitHub, or policy state.
++
++It may classify evidence from doc, tests, patch, phase reports, and `.var` outputs as non-runtime trace evidence.
++
++It must mark findings in `src/` and `tools/` as requiring runtime review before the functional EventBus -> PassiveSupervisorSink implementation resumes.
+diff --git a/newroot/doc/docs/architecture/runtime/229_eventbus_supervision_reuse_findings_triage.dot b/doc/docs/architecture/runtime/229_eventbus_supervision_reuse_findings_triage.dot
+new file mode 100644
+index 0000000..d42fe0a
+--- /dev/null
++++ b/doc/docs/architecture/runtime/229_eventbus_supervision_reuse_findings_triage.dot
+@@ -0,0 +1,13 @@
++digraph eventbus_supervision_reuse_findings_triage_0229 {
++  rankdir=LR;
++  audit0228 [label="0228 reuse audit report"];
++  triage0229 [label="0229 read-only findings triage"];
++  docs [label="doc/tests/patch/phase evidence\nallowed trace"];
++  runtime [label="src/tools evidence\nruntime review required"];
++  next [label="functional sink may resume\nonly if runtime_review_required=0"];
++
++  audit0228 -> triage0229;
++  triage0229 -> docs;
++  triage0229 -> runtime;
++  triage0229 -> next;
++}
+diff --git a/newroot/doc/manifests/MANIFEST_0229_EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE_CHANGED_FILES.md b/doc/manifests/MANIFEST_0229_EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE_CHANGED_FILES.md
+new file mode 100644
+index 0000000..a67582d
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0229_EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest 0229 — changed files
++
++- `tools/triage_eventbus_supervision_reuse_findings_0229.py`
++- `tests/tools/test_triage_eventbus_supervision_reuse_findings_0229.py`
++- `tests/rules/test_eventbus_supervision_reuse_findings_triage_0229_rule.py`
++- `doc/architecture/EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE_0229.md`
++- `doc/code-rules/0229_eventbus_supervision_reuse_findings_triage_rule.md`
++- `doc/docs/architecture/runtime/229_eventbus_supervision_reuse_findings_triage.dot`
++- `doc/CHANGELOG_0229_EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE.md`
++- `doc/manifests/MANIFEST_0229_EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE_CHANGED_FILES.md`
++- `PHASE0229_EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE_TEST_REPORT.md`
+diff --git a/newroot/patch/0229-r1-eventbus_supervision_reuse_findings_triage/README.md b/patch/0229-r1-eventbus_supervision_reuse_findings_triage/README.md
+new file mode 100644
+index 0000000..3f213b6
+--- /dev/null
++++ b/patch/0229-r1-eventbus_supervision_reuse_findings_triage/README.md
+@@ -0,0 +1,3 @@
++# 0229-r1 — EventBus supervision reuse findings triage
++
++Read-only triage of the 0228 reuse audit report before resuming functional EventBus -> PassiveSupervisorSink work.
+diff --git a/newroot/patch/0229-r1-eventbus_supervision_reuse_findings_triage/metadata.json b/patch/0229-r1-eventbus_supervision_reuse_findings_triage/metadata.json
+new file mode 100644
+index 0000000..c1b97b0
+--- /dev/null
++++ b/patch/0229-r1-eventbus_supervision_reuse_findings_triage/metadata.json
+@@ -0,0 +1,7 @@
++{
++  "patch_id": "0229-r1-eventbus_supervision_reuse_findings_triage",
++  "kind": "audit-triage",
++  "stdlib_only": true,
++  "runtime_mutation": false,
++  "scheduler_run": false
++}
+diff --git a/newroot/patch/0229-r1-eventbus_supervision_reuse_findings_triage/patch.diff b/patch/0229-r1-eventbus_supervision_reuse_findings_triage/patch.diff
+new file mode 100644
+index 0000000..3ca636b
+--- /dev/null
++++ b/patch/0229-r1-eventbus_supervision_reuse_findings_triage/patch.diff
+@@ -0,0 +1,111 @@
++diff --git a/newroot/PHASE0229_EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE_TEST_REPORT.md b/PHASE0229_EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE_TEST_REPORT.md
++new file mode 100644
++index 0000000..a917408
++--- /dev/null
+++++ b/PHASE0229_EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE_TEST_REPORT.md
++@@ -0,0 +1,13 @@
+++# PHASE0229 test report — EventBus supervision reuse findings triage
+++
+++Validation performed on a generated patch skeleton:
+++
+++```text
+++git apply --check: OK
+++git apply: OK
+++compileall tools tests: OK
+++pytest targeted tests: OK
+++smoke CLI summary/output: OK
+++```
+++
+++The tool is read-only over the 0228 JSON report and does not call runtime surfaces.
++diff --git a/newroot/doc/CHANGELOG_0229_EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE.md b/doc/CHANGELOG_0229_EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE.md
++new file mode 100644
++index 0000000..bc90723
++--- /dev/null
+++++ b/doc/CHANGELOG_0229_EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE.md
++@@ -0,0 +1,5 @@
+++# Changelog 0229 — EventBus supervision reuse findings triage
+++
+++- Added a read-only triage tool for the 0228 reuse audit JSON report.
+++- Classified forbidden evidence into doc/test/trace findings and runtime-review findings.
+++- Added tests and architecture/code-rule documentation to prevent functional work from resuming while runtime evidence remains unresolved.
++diff --git a/newroot/doc/architecture/EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE_0229.md b/doc/architecture/EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE_0229.md
++new file mode 100644
++index 0000000..417dee5
++--- /dev/null
+++++ b/doc/architecture/EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE_0229.md
++@@ -0,0 +1,60 @@
+++# 0229 — EventBus supervision reuse findings triage
+++
+++## Purpose
+++
+++Patch 0228 added a read-only reuse audit before resuming functional supervision work. A summary can report that EventBus, Scheduler, passive supervision and runtime/data surfaces exist, while also reporting `forbidden_runtime_evidence_count`.
+++
+++Patch 0229 makes that result actionable without starting runtime implementation.
+++
+++It classifies forbidden evidence into:
+++
+++```text
+++allowed_doc_test_trace
+++runtime_review_required
+++review_required
+++unknown_review_required
+++```
+++
+++Only findings in runtime/review categories block the next functional patch.
+++
+++## Canonical next path
+++
+++The desired functional path remains:
+++
+++```text
+++EventBus -> PassiveSupervisorSink -> CellularState
+++
+++Scheduler / RouteProxy / ControlProxy / SHM / Policy / GitHub / SQL / Qdrant
+++  -> EventBus
+++  -> PassiveSupervisorSink
+++  -> CellularState
+++```
+++
+++The triage tool does not implement that path. It only decides whether the repository is ready for the next implementation patch.
+++
+++## Authority boundary
+++
+++The triage is read-only over a JSON report. It must not:
+++
+++```text
+++call Scheduler.run()
+++create a new EventBus
+++control RouteProxy or ControlProxy
+++read or mutate raw SHM
+++make policy decisions
+++write SQL
+++write Qdrant
+++mutate GitHub
+++turn events.jsonl into the live runtime path
+++```
+++
+++## Expected usage
+++
+++```bash
+++python tools/triage_eventbus_supervision_reuse_findings_0229.py \
+++  --report .var/reports/eventbus_supervision_reuse_0228.json \
+++  --output .var/reports/eventbus_supervision_reuse_findings_triage_0229.json \
+++  --format summary
+++```
+++
+++If `may_resume_functional_supervision_patch` is true, the next patch may implement the direct sink by reusing existing surfaces. If it is false, the runtime review findings must be inspected first.
++diff --git a/newroot/doc/code-rules/0229_eventbus_supervision_reuse_findings_triage_rule.md b/doc/code-rules/0229_eventbus_supervision_reuse_findings_triage_rule.md
++new file mode 100644
++index 0000000..50e128d
++--- /dev/null
+++++ b/doc/code-rules/0229_eventbus_supervision_reuse_findings_triage_rule.md
++@@ -0,0 +1,17 @@
+++# Code rule 0229 — EventBus supervision reuse findings triage
+++
+++The 0229 triage is a read-only gate over the 0228 reuse audit report.
+++
+++It must not call Scheduler.run.
+++
+++It must not create a new EventBus.
+++
+++It must not turn events.jsonl into the live p
+\ No newline at end of file
+diff --git a/newroot/tests/rules/test_eventbus_supervision_reuse_findings_triage_0229_rule.py b/tests/rules/test_eventbus_supervision_reuse_findings_triage_0229_rule.py
+new file mode 100644
+index 0000000..cc64db5
+--- /dev/null
++++ b/tests/rules/test_eventbus_supervision_reuse_findings_triage_0229_rule.py
+@@ -0,0 +1,36 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "triage_eventbus_supervision_reuse_findings_0229.py"
++DOC = ROOT / "doc" / "architecture" / "EVENTBUS_SUPERVISION_REUSE_FINDINGS_TRIAGE_0229.md"
++RULE = ROOT / "doc" / "code-rules" / "0229_eventbus_supervision_reuse_findings_triage_rule.md"
++
++
++def test_0229_tool_is_read_only_and_does_not_use_scheduler_run() -> None:
++    text = TOOL.read_text(encoding="utf-8")
++    assert "Scheduler.run()" in text
++    assert "subprocess.run" not in text
++    assert "git " not in text
++    assert ".write_text" in text
++    assert "writes_sql" in text
++    assert "writes_qdrant" in text
++    assert "mutates_github" in text
++
++
++def test_0229_contract_requires_audit_before_functional_resumption() -> None:
++    text = DOC.read_text(encoding="utf-8")
++    assert "0228" in text
++    assert "forbidden_runtime_evidence_count" in text
++    assert "runtime_review_required" in text
++    assert "may_resume_functional_supervision_patch" in text
++    assert "EventBus -> PassiveSupervisorSink" in text
++
++
++def test_0229_code_rule_keeps_supervisor_downstream_only() -> None:
++    text = RULE.read_text(encoding="utf-8")
++    assert "read-only" in text
++    assert "must not call Scheduler.run" in text
++    assert "must not create a new EventBus" in text
++    assert "must not turn events.jsonl into the live path" in text
+diff --git a/newroot/tests/tools/test_triage_eventbus_supervision_reuse_findings_0229.py b/tests/tools/test_triage_eventbus_supervision_reuse_findings_0229.py
+new file mode 100644
+index 0000000..fd17e8a
+--- /dev/null
++++ b/tests/tools/test_triage_eventbus_supervision_reuse_findings_0229.py
+@@ -0,0 +1,98 @@
++from __future__ import annotations
++
++import json
++import subprocess
++import sys
++from pathlib import Path
++
++from tools.triage_eventbus_supervision_reuse_findings_0229 import build_triage, extract_findings
++
++
++def test_triage_allows_doc_and_requires_runtime_review() -> None:
++    report = {
++        "report_kind": "eventbus_supervision_reuse_0228",
++        "forbidden_runtime_evidence_count": 2,
++        "forbidden_runtime_evidence": [
++            {"path": "doc/architecture/example.md", "line": 10, "evidence": "Scheduler.run is forbidden"},
++            {"path": "src/runtime/example.py", "line": 12, "evidence": "Scheduler.run()"},
++        ],
++    }
++
++    triage = build_triage(report)
++
++    assert triage["extracted_forbidden_evidence_count"] == 2
++    assert triage["allowed_doc_test_trace_count"] == 1
++    assert triage["runtime_review_required_count"] == 1
++    assert triage["may_resume_functional_supervision_patch"] is False
++
++
++def test_triage_may_resume_when_only_docs_tests_and_patch_artifacts() -> None:
++    report = {
++        "forbidden_runtime_evidence_count": 3,
++        "forbidden_runtime_evidence": [
++            {"path": "tests/rules/test_contract.py", "line": 1, "evidence": "forbid Scheduler.run"},
++            {"path": "patch/0227/foo.diff", "line": 2, "evidence": "no new bus"},
++            {"path": "PHASE0227_REPORT.md", "line": 3, "evidence": "no status.json path"},
++        ],
++    }
++
++    triage = build_triage(report)
++
++    assert triage["runtime_review_required_count"] == 0
++    assert triage["may_resume_functional_supervision_patch"] is True
++
++
++def test_extract_findings_handles_nested_forbidden_shapes() -> None:
++    report = {
++        "sections": {
++            "runtime": {
++                "forbidden_runtime_evidence": [
++                    {"file_path": "tools/example.py", "line_number": "7", "snippet": "status json path"}
++                ]
++            }
++        }
++    }
++
++    findings = extract_findings(report)
++
++    assert len(findings) == 1
++    assert findings[0].path == "tools/example.py"
++    assert findings[0].line == 7
++    assert findings[0].category == "runtime_review_required"
++
++
++def test_cli_writes_summary_and_output(tmp_path: Path) -> None:
++    report = tmp_path / "report.json"
++    output = tmp_path / "triage.json"
++    report.write_text(
++        json.dumps(
++            {
++                "forbidden_runtime_evidence_count": 1,
++                "forbidden_runtime_evidence": [
++                    {"path": "doc/example.md", "line": 4, "evidence": "forbidden phrase"}
++                ],
++            }
++        ),
++        encoding="utf-8",
++    )
++
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/triage_eventbus_supervision_reuse_findings_0229.py",
++            "--report",
++            str(report),
++            "--output",
++            str(output),
++            "--format",
++            "summary",
++        ],
++        cwd=Path(__file__).resolve().parents[2],
++        check=True,
++        text=True,
++        capture_output=True,
++    )
++
++    assert "may_resume=True" in result.stdout
++    payload = json.loads(output.read_text(encoding="utf-8"))
++    assert payload["authority_boundary"]["uses_scheduler_run"] is False
+diff --git a/newroot/tools/triage_eventbus_supervision_reuse_findings_0229.py b/tools/triage_eventbus_supervision_reuse_findings_0229.py
+new file mode 100755
+index 0000000..ecf0856
+--- /dev/null
++++ b/tools/triage_eventbus_supervision_reuse_findings_0229.py
+@@ -0,0 +1,252 @@
++#!/usr/bin/env python3
++"""Triage the 0228 EventBus supervision reuse audit findings.
++
++This tool is intentionally read-only. It does not inspect live runtime state, does
++not import project runtime modules, and does not call Scheduler.run(). It consumes
++the JSON report produced by tools/audit_eventbus_supervision_reuse_0228.py and
++classifies forbidden evidence so the next functional patch can reuse existing
++surfaces without inventing a parallel bus or supervisor.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any, Iterable, Mapping, Sequence
++
++DOC_OR_TRACE_PREFIXES = (
++    "doc/",
++    "tests/",
++    "patch/",
++    "bad_",
++    ".var/",
++)
++DOC_OR_TRACE_FILENAMES = (
++    "README",
++    "CHANGELOG",
++    "MANIFEST",
++    "PHASE",
++)
++RUNTIME_PREFIXES = (
++    "src/",
++    "tools/",
++)
++FORBIDDEN_KEY_PARTS = (
++    "forbidden",
++    "violation",
++    "evidence",
++)
++DEFAULT_REPORT = ".var/reports/eventbus_supervision_reuse_0228.json"
++
++
++@dataclass(frozen=True)
++class Finding:
++    """One evidence item extracted from the 0228 audit report."""
++
++    path: str
++    line: int | None
++    category: str
++    evidence: str
++    raw: Mapping[str, Any]
++
++    def as_dict(self) -> dict[str, Any]:
++        return {
++            "path": self.path,
++            "line": self.line,
++            "category": self.category,
++            "evidence": self.evidence,
++            "raw": dict(self.raw),
++        }
++
++
++def _stringify(value: Any) -> str:
++    if value is None:
++        return ""
++    if isinstance(value, str):
++        return value
++    return json.dumps(value, sort_keys=True, ensure_ascii=False)
++
++
++def _first_text(mapping: Mapping[str, Any], names: Sequence[str]) -> str:
++    for name in names:
++        value = mapping.get(name)
++        text = _stringify(value).strip()
++        if text:
++            return text
++    return ""
++
++
++def _first_int(mapping: Mapping[str, Any], names: Sequence[str]) -> int | None:
++    for name in names:
++        value = mapping.get(name)
++        if isinstance(value, int):
++            return value
++        if isinstance(value, str) and value.isdigit():
++            return int(value)
++    return None
++
++
++def _looks_like_evidence_mapping(mapping: Mapping[str, Any]) -> bool:
++    keys = {str(key).lower() for key in mapping.keys()}
++    has_path = any(key in keys for key in ("path", "file", "file_path", "source_path"))
++    has_text = any(
++        key in keys
++        for key in (
++            "evidence",
++            "match",
++            "line_text",
++            "snippet",
++            "text",
++            "pattern",
++            "reason",
++        )
++    )
++    return has_path and has_text
++
++
++def _walk_forbidden_objects(value: Any, parent_key: str = "") -> Iterable[Mapping[str, Any]]:
++    if isinstance(value, Mapping):
++        lowered = parent_key.lower()
++        if _looks_like_evidence_mapping(value) and any(part in lowered for part in FORBIDDEN_KEY_PARTS):
++            yield value
++        for key, child in value.items():
++            child_key = f"{parent_key}.{key}" if parent_key else str(key)
++            yield from _walk_forbidden_objects(child, child_key)
++    elif isinstance(value, list):
++        for child in value:
++            yield from _walk_forbidden_objects(child, parent_key)
++
++
++def _classify_path(path: str) -> str:
++    normalized = path.replace("\\", "/")
++    name = Path(normalized).name
++    if normalized.startswith(DOC_OR_TRACE_PREFIXES) or name.startswith(DOC_OR_TRACE_FILENAMES):
++        return "allowed_doc_test_trace"
++    if normalized.startswith(RUNTIME_PREFIXES):
++        return "runtime_review_required"
++    if not normalized:
++        return "unknown_review_required"
++    return "review_required"
++
++
++def _finding_from_mapping(mapping: Mapping[str, Any]) -> Finding:
++    path = _first_text(mapping, ("path", "file", "file_path", "source_path"))
++    line = _first_int(mapping, ("line", "lineno", "line_number", "start_line"))
++    evidence = _first_text(
++        mapping,
++        ("evidence", "match", "line_text", "snippet", "text", "pattern", "reason"),
++    )
++    return Finding(
++        path=path,
++        line=line,
++        category=_classify_path(path),
++        evidence=evidence,
++        raw=mapping,
++    )
++
++
++def extract_findings(report: Mapping[str, Any]) -> list[Finding]:
++    """Extract forbidden evidence findings from likely 0228 report shapes."""
++
++    explicit = report.get("forbidden_runtime_evidence")
++    if explicit is None:
++        explicit = report.get("forbidden_runtime_evidence_matches")
++    if explicit is None:
++        explicit = report.get("forbidden_evidence")
++
++    candidates: list[Mapping[str, Any]] = []
++    if isinstance(explicit, list):
++        candidates.extend(item for item in explicit if isinstance(item, Mapping))
++    else:
++        candidates.extend(_walk_forbidden_objects(report))
++
++    findings = [_finding_from_mapping(candidate) for candidate in candidates]
++    seen: set[tuple[str, int | None, str]] = set()
++    unique: list[Finding] = []
++    for finding in findings:
++        key = (finding.path, finding.line, finding.evidence)
++        if key not in seen:
++            seen.add(key)
++            unique.append(finding)
++    return unique
++
++
++def build_triage(report: Mapping[str, Any]) -> dict[str, Any]:
++    findings = extract_findings(report)
++    runtime_review = [item for item in findings if item.category.endswith("review_required")]
++    allowed = [item for item in findings if item.category == "allowed_doc_test_trace"]
++    return {
++        "eventbus_supervision_reuse_findings_triaged": True,
++        "source_report_kind": report.get("report_kind") or report.get("kind") or "eventbus_supervision_reuse_0228",
++        "input_forbidden_runtime_evidence_count": report.get("forbidden_runtime_evidence_count"),
++        "extracted_forbidden_evidence_count": len(findings),
++        "allowed_doc_test_trace_count": len(allowed),
++        "runtime_review_required_count": len(runtime_review),
++        "may_resume_functional_supervision_patch": len(runtime_review) == 0,
++        "next_action": (
++            "resume EventBus -> PassiveSupervisorSink functional patch"
++            if len(runtime_review) == 0
++            else "inspect runtime_review_required findings before coding"
++        ),
++        "findings": [item.as_dict() for item in findings],
++        "authority_boundary": {
++            "read_only_report_triage": True,
++            "uses_scheduler_run": False,
++            "creates_eventbus": False,
++            "controls_proxy": False,
++            "mutates_shm": False,
++            "decides_policy": False,
++            "writes_sql": False,
++            "writes_qdrant": False,
++            "mutates_github": False,
++            "requires_non_stdlib": False,
++        },
++    }
++
++
++def _load_json(path: Path) -> Mapping[str, Any]:
++    with path.open("r", encoding="utf-8") as handle:
++        data = json.load(handle)
++    if not isinstance(data, Mapping):
++        raise ValueError(f"expected a JSON object in {path}")
++    return data
++
++
++def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
++
++
++def parse_args(argv: Sequence[str]) -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--report", default=DEFAULT_REPORT, help="0228 audit report JSON path")
++    parser.add_argument("--output", help="optional output JSON path")
++    parser.add_argument("--format", choices=("json", "summary"), default="json")
++    return parser.parse_args(argv)
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = parse_args(tuple(sys.argv[1:] if argv is None else argv))
++    report = _load_json(Path(args.report))
++    triage = build_triage(report)
++    if args.output:
++        _write_json(Path(args.output), triage)
++    if args.format == "summary":
++        print(
++            "triaged="
++            f"{triage['eventbus_supervision_reuse_findings_triaged']} "
++            f"extracted={triage['extracted_forbidden_evidence_count']} "
++            f"allowed_doc_test_trace={triage['allowed_doc_test_trace_count']} "
++            f"runtime_review_required={triage['runtime_review_required_count']} "
++            f"may_resume={triage['may_resume_functional_supervision_patch']}"
++        )
++    else:
++        print(json.dumps(triage, indent=2, sort_keys=True, ensure_ascii=False))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

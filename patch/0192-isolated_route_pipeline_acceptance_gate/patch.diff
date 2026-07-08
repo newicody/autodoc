@@ -1,0 +1,659 @@
+diff --git a/PHASE0192_TEST_REPORT.md b/PHASE0192_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0192_TEST_REPORT.md
+@@ -0,0 +1,31 @@
++# Phase 0192 Test Report — Isolated route pipeline acceptance gate
++
++Status: prepared.
++
++Scope:
++- Reads `isolated_route_pipeline_artifact_audit.json`.
++- Produces `isolated_route_pipeline_acceptance.json`.
++- Approves `isolated-route-pipeline-write-read-v1` only when the 0191 audit is
++  clean and counts match.
++- No runtime import.
++- No handler call.
++- No RouteProxyRuntime preparation.
++- No read_route_frame call.
++- No writer permit request.
++- No frame write.
++- No Scheduler modification.
++- No Scheduler/EventBus instantiation.
++- No ControlProxy frame write.
++- No GitHub API/network.
++- No conversion/inference/SQL/Qdrant/VisPy writes.
++
++Validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/tools/test_assert_isolated_route_pipeline_acceptance_0192.py \
++  tests/rules/test_isolated_route_pipeline_acceptance_gate_0192_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
+diff --git a/tools/assert_isolated_route_pipeline_acceptance.py b/tools/assert_isolated_route_pipeline_acceptance.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/assert_isolated_route_pipeline_acceptance.py
+@@ -0,0 +1,214 @@
++#!/usr/bin/env python3
++"""Assert acceptance of the isolated route pipeline prototype.
++
++0192 is an acceptance gate only.
++
++It reads isolated_route_pipeline_artifact_audit.json from 0191 and produces a
++compact isolated_route_pipeline_acceptance.json verdict.
++
++It does not import runtime handler modules.
++It does not call handle_scheduler_route_command.
++It does not call handle_scheduler_route_request.
++It does not call prepare_route_proxy_runtime.
++It does not call read_route_frame.
++It does not request writer permits.
++It does not call write_route_frame.
++It does not modify Scheduler.run.
++It does not instantiate Scheduler.
++It does not instantiate EventBus.
++It does not write ControlProxy or RouteProxy frames.
++It does not call GitHub API or use network.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++from typing import Any, Mapping
++
++
++ISOLATED_ROUTE_PIPELINE_ACCEPTANCE_SCHEMA = "missipy.route_pipeline.isolated_acceptance.v1"
++EXPECTED_AUDIT_SCHEMA = "missipy.route_pipeline.isolated_artifact_audit.v1"
++DEFAULT_OUTPUT_NAME = "isolated_route_pipeline_acceptance.json"
++
++FALSE_SAFETY_FLAGS = (
++    "runtime_imports_executed",
++    "handler_called",
++    "routeproxy_prepared",
++    "read_route_frame_called",
++    "writer_permits_requested",
++    "frames_written",
++    "controlproxy_frames_written",
++    "scheduler_modified",
++    "eventbus_instantiated",
++    "network_used",
++)
++
++DOWNSTREAM_TOP_LEVEL_COUNTS = (
++    "command_plan_ready_count",
++    "command_built_count",
++    "handler_executed_count",
++    "frames_written_count",
++    "readback_count",
++)
++
++DOWNSTREAM_ARTIFACT_COUNTS = (
++    "command_plan_items",
++    "command_smoke_items",
++    "isolated_plan_items",
++    "handler_smoke_items",
++    "readback_items",
++)
++
++
++class IsolatedRoutePipelineAcceptanceError(ValueError):
++    """Raised when acceptance inputs are unsafe."""
++
++
++def assert_isolated_route_pipeline_acceptance(
++    *,
++    audit_path: Path | str,
++    output_path: Path | str | None = None,
++) -> dict[str, Any]:
++    """Build an acceptance verdict from a 0191 artifact audit."""
++
++    path = Path(audit_path)
++    audit = _read_json_file(path)
++    issues: list[str] = []
++    warnings: list[str] = []
++
++    if audit.get("schema") != EXPECTED_AUDIT_SCHEMA:
++        issues.append("audit schema mismatch")
++    if audit.get("audit_success") is not True:
++        issues.append("audit_success must be true")
++    if audit.get("pipeline_success") is not True:
++        issues.append("pipeline_success must be true")
++    if audit.get("issues") not in ([], None):
++        issues.append("audit issues must be empty")
++    if audit.get("warnings") not in ([], None):
++        warnings.append("audit warnings are present")
++
++    for flag in FALSE_SAFETY_FLAGS:
++        if audit.get(flag) is not False:
++            issues.append(f"{flag} must be false")
++
++    top_level_counts = audit.get("top_level_counts")
++    artifact_counts = audit.get("artifact_counts")
++    if not isinstance(top_level_counts, Mapping):
++        issues.append("top_level_counts must be an object")
++        top_level_counts = {}
++    if not isinstance(artifact_counts, Mapping):
++        issues.append("artifact_counts must be an object")
++        artifact_counts = {}
++
++    policy_scoped_count = top_level_counts.get("policy_scoped_queued_count")
++    if not isinstance(policy_scoped_count, int) or policy_scoped_count <= 0:
++        issues.append("policy_scoped_queued_count must be a positive integer")
++        policy_scoped_count = None
++
++    _assert_top_level_counts(top_level_counts, policy_scoped_count, issues)
++    _assert_artifact_counts(artifact_counts, policy_scoped_count, issues)
++
++    verdict = {
++        "schema": ISOLATED_ROUTE_PIPELINE_ACCEPTANCE_SCHEMA,
++        "audit_path": str(path),
++        "pipeline_report_path": audit.get("pipeline_report_path"),
++        "pipeline_schema": audit.get("pipeline_schema"),
++        "policy_decision_id": audit.get("policy_decision_id"),
++        "runtime_root": audit.get("runtime_root"),
++        "isolated_runtime_root": audit.get("isolated_runtime_root"),
++        "top_level_counts": dict(top_level_counts),
++        "artifact_counts": dict(artifact_counts),
++        "issues": issues,
++        "warnings": warnings,
++        "acceptance_approved": not issues,
++        "accepted_baseline": "isolated-route-pipeline-write-read-v1" if not issues else None,
++        "runtime_imports_executed": False,
++        "handler_called": False,
++        "routeproxy_prepared": False,
++        "read_route_frame_called": False,
++        "writer_permits_requested": False,
++        "frames_written": False,
++        "controlproxy_frames_written": False,
++        "scheduler_modified": False,
++        "eventbus_instantiated": False,
++        "network_used": False,
++    }
++
++    if output_path is not None:
++        _write_acceptance(Path(output_path), verdict)
++
++    return verdict
++
++
++def _assert_top_level_counts(
++    counts: Mapping[str, Any],
++    policy_scoped_count: int | None,
++    issues: list[str],
++) -> None:
++    if policy_scoped_count is None:
++        return
++    queued = counts.get("queued_count")
++    if not isinstance(queued, int) or queued <= 0:
++        issues.append("queued_count must be a positive integer")
++    for name in DOWNSTREAM_TOP_LEVEL_COUNTS:
++        if counts.get(name) != policy_scoped_count:
++            issues.append(f"{name} must equal policy_scoped_queued_count")
++
++
++def _assert_artifact_counts(
++    counts: Mapping[str, Any],
++    policy_scoped_count: int | None,
++    issues: list[str],
++) -> None:
++    if policy_scoped_count is None:
++        return
++    queue_items = counts.get("queue_items")
++    if not isinstance(queue_items, int) or queue_items < policy_scoped_count:
++        issues.append("queue_items must be >= policy_scoped_queued_count")
++    if counts.get("policy_scoped_queue_items") != policy_scoped_count:
++        issues.append("policy_scoped_queue_items must equal policy_scoped_queued_count")
++    for name in DOWNSTREAM_ARTIFACT_COUNTS:
++        if counts.get(name) != policy_scoped_count:
++            issues.append(f"{name} must equal policy_scoped_queued_count")
++
++
++def _read_json_file(path: Path) -> dict[str, Any]:
++    raw = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(raw, dict):
++        raise IsolatedRoutePipelineAcceptanceError("audit must be a JSON object")
++    return raw
++
++
++def _write_acceptance(path: Path, verdict: dict[str, Any]) -> None:
++    if path.name != DEFAULT_OUTPUT_NAME:
++        raise IsolatedRoutePipelineAcceptanceError("output filename must be isolated_route_pipeline_acceptance.json")
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(verdict, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Assert isolated route pipeline acceptance from 0191 audit.")
++    parser.add_argument("--audit", required=True, help="Path to isolated_route_pipeline_artifact_audit.json.")
++    parser.add_argument("--output", help="Optional isolated_route_pipeline_acceptance.json output path.")
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    args = parser.parse_args(argv)
++
++    verdict = assert_isolated_route_pipeline_acceptance(
++        audit_path=Path(args.audit),
++        output_path=Path(args.output) if args.output else None,
++    )
++
++    if args.format == "json":
++        print(json.dumps(verdict, indent=2, sort_keys=True))
++    else:
++        print(f"acceptance_approved: {verdict['acceptance_approved']}")
++        print(f"accepted_baseline: {verdict['accepted_baseline']}")
++        print(f"issues: {len(verdict['issues'])}")
++        print(f"warnings: {len(verdict['warnings'])}")
++    return 0 if verdict["acceptance_approved"] else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_assert_isolated_route_pipeline_acceptance_0192.py b/tests/tools/test_assert_isolated_route_pipeline_acceptance_0192.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_assert_isolated_route_pipeline_acceptance_0192.py
+@@ -0,0 +1,124 @@
++from pathlib import Path
++import importlib.util
++import json
++import subprocess
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "assert_isolated_route_pipeline_acceptance.py"
++
++
++def _load_tool_module():
++    spec = importlib.util.spec_from_file_location("assert_isolated_route_pipeline_acceptance_tool", TOOL)
++    assert spec is not None
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    assert spec.loader is not None
++    spec.loader.exec_module(module)
++    return module
++
++
++def _audit_fixture(*, success: bool = True) -> dict:
++    issues = [] if success else ["pipeline_success must be true"]
++    return {
++        "schema": "missipy.route_pipeline.isolated_artifact_audit.v1",
++        "audit_success": success,
++        "pipeline_success": success,
++        "pipeline_report_path": "/tmp/runtime/isolated_route_pipeline_smoke.json",
++        "pipeline_schema": "missipy.route_pipeline.isolated_smoke.v1",
++        "policy_decision_id": "policy:allow:github-artifact:0192",
++        "runtime_root": "/tmp/runtime",
++        "isolated_runtime_root": "/tmp/runtime/routeproxy-isolated",
++        "issues": issues,
++        "warnings": [],
++        "runtime_imports_executed": False,
++        "handler_called": False,
++        "routeproxy_prepared": False,
++        "read_route_frame_called": False,
++        "writer_permits_requested": False,
++        "frames_written": False,
++        "controlproxy_frames_written": False,
++        "scheduler_modified": False,
++        "eventbus_instantiated": False,
++        "network_used": False,
++        "top_level_counts": {
++            "queued_count": 4,
++            "policy_scoped_queued_count": 1,
++            "command_plan_ready_count": 1,
++            "command_built_count": 1,
++            "handler_executed_count": 1,
++            "frames_written_count": 1,
++            "readback_count": 1,
++        },
++        "artifact_counts": {
++            "queue_items": 4,
++            "policy_scoped_queue_items": 1,
++            "command_plan_items": 1,
++            "command_smoke_items": 1,
++            "isolated_plan_items": 1,
++            "handler_smoke_items": 1,
++            "readback_items": 1,
++        },
++    }
++
++
++def test_0192_accepts_clean_0191_audit(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    audit_path = tmp_path / "isolated_route_pipeline_artifact_audit.json"
++    audit_path.write_text(json.dumps(_audit_fixture(), indent=2), encoding="utf-8")
++
++    verdict = module.assert_isolated_route_pipeline_acceptance(
++        audit_path=audit_path,
++        output_path=tmp_path / "isolated_route_pipeline_acceptance.json",
++    )
++
++    assert verdict["acceptance_approved"] is True
++    assert verdict["accepted_baseline"] == "isolated-route-pipeline-write-read-v1"
++    assert verdict["issues"] == []
++    assert verdict["handler_called"] is False
++    assert verdict["frames_written"] is False
++    assert verdict["network_used"] is False
++    assert (tmp_path / "isolated_route_pipeline_acceptance.json").exists()
++
++
++def test_0192_rejects_failed_audit(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    audit_path = tmp_path / "isolated_route_pipeline_artifact_audit.json"
++    audit_path.write_text(json.dumps(_audit_fixture(success=False), indent=2), encoding="utf-8")
++
++    verdict = module.assert_isolated_route_pipeline_acceptance(audit_path=audit_path)
++
++    assert verdict["acceptance_approved"] is False
++    assert verdict["accepted_baseline"] is None
++    assert "audit_success must be true" in verdict["issues"]
++    assert "pipeline_success must be true" in verdict["issues"]
++
++
++def test_0192_cli_outputs_json_and_zero_for_clean_audit(tmp_path: Path) -> None:
++    audit_path = tmp_path / "isolated_route_pipeline_artifact_audit.json"
++    audit_path.write_text(json.dumps(_audit_fixture(), indent=2), encoding="utf-8")
++
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--audit",
++            str(audit_path),
++            "--output",
++            str(tmp_path / "isolated_route_pipeline_acceptance.json"),
++            "--format",
++            "json",
++        ],
++        cwd=ROOT,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=True,
++    )
++
++    verdict = json.loads(completed.stdout)
++    assert verdict["schema"] == "missipy.route_pipeline.isolated_acceptance.v1"
++    assert verdict["acceptance_approved"] is True
++    assert verdict["handler_called"] is False
++    assert verdict["frames_written"] is False
+diff --git a/tests/rules/test_isolated_route_pipeline_acceptance_gate_0192_rule.py b/tests/rules/test_isolated_route_pipeline_acceptance_gate_0192_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_isolated_route_pipeline_acceptance_gate_0192_rule.py
+@@ -0,0 +1,88 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "assert_isolated_route_pipeline_acceptance.py"
++DOC = ROOT / "doc" / "architecture" / "ISOLATED_ROUTE_PIPELINE_ACCEPTANCE_GATE_0192.md"
++RULE = ROOT / "doc" / "code-rules" / "0192_isolated_route_pipeline_acceptance_gate_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0192_CHANGED_FILES.md"
++
++
++def test_0192_tool_is_acceptance_gate_only() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    for token in [
++        "0192 is an acceptance gate only",
++        "isolated_route_pipeline_artifact_audit.json",
++        "isolated_route_pipeline_acceptance.json",
++        "accepted_baseline",
++        "isolated-route-pipeline-write-read-v1",
++        "It does not import runtime handler modules",
++        "It does not call handle_scheduler_route_command",
++        "It does not call prepare_route_proxy_runtime",
++        "It does not call read_route_frame",
++        "It does not request writer permits",
++        "It does not call write_route_frame",
++        "It does not modify Scheduler.run",
++        "It does not instantiate Scheduler",
++        "It does not instantiate EventBus",
++        "It does not write ControlProxy or RouteProxy frames",
++        "It does not call GitHub API or use network",
++    ]:
++        assert token in source
++    assert "from runtime." not in source
++    assert "handle_scheduler_route_command(" not in source
++    assert "prepare_route_proxy_runtime(" not in source
++    assert "read_route_frame(" not in source
++    assert "write_route_frame(" not in source
++
++
++def test_0192_doc_locks_acceptance_gate_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    for token in [
++        "0192 accepts or rejects the isolated route pipeline baseline",
++        "The input is isolated_route_pipeline_artifact_audit.json",
++        "The output is isolated_route_pipeline_acceptance.json",
++        "It accepts isolated-route-pipeline-write-read-v1",
++        "It does not rerun the pipeline",
++        "It does not call runtime APIs",
++        "This is the CI-style gate for the first isolated prototype",
++    ]:
++        assert token in doc
++
++
++def test_0192_rule_blocks_runtime_execution() -> None:
++    rule = RULE.read_text(encoding="utf-8")
++    for token in [
++        "Read isolated_route_pipeline_artifact_audit.json from 0191",
++        "Approve only when audit_success is true and issues are empty",
++        "Approve only when policy_scoped_queued_count matches downstream counts",
++        "Do not import runtime handler modules",
++        "Do not call handle_scheduler_route_command",
++        "Do not call prepare_route_proxy_runtime",
++        "Do not call read_route_frame",
++        "Do not write ControlProxy or RouteProxy frames",
++        "Do not write SQL",
++        "Do not write Qdrant",
++    ]:
++        assert token in rule
++
++
++def test_0192_tool_has_no_network_imports() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    assert "--audit" in source
++    assert "--output" in source
++    assert "import requests" not in source
++    assert "from requests" not in source
++    assert "urllib" not in source
++
++
++def test_0192_manifest_lists_acceptance_gate_files() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    for token in [
++        "tools/assert_isolated_route_pipeline_acceptance.py",
++        "tests/tools/test_assert_isolated_route_pipeline_acceptance_0192.py",
++        "tests/rules/test_isolated_route_pipeline_acceptance_gate_0192_rule.py",
++        "doc/architecture/ISOLATED_ROUTE_PIPELINE_ACCEPTANCE_GATE_0192.md",
++        "doc/code-rules/0192_isolated_route_pipeline_acceptance_gate_rule.md",
++    ]:
++        assert token in manifest
+diff --git a/doc/architecture/ISOLATED_ROUTE_PIPELINE_ACCEPTANCE_GATE_0192.md b/doc/architecture/ISOLATED_ROUTE_PIPELINE_ACCEPTANCE_GATE_0192.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/ISOLATED_ROUTE_PIPELINE_ACCEPTANCE_GATE_0192.md
+@@ -0,0 +1,72 @@
++# 0192 — Isolated route pipeline acceptance gate
++
++## Decision
++
++0192 accepts or rejects the isolated route pipeline baseline.
++
++The input is isolated_route_pipeline_artifact_audit.json.
++The output is isolated_route_pipeline_acceptance.json.
++
++It accepts isolated-route-pipeline-write-read-v1.
++It does not rerun the pipeline.
++It does not call runtime APIs.
++
++This is the CI-style gate for the first isolated prototype.
++
++## Why this exists
++
++0191 audits the saved artifacts. 0192 turns that audit into a compact acceptance
++verdict that can be used by humans, CI, or a future project status layer.
++
++The accepted baseline proves:
++
++```text
++context.bus
++-> authorized policy-scoped route request
++-> command builder
++-> isolated handler write
++-> isolated readback
++-> artifact audit
++```
++
++without touching Scheduler.run, EventBus, ControlProxy, GitHub, SQL, Qdrant,
++inference, or VisPy.
++
++## Boundary
++
++0192:
++
++- reads `isolated_route_pipeline_artifact_audit.json`,
++- verifies `audit_success`,
++- verifies empty audit issues,
++- verifies safety flags are false,
++- verifies `policy_scoped_queued_count` matches downstream counts,
++- writes optional `isolated_route_pipeline_acceptance.json`.
++
++0192 does not:
++
++- import runtime handler modules,
++- call handle_scheduler_route_command,
++- call handle_scheduler_route_request,
++- call prepare_route_proxy_runtime,
++- call read_route_frame,
++- request writer permits,
++- call write_route_frame,
++- modify Scheduler.run,
++- instantiate Scheduler,
++- instantiate EventBus,
++- create a parallel bus,
++- write ControlProxy or RouteProxy frames,
++- call GitHub API,
++- use network,
++- execute conversion,
++- execute inference,
++- write SQL,
++- write Qdrant,
++- write directly to VisPy.
++
++## Authority
++
++Scheduler/policy/zone remain the authority.
++0192 approves the isolated prototype baseline only. It does not approve
++production route writes.
+diff --git a/doc/code-rules/0192_isolated_route_pipeline_acceptance_gate_rule.md b/doc/code-rules/0192_isolated_route_pipeline_acceptance_gate_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0192_isolated_route_pipeline_acceptance_gate_rule.md
+@@ -0,0 +1,32 @@
++# 0192 isolated route pipeline acceptance gate rule
++
++0192 is the CI-style acceptance gate for the isolated route pipeline baseline.
++
++Rules:
++
++- Read isolated_route_pipeline_artifact_audit.json from 0191.
++- Approve only when audit_success is true and issues are empty.
++- Approve only when pipeline_success is true.
++- Approve only when policy_scoped_queued_count matches downstream counts.
++- Approve only when runtime safety flags are false.
++- Write only isolated_route_pipeline_acceptance.json as report output.
++- Do not import runtime handler modules.
++- Do not call handle_scheduler_route_command.
++- Do not call handle_scheduler_route_request.
++- Do not call prepare_route_proxy_runtime.
++- Do not call read_route_frame.
++- Do not request writer permits.
++- Do not call write_route_frame.
++- Do not write ControlProxy or RouteProxy frames.
++- Do not add a new runtime handler.
++- Do not modify Scheduler.run.
++- Do not instantiate Scheduler.
++- Do not instantiate EventBus.
++- Do not create a parallel bus.
++- Do not call GitHub API.
++- Do not use network.
++- Do not execute conversion.
++- Do not execute inference.
++- Do not write SQL.
++- Do not write Qdrant.
++- Do not write directly to VisPy.
+diff --git a/doc/docs/architecture/runtime/192_isolated_route_pipeline_acceptance_gate.dot b/doc/docs/architecture/runtime/192_isolated_route_pipeline_acceptance_gate.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/192_isolated_route_pipeline_acceptance_gate.dot
+@@ -0,0 +1,16 @@
++digraph isolated_route_pipeline_acceptance_gate_0192 {
++  rankdir=LR;
++  label="0192 Isolated route pipeline acceptance gate";
++  labelloc=t;
++
++  audit [label="isolated_route_pipeline_artifact_audit.json"];
++  gate [label="acceptance gate"];
++  verdict [label="isolated_route_pipeline_acceptance.json"];
++  baseline [label="isolated-route-pipeline-write-read-v1"];
++
++  audit -> gate [label="audit_success + counts + flags"];
++  gate -> verdict;
++  gate -> baseline [label="approved when clean"];
++
++  gate -> verdict [label="no runtime APIs", style=dashed];
++}
+diff --git a/doc/CHANGELOG_0192_ISOLATED_ROUTE_PIPELINE_ACCEPTANCE_GATE.md b/doc/CHANGELOG_0192_ISOLATED_ROUTE_PIPELINE_ACCEPTANCE_GATE.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0192_ISOLATED_ROUTE_PIPELINE_ACCEPTANCE_GATE.md
+@@ -0,0 +1,17 @@
++# Changelog — 0192 Isolated route pipeline acceptance gate
++
++## Added
++
++- Acceptance gate for `isolated_route_pipeline_artifact_audit.json`.
++- Compact `isolated_route_pipeline_acceptance.json` verdict.
++- Accepted baseline label: `isolated-route-pipeline-write-read-v1`.
++- Tests/rules locking that no runtime import, handler call, RouteProxy runtime
++  call, frame write, Scheduler modification, EventBus instantiation, GitHub API,
++  network, SQL, Qdrant, or VisPy write is introduced.
++
++## Not changed
++
++- No runtime execution.
++- No new runtime handler.
++- No Scheduler.run modification.
++- No production route write.
+diff --git a/doc/manifests/MANIFEST_0192_CHANGED_FILES.md b/doc/manifests/MANIFEST_0192_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0192_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest — 0192 Isolated route pipeline acceptance gate
++
++- PHASE0192_TEST_REPORT.md
++- tools/assert_isolated_route_pipeline_acceptance.py
++- tests/tools/test_assert_isolated_route_pipeline_acceptance_0192.py
++- tests/rules/test_isolated_route_pipeline_acceptance_gate_0192_rule.py
++- doc/architecture/ISOLATED_ROUTE_PIPELINE_ACCEPTANCE_GATE_0192.md
++- doc/code-rules/0192_isolated_route_pipeline_acceptance_gate_rule.md
++- doc/docs/architecture/runtime/192_isolated_route_pipeline_acceptance_gate.dot
++- doc/CHANGELOG_0192_ISOLATED_ROUTE_PIPELINE_ACCEPTANCE_GATE.md
++- doc/manifests/MANIFEST_0192_CHANGED_FILES.md

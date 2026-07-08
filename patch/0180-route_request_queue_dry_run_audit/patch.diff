@@ -1,0 +1,656 @@
+diff --git a/PHASE0180_TEST_REPORT.md b/PHASE0180_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0180_TEST_REPORT.md
+@@ -0,0 +1,26 @@
++# Phase 0180 Test Report — Route request queue dry-run audit
++
++Status: prepared.
++
++Scope:
++- Reads `scheduler.route_requests.jsonl`.
++- Validates rows with `SchedulerRouteRequest.from_mapping`.
++- Produces dry-run readiness report.
++- No Scheduler modification.
++- No route handler call.
++- No EventBus instantiation.
++- No ControlProxy/RouteProxy frame write.
++- No GitHub API/network.
++- No conversion/inference/SQL/Qdrant/VisPy writes.
++
++Validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/context/test_authorized_route_request_queue_dry_run_0180.py \
++  tests/tools/test_audit_authorized_route_request_queue_dry_run_0180.py \
++  tests/rules/test_route_request_queue_dry_run_audit_0180_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
+diff --git a/src/context/authorized_route_request_queue_dry_run.py b/src/context/authorized_route_request_queue_dry_run.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/context/authorized_route_request_queue_dry_run.py
+@@ -0,0 +1,169 @@
++"""Authorized route request queue dry-run audit.
++
++0180 reads the local scheduler.route_requests.jsonl handoff queue produced by
++0179 and audits whether queued SchedulerRouteRequest items are structurally
++ready for a later handler handoff.
++
++This is dry-run only.
++
++Path:
++
++    scheduler.route_requests.jsonl
++    -> iter_authorized_route_request_queue(...)
++    -> SchedulerRouteRequest objects
++    -> readiness/audit report
++
++Boundary:
++
++- This module does not call handle_scheduler_route_request.
++- This module does not import the route handler as an executable dependency.
++- This module does not instantiate Scheduler.
++- This module does not modify Scheduler.run().
++- This module does not instantiate EventBus.
++- This module does not write ControlProxy or RouteProxy frames.
++- This module does not write to VisPy.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Any, Iterable, Mapping
++
++from context.authorized_route_request_queue import iter_authorized_route_request_queue
++from runtime.scheduler_route_adapter import SchedulerRouteRequest
++
++
++ROUTE_REQUEST_QUEUE_DRY_RUN_AUDIT_SCHEMA = "missipy.scheduler.route_request_queue_dry_run_audit.v1"
++
++EXPECTED_HANDLER_SURFACES = (
++    "src/runtime/scheduler_route_adapter.py",
++    "src/runtime/scheduler_route_handler_minimal.py",
++    "src/runtime/scheduler_route_handshake.py",
++    "src/runtime/controlproxy_scheduler_handler.py",
++)
++
++
++class RouteRequestQueueDryRunAuditError(ValueError):
++    """Raised when a dry-run audit cannot be completed safely."""
++
++
++@dataclass(frozen=True, slots=True)
++class RouteRequestQueueDryRunItem:
++    """One queued route request dry-run result."""
++
++    index: int
++    request_id: str
++    route_id: str
++    task_id: str
++    authorized: bool
++    policy_decision_id: str | None
++    ready_for_later_handler_handoff: bool
++    issues: tuple[str, ...]
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "index": self.index,
++            "request_id": self.request_id,
++            "route_id": self.route_id,
++            "task_id": self.task_id,
++            "authorized": self.authorized,
++            "policy_decision_id": self.policy_decision_id,
++            "ready_for_later_handler_handoff": self.ready_for_later_handler_handoff,
++            "issues": list(self.issues),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class RouteRequestQueueDryRunAuditReport:
++    """Dry-run audit report for a route request handoff queue."""
++
++    schema: str
++    queue_path: str
++    item_count: int
++    ready_count: int
++    blocked_count: int
++    handler_surfaces: Mapping[str, bool]
++    items: tuple[RouteRequestQueueDryRunItem, ...]
++    dry_run_only: bool
++    scheduler_modified: bool
++    handler_called: bool
++    frames_written: bool
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "queue_path": self.queue_path,
++            "item_count": self.item_count,
++            "ready_count": self.ready_count,
++            "blocked_count": self.blocked_count,
++            "handler_surfaces": dict(self.handler_surfaces),
++            "items": [item.to_mapping() for item in self.items],
++            "dry_run_only": self.dry_run_only,
++            "scheduler_modified": self.scheduler_modified,
++            "handler_called": self.handler_called,
++            "frames_written": self.frames_written,
++        }
++
++
++def audit_authorized_route_request_queue_dry_run(
++    queue_path: Path | str,
++    *,
++    repo_root: Path | str | None = None,
++) -> RouteRequestQueueDryRunAuditReport:
++    """Validate and audit queued authorized route requests without executing them."""
++
++    queue = Path(queue_path)
++    root = Path(repo_root) if repo_root is not None else _infer_repo_root()
++    handler_surfaces = _handler_surface_presence(root)
++
++    items = tuple(
++        _audit_request(index, request)
++        for index, request in enumerate(iter_authorized_route_request_queue(queue), start=1)
++    )
++    ready_count = sum(1 for item in items if item.ready_for_later_handler_handoff)
++    blocked_count = len(items) - ready_count
++    return RouteRequestQueueDryRunAuditReport(
++        schema=ROUTE_REQUEST_QUEUE_DRY_RUN_AUDIT_SCHEMA,
++        queue_path=str(queue),
++        item_count=len(items),
++        ready_count=ready_count,
++        blocked_count=blocked_count,
++        handler_surfaces=handler_surfaces,
++        items=items,
++        dry_run_only=True,
++        scheduler_modified=False,
++        handler_called=False,
++        frames_written=False,
++    )
++
++
++def _audit_request(index: int, request: SchedulerRouteRequest) -> RouteRequestQueueDryRunItem:
++    issues: list[str] = []
++    if not request.authorized:
++        issues.append("request is not authorized")
++    if not request.policy_decision_id:
++        issues.append("missing policy_decision_id")
++    if not request.route_id:
++        issues.append("missing route_id")
++    if not request.task_id:
++        issues.append("missing task_id")
++    ready = not issues
++    return RouteRequestQueueDryRunItem(
++        index=index,
++        request_id=request.request_id,
++        route_id=request.route_id,
++        task_id=request.task_id,
++        authorized=request.authorized,
++        policy_decision_id=request.policy_decision_id,
++        ready_for_later_handler_handoff=ready,
++        issues=tuple(issues),
++    )
++
++
++def _handler_surface_presence(repo_root: Path) -> dict[str, bool]:
++    return {relative: (repo_root / relative).exists() for relative in EXPECTED_HANDLER_SURFACES}
++
++
++def _infer_repo_root() -> Path:
++    return Path(__file__).resolve().parents[2]
+diff --git a/tools/audit_authorized_route_request_queue_dry_run.py b/tools/audit_authorized_route_request_queue_dry_run.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/audit_authorized_route_request_queue_dry_run.py
+@@ -0,0 +1,46 @@
++#!/usr/bin/env python3
++"""Dry-run audit an authorized scheduler route entry handoff queue."""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import sys
++
++ROOT = Path(__file__).resolve().parents[1]
++SRC = ROOT / "src"
++if str(SRC) not in sys.path:
++    sys.path.insert(0, str(SRC))
++
++from context.authorized_route_request_queue_dry_run import audit_authorized_route_request_queue_dry_run  # noqa: E402
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(
++        description="Dry-run audit scheduler.route_requests.jsonl without route execution."
++    )
++    parser.add_argument("--queue", required=True, help="Path to scheduler.route_requests.jsonl.")
++    parser.add_argument("--repo-root", default=str(ROOT), help="Repository root used for handler surface presence checks.")
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    args = parser.parse_args(argv)
++
++    report = audit_authorized_route_request_queue_dry_run(
++        Path(args.queue),
++        repo_root=Path(args.repo_root),
++    )
++
++    if args.format == "json":
++        print(json.dumps(report.to_mapping(), indent=2, sort_keys=True))
++    else:
++        print(f"item_count: {report.item_count}")
++        print(f"ready_count: {report.ready_count}")
++        print(f"blocked_count: {report.blocked_count}")
++        print("dry_run_only: True")
++        print("scheduler_modified: False")
++        print("handler_called: False")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/context/test_authorized_route_request_queue_dry_run_0180.py b/tests/context/test_authorized_route_request_queue_dry_run_0180.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/context/test_authorized_route_request_queue_dry_run_0180.py
+@@ -0,0 +1,82 @@
++from pathlib import Path
++import json
++
++import pytest
++
++from context.authorized_route_request_queue import append_authorized_route_requests_from_context_bus
++from context.authorized_route_request_queue_dry_run import (
++    EXPECTED_HANDLER_SURFACES,
++    RouteRequestQueueDryRunAuditError,
++    audit_authorized_route_request_queue_dry_run,
++)
++from context.github_artifact_dataset_bus_observation import append_github_artifact_dataset_bus_observation
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _observation() -> dict[str, object]:
++    return {
++        "report_ref": "report:github-artifact:0180",
++        "repository": "newicody/autodoc-ideas",
++        "run_id": "run0180",
++        "artifact_id": "artifact0180",
++        "status": "queued",
++        "dataset_root_ref": "server-dataset:github-artifacts",
++        "raw_count": 1,
++        "queued_count": 1,
++        "failed_count": 0,
++        "occurred_at": "2026-07-07T00:00:00Z",
++    }
++
++
++def test_0180_dry_run_audits_authorized_route_request_queue(tmp_path: Path) -> None:
++    append_github_artifact_dataset_bus_observation(runtime_root=tmp_path, raw=_observation())
++    handoff = append_authorized_route_requests_from_context_bus(
++        context_bus_path=tmp_path / "context.bus.jsonl",
++        runtime_root=tmp_path,
++        policy_decision_id="policy:allow:github-artifact:0180",
++    )
++
++    report = audit_authorized_route_request_queue_dry_run(handoff.queue_path, repo_root=ROOT)
++
++    assert report.item_count == 1
++    assert report.ready_count == 1
++    assert report.blocked_count == 0
++    assert report.dry_run_only is True
++    assert report.scheduler_modified is False
++    assert report.handler_called is False
++    assert report.frames_written is False
++    assert report.items[0].ready_for_later_handler_handoff is True
++    assert report.items[0].policy_decision_id == "policy:allow:github-artifact:0180"
++
++
++def test_0180_reports_expected_handler_surface_presence(tmp_path: Path) -> None:
++    append_github_artifact_dataset_bus_observation(runtime_root=tmp_path, raw=_observation())
++    handoff = append_authorized_route_requests_from_context_bus(
++        context_bus_path=tmp_path / "context.bus.jsonl",
++        runtime_root=tmp_path,
++        policy_decision_id="policy:allow:github-artifact:0180-surfaces",
++    )
++
++    report = audit_authorized_route_request_queue_dry_run(handoff.queue_path, repo_root=ROOT)
++    assert set(report.handler_surfaces) == set(EXPECTED_HANDLER_SURFACES)
++    assert report.handler_surfaces["src/runtime/scheduler_route_adapter.py"] is True
++
++
++def test_0180_empty_queue_is_valid_dry_run(tmp_path: Path) -> None:
++    queue = tmp_path / "scheduler.route_requests.jsonl"
++    queue.write_text("", encoding="utf-8")
++
++    report = audit_authorized_route_request_queue_dry_run(queue, repo_root=ROOT)
++    assert report.item_count == 0
++    assert report.ready_count == 0
++    assert report.blocked_count == 0
++
++
++def test_0180_rejects_malformed_queue_json(tmp_path: Path) -> None:
++    queue = tmp_path / "scheduler.route_requests.jsonl"
++    queue.write_text("{not-json}\n", encoding="utf-8")
++
++    with pytest.raises(Exception):
++        audit_authorized_route_request_queue_dry_run(queue, repo_root=ROOT)
+diff --git a/tests/tools/test_audit_authorized_route_request_queue_dry_run_0180.py b/tests/tools/test_audit_authorized_route_request_queue_dry_run_0180.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_audit_authorized_route_request_queue_dry_run_0180.py
+@@ -0,0 +1,57 @@
++from pathlib import Path
++import json
++import subprocess
++import sys
++
++from context.authorized_route_request_queue import append_authorized_route_requests_from_context_bus
++from context.github_artifact_dataset_bus_observation import append_github_artifact_dataset_bus_observation
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "audit_authorized_route_request_queue_dry_run.py"
++
++
++def test_0180_tool_dry_run_audits_queue(tmp_path: Path) -> None:
++    append_github_artifact_dataset_bus_observation(
++        runtime_root=tmp_path,
++        raw={
++            "report_ref": "report:github-artifact:tool0180",
++            "repository": "newicody/autodoc-ideas",
++            "run_id": "run0180tool",
++            "artifact_id": "artifact0180tool",
++            "status": "queued",
++            "dataset_root_ref": "server-dataset:github-artifacts",
++            "raw_count": 1,
++            "queued_count": 1,
++            "failed_count": 0,
++            "occurred_at": "2026-07-07T00:00:00Z",
++        },
++    )
++    handoff = append_authorized_route_requests_from_context_bus(
++        context_bus_path=tmp_path / "context.bus.jsonl",
++        runtime_root=tmp_path,
++        policy_decision_id="policy:allow:github-artifact:tool0180",
++    )
++
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--queue",
++            handoff.queue_path,
++            "--repo-root",
++            str(ROOT),
++            "--format",
++            "json",
++        ],
++        cwd=ROOT,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=True,
++    )
++    report = json.loads(completed.stdout)
++    assert report["item_count"] == 1
++    assert report["ready_count"] == 1
++    assert report["dry_run_only"] is True
++    assert report["handler_called"] is False
+diff --git a/tests/rules/test_route_request_queue_dry_run_audit_0180_rule.py b/tests/rules/test_route_request_queue_dry_run_audit_0180_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_route_request_queue_dry_run_audit_0180_rule.py
+@@ -0,0 +1,78 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src" / "context" / "authorized_route_request_queue_dry_run.py"
++TOOL = ROOT / "tools" / "audit_authorized_route_request_queue_dry_run.py"
++DOC = ROOT / "doc" / "architecture" / "ROUTE_REQUEST_QUEUE_DRY_RUN_AUDIT_0180.md"
++RULE = ROOT / "doc" / "code-rules" / "0180_route_request_queue_dry_run_audit_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0180_CHANGED_FILES.md"
++
++
++def test_0180_module_is_dry_run_only() -> None:
++    source = MODULE.read_text(encoding="utf-8")
++    for token in [
++        "scheduler.route_requests.jsonl",
++        "iter_authorized_route_request_queue",
++        "SchedulerRouteRequest objects",
++        "readiness/audit report",
++        "This module does not call handle_scheduler_route_request",
++        "This module does not instantiate Scheduler",
++        "This module does not modify Scheduler.run()",
++        "This module does not instantiate EventBus",
++        "This module does not write ControlProxy or RouteProxy frames",
++    ]:
++        assert token in source
++    assert "handle_scheduler_route_request(" not in source
++    assert "from kernel.scheduler import Scheduler" not in source
++    assert "from kernel.event_bus import EventBus" not in source
++
++
++def test_0180_doc_locks_dry_run_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    for token in [
++        "0180 is a dry-run audit, not route execution",
++        "The input is scheduler.route_requests.jsonl",
++        "The output is a readiness report",
++        "It validates queued items through SchedulerRouteRequest.from_mapping",
++        "It does not call handle_scheduler_route_request",
++        "It does not modify Scheduler.run()",
++        "It does not write ControlProxy or RouteProxy frames",
++    ]:
++        assert token in doc
++
++
++def test_0180_rule_blocks_execution() -> None:
++    rule = RULE.read_text(encoding="utf-8")
++    for token in [
++        "Read only scheduler.route_requests.jsonl",
++        "Produce only a dry-run readiness report",
++        "Validate queued items with SchedulerRouteRequest.from_mapping",
++        "Do not call handle_scheduler_route_request",
++        "Do not modify Scheduler.run()",
++        "Do not instantiate Scheduler",
++        "Do not instantiate EventBus",
++        "Do not write ControlProxy or RouteProxy frames",
++    ]:
++        assert token in rule
++
++
++def test_0180_tool_has_no_network_imports() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    assert "--queue" in source
++    assert "audit_authorized_route_request_queue_dry_run" in source
++    assert "import requests" not in source
++    assert "from requests" not in source
++    assert "urllib" not in source
++
++
++def test_0180_manifest_lists_dry_run_files() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    for token in [
++        "src/context/authorized_route_request_queue_dry_run.py",
++        "tools/audit_authorized_route_request_queue_dry_run.py",
++        "tests/context/test_authorized_route_request_queue_dry_run_0180.py",
++        "tests/tools/test_audit_authorized_route_request_queue_dry_run_0180.py",
++        "tests/rules/test_route_request_queue_dry_run_audit_0180_rule.py",
++    ]:
++        assert token in manifest
+diff --git a/doc/architecture/ROUTE_REQUEST_QUEUE_DRY_RUN_AUDIT_0180.md b/doc/architecture/ROUTE_REQUEST_QUEUE_DRY_RUN_AUDIT_0180.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/ROUTE_REQUEST_QUEUE_DRY_RUN_AUDIT_0180.md
+@@ -0,0 +1,60 @@
++# 0180 — Route request queue dry-run audit
++
++## Decision
++
++0180 is a dry-run audit, not route execution.
++
++The input is scheduler.route_requests.jsonl.
++The output is a readiness report.
++
++It validates queued items through SchedulerRouteRequest.from_mapping.
++It does not call handle_scheduler_route_request.
++It does not modify Scheduler.run().
++It does not write ControlProxy or RouteProxy frames.
++
++## Why this exists
++
++0179 materializes authorized SchedulerRouteRequest mappings into a local handoff
++queue.
++
++0180 checks that this queue is structurally ready for a later handler handoff,
++without executing the handler and without writing runtime frames.
++
++This gives a safe boundary before any future patch touches route execution:
++
++```text
++scheduler.route_requests.jsonl
++-> dry-run validation/audit
++-> readiness report
++```
++
++## Boundary
++
++0180:
++
++- reads `scheduler.route_requests.jsonl`,
++- validates every row through `SchedulerRouteRequest.from_mapping(...)`,
++- verifies each row is authorized,
++- reports ready/blocked counts,
++- checks that expected handler surface files exist.
++
++0180 does not:
++
++- call handle_scheduler_route_request,
++- instantiate Scheduler,
++- modify Scheduler.run(),
++- instantiate EventBus,
++- create a parallel bus,
++- write ControlProxy or RouteProxy frames,
++- call GitHub API,
++- use network,
++- execute conversion,
++- execute inference,
++- write SQL,
++- write Qdrant,
++- write directly to VisPy.
++
++## Authority
++
++Scheduler/policy/zone remain the authority.
++The dry-run report does not grant execution.
+diff --git a/doc/code-rules/0180_route_request_queue_dry_run_audit_rule.md b/doc/code-rules/0180_route_request_queue_dry_run_audit_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0180_route_request_queue_dry_run_audit_rule.md
+@@ -0,0 +1,22 @@
++# 0180 route request queue dry-run audit rule
++
++0180 audits the authorized route request handoff queue without executing it.
++
++Rules:
++
++- Read only scheduler.route_requests.jsonl.
++- Produce only a dry-run readiness report.
++- Validate queued items with SchedulerRouteRequest.from_mapping.
++- Do not call handle_scheduler_route_request.
++- Do not modify Scheduler.run().
++- Do not instantiate Scheduler.
++- Do not instantiate EventBus.
++- Do not create a parallel bus.
++- Do not write ControlProxy or RouteProxy frames.
++- Do not call GitHub API.
++- Do not use network.
++- Do not execute conversion.
++- Do not execute inference.
++- Do not write SQL.
++- Do not write Qdrant.
++- Do not write directly to VisPy.
+diff --git a/doc/docs/architecture/runtime/180_route_request_queue_dry_run_audit.dot b/doc/docs/architecture/runtime/180_route_request_queue_dry_run_audit.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/180_route_request_queue_dry_run_audit.dot
+@@ -0,0 +1,19 @@
++digraph route_request_queue_dry_run_audit_0180 {
++  rankdir=LR;
++  label="0180 Route request queue dry-run audit";
++  labelloc=t;
++
++  queue [label="scheduler.route_requests.jsonl"];
++  reader [label="iter_authorized_route_request_queue"];
++  validate [label="SchedulerRouteRequest.from_mapping"];
++  audit [label="dry-run readiness report"];
++  later [label="future handler handoff"];
++
++  queue -> reader;
++  reader -> validate;
++  validate -> audit;
++  audit -> later [label="later patch only"];
++
++  audit -> later [label="not execution in 0180", style=dashed];
++  reader -> later [label="forbidden direct handler call", style=dashed];
++}
+diff --git a/doc/CHANGELOG_0180_ROUTE_REQUEST_QUEUE_DRY_RUN_AUDIT.md b/doc/CHANGELOG_0180_ROUTE_REQUEST_QUEUE_DRY_RUN_AUDIT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0180_ROUTE_REQUEST_QUEUE_DRY_RUN_AUDIT.md
+@@ -0,0 +1,18 @@
++# Changelog — 0180 Route request queue dry-run audit
++
++## Added
++
++- Dry-run audit for `scheduler.route_requests.jsonl`.
++- Validation through `SchedulerRouteRequest.from_mapping`.
++- Readiness report with item counts, ready/blocked counts, and expected handler
++  surface presence.
++- CLI for local dry-run queue audit.
++- Tests/rules locking that no route execution, Scheduler modification, EventBus
++  instantiation, frame write, GitHub API, network, conversion, inference, SQL,
++  Qdrant, or VisPy write is introduced.
++
++## Not changed
++
++- No Scheduler.run modification.
++- No route handler call.
++- No ControlProxy/RouteProxy frame write.
+diff --git a/doc/manifests/MANIFEST_0180_CHANGED_FILES.md b/doc/manifests/MANIFEST_0180_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0180_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest — 0180 Route request queue dry-run audit
++
++- PHASE0180_TEST_REPORT.md
++- src/context/authorized_route_request_queue_dry_run.py
++- tools/audit_authorized_route_request_queue_dry_run.py
++- tests/context/test_authorized_route_request_queue_dry_run_0180.py
++- tests/tools/test_audit_authorized_route_request_queue_dry_run_0180.py
++- tests/rules/test_route_request_queue_dry_run_audit_0180_rule.py
++- doc/architecture/ROUTE_REQUEST_QUEUE_DRY_RUN_AUDIT_0180.md
++- doc/code-rules/0180_route_request_queue_dry_run_audit_rule.md
++- doc/docs/architecture/runtime/180_route_request_queue_dry_run_audit.dot
++- doc/CHANGELOG_0180_ROUTE_REQUEST_QUEUE_DRY_RUN_AUDIT.md
++- doc/manifests/MANIFEST_0180_CHANGED_FILES.md

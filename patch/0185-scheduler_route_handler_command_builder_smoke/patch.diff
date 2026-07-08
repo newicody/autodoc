@@ -1,0 +1,619 @@
+diff --git a/PHASE0185_TEST_REPORT.md b/PHASE0185_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0185_TEST_REPORT.md
+@@ -0,0 +1,28 @@
++# Phase 0185 Test Report — Scheduler route handler command-builder smoke
++
++Status: prepared.
++
++Scope:
++- Reads `route_request_to_command_dry_run_plan.jsonl`.
++- Imports existing `build_single_frame_route_command`.
++- Builds `SchedulerRouteHandlerCommand` mappings.
++- Writes optional `scheduler_route_handler_command_smoke.jsonl`.
++- No handler call.
++- No RouteProxyRuntime preparation.
++- No writer permit request.
++- No Scheduler modification.
++- No EventBus instantiation.
++- No ControlProxy/RouteProxy frame write.
++- No GitHub API/network.
++- No conversion/inference/SQL/Qdrant/VisPy writes.
++
++Validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/tools/test_build_scheduler_route_handler_command_smoke_0185.py \
++  tests/rules/test_scheduler_route_handler_command_builder_smoke_0185_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
+diff --git a/tools/build_scheduler_route_handler_command_smoke.py b/tools/build_scheduler_route_handler_command_smoke.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/build_scheduler_route_handler_command_smoke.py
+@@ -0,0 +1,181 @@
++#!/usr/bin/env python3
++"""Smoke-build SchedulerRouteHandlerCommand objects from a dry-run plan.
++
++0185 is a command-builder smoke only.
++
++It reads route_request_to_command_dry_run_plan.jsonl from 0184, imports only the
++existing build_single_frame_route_command builder surface, builds immutable
++SchedulerRouteHandlerCommand objects, and optionally writes
++scheduler_route_handler_command_smoke.jsonl.
++
++It does not call handle_scheduler_route_command.
++It does not call handle_scheduler_route_request.
++It does not prepare RouteProxyRuntime.
++It does not write RouteProxy or ControlProxy frames.
++It does not modify Scheduler.run.
++It does not instantiate Scheduler.
++It does not instantiate EventBus.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import sys
++from typing import Any, Iterable, Mapping
++
++ROOT = Path(__file__).resolve().parents[1]
++SRC = ROOT / "src"
++if str(SRC) not in sys.path:
++    sys.path.insert(0, str(SRC))
++
++from runtime.scheduler_route_handler_minimal import (  # noqa: E402
++    SchedulerRouteHandlerCommand,
++    build_single_frame_route_command,
++)
++
++
++SCHEDULER_ROUTE_HANDLER_COMMAND_BUILDER_SMOKE_SCHEMA = "missipy.scheduler.route_handler.command_builder_smoke.v1"
++DEFAULT_INPUT_NAME = "route_request_to_command_dry_run_plan.jsonl"
++DEFAULT_OUTPUT_NAME = "scheduler_route_handler_command_smoke.jsonl"
++
++
++class SchedulerRouteHandlerCommandBuilderSmokeError(ValueError):
++    """Raised when command-builder smoke input is unsafe."""
++
++
++def build_scheduler_route_handler_command_smoke(
++    *,
++    plan_path: Path | str,
++    output_path: Path | str | None = None,
++) -> dict[str, Any]:
++    """Build SchedulerRouteHandlerCommand mappings from a reviewed dry-run plan."""
++
++    plan = Path(plan_path)
++    items = list(_read_plan_items(plan))
++    smoke_items: list[dict[str, Any]] = []
++    for index, item in enumerate(items, start=1):
++        smoke_items.append(_smoke_build_item(index, item))
++
++    if output_path is not None:
++        _write_smoke_jsonl(Path(output_path), smoke_items)
++
++    built_count = sum(1 for item in smoke_items if item["command_built"])
++    blocked_count = len(smoke_items) - built_count
++    return {
++        "schema": SCHEDULER_ROUTE_HANDLER_COMMAND_BUILDER_SMOKE_SCHEMA,
++        "plan_path": str(plan),
++        "output_path": str(output_path) if output_path is not None else None,
++        "item_count": len(smoke_items),
++        "built_count": built_count,
++        "blocked_count": blocked_count,
++        "items": smoke_items,
++        "builder_imported": True,
++        "builder_called": True,
++        "handler_called": False,
++        "routeproxy_prepared": False,
++        "scheduler_modified": False,
++        "frames_written": False,
++    }
++
++
++def _smoke_build_item(index: int, item: Mapping[str, Any]) -> dict[str, Any]:
++    issues: list[str] = []
++    if not item.get("ready_for_later_command_builder_call"):
++        issues.append("plan item is not ready for command builder call")
++    if item.get("builder_surface") != "build_single_frame_route_command":
++        issues.append("unexpected builder surface")
++    if item.get("handler_surface") != "handle_scheduler_route_command":
++        issues.append("unexpected handler surface")
++    raw_kwargs = item.get("builder_kwargs")
++    if not isinstance(raw_kwargs, Mapping):
++        issues.append("builder_kwargs must be an object")
++        raw_kwargs = {}
++
++    command_mapping: dict[str, Any] | None = None
++    command_type: str | None = None
++    if not issues:
++        try:
++            command = build_single_frame_route_command(**dict(raw_kwargs))
++        except Exception as exc:  # smoke reports validation errors, it does not hide them
++            issues.append(f"builder validation failed: {exc}")
++        else:
++            if not isinstance(command, SchedulerRouteHandlerCommand):
++                issues.append("builder did not return SchedulerRouteHandlerCommand")
++            else:
++                command_type = type(command).__name__
++                command_mapping = command.to_mapping()
++
++    return {
++        "index": index,
++        "source_request_id": item.get("request_id"),
++        "source_route_id": item.get("route_id"),
++        "source_task_id": item.get("task_id"),
++        "policy_decision_id": item.get("policy_decision_id"),
++        "builder_surface": "build_single_frame_route_command",
++        "handler_surface": "handle_scheduler_route_command",
++        "command_type": command_type,
++        "command_mapping": command_mapping,
++        "command_built": command_mapping is not None and not issues,
++        "ready_for_later_handler_call": command_mapping is not None and not issues,
++        "issues": issues,
++    }
++
++
++def _read_plan_items(path: Path) -> Iterable[dict[str, Any]]:
++    if path.name != DEFAULT_INPUT_NAME:
++        raise SchedulerRouteHandlerCommandBuilderSmokeError("input filename must be route_request_to_command_dry_run_plan.jsonl")
++    with path.open("r", encoding="utf-8") as handle:
++        for line_number, line in enumerate(handle, start=1):
++            raw = line.strip()
++            if not raw:
++                continue
++            try:
++                item = json.loads(raw)
++            except json.JSONDecodeError as exc:
++                raise SchedulerRouteHandlerCommandBuilderSmokeError(
++                    f"invalid plan JSON at {path}:{line_number}"
++                ) from exc
++            if not isinstance(item, dict):
++                raise SchedulerRouteHandlerCommandBuilderSmokeError(
++                    f"plan line must be an object at {path}:{line_number}"
++                )
++            yield item
++
++
++def _write_smoke_jsonl(path: Path, items: list[Mapping[str, Any]]) -> None:
++    if path.name != DEFAULT_OUTPUT_NAME:
++        raise SchedulerRouteHandlerCommandBuilderSmokeError("output filename must be scheduler_route_handler_command_smoke.jsonl")
++    path.parent.mkdir(parents=True, exist_ok=True)
++    with path.open("w", encoding="utf-8") as handle:
++        for item in items:
++            handle.write(json.dumps(dict(item), sort_keys=True, separators=(",", ":")) + "\n")
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Smoke-build SchedulerRouteHandlerCommand from 0184 plan.")
++    parser.add_argument("--plan", required=True, help="Path to route_request_to_command_dry_run_plan.jsonl.")
++    parser.add_argument("--output", help="Optional scheduler_route_handler_command_smoke.jsonl output path.")
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    args = parser.parse_args(argv)
++
++    report = build_scheduler_route_handler_command_smoke(
++        plan_path=Path(args.plan),
++        output_path=Path(args.output) if args.output else None,
++    )
++
++    if args.format == "json":
++        print(json.dumps(report, indent=2, sort_keys=True))
++    else:
++        print(f"item_count: {report['item_count']}")
++        print(f"built_count: {report['built_count']}")
++        print(f"blocked_count: {report['blocked_count']}")
++        print("builder_called: True")
++        print("handler_called: False")
++        print("frames_written: False")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_build_scheduler_route_handler_command_smoke_0185.py b/tests/tools/test_build_scheduler_route_handler_command_smoke_0185.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_build_scheduler_route_handler_command_smoke_0185.py
+@@ -0,0 +1,141 @@
++from pathlib import Path
++import importlib.util
++import json
++import subprocess
++import sys
++
++from context.authorized_route_request_queue import append_authorized_route_requests_from_context_bus
++from context.github_artifact_dataset_bus_observation import append_github_artifact_dataset_bus_observation
++
++
++ROOT = Path(__file__).resolve().parents[2]
++PLAN_TOOL = ROOT / "tools" / "build_route_request_to_command_dry_run_plan.py"
++TOOL = ROOT / "tools" / "build_scheduler_route_handler_command_smoke.py"
++
++
++def _load_tool_module():
++    spec = importlib.util.spec_from_file_location("build_scheduler_route_handler_command_smoke_tool", TOOL)
++    assert spec is not None
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    assert spec.loader is not None
++    spec.loader.exec_module(module)
++    return module
++
++
++def _load_plan_tool_module():
++    spec = importlib.util.spec_from_file_location("build_route_request_to_command_dry_run_plan_tool", PLAN_TOOL)
++    assert spec is not None
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    assert spec.loader is not None
++    spec.loader.exec_module(module)
++    return module
++
++
++def _write_plan(root: Path) -> Path:
++    append_github_artifact_dataset_bus_observation(
++        runtime_root=root,
++        raw={
++            "report_ref": "report:github-artifact:0185",
++            "repository": "newicody/autodoc-ideas",
++            "run_id": "run0185",
++            "artifact_id": "artifact0185",
++            "status": "queued",
++            "dataset_root_ref": "server-dataset:github-artifacts",
++            "raw_count": 1,
++            "queued_count": 1,
++            "failed_count": 0,
++            "occurred_at": "2026-07-07T00:00:00Z",
++        },
++    )
++    handoff = append_authorized_route_requests_from_context_bus(
++        context_bus_path=root / "context.bus.jsonl",
++        runtime_root=root,
++        policy_decision_id="policy:allow:github-artifact:0185",
++    )
++    plan_tool = _load_plan_tool_module()
++    plan_path = root / "route_request_to_command_dry_run_plan.jsonl"
++    plan_tool.build_route_request_to_command_dry_run_plan(
++        queue_path=handoff.queue_path,
++        output_path=plan_path,
++    )
++    return plan_path
++
++
++def test_0185_smoke_builds_scheduler_route_handler_command_without_handler_call(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    plan_path = _write_plan(tmp_path)
++
++    report = module.build_scheduler_route_handler_command_smoke(
++        plan_path=plan_path,
++        output_path=tmp_path / "scheduler_route_handler_command_smoke.jsonl",
++    )
++
++    assert report["item_count"] == 1
++    assert report["built_count"] == 1
++    assert report["blocked_count"] == 0
++    assert report["builder_imported"] is True
++    assert report["builder_called"] is True
++    assert report["handler_called"] is False
++    assert report["routeproxy_prepared"] is False
++    assert report["frames_written"] is False
++    item = report["items"][0]
++    assert item["command_built"] is True
++    assert item["command_type"] == "SchedulerRouteHandlerCommand"
++    command_mapping = item["command_mapping"]
++    assert command_mapping["schema"] == "missipy.scheduler.route_handler_command.v1"
++    assert command_mapping["scheduler_run_modified"] is False
++    assert command_mapping["handler_is_executor"] is True
++    assert command_mapping["frame_requests"][0]["frame_kind"] == "runtime_probe"
++    assert (tmp_path / "scheduler_route_handler_command_smoke.jsonl").exists()
++
++
++def test_0185_blocks_non_ready_plan_item(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    plan_path = tmp_path / "route_request_to_command_dry_run_plan.jsonl"
++    plan_path.write_text(
++        json.dumps(
++            {
++                "ready_for_later_command_builder_call": False,
++                "builder_surface": "build_single_frame_route_command",
++                "handler_surface": "handle_scheduler_route_command",
++                "builder_kwargs": {},
++            }
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++
++    report = module.build_scheduler_route_handler_command_smoke(plan_path=plan_path)
++
++    assert report["built_count"] == 0
++    assert report["blocked_count"] == 1
++    assert "plan item is not ready for command builder call" in report["items"][0]["issues"]
++
++
++def test_0185_cli_outputs_json(tmp_path: Path) -> None:
++    plan_path = _write_plan(tmp_path)
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--plan",
++            str(plan_path),
++            "--output",
++            str(tmp_path / "scheduler_route_handler_command_smoke.jsonl"),
++            "--format",
++            "json",
++        ],
++        cwd=ROOT,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=True,
++    )
++    report = json.loads(completed.stdout)
++    assert report["schema"] == "missipy.scheduler.route_handler.command_builder_smoke.v1"
++    assert report["built_count"] == 1
++    assert report["builder_called"] is True
++    assert report["handler_called"] is False
++    assert report["frames_written"] is False
+diff --git a/tests/rules/test_scheduler_route_handler_command_builder_smoke_0185_rule.py b/tests/rules/test_scheduler_route_handler_command_builder_smoke_0185_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_scheduler_route_handler_command_builder_smoke_0185_rule.py
+@@ -0,0 +1,81 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "build_scheduler_route_handler_command_smoke.py"
++DOC = ROOT / "doc" / "architecture" / "SCHEDULER_ROUTE_HANDLER_COMMAND_BUILDER_SMOKE_0185.md"
++RULE = ROOT / "doc" / "code-rules" / "0185_scheduler_route_handler_command_builder_smoke_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0185_CHANGED_FILES.md"
++
++
++def test_0185_tool_imports_only_builder_surface_and_never_handler() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    for token in [
++        "0185 is a command-builder smoke only",
++        "route_request_to_command_dry_run_plan.jsonl",
++        "scheduler_route_handler_command_smoke.jsonl",
++        "build_single_frame_route_command",
++        "SchedulerRouteHandlerCommand",
++        "It does not call handle_scheduler_route_command",
++        "It does not call handle_scheduler_route_request",
++        "It does not prepare RouteProxyRuntime",
++        "It does not write RouteProxy or ControlProxy frames",
++        "builder_called",
++        "handler_called",
++    ]:
++        assert token in source
++    assert "handle_scheduler_route_command(" not in source
++    assert "handle_scheduler_route_request(" not in source
++    assert "prepare_route_proxy_runtime(" not in source
++    assert "write_route_frame(" not in source
++    assert "request_writer_permit(" not in source
++
++
++def test_0185_doc_locks_builder_smoke_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    for token in [
++        "0185 calls the existing command builder, not the route handler",
++        "The input is route_request_to_command_dry_run_plan.jsonl",
++        "The output is scheduler_route_handler_command_smoke.jsonl",
++        "It may import build_single_frame_route_command",
++        "It must not call handle_scheduler_route_command",
++        "It must not prepare RouteProxyRuntime",
++        "A future patch may execute the handler only after this smoke is reviewed",
++    ]:
++        assert token in doc
++
++
++def test_0185_rule_blocks_handler_execution_and_frame_writes() -> None:
++    rule = RULE.read_text(encoding="utf-8")
++    for token in [
++        "Read route_request_to_command_dry_run_plan.jsonl from 0184",
++        "Call only build_single_frame_route_command",
++        "Do not call handle_scheduler_route_command",
++        "Do not call handle_scheduler_route_request",
++        "Do not prepare RouteProxyRuntime",
++        "Do not write ControlProxy or RouteProxy frames",
++        "Do not modify Scheduler.run",
++        "Do not instantiate EventBus",
++    ]:
++        assert token in rule
++
++
++def test_0185_tool_has_no_network_imports() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    assert "--plan" in source
++    assert "--output" in source
++    assert "import requests" not in source
++    assert "from requests" not in source
++    assert "urllib" not in source
++
++
++def test_0185_manifest_lists_builder_smoke_files() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    for token in [
++        "tools/build_scheduler_route_handler_command_smoke.py",
++        "tests/tools/test_build_scheduler_route_handler_command_smoke_0185.py",
++        "tests/rules/test_scheduler_route_handler_command_builder_smoke_0185_rule.py",
++        "doc/architecture/SCHEDULER_ROUTE_HANDLER_COMMAND_BUILDER_SMOKE_0185.md",
++        "doc/code-rules/0185_scheduler_route_handler_command_builder_smoke_rule.md",
++    ]:
++        assert token in manifest
+diff --git a/doc/architecture/SCHEDULER_ROUTE_HANDLER_COMMAND_BUILDER_SMOKE_0185.md b/doc/architecture/SCHEDULER_ROUTE_HANDLER_COMMAND_BUILDER_SMOKE_0185.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/SCHEDULER_ROUTE_HANDLER_COMMAND_BUILDER_SMOKE_0185.md
+@@ -0,0 +1,61 @@
++# 0185 — Scheduler route handler command-builder smoke
++
++## Decision
++
++0185 calls the existing command builder, not the route handler.
++
++The input is route_request_to_command_dry_run_plan.jsonl.
++The output is scheduler_route_handler_command_smoke.jsonl.
++
++It may import build_single_frame_route_command.
++It must not call handle_scheduler_route_command.
++It must not prepare RouteProxyRuntime.
++
++A future patch may execute the handler only after this smoke is reviewed.
++
++## Why this exists
++
++0184 builds reviewable keyword arguments for the existing
++`build_single_frame_route_command` surface.
++
++0185 is the first controlled import smoke. It verifies that those planned
++keyword arguments can build a real `SchedulerRouteHandlerCommand` object using
++the existing code.
++
++This is still not route execution.
++
++## Boundary
++
++0185:
++
++- reads `route_request_to_command_dry_run_plan.jsonl`,
++- imports `SchedulerRouteHandlerCommand`,
++- imports `build_single_frame_route_command`,
++- calls only `build_single_frame_route_command`,
++- writes optional `scheduler_route_handler_command_smoke.jsonl`.
++
++0185 does not:
++
++- call handle_scheduler_route_command,
++- call handle_scheduler_route_request,
++- prepare RouteProxyRuntime,
++- request writer permits,
++- write RouteProxy frames,
++- write ControlProxy frames,
++- add a new runtime handler,
++- instantiate Scheduler,
++- modify Scheduler.run,
++- instantiate EventBus,
++- create a parallel bus,
++- call GitHub API,
++- use network,
++- execute conversion,
++- execute inference,
++- write SQL,
++- write Qdrant,
++- write directly to VisPy.
++
++## Authority
++
++Scheduler/policy/zone remain the authority.
++The smoke output proves command shape only. It does not grant route execution.
+diff --git a/doc/code-rules/0185_scheduler_route_handler_command_builder_smoke_rule.md b/doc/code-rules/0185_scheduler_route_handler_command_builder_smoke_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0185_scheduler_route_handler_command_builder_smoke_rule.md
+@@ -0,0 +1,26 @@
++# 0185 scheduler route handler command-builder smoke rule
++
++0185 verifies the existing command builder without executing the route handler.
++
++Rules:
++
++- Read route_request_to_command_dry_run_plan.jsonl from 0184.
++- Call only build_single_frame_route_command.
++- Write only scheduler_route_handler_command_smoke.jsonl.
++- Do not call handle_scheduler_route_command.
++- Do not call handle_scheduler_route_request.
++- Do not prepare RouteProxyRuntime.
++- Do not request writer permits.
++- Do not write ControlProxy or RouteProxy frames.
++- Do not add a new runtime handler.
++- Do not modify Scheduler.run.
++- Do not instantiate Scheduler.
++- Do not instantiate EventBus.
++- Do not create a parallel bus.
++- Do not call GitHub API.
++- Do not use network.
++- Do not execute conversion.
++- Do not execute inference.
++- Do not write SQL.
++- Do not write Qdrant.
++- Do not write directly to VisPy.
+diff --git a/doc/docs/architecture/runtime/185_scheduler_route_handler_command_builder_smoke.dot b/doc/docs/architecture/runtime/185_scheduler_route_handler_command_builder_smoke.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/185_scheduler_route_handler_command_builder_smoke.dot
+@@ -0,0 +1,19 @@
++digraph scheduler_route_handler_command_builder_smoke_0185 {
++  rankdir=LR;
++  label="0185 Scheduler route handler command-builder smoke";
++  labelloc=t;
++
++  plan [label="route_request_to_command_dry_run_plan.jsonl"];
++  builder [label="build_single_frame_route_command"];
++  command [label="SchedulerRouteHandlerCommand"];
++  smoke [label="scheduler_route_handler_command_smoke.jsonl"];
++  handler [label="handle_scheduler_route_command\nfuture only"];
++
++  plan -> builder [label="kwargs"];
++  builder -> command [label="object build only"];
++  command -> smoke;
++  smoke -> handler [label="later patch only"];
++
++  builder -> handler [label="not called in 0185", style=dashed];
++  command -> handler [label="does not grant execution", style=dashed];
++}
+diff --git a/doc/CHANGELOG_0185_SCHEDULER_ROUTE_HANDLER_COMMAND_BUILDER_SMOKE.md b/doc/CHANGELOG_0185_SCHEDULER_ROUTE_HANDLER_COMMAND_BUILDER_SMOKE.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0185_SCHEDULER_ROUTE_HANDLER_COMMAND_BUILDER_SMOKE.md
+@@ -0,0 +1,17 @@
++# Changelog — 0185 Scheduler route handler command-builder smoke
++
++## Added
++
++- Controlled command-builder smoke using existing `build_single_frame_route_command`.
++- Optional `scheduler_route_handler_command_smoke.jsonl` output.
++- Tests/rules locking that no route handler call, RouteProxyRuntime preparation,
++  writer permit request, frame write, Scheduler modification, EventBus
++  instantiation, GitHub API, network, conversion, inference, SQL, Qdrant, or
++  VisPy write is introduced.
++
++## Not changed
++
++- No new runtime handler.
++- No Scheduler.run modification.
++- No route handler execution.
++- No ControlProxy/RouteProxy frame write.
+diff --git a/doc/manifests/MANIFEST_0185_CHANGED_FILES.md b/doc/manifests/MANIFEST_0185_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0185_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest — 0185 Scheduler route handler command-builder smoke
++
++- PHASE0185_TEST_REPORT.md
++- tools/build_scheduler_route_handler_command_smoke.py
++- tests/tools/test_build_scheduler_route_handler_command_smoke_0185.py
++- tests/rules/test_scheduler_route_handler_command_builder_smoke_0185_rule.py
++- doc/architecture/SCHEDULER_ROUTE_HANDLER_COMMAND_BUILDER_SMOKE_0185.md
++- doc/code-rules/0185_scheduler_route_handler_command_builder_smoke_rule.md
++- doc/docs/architecture/runtime/185_scheduler_route_handler_command_builder_smoke.dot
++- doc/CHANGELOG_0185_SCHEDULER_ROUTE_HANDLER_COMMAND_BUILDER_SMOKE.md
++- doc/manifests/MANIFEST_0185_CHANGED_FILES.md

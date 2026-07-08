@@ -1,0 +1,791 @@
+diff --git a/PHASE0197_TEST_REPORT.md b/PHASE0197_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0197_TEST_REPORT.md
+@@ -0,0 +1,41 @@
++# Phase 0197 Test Report — Route pipeline Bloc A coherence record
++
++Status: prepared.
++
++Scope:
++- Reads `isolated_route_pipeline_promotion_readiness_acceptance.json`.
++- Produces `route_pipeline_bloc_a_coherence_record.json`.
++- Reuses the existing 0196 readiness acceptance artifact.
++- Applies `doc/code-rules/code_rule.md`.
++- Updates docs, graph, changelog, manifest, and rule.
++- Closes Bloc A.
++- Records phase re-evaluation.
++- Records that execution locks are phase gates, not permanent prohibitions.
++- Allows Bloc B to unlock controlled dev execution explicitly when required.
++- Keeps `execution_allowed_by_0197=false`.
++- No controlled dev smoke execution.
++- No new runtime handler.
++- No new adapter.
++- No new bus.
++- No runtime import.
++- No handler call.
++- No RouteProxyRuntime preparation.
++- No read_route_frame call.
++- No writer permit request.
++- No frame write.
++- No Scheduler modification.
++- No Scheduler/EventBus instantiation.
++- No ControlProxy frame write.
++- No GitHub API/network.
++- No conversion/inference/SQL/Qdrant/VisPy writes.
++
++Validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/tools/test_record_route_pipeline_bloc_a_coherence_0197.py \
++  tests/rules/test_route_pipeline_bloc_a_coherence_record_0197_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
+diff --git a/tools/record_route_pipeline_bloc_a_coherence.py b/tools/record_route_pipeline_bloc_a_coherence.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/record_route_pipeline_bloc_a_coherence.py
+@@ -0,0 +1,272 @@
++#!/usr/bin/env python3
++"""Record Bloc A coherence for the route pipeline plan.
++
++0197 is the Bloc A coherence record only.
++
++It reads isolated_route_pipeline_promotion_readiness_acceptance.json from 0196
++and writes route_pipeline_bloc_a_coherence_record.json. It closes Bloc A,
++records phase re-evaluation, and opens the next Bloc B direction.
++
++It must reuse the existing 0196 readiness acceptance artifact. It must not
++introduce a new runtime handler, adapter, bus, RouteProxy runtime, ControlProxy
++runtime, SQL backend, Qdrant backend, GitHub client, graph renderer, or
++inference path.
++
++Important: execution locks are not permanent. Bloc A keeps execution disabled
++because Bloc A is a plan/audit/readiness bloc. A later execution bloc may unlock
++execution explicitly when the phase requires it, with policy_decision_id, gate,
++documentation, audit, and acceptance.
++
++It does not execute controlled-dev-routeproxy-smoke.
++It does not import runtime handler modules.
++It does not call handle_scheduler_route_command.
++It does not call handle_scheduler_route_request.
++It does not call prepare_route_proxy_runtime.
++It does not call read_route_frame.
++It does not request writer permits.
++It does not call write_route_frame.
++It does not modify Scheduler.run.
++It does not instantiate Scheduler.
++It does not instantiate EventBus.
++It does not write ControlProxy or RouteProxy frames.
++It does not call GitHub API or use network.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++from typing import Any, Mapping
++
++
++ROUTE_PIPELINE_BLOC_A_COHERENCE_SCHEMA = "missipy.route_pipeline.bloc_a_coherence_record.v1"
++EXPECTED_READINESS_SCHEMA = "missipy.route_pipeline.isolated_promotion_readiness_acceptance.v1"
++EXPECTED_BASELINE = "isolated-route-pipeline-write-read-v1"
++EXPECTED_PROMOTION_TARGET = "controlled-dev-routeproxy-smoke"
++DEFAULT_OUTPUT_NAME = "route_pipeline_bloc_a_coherence_record.json"
++
++FALSE_SAFETY_FLAGS = (
++    "runtime_imports_executed",
++    "handler_called",
++    "routeproxy_prepared",
++    "read_route_frame_called",
++    "writer_permits_requested",
++    "frames_written",
++    "controlproxy_frames_written",
++    "scheduler_modified",
++    "eventbus_instantiated",
++    "network_used",
++)
++
++FALSE_NEW_SURFACE_FLAGS = (
++    "new_runtime_handler_added",
++    "new_adapter_added",
++    "new_bus_added",
++    "new_sql_backend_added",
++    "new_qdrant_backend_added",
++    "new_github_client_added",
++)
++
++
++class RoutePipelineBlocACoherenceError(ValueError):
++    """Raised when Bloc A coherence cannot be recorded safely."""
++
++
++def record_route_pipeline_bloc_a_coherence(
++    *,
++    readiness_acceptance_path: Path | str,
++    output_path: Path | str | None = None,
++) -> dict[str, Any]:
++    """Record Bloc A coherence from a clean 0196 readiness acceptance."""
++
++    path = Path(readiness_acceptance_path)
++    readiness = _read_json_file(path)
++    issues: list[str] = []
++    warnings: list[str] = []
++
++    if readiness.get("schema") != EXPECTED_READINESS_SCHEMA:
++        issues.append("readiness acceptance schema mismatch")
++    if readiness.get("promotion_readiness_accepted") is not True:
++        issues.append("promotion_readiness_accepted must be true")
++    if readiness.get("controlled_dev_smoke_ready") is not True:
++        issues.append("controlled_dev_smoke_ready must be true")
++    if readiness.get("execution_allowed_by_0196") is not False:
++        issues.append("execution_allowed_by_0196 must remain false")
++    if readiness.get("phase_re_evaluation_required_before_execution") is not True:
++        issues.append("phase_re_evaluation_required_before_execution must be true")
++    if readiness.get("accepted_baseline") != EXPECTED_BASELINE:
++        issues.append("accepted_baseline mismatch")
++    if readiness.get("promotion_target") != EXPECTED_PROMOTION_TARGET:
++        issues.append("promotion_target mismatch")
++    if readiness.get("next_required_patch") != "0197-bloc_a_coherence_record":
++        issues.append("next_required_patch must be 0197-bloc_a_coherence_record")
++    if readiness.get("issues") not in ([], None):
++        issues.append("readiness issues must be empty")
++    if isinstance(readiness.get("warnings"), list) and readiness.get("warnings"):
++        warnings.extend(str(item) for item in readiness.get("warnings", []))
++    if readiness.get("existing_surfaces_reused") is not True:
++        issues.append("existing_surfaces_reused must be true")
++
++    _audit_required_paths(readiness, issues)
++    _audit_false_flags(readiness, FALSE_SAFETY_FLAGS, issues)
++    _audit_false_flags(readiness, FALSE_NEW_SURFACE_FLAGS, issues)
++
++    record = {
++        "schema": ROUTE_PIPELINE_BLOC_A_COHERENCE_SCHEMA,
++        "bloc": "A",
++        "bloc_name": "isolated-prototype-stabilization",
++        "bloc_patch_limit": 3,
++        "bloc_patches": [
++            "0195-isolated_route_pipeline_promotion_plan_audit",
++            "0196-isolated_route_pipeline_promotion_readiness_acceptance",
++            "0197-bloc_a_coherence_record",
++        ],
++        "readiness_acceptance_path": str(path),
++        "readiness_acceptance_schema": readiness.get("schema"),
++        "selected_baseline_ref": readiness.get("selected_baseline_ref"),
++        "selected_entry_digest": readiness.get("selected_entry_digest"),
++        "accepted_baseline": readiness.get("accepted_baseline"),
++        "source_policy_decision_id": readiness.get("source_policy_decision_id"),
++        "source_runtime_root": readiness.get("source_runtime_root"),
++        "source_isolated_runtime_root": readiness.get("source_isolated_runtime_root"),
++        "target_runtime_root": readiness.get("target_runtime_root"),
++        "target_isolated_runtime_root": readiness.get("target_isolated_runtime_root"),
++        "promotion_target": readiness.get("promotion_target"),
++        "bloc_a_coherence_accepted": not issues,
++        "bloc_a_complete": not issues,
++        "phase_re_evaluated": True,
++        "plan_adjustment_required": False,
++        "rules_adjustment_required": False,
++        "next_bloc": "B",
++        "next_bloc_name": "controlled-dev-smoke",
++        "next_recommended_patch": "0198-controlled_dev_smoke_plan",
++        "execution_allowed_by_0197": False,
++        "future_execution_can_be_unlocked": True,
++        "future_execution_unlock_requires": [
++            "explicit execution patch in an execution bloc",
++            "explicit policy_decision_id",
++            "reuse or adapt existing pipeline tools before adding code",
++            "doc/code-rules/code_rule.md applied",
++            "docs, graph, changelog, manifest, and rule updated",
++            "post-execution artifact audit",
++            "post-audit acceptance gate",
++        ],
++        "coherence_decisions": [
++            "Bloc A remains a preparation bloc and does not execute controlled-dev-routeproxy-smoke.",
++            "Execution locks are phase gates, not permanent prohibitions.",
++            "Bloc B may prepare and then explicitly unlock controlled dev execution if its gate requires it.",
++            "Existing surfaces must be reused or adapted before adding new runtime surfaces.",
++            "Every bloc must end with re-evaluation and coherence before moving forward.",
++        ],
++        "issues": issues,
++        "warnings": warnings,
++        "existing_surfaces_reused": True,
++        "new_runtime_handler_added": False,
++        "new_adapter_added": False,
++        "new_bus_added": False,
++        "new_sql_backend_added": False,
++        "new_qdrant_backend_added": False,
++        "new_github_client_added": False,
++        "runtime_imports_executed": False,
++        "handler_called": False,
++        "routeproxy_prepared": False,
++        "read_route_frame_called": False,
++        "writer_permits_requested": False,
++        "frames_written": False,
++        "controlproxy_frames_written": False,
++        "scheduler_modified": False,
++        "eventbus_instantiated": False,
++        "network_used": False,
++    }
++
++    if output_path is not None:
++        _write_record(Path(output_path), record)
++
++    return record
++
++
++def _audit_required_paths(readiness: Mapping[str, Any], issues: list[str]) -> None:
++    for key in (
++        "promotion_plan_audit_path",
++        "source_runtime_root",
++        "source_isolated_runtime_root",
++        "target_runtime_root",
++        "target_isolated_runtime_root",
++    ):
++        if not isinstance(readiness.get(key), str) or not readiness.get(key):
++            issues.append(f"{key} must be present")
++
++    target_runtime_root = readiness.get("target_runtime_root")
++    target_isolated_runtime_root = readiness.get("target_isolated_runtime_root")
++    if isinstance(target_runtime_root, str) and isinstance(target_isolated_runtime_root, str):
++        runtime = Path(target_runtime_root)
++        isolated = Path(target_isolated_runtime_root)
++        if not runtime.is_absolute():
++            issues.append("target_runtime_root must be absolute")
++        if not isolated.is_absolute():
++            issues.append("target_isolated_runtime_root must be absolute")
++        if runtime == isolated:
++            issues.append("target_runtime_root and target_isolated_runtime_root must be distinct")
++        if runtime.is_absolute() and isolated.is_absolute() and not _is_within_or_equal(isolated, runtime):
++            issues.append("target_isolated_runtime_root must be inside target_runtime_root")
++
++
++def _audit_false_flags(readiness: Mapping[str, Any], flags: tuple[str, ...], issues: list[str]) -> None:
++    for flag in flags:
++        if readiness.get(flag) is not False:
++            issues.append(f"{flag} must be false")
++
++
++def _is_within_or_equal(path: Path, root: Path) -> bool:
++    try:
++        path.resolve().relative_to(root.resolve())
++    except ValueError:
++        return False
++    return True
++
++
++def _read_json_file(path: Path) -> dict[str, Any]:
++    raw = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(raw, dict):
++        raise RoutePipelineBlocACoherenceError("readiness acceptance must be a JSON object")
++    return raw
++
++
++def _write_record(path: Path, record: dict[str, Any]) -> None:
++    if path.name != DEFAULT_OUTPUT_NAME:
++        raise RoutePipelineBlocACoherenceError("output filename must be route_pipeline_bloc_a_coherence_record.json")
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Record Route pipeline Bloc A coherence.")
++    parser.add_argument(
++        "--readiness-acceptance",
++        required=True,
++        help="Path to isolated_route_pipeline_promotion_readiness_acceptance.json.",
++    )
++    parser.add_argument("--output", help="Optional route_pipeline_bloc_a_coherence_record.json output path.")
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    args = parser.parse_args(argv)
++
++    record = record_route_pipeline_bloc_a_coherence(
++        readiness_acceptance_path=Path(args.readiness_acceptance),
++        output_path=Path(args.output) if args.output else None,
++    )
++
++    if args.format == "json":
++        print(json.dumps(record, indent=2, sort_keys=True))
++    else:
++        print(f"bloc_a_coherence_accepted: {record['bloc_a_coherence_accepted']}")
++        print(f"bloc_a_complete: {record['bloc_a_complete']}")
++        print(f"next_bloc: {record['next_bloc']}")
++        print(f"future_execution_can_be_unlocked: {record['future_execution_can_be_unlocked']}")
++        print(f"execution_allowed_by_0197: {record['execution_allowed_by_0197']}")
++        print(f"issues: {len(record['issues'])}")
++    return 0 if record["bloc_a_coherence_accepted"] else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_record_route_pipeline_bloc_a_coherence_0197.py b/tests/tools/test_record_route_pipeline_bloc_a_coherence_0197.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_record_route_pipeline_bloc_a_coherence_0197.py
+@@ -0,0 +1,134 @@
++from pathlib import Path
++import importlib.util
++import json
++import subprocess
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "record_route_pipeline_bloc_a_coherence.py"
++
++
++def _load_tool_module():
++    spec = importlib.util.spec_from_file_location("record_route_pipeline_bloc_a_coherence_tool", TOOL)
++    assert spec is not None
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    assert spec.loader is not None
++    spec.loader.exec_module(module)
++    return module
++
++
++def _readiness_fixture(tmp_path: Path, *, accepted: bool = True) -> dict:
++    return {
++        "schema": "missipy.route_pipeline.isolated_promotion_readiness_acceptance.v1",
++        "promotion_plan_audit_path": str(tmp_path / "isolated_route_pipeline_promotion_plan_audit.json"),
++        "promotion_plan_audit_schema": "missipy.route_pipeline.isolated_promotion_plan_audit.v1",
++        "selected_baseline_ref": "baseline:isolated-route-pipeline-write-read-v1:0123456789abcdef",
++        "selected_entry_digest": "0123456789abcdef" * 4,
++        "accepted_baseline": "isolated-route-pipeline-write-read-v1",
++        "source_policy_decision_id": "policy:allow:github-artifact:0197",
++        "source_runtime_root": str(tmp_path / "runtime"),
++        "source_isolated_runtime_root": str(tmp_path / "runtime" / "routeproxy-isolated"),
++        "target_runtime_root": str(tmp_path / "runtime" / "dev-controlled"),
++        "target_isolated_runtime_root": str(tmp_path / "runtime" / "dev-controlled" / "routeproxy-isolated"),
++        "promotion_target": "controlled-dev-routeproxy-smoke",
++        "promotion_readiness_accepted": accepted,
++        "controlled_dev_smoke_ready": accepted,
++        "execution_allowed_by_0196": False,
++        "next_required_patch": "0197-bloc_a_coherence_record",
++        "phase_re_evaluation_required_before_execution": True,
++        "issues": [] if accepted else ["promotion_readiness_accepted must be true"],
++        "warnings": [],
++        "existing_surfaces_reused": True,
++        "new_runtime_handler_added": False,
++        "new_adapter_added": False,
++        "new_bus_added": False,
++        "new_sql_backend_added": False,
++        "new_qdrant_backend_added": False,
++        "new_github_client_added": False,
++        "runtime_imports_executed": False,
++        "handler_called": False,
++        "routeproxy_prepared": False,
++        "read_route_frame_called": False,
++        "writer_permits_requested": False,
++        "frames_written": False,
++        "controlproxy_frames_written": False,
++        "scheduler_modified": False,
++        "eventbus_instantiated": False,
++        "network_used": False,
++    }
++
++
++def test_0197_records_clean_bloc_a_coherence(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    readiness_path = tmp_path / "isolated_route_pipeline_promotion_readiness_acceptance.json"
++    output_path = tmp_path / "route_pipeline_bloc_a_coherence_record.json"
++    readiness_path.write_text(json.dumps(_readiness_fixture(tmp_path), indent=2), encoding="utf-8")
++
++    record = module.record_route_pipeline_bloc_a_coherence(
++        readiness_acceptance_path=readiness_path,
++        output_path=output_path,
++    )
++
++    assert record["bloc_a_coherence_accepted"] is True
++    assert record["bloc_a_complete"] is True
++    assert record["phase_re_evaluated"] is True
++    assert record["next_bloc"] == "B"
++    assert record["future_execution_can_be_unlocked"] is True
++    assert record["execution_allowed_by_0197"] is False
++    assert record["issues"] == []
++    assert record["existing_surfaces_reused"] is True
++    assert record["new_runtime_handler_added"] is False
++    assert record["new_adapter_added"] is False
++    assert record["handler_called"] is False
++    assert record["frames_written"] is False
++    assert record["scheduler_modified"] is False
++    assert output_path.exists()
++
++
++def test_0197_rejects_failed_readiness_acceptance(tmp_path: Path) -> None:
++    module = _load_tool_module()
++    readiness_path = tmp_path / "isolated_route_pipeline_promotion_readiness_acceptance.json"
++    readiness_path.write_text(json.dumps(_readiness_fixture(tmp_path, accepted=False), indent=2), encoding="utf-8")
++
++    record = module.record_route_pipeline_bloc_a_coherence(
++        readiness_acceptance_path=readiness_path,
++    )
++
++    assert record["bloc_a_coherence_accepted"] is False
++    assert record["bloc_a_complete"] is False
++    assert "promotion_readiness_accepted must be true" in record["issues"]
++    assert "controlled_dev_smoke_ready must be true" in record["issues"]
++
++
++def test_0197_cli_outputs_json(tmp_path: Path) -> None:
++    readiness_path = tmp_path / "isolated_route_pipeline_promotion_readiness_acceptance.json"
++    output_path = tmp_path / "route_pipeline_bloc_a_coherence_record.json"
++    readiness_path.write_text(json.dumps(_readiness_fixture(tmp_path), indent=2), encoding="utf-8")
++
++    completed = subprocess.run(
++        [
++            sys.executable,
++            str(TOOL),
++            "--readiness-acceptance",
++            str(readiness_path),
++            "--output",
++            str(output_path),
++            "--format",
++            "json",
++        ],
++        cwd=ROOT,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=True,
++    )
++
++    record = json.loads(completed.stdout)
++    assert record["schema"] == "missipy.route_pipeline.bloc_a_coherence_record.v1"
++    assert record["bloc_a_coherence_accepted"] is True
++    assert record["next_bloc"] == "B"
++    assert record["future_execution_can_be_unlocked"] is True
++    assert record["execution_allowed_by_0197"] is False
++    assert output_path.exists()
+diff --git a/tests/rules/test_route_pipeline_bloc_a_coherence_record_0197_rule.py b/tests/rules/test_route_pipeline_bloc_a_coherence_record_0197_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_route_pipeline_bloc_a_coherence_record_0197_rule.py
+@@ -0,0 +1,93 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "record_route_pipeline_bloc_a_coherence.py"
++DOC = ROOT / "doc" / "architecture" / "ROUTE_PIPELINE_BLOC_A_COHERENCE_RECORD_0197.md"
++RULE = ROOT / "doc" / "code-rules" / "0197_route_pipeline_bloc_a_coherence_record_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0197_CHANGED_FILES.md"
++
++
++def test_0197_tool_is_coherence_record_only_and_reuses_existing_surfaces() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    for token in [
++        "0197 is the Bloc A coherence record only",
++        "isolated_route_pipeline_promotion_readiness_acceptance.json",
++        "route_pipeline_bloc_a_coherence_record.json",
++        "It must reuse the existing 0196 readiness acceptance artifact",
++        "introduce a new runtime handler",
++        "Execution locks are not permanent",
++        "A later execution bloc may unlock execution explicitly",
++        "policy_decision_id",
++        "future_execution_can_be_unlocked",
++        "execution_allowed_by_0197",
++        "0198-controlled_dev_smoke_plan",
++        "Every bloc must end with re-evaluation and coherence",
++        "It does not execute controlled-dev-routeproxy-smoke",
++        "It does not import runtime handler modules",
++        "It does not call handle_scheduler_route_command",
++        "It does not call prepare_route_proxy_runtime",
++        "It does not call read_route_frame",
++        "It does not request writer permits",
++        "It does not call write_route_frame",
++        "It does not modify Scheduler.run",
++        "It does not instantiate Scheduler",
++        "It does not instantiate EventBus",
++        "It does not write ControlProxy or RouteProxy frames",
++        "It does not call GitHub API or use network",
++    ]:
++        assert token in source
++    assert "from runtime." not in source
++    assert "handle_scheduler_route_command(" not in source
++    assert "prepare_route_proxy_runtime(" not in source
++    assert "read_route_frame(" not in source
++    assert "write_route_frame(" not in source
++    assert "import requests" not in source
++    assert "from requests" not in source
++
++
++def test_0197_doc_locks_bloc_a_coherence_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    for token in [
++        "0197 closes Bloc A with a coherence record and phase re-evaluation",
++        "The input is isolated_route_pipeline_promotion_readiness_acceptance.json",
++        "The output is route_pipeline_bloc_a_coherence_record.json",
++        "Execution locks are phase gates, not permanent prohibitions",
++        "Bloc B may unlock controlled dev execution explicitly",
++        "Reuse/adapt existing surfaces first",
++        "doc/code-rules/code_rule.md remains the primary rule",
++        "The next recommended patch is P0198 controlled dev smoke plan",
++    ]:
++        assert token in doc
++
++
++def test_0197_rule_blocks_runtime_execution_but_allows_future_execution_bloc() -> None:
++    rule = RULE.read_text(encoding="utf-8")
++    for token in [
++        "Read isolated_route_pipeline_promotion_readiness_acceptance.json from 0196",
++        "Close Bloc A as preparation only",
++        "Do not execute controlled-dev-routeproxy-smoke in 0197",
++        "Record that execution locks are not permanent",
++        "Allow Bloc B to unlock execution explicitly when required",
++        "Require policy_decision_id for any future execution unlock",
++        "Do not add a new runtime handler",
++        "Do not add a new adapter",
++        "Do not add a new bus",
++        "Do not import runtime handler modules",
++        "Do not call handle_scheduler_route_command",
++        "Do not call prepare_route_proxy_runtime",
++        "Do not write ControlProxy or RouteProxy frames",
++    ]:
++        assert token in rule
++
++
++def test_0197_manifest_lists_bloc_a_coherence_files() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    for token in [
++        "tools/record_route_pipeline_bloc_a_coherence.py",
++        "tests/tools/test_record_route_pipeline_bloc_a_coherence_0197.py",
++        "tests/rules/test_route_pipeline_bloc_a_coherence_record_0197_rule.py",
++        "doc/architecture/ROUTE_PIPELINE_BLOC_A_COHERENCE_RECORD_0197.md",
++        "doc/code-rules/0197_route_pipeline_bloc_a_coherence_record_rule.md",
++    ]:
++        assert token in manifest
+diff --git a/doc/architecture/ROUTE_PIPELINE_BLOC_A_COHERENCE_RECORD_0197.md b/doc/architecture/ROUTE_PIPELINE_BLOC_A_COHERENCE_RECORD_0197.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/ROUTE_PIPELINE_BLOC_A_COHERENCE_RECORD_0197.md
+@@ -0,0 +1,104 @@
++# 0197 — Route pipeline Bloc A coherence record
++
++## Decision
++
++0197 closes Bloc A with a coherence record and phase re-evaluation.
++
++The input is isolated_route_pipeline_promotion_readiness_acceptance.json.
++The output is route_pipeline_bloc_a_coherence_record.json.
++
++Reuse/adapt existing surfaces first.
++doc/code-rules/code_rule.md remains the primary rule.
++docs, graph, changelog, manifest, and rule are updated with the patch.
++
++Execution locks are phase gates, not permanent prohibitions.
++Bloc B may unlock controlled dev execution explicitly when required.
++The next recommended patch is P0198 controlled dev smoke plan.
++
++## Why this exists
++
++Bloc A stabilized the accepted isolated prototype and prepared a controlled dev
++promotion without executing it.
++
++0197 records that Bloc A is coherent, complete, and ready to hand off to Bloc B.
++
++It also records the important policy clarification: the final prototype is an
++execution. Therefore safety locks must be released when a later execution phase
++explicitly requires it and passes the proper gates.
++
++## Existing-surface reuse decision
++
++0197 does not add a runtime handler, adapter, bus, SQL backend, Qdrant backend,
++GitHub client, graph renderer, or inference path.
++
++It reuses the existing artifact created by 0196 and records coherence as plain
++JSON.
++
++## Boundary
++
++0197:
++
++- reads `isolated_route_pipeline_promotion_readiness_acceptance.json`,
++- validates Bloc A readiness,
++- validates future controlled dev target,
++- validates existing-surface reuse,
++- validates safety flags,
++- records phase re-evaluation,
++- records that Bloc B may explicitly unlock controlled dev execution,
++- writes optional `route_pipeline_bloc_a_coherence_record.json`.
++
++0197 does not:
++
++- execute controlled-dev-routeproxy-smoke,
++- import runtime handler modules,
++- call handle_scheduler_route_command,
++- call handle_scheduler_route_request,
++- call prepare_route_proxy_runtime,
++- call read_route_frame,
++- request writer permits,
++- call write_route_frame,
++- modify Scheduler.run,
++- instantiate Scheduler,
++- instantiate EventBus,
++- create a parallel bus,
++- write ControlProxy or RouteProxy frames,
++- call GitHub API,
++- use network,
++- execute conversion,
++- execute inference,
++- write SQL,
++- write Qdrant,
++- write directly to VisPy.
++
++## Phase re-evaluation
++
++Bloc A is accepted when:
++
++- P0195 promotion plan audit is clean,
++- P0196 readiness acceptance is clean,
++- P0197 coherence record is clean,
++- no new runtime surface was introduced,
++- docs, graph, changelog, manifest, and rules are updated.
++
++If any of those fail, Bloc A remains open and the plan must be adjusted before
++Bloc B starts.
++
++## Execution unlock policy
++
++`execution_allowed_by_0197` remains false because P0197 is not the execution
++patch.
++
++`future_execution_can_be_unlocked` is true because the final prototype is an
++execution. A later execution patch may unlock execution only with:
++
++- explicit execution scope,
++- explicit `policy_decision_id`,
++- reuse/adaptation of existing tools first,
++- updated docs/graph/changelog/manifest/rules,
++- post-execution audit,
++- post-audit acceptance.
++
++## Authority
++
++Scheduler/policy/zone remain the authority.
++0197 closes preparation only. It does not approve production route writes.
+diff --git a/doc/code-rules/0197_route_pipeline_bloc_a_coherence_record_rule.md b/doc/code-rules/0197_route_pipeline_bloc_a_coherence_record_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0197_route_pipeline_bloc_a_coherence_record_rule.md
+@@ -0,0 +1,45 @@
++# 0197 route pipeline Bloc A coherence record rule
++
++0197 closes Bloc A and records phase re-evaluation.
++
++Rules:
++
++- Read isolated_route_pipeline_promotion_readiness_acceptance.json from 0196.
++- Reuse the existing 0196 readiness acceptance artifact.
++- Apply doc/code-rules/code_rule.md as the primary rule.
++- Keep docs, graph, changelog, manifest, and rule updated with the patch.
++- Close Bloc A as preparation only.
++- Do not execute controlled-dev-routeproxy-smoke in 0197.
++- Record that execution locks are not permanent.
++- Allow Bloc B to unlock execution explicitly when required.
++- Require policy_decision_id for any future execution unlock.
++- Require post-execution audit for any future execution unlock.
++- Require post-audit acceptance for any future execution unlock.
++- Do not add a new runtime handler.
++- Do not add a new adapter.
++- Do not add a new bus.
++- Do not add a new SQL backend.
++- Do not add a new Qdrant backend.
++- Do not add a new GitHub client.
++- Do not add a new graph renderer.
++- Do not add a new inference path.
++- Do not approve production route writes.
++- Do not import runtime handler modules.
++- Do not call handle_scheduler_route_command.
++- Do not call handle_scheduler_route_request.
++- Do not call prepare_route_proxy_runtime.
++- Do not call read_route_frame.
++- Do not request writer permits.
++- Do not call write_route_frame.
++- Do not write ControlProxy or RouteProxy frames.
++- Do not modify Scheduler.run.
++- Do not instantiate Scheduler.
++- Do not instantiate EventBus.
++- Do not create a parallel bus.
++- Do not call GitHub API.
++- Do not use network.
++- Do not execute conversion.
++- Do not execute inference.
++- Do not write SQL.
++- Do not write Qdrant.
++- Do not write directly to VisPy.
+diff --git a/doc/docs/architecture/runtime/197_route_pipeline_bloc_a_coherence_record.dot b/doc/docs/architecture/runtime/197_route_pipeline_bloc_a_coherence_record.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/197_route_pipeline_bloc_a_coherence_record.dot
+@@ -0,0 +1,16 @@
++digraph route_pipeline_bloc_a_coherence_record_0197 {
++  rankdir=LR;
++  label="0197 Route pipeline Bloc A coherence record";
++  labelloc=t;
++
++  readiness [label="0196 readiness acceptance"];
++  coherence [label="Bloc A coherence record"];
++  blocb [label="Bloc B controlled dev smoke"];
++  lock [label="execution_allowed_by_0197=false", style=dashed];
++  unlock [label="future execution can be unlocked\nby explicit execution bloc", style=dashed];
++
++  readiness -> coherence [label="readiness + safety flags"];
++  coherence -> blocb [label="next recommended patch P0198"];
++  lock -> coherence [label="Bloc A no execution", style=dashed];
++  coherence -> unlock [label="phase re-evaluation", style=dashed];
++}
+diff --git a/doc/CHANGELOG_0197_ROUTE_PIPELINE_BLOC_A_COHERENCE_RECORD.md b/doc/CHANGELOG_0197_ROUTE_PIPELINE_BLOC_A_COHERENCE_RECORD.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0197_ROUTE_PIPELINE_BLOC_A_COHERENCE_RECORD.md
+@@ -0,0 +1,21 @@
++# Changelog — 0197 Route pipeline Bloc A coherence record
++
++## Added
++
++- Bloc A coherence record from 0196 readiness acceptance.
++- Phase re-evaluation marker for the end of Bloc A.
++- Explicit next Bloc B direction.
++- Execution unlock policy: locks are phase gates, not permanent prohibitions.
++- `future_execution_can_be_unlocked=true` for later execution blocs.
++- `execution_allowed_by_0197=false` because P0197 does not execute.
++- Documentation, graph, changelog, manifest, and code-rule entry for the patch.
++
++## Not changed
++
++- No controlled dev smoke execution.
++- No runtime handler import.
++- No runtime handler call.
++- No new adapter, bus, SQL backend, Qdrant backend, GitHub client, graph
++  renderer, or inference path.
++- No Scheduler.run modification.
++- No production route write.
+diff --git a/doc/manifests/MANIFEST_0197_CHANGED_FILES.md b/doc/manifests/MANIFEST_0197_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0197_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest — 0197 Route pipeline Bloc A coherence record
++
++- PHASE0197_TEST_REPORT.md
++- tools/record_route_pipeline_bloc_a_coherence.py
++- tests/tools/test_record_route_pipeline_bloc_a_coherence_0197.py
++- tests/rules/test_route_pipeline_bloc_a_coherence_record_0197_rule.py
++- doc/architecture/ROUTE_PIPELINE_BLOC_A_COHERENCE_RECORD_0197.md
++- doc/code-rules/0197_route_pipeline_bloc_a_coherence_record_rule.md
++- doc/docs/architecture/runtime/197_route_pipeline_bloc_a_coherence_record.dot
++- doc/CHANGELOG_0197_ROUTE_PIPELINE_BLOC_A_COHERENCE_RECORD.md
++- doc/manifests/MANIFEST_0197_CHANGED_FILES.md

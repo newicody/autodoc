@@ -1,0 +1,803 @@
+diff --git a/PHASE0199_TEST_REPORT.md b/PHASE0199_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0199_TEST_REPORT.md
+@@ -0,0 +1,26 @@
++# Phase 0199 Test Report — Controlled dev RouteProxy smoke execution
++
++Status: prepared.
++
++Scope:
++- Reads `controlled_dev_routeproxy_smoke_plan.json`.
++- Requires explicit `policy_decision_id`.
++- Requires `context.bus.jsonl`.
++- Reuses `tools/run_isolated_route_pipeline_smoke.py`.
++- Produces `isolated_route_pipeline_smoke.json` under `target_runtime_root`.
++- Produces `controlled_dev_routeproxy_smoke_execution.json`.
++- Applies `doc/code-rules/code_rule.md`.
++- Updates docs, graph, changelog, manifest, and rule.
++- Explicitly unlocks controlled dev execution.
++- Requires P0200 post-execution audit and acceptance.
++
++Validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/tools/test_run_controlled_dev_routeproxy_smoke_0199.py \
++  tests/rules/test_controlled_dev_routeproxy_smoke_execution_0199_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
+diff --git a/tools/run_controlled_dev_routeproxy_smoke.py b/tools/run_controlled_dev_routeproxy_smoke.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/run_controlled_dev_routeproxy_smoke.py
+@@ -0,0 +1,331 @@
++#!/usr/bin/env python3
++"""Execute controlled dev RouteProxy smoke by reusing the existing pipeline tool.
++
++0199 is the Bloc B controlled dev RouteProxy smoke execution patch.
++
++It reads controlled_dev_routeproxy_smoke_plan.json from 0198 and executes the
++existing tools/run_isolated_route_pipeline_smoke.py surface with the plan target
++roots and policy_decision_id.
++
++It must reuse the existing 0198 plan artifact and the existing
++tools/run_isolated_route_pipeline_smoke.py execution surface. It must not
++introduce a new runtime handler, adapter, bus, RouteProxy runtime, ControlProxy
++runtime, SQL backend, Qdrant backend, GitHub client, graph renderer, or
++inference path.
++
++Execution locks are phase gates, not permanent prohibitions.
++P0199 explicitly unlocks controlled-dev-routeproxy-smoke execution for this
++phase only.
++
++P0199 does not import runtime handler modules directly.
++P0199 does not modify Scheduler.run.
++P0199 does not instantiate Scheduler directly.
++P0199 does not instantiate EventBus directly.
++P0199 does not write ControlProxy frames.
++P0199 does not call GitHub API or use network.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import subprocess
++import sys
++from pathlib import Path
++from typing import Any, Mapping
++
++
++CONTROLLED_DEV_ROUTE_PROXY_SMOKE_EXECUTION_SCHEMA = "missipy.route_pipeline.controlled_dev_routeproxy_smoke_execution.v1"
++EXPECTED_PLAN_SCHEMA = "missipy.route_pipeline.controlled_dev_routeproxy_smoke_plan.v1"
++EXPECTED_EXECUTION_TOOL = "tools/run_isolated_route_pipeline_smoke.py"
++DEFAULT_OUTPUT_NAME = "controlled_dev_routeproxy_smoke_execution.json"
++PIPELINE_OUTPUT_NAME = "isolated_route_pipeline_smoke.json"
++
++
++class ControlledDevRouteProxySmokeExecutionError(ValueError):
++    """Raised when the controlled dev smoke execution input is unsafe."""
++
++
++def run_controlled_dev_routeproxy_smoke(
++    *,
++    controlled_dev_plan_path: Path | str,
++    context_bus_path: Path | str,
++    output_path: Path | str | None = None,
++    repo_root: Path | str | None = None,
++) -> dict[str, Any]:
++    """Execute the existing isolated route pipeline smoke in the controlled dev root."""
++
++    plan_path = Path(controlled_dev_plan_path)
++    context_bus = Path(context_bus_path)
++    root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[1]
++    plan = _read_json_file(plan_path)
++
++    issues: list[str] = []
++    warnings: list[str] = []
++    _audit_plan(plan, issues, warnings)
++    _audit_context_bus(context_bus, issues)
++
++    target_runtime_root = Path(str(plan.get("target_runtime_root", "")))
++    target_isolated_runtime_root = Path(str(plan.get("target_isolated_runtime_root", "")))
++    pipeline_output = target_runtime_root / PIPELINE_OUTPUT_NAME
++    final_output = Path(output_path) if output_path is not None else target_runtime_root / DEFAULT_OUTPUT_NAME
++    if final_output.name != DEFAULT_OUTPUT_NAME:
++        issues.append("output filename must be controlled_dev_routeproxy_smoke_execution.json")
++    if target_runtime_root.is_absolute() and final_output.is_absolute():
++        if not _is_within_or_equal(final_output, target_runtime_root):
++            issues.append("execution report output must be inside target_runtime_root")
++    if target_runtime_root.is_absolute() and pipeline_output.is_absolute():
++        if not _is_within_or_equal(pipeline_output, target_runtime_root):
++            issues.append("pipeline output must be inside target_runtime_root")
++
++    if issues:
++        report = _build_report(
++            plan_path=plan_path,
++            context_bus=context_bus,
++            plan=plan,
++            command=[],
++            pipeline_output=pipeline_output,
++            subprocess_returncode=None,
++            subprocess_stdout="",
++            subprocess_stderr="",
++            smoke={},
++            issues=issues,
++            warnings=warnings,
++        )
++        if output_path is not None:
++            _write_report(final_output, report)
++        return report
++
++    command = [
++        sys.executable,
++        str(root / EXPECTED_EXECUTION_TOOL),
++        "--context-bus",
++        str(context_bus),
++        "--runtime-root",
++        str(target_runtime_root),
++        "--policy-decision-id",
++        str(plan["policy_decision_id"]),
++        "--isolated-runtime-root",
++        str(target_isolated_runtime_root),
++        "--output",
++        str(pipeline_output),
++        "--format",
++        "json",
++    ]
++
++    completed = subprocess.run(
++        command,
++        cwd=root,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=False,
++    )
++
++    smoke: dict[str, Any] = {}
++    if pipeline_output.exists():
++        try:
++            smoke = _read_json_file(pipeline_output)
++        except Exception as exc:  # pragma: no cover - defensive reporting
++            issues.append(f"unable to read pipeline output: {exc}")
++    else:
++        issues.append("pipeline output was not created")
++
++    if completed.returncode != 0:
++        issues.append(f"pipeline tool returned non-zero exit status: {completed.returncode}")
++    if smoke and smoke.get("pipeline_success") is not True:
++        issues.append("pipeline_success must be true")
++    if smoke and smoke.get("policy_scoped_queued_count") != smoke.get("queued_count"):
++        issues.append("policy scoped queued count must match queued count")
++    if smoke and smoke.get("controlproxy_frames_written") is not False:
++        issues.append("ControlProxy frames must not be written")
++    if smoke and smoke.get("scheduler_modified") is not False:
++        issues.append("Scheduler must not be modified")
++    if smoke and smoke.get("network_used") is not False:
++        issues.append("network must not be used")
++
++    report = _build_report(
++        plan_path=plan_path,
++        context_bus=context_bus,
++        plan=plan,
++        command=command,
++        pipeline_output=pipeline_output,
++        subprocess_returncode=completed.returncode,
++        subprocess_stdout=completed.stdout,
++        subprocess_stderr=completed.stderr,
++        smoke=smoke,
++        issues=issues,
++        warnings=warnings,
++    )
++    _write_report(final_output, report)
++    return report
++
++
++def _audit_plan(plan: Mapping[str, Any], issues: list[str], warnings: list[str]) -> None:
++    if plan.get("schema") != EXPECTED_PLAN_SCHEMA:
++        issues.append("controlled dev smoke plan schema mismatch")
++    if plan.get("plan_ready") is not True:
++        issues.append("plan_ready must be true")
++    if plan.get("execution_allowed_by_0198") is not False:
++        issues.append("execution_allowed_by_0198 must remain false")
++    if plan.get("execution_can_be_unlocked_by_p0199") is not True:
++        issues.append("execution_can_be_unlocked_by_p0199 must be true")
++    if plan.get("execution_tool_to_reuse") != EXPECTED_EXECUTION_TOOL:
++        issues.append("execution_tool_to_reuse must be tools/run_isolated_route_pipeline_smoke.py")
++    if not isinstance(plan.get("policy_decision_id"), str) or not plan.get("policy_decision_id"):
++        issues.append("policy_decision_id must be present")
++    elif not str(plan.get("policy_decision_id")).startswith("policy:allow:"):
++        issues.append("policy_decision_id must start with policy:allow:")
++    if plan.get("issues") not in ([], None):
++        issues.append("controlled dev smoke plan issues must be empty")
++    if isinstance(plan.get("warnings"), list) and plan.get("warnings"):
++        warnings.extend(str(item) for item in plan.get("warnings", []))
++    if plan.get("existing_surfaces_reused") is not True:
++        issues.append("existing_surfaces_reused must be true")
++    for key in ("target_runtime_root", "target_isolated_runtime_root"):
++        if not isinstance(plan.get(key), str) or not plan.get(key):
++            issues.append(f"{key} must be present")
++    _audit_target_roots(plan, issues)
++
++
++def _audit_target_roots(plan: Mapping[str, Any], issues: list[str]) -> None:
++    target_runtime_root = Path(str(plan.get("target_runtime_root", "")))
++    target_isolated_runtime_root = Path(str(plan.get("target_isolated_runtime_root", "")))
++    if not target_runtime_root.is_absolute():
++        issues.append("target_runtime_root must be absolute")
++    if not target_isolated_runtime_root.is_absolute():
++        issues.append("target_isolated_runtime_root must be absolute")
++    if target_runtime_root == target_isolated_runtime_root:
++        issues.append("target_runtime_root and target_isolated_runtime_root must be distinct")
++    if target_runtime_root.is_absolute() and target_isolated_runtime_root.is_absolute():
++        if not _is_within_or_equal(target_isolated_runtime_root, target_runtime_root):
++            issues.append("target_isolated_runtime_root must be inside target_runtime_root")
++
++
++def _audit_context_bus(context_bus: Path, issues: list[str]) -> None:
++    if not context_bus.is_absolute():
++        issues.append("context bus path must be absolute")
++    if not context_bus.exists():
++        issues.append("context bus path must exist")
++    if context_bus.name != "context.bus.jsonl":
++        issues.append("context bus filename must be context.bus.jsonl")
++
++
++def _build_report(
++    *,
++    plan_path: Path,
++    context_bus: Path,
++    plan: Mapping[str, Any],
++    command: list[str],
++    pipeline_output: Path,
++    subprocess_returncode: int | None,
++    subprocess_stdout: str,
++    subprocess_stderr: str,
++    smoke: Mapping[str, Any],
++    issues: list[str],
++    warnings: list[str],
++) -> dict[str, Any]:
++    return {
++        "schema": CONTROLLED_DEV_ROUTE_PROXY_SMOKE_EXECUTION_SCHEMA,
++        "bloc": "B",
++        "bloc_name": "controlled-dev-smoke",
++        "controlled_dev_plan_path": str(plan_path),
++        "context_bus_path": str(context_bus),
++        "policy_decision_id": plan.get("policy_decision_id"),
++        "target_runtime_root": plan.get("target_runtime_root"),
++        "target_isolated_runtime_root": plan.get("target_isolated_runtime_root"),
++        "execution_tool_reused": EXPECTED_EXECUTION_TOOL,
++        "execution_unlocked_by_p0199": True,
++        "execution_allowed_by_0199": True,
++        "execution_scope": "controlled-dev-routeproxy-smoke",
++        "pipeline_output": str(pipeline_output),
++        "subprocess_command": command,
++        "subprocess_returncode": subprocess_returncode,
++        "subprocess_stdout": subprocess_stdout,
++        "subprocess_stderr": subprocess_stderr,
++        "pipeline_success": smoke.get("pipeline_success") is True,
++        "queued_count": smoke.get("queued_count"),
++        "policy_scoped_queued_count": smoke.get("policy_scoped_queued_count"),
++        "command_plan_ready_count": smoke.get("command_plan_ready_count"),
++        "command_built_count": smoke.get("command_built_count"),
++        "handler_executed_count": smoke.get("handler_executed_count"),
++        "frames_written_count": smoke.get("frames_written_count"),
++        "readback_count": smoke.get("readback_count"),
++        "issues": issues,
++        "warnings": warnings,
++        "execution_success": not issues and smoke.get("pipeline_success") is True,
++        "existing_surfaces_reused": True,
++        "new_runtime_handler_added": False,
++        "new_adapter_added": False,
++        "new_bus_added": False,
++        "new_sql_backend_added": False,
++        "new_qdrant_backend_added": False,
++        "new_github_client_added": False,
++        "runtime_imports_executed_by_wrapper": False,
++        "existing_pipeline_tool_executed": subprocess_returncode is not None,
++        "handler_called": bool(smoke.get("handler_called") or smoke.get("handler_executed_count")),
++        "routeproxy_prepared": bool(smoke.get("routeproxy_prepared") or smoke.get("handler_executed_count")),
++        "read_route_frame_called": bool(smoke.get("read_route_frame_called") or smoke.get("readback_count")),
++        "writer_permits_requested": bool(smoke.get("writer_permits_requested") or smoke.get("frames_written_count")),
++        "frames_written": bool(smoke.get("frames_written") or smoke.get("frames_written_count")),
++        "controlproxy_frames_written": bool(smoke.get("controlproxy_frames_written")),
++        "scheduler_modified": bool(smoke.get("scheduler_modified")),
++        "eventbus_instantiated": bool(smoke.get("eventbus_instantiated")),
++        "network_used": bool(smoke.get("network_used")),
++        "requires_p0200_post_execution_audit": True,
++    }
++
++
++def _is_within_or_equal(path: Path, root: Path) -> bool:
++    try:
++        path.resolve().relative_to(root.resolve())
++    except ValueError:
++        return False
++    return True
++
++
++def _read_json_file(path: Path) -> dict[str, Any]:
++    raw = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(raw, dict):
++        raise ControlledDevRouteProxySmokeExecutionError("input must be a JSON object")
++    return raw
++
++
++def _write_report(path: Path, report: dict[str, Any]) -> None:
++    if path.name != DEFAULT_OUTPUT_NAME:
++        raise ControlledDevRouteProxySmokeExecutionError("output filename must be controlled_dev_routeproxy_smoke_execution.json")
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Run controlled dev RouteProxy smoke.")
++    parser.add_argument("--controlled-dev-plan", required=True, help="Path to controlled_dev_routeproxy_smoke_plan.json.")
++    parser.add_argument("--context-bus", required=True, help="Path to context.bus.jsonl.")
++    parser.add_argument("--output", help="Optional controlled_dev_routeproxy_smoke_execution.json output path.")
++    parser.add_argument("--repo-root", help="Repository root, defaults to tool parent.")
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    args = parser.parse_args(argv)
++
++    report = run_controlled_dev_routeproxy_smoke(
++        controlled_dev_plan_path=Path(args.controlled_dev_plan),
++        context_bus_path=Path(args.context_bus),
++        output_path=Path(args.output) if args.output else None,
++        repo_root=Path(args.repo_root) if args.repo_root else None,
++    )
++
++    if args.format == "json":
++        print(json.dumps(report, indent=2, sort_keys=True))
++    else:
++        print(f"execution_success: {report['execution_success']}")
++        print(f"execution_allowed_by_0199: {report['execution_allowed_by_0199']}")
++        print(f"pipeline_success: {report['pipeline_success']}")
++        print(f"frames_written_count: {report['frames_written_count']}")
++        print(f"readback_count: {report['readback_count']}")
++        print(f"requires_p0200_post_execution_audit: {report['requires_p0200_post_execution_audit']}")
++        print(f"issues: {len(report['issues'])}")
++    return 0 if report["execution_success"] else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_run_controlled_dev_routeproxy_smoke_0199.py b/tests/tools/test_run_controlled_dev_routeproxy_smoke_0199.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_run_controlled_dev_routeproxy_smoke_0199.py
+@@ -0,0 +1,138 @@
++from pathlib import Path
++import importlib.util
++import json
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "run_controlled_dev_routeproxy_smoke.py"
++
++
++def _load_tool_module():
++    spec = importlib.util.spec_from_file_location("run_controlled_dev_routeproxy_smoke_tool", TOOL)
++    assert spec is not None
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    assert spec.loader is not None
++    spec.loader.exec_module(module)
++    return module
++
++
++def _plan_fixture(tmp_path: Path, *, ready: bool = True) -> dict:
++    runtime = tmp_path / "runtime" / "dev-controlled"
++    return {
++        "schema": "missipy.route_pipeline.controlled_dev_routeproxy_smoke_plan.v1",
++        "bloc": "B",
++        "bloc_name": "controlled-dev-smoke",
++        "bloc_patch_limit": 3,
++        "target_runtime_root": str(runtime),
++        "target_isolated_runtime_root": str(runtime / "routeproxy-isolated"),
++        "policy_decision_id": "policy:allow:controlled-dev:manual0199",
++        "plan_ready": ready,
++        "execution_allowed_by_0198": False,
++        "execution_can_be_unlocked_by_p0199": ready,
++        "execution_unlock_planned_for": "0199-controlled_dev_routeproxy_smoke_execution",
++        "execution_tool_to_reuse": "tools/run_isolated_route_pipeline_smoke.py",
++        "issues": [] if ready else ["plan_ready must be true"],
++        "warnings": [],
++        "existing_surfaces_reused": True,
++    }
++
++
++class _Completed:
++    def __init__(self, returncode: int = 0) -> None:
++        self.returncode = returncode
++        self.stdout = '{"pipeline_success": true}'
++        self.stderr = ""
++
++
++def test_0199_runs_existing_pipeline_tool_from_clean_plan(tmp_path: Path, monkeypatch) -> None:
++    module = _load_tool_module()
++    runtime = tmp_path / "runtime" / "dev-controlled"
++    runtime.mkdir(parents=True)
++    plan_path = tmp_path / "controlled_dev_routeproxy_smoke_plan.json"
++    context_bus = tmp_path / "context.bus.jsonl"
++    output_path = runtime / "controlled_dev_routeproxy_smoke_execution.json"
++    plan_path.write_text(json.dumps(_plan_fixture(tmp_path), indent=2), encoding="utf-8")
++    context_bus.write_text("{}", encoding="utf-8")
++
++    captured = {}
++
++    def fake_run(command, cwd, text, stdout, stderr, check):
++        captured["command"] = command
++        pipeline_output = Path(command[command.index("--output") + 1])
++        pipeline_output.parent.mkdir(parents=True, exist_ok=True)
++        pipeline_output.write_text(
++            json.dumps(
++                {
++                    "pipeline_success": True,
++                    "queued_count": 1,
++                    "policy_scoped_queued_count": 1,
++                    "command_plan_ready_count": 1,
++                    "command_built_count": 1,
++                    "handler_executed_count": 1,
++                    "frames_written_count": 1,
++                    "readback_count": 1,
++                    "controlproxy_frames_written": False,
++                    "scheduler_modified": False,
++                    "eventbus_instantiated": False,
++                    "network_used": False,
++                },
++                indent=2,
++            ),
++            encoding="utf-8",
++        )
++        return _Completed()
++
++    monkeypatch.setattr(module.subprocess, "run", fake_run)
++
++    report = module.run_controlled_dev_routeproxy_smoke(
++        controlled_dev_plan_path=plan_path,
++        context_bus_path=context_bus,
++        output_path=output_path,
++        repo_root=ROOT,
++    )
++
++    assert report["execution_success"] is True
++    assert report["execution_unlocked_by_p0199"] is True
++    assert report["execution_allowed_by_0199"] is True
++    assert report["execution_tool_reused"] == "tools/run_isolated_route_pipeline_smoke.py"
++    assert "tools/run_isolated_route_pipeline_smoke.py" in captured["command"][1]
++    assert report["frames_written_count"] == 1
++    assert report["readback_count"] == 1
++    assert report["handler_called"] is True
++    assert report["frames_written"] is True
++    assert report["controlproxy_frames_written"] is False
++    assert report["scheduler_modified"] is False
++    assert report["network_used"] is False
++    assert report["requires_p0200_post_execution_audit"] is True
++    assert output_path.exists()
++
++
++def test_0199_rejects_unready_plan_without_subprocess(tmp_path: Path, monkeypatch) -> None:
++    module = _load_tool_module()
++    runtime = tmp_path / "runtime" / "dev-controlled"
++    runtime.mkdir(parents=True)
++    plan_path = tmp_path / "controlled_dev_routeproxy_smoke_plan.json"
++    context_bus = tmp_path / "context.bus.jsonl"
++    plan_path.write_text(json.dumps(_plan_fixture(tmp_path, ready=False), indent=2), encoding="utf-8")
++    context_bus.write_text("{}", encoding="utf-8")
++
++    called = {"value": False}
++
++    def fake_run(*args, **kwargs):
++        called["value"] = True
++        return _Completed()
++
++    monkeypatch.setattr(module.subprocess, "run", fake_run)
++
++    report = module.run_controlled_dev_routeproxy_smoke(
++        controlled_dev_plan_path=plan_path,
++        context_bus_path=context_bus,
++        repo_root=ROOT,
++    )
++
++    assert report["execution_success"] is False
++    assert called["value"] is False
++    assert "plan_ready must be true" in report["issues"]
++    assert "execution_can_be_unlocked_by_p0199 must be true" in report["issues"]
+diff --git a/tests/rules/test_controlled_dev_routeproxy_smoke_execution_0199_rule.py b/tests/rules/test_controlled_dev_routeproxy_smoke_execution_0199_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_controlled_dev_routeproxy_smoke_execution_0199_rule.py
+@@ -0,0 +1,83 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "run_controlled_dev_routeproxy_smoke.py"
++DOC = ROOT / "doc" / "architecture" / "CONTROLLED_DEV_ROUTE_PROXY_SMOKE_EXECUTION_0199.md"
++RULE = ROOT / "doc" / "code-rules" / "0199_controlled_dev_routeproxy_smoke_execution_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0199_CHANGED_FILES.md"
++
++
++def test_0199_tool_executes_only_existing_pipeline_surface() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    for token in [
++        "0199 is the Bloc B controlled dev RouteProxy smoke execution patch",
++        "controlled_dev_routeproxy_smoke_plan.json",
++        "controlled_dev_routeproxy_smoke_execution.json",
++        "tools/run_isolated_route_pipeline_smoke.py",
++        "Execution locks are phase gates, not permanent prohibitions",
++        "P0199 explicitly unlocks controlled-dev-routeproxy-smoke execution",
++        "It must reuse the existing 0198 plan artifact",
++        "It must not",
++        "introduce a new runtime handler",
++        "execution_unlocked_by_p0199",
++        "execution_allowed_by_0199",
++        "requires_p0200_post_execution_audit",
++        "write RouteProxy frames only under target_isolated_runtime_root",
++        "P0199 does not import runtime handler modules directly",
++        "P0199 does not modify Scheduler.run",
++        "P0199 does not write ControlProxy frames",
++        "P0199 does not call GitHub API or use network",
++    ]:
++        assert token in source
++    assert "from runtime." not in source
++    assert "import runtime." not in source
++    assert "import requests" not in source
++    assert "from requests" not in source
++
++
++def test_0199_doc_locks_execution_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    for token in [
++        "0199 executes the controlled dev RouteProxy smoke by reusing the existing pipeline tool",
++        "The input is controlled_dev_routeproxy_smoke_plan.json",
++        "The output is controlled_dev_routeproxy_smoke_execution.json",
++        "Reuse/adapt existing surfaces first",
++        "doc/code-rules/code_rule.md remains the primary rule",
++        "P0199 explicitly unlocks execution",
++        "The execution surface reused is tools/run_isolated_route_pipeline_smoke.py",
++        "P0200 must perform post-execution audit and acceptance",
++        "docs, graph, changelog, manifest, and rule are updated with the patch",
++    ]:
++        assert token in doc
++
++
++def test_0199_rule_requires_reuse_and_followup_audit() -> None:
++    rule = RULE.read_text(encoding="utf-8")
++    for token in [
++        "Read controlled_dev_routeproxy_smoke_plan.json from 0198",
++        "Reuse tools/run_isolated_route_pipeline_smoke.py",
++        "Do not add a new runtime handler",
++        "Do not add a new adapter",
++        "Do not add a new bus",
++        "Allow controlled-dev-routeproxy-smoke execution in 0199",
++        "Require explicit policy_decision_id",
++        "Write RouteProxy frames only under target_isolated_runtime_root",
++        "Do not write ControlProxy frames",
++        "Do not modify Scheduler.run",
++        "Require P0200 post-execution audit",
++        "Require P0200 post-audit acceptance",
++    ]:
++        assert token in rule
++
++
++def test_0199_manifest_lists_execution_files() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    for token in [
++        "tools/run_controlled_dev_routeproxy_smoke.py",
++        "tests/tools/test_run_controlled_dev_routeproxy_smoke_0199.py",
++        "tests/rules/test_controlled_dev_routeproxy_smoke_execution_0199_rule.py",
++        "doc/architecture/CONTROLLED_DEV_ROUTE_PROXY_SMOKE_EXECUTION_0199.md",
++        "doc/code-rules/0199_controlled_dev_routeproxy_smoke_execution_rule.md",
++    ]:
++        assert token in manifest
+diff --git a/doc/architecture/CONTROLLED_DEV_ROUTE_PROXY_SMOKE_EXECUTION_0199.md b/doc/architecture/CONTROLLED_DEV_ROUTE_PROXY_SMOKE_EXECUTION_0199.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/CONTROLLED_DEV_ROUTE_PROXY_SMOKE_EXECUTION_0199.md
+@@ -0,0 +1,81 @@
++# 0199 — Controlled dev RouteProxy smoke execution
++
++## Decision
++
++0199 executes the controlled dev RouteProxy smoke by reusing the existing pipeline tool.
++
++The input is controlled_dev_routeproxy_smoke_plan.json.
++The output is controlled_dev_routeproxy_smoke_execution.json.
++
++Reuse/adapt existing surfaces first.
++doc/code-rules/code_rule.md remains the primary rule.
++docs, graph, changelog, manifest, and rule are updated with the patch.
++
++P0199 explicitly unlocks execution.
++The execution surface reused is tools/run_isolated_route_pipeline_smoke.py.
++P0200 must perform post-execution audit and acceptance.
++
++## Why this exists
++
++Bloc B is the first execution-oriented bloc.
++
++0198 proved that the controlled dev execution can be unlocked. 0199 performs
++that execution without adding a new handler, adapter, bus, SQL backend, Qdrant
++backend, GitHub client, graph renderer, or inference path.
++
++## Existing-surface reuse decision
++
++0199 reuses:
++
++- `controlled_dev_routeproxy_smoke_plan.json` from 0198,
++- `tools/run_isolated_route_pipeline_smoke.py` as the execution surface,
++- `target_runtime_root` and `target_isolated_runtime_root` from the plan,
++- the explicit `policy_decision_id` from the plan.
++
++## Boundary
++
++0199:
++
++- reads `controlled_dev_routeproxy_smoke_plan.json`,
++- validates `plan_ready`,
++- validates `execution_can_be_unlocked_by_p0199`,
++- validates explicit `policy_decision_id`,
++- validates target roots,
++- executes `tools/run_isolated_route_pipeline_smoke.py`,
++- writes `isolated_route_pipeline_smoke.json` under `target_runtime_root`,
++- writes optional `controlled_dev_routeproxy_smoke_execution.json`.
++
++0199 does not:
++
++- add a new runtime handler,
++- add a new adapter,
++- add a new bus,
++- modify Scheduler.run,
++- write ControlProxy frames,
++- call GitHub API,
++- use network,
++- write SQL,
++- write Qdrant,
++- write directly to VisPy.
++
++## Execution unlock policy
++
++Execution locks are phase gates, not permanent prohibitions.
++
++0199 unlocks only the controlled dev RouteProxy smoke scope. It does not unlock
++production route roots or Scheduler integration.
++
++The RouteProxy frame writes must stay inside `target_isolated_runtime_root`.
++
++## Required follow-up
++
++P0200 must perform:
++
++- post-execution artifact audit,
++- post-audit acceptance,
++- controlled dev registry or Bloc B coherence decision.
++
++## Authority
++
++Scheduler/policy/zone remain the authority.
++0199 executes a controlled dev smoke only. It does not approve production route writes.
+diff --git a/doc/code-rules/0199_controlled_dev_routeproxy_smoke_execution_rule.md b/doc/code-rules/0199_controlled_dev_routeproxy_smoke_execution_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0199_controlled_dev_routeproxy_smoke_execution_rule.md
+@@ -0,0 +1,36 @@
++# 0199 controlled dev RouteProxy smoke execution rule
++
++0199 executes controlled dev RouteProxy smoke by reusing the existing pipeline tool.
++
++Rules:
++
++- Read controlled_dev_routeproxy_smoke_plan.json from 0198.
++- Reuse the existing 0198 plan artifact.
++- Reuse tools/run_isolated_route_pipeline_smoke.py.
++- Apply doc/code-rules/code_rule.md as the primary rule.
++- Keep docs, graph, changelog, manifest, and rule updated with the patch.
++- Allow controlled-dev-routeproxy-smoke execution in 0199.
++- Require explicit policy_decision_id.
++- Require target_runtime_root from the plan.
++- Require target_isolated_runtime_root from the plan.
++- Write RouteProxy frames only under target_isolated_runtime_root.
++- Keep scheduler.route_requests.jsonl append-only.
++- Use policy-scoped queue for the policy_decision_id.
++- Do not add a new runtime handler.
++- Do not add a new adapter.
++- Do not add a new bus.
++- Do not add a new SQL backend.
++- Do not add a new Qdrant backend.
++- Do not add a new GitHub client.
++- Do not add a new graph renderer.
++- Do not add a new inference path.
++- Do not approve production route writes.
++- Do not write ControlProxy frames.
++- Do not modify Scheduler.run.
++- Do not call GitHub API.
++- Do not use network.
++- Do not write SQL.
++- Do not write Qdrant.
++- Do not write directly to VisPy.
++- Require P0200 post-execution audit.
++- Require P0200 post-audit acceptance.
+diff --git a/doc/docs/architecture/runtime/199_controlled_dev_routeproxy_smoke_execution.dot b/doc/docs/architecture/runtime/199_controlled_dev_routeproxy_smoke_execution.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/199_controlled_dev_routeproxy_smoke_execution.dot
+@@ -0,0 +1,18 @@
++digraph controlled_dev_routeproxy_smoke_execution_0199 {
++  rankdir=LR;
++  label="0199 Controlled dev RouteProxy smoke execution";
++  labelloc=t;
++
++  plan [label="controlled_dev_routeproxy_smoke_plan.json"];
++  context [label="context.bus.jsonl"];
++  existing [label="tools/run_isolated_route_pipeline_smoke.py"];
++  pipeline [label="isolated_route_pipeline_smoke.json"];
++  report [label="controlled_dev_routeproxy_smoke_execution.json"];
++  p0200 [label="P0200 post-execution audit + acceptance"];
++
++  plan -> existing [label="reuse execution surface"];
++  context -> existing [label="input"];
++  existing -> pipeline [label="controlled dev execution"];
++  pipeline -> report [label="execution report"];
++  report -> p0200 [label="required follow-up"];
++}
+diff --git a/doc/CHANGELOG_0199_CONTROLLED_DEV_ROUTE_PROXY_SMOKE_EXECUTION.md b/doc/CHANGELOG_0199_CONTROLLED_DEV_ROUTE_PROXY_SMOKE_EXECUTION.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0199_CONTROLLED_DEV_ROUTE_PROXY_SMOKE_EXECUTION.md
+@@ -0,0 +1,25 @@
++# Changelog — 0199 Controlled dev RouteProxy smoke execution
++
++## Added
++
++- Controlled dev RouteProxy smoke execution wrapper.
++- Explicit reuse of `tools/run_isolated_route_pipeline_smoke.py`.
++- Controlled dev execution report.
++- `execution_unlocked_by_p0199=true`.
++- `execution_allowed_by_0199=true`.
++- P0200 post-execution audit requirement.
++- Documentation, graph, changelog, manifest, and code-rule entry for the patch.
++
++## Not changed
++
++- No new runtime handler.
++- No new adapter.
++- No new bus.
++- No new SQL backend.
++- No new Qdrant backend.
++- No new GitHub client.
++- No new graph renderer.
++- No new inference path.
++- No Scheduler.run modification.
++- No ControlProxy frame write.
++- No production route write.
+diff --git a/doc/manifests/MANIFEST_0199_CHANGED_FILES.md b/doc/manifests/MANIFEST_0199_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0199_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest — 0199 Controlled dev RouteProxy smoke execution
++
++- PHASE0199_TEST_REPORT.md
++- tools/run_controlled_dev_routeproxy_smoke.py
++- tests/tools/test_run_controlled_dev_routeproxy_smoke_0199.py
++- tests/rules/test_controlled_dev_routeproxy_smoke_execution_0199_rule.py
++- doc/architecture/CONTROLLED_DEV_ROUTE_PROXY_SMOKE_EXECUTION_0199.md
++- doc/code-rules/0199_controlled_dev_routeproxy_smoke_execution_rule.md
++- doc/docs/architecture/runtime/199_controlled_dev_routeproxy_smoke_execution.dot
++- doc/CHANGELOG_0199_CONTROLLED_DEV_ROUTE_PROXY_SMOKE_EXECUTION.md
++- doc/manifests/MANIFEST_0199_CHANGED_FILES.md

@@ -1,0 +1,941 @@
+diff --git a/PHASE0206_TEST_REPORT.md b/PHASE0206_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0206_TEST_REPORT.md
+@@ -0,0 +1,35 @@
++# Phase 0206 Test Report — ControlProxy RouteProxy coherence acceptance
++
++Status: prepared.
++
++Scope:
++- Reads `controlproxy_stale_priority_zone_smoke_plan.json`.
++- Requires explicit `policy_decision_id`.
++- Requires `context.bus.jsonl`.
++- Reuses `tools/run_isolated_route_pipeline_smoke.py`.
++- Produces `isolated_route_pipeline_smoke.json`.
++- Produces `controlproxy_routeproxy_coherence_acceptance.json`.
++- Applies `doc/code-rules/code_rule.md`.
++- Updates docs, graph, changelog, manifest, and rule.
++- Closes Bloc D.
++- Opens Bloc E after acceptance.
++- No Scheduler.run execution.
++- No Scheduler.run modification.
++- No new ControlProxy runtime.
++- No new RouteProxy runtime.
++- No new Scheduler hook implementation.
++- No direct mark_route_frame_stale call.
++- No ControlProxy frame write.
++- No GitHub API/network.
++- No conversion/inference/SQL/Qdrant/VisPy writes.
++
++Validation:
++
++```bash
++python -m compileall -q src tests tools
++python -m pytest -q \
++  tests/tools/test_run_controlproxy_routeproxy_coherence_acceptance_0206.py \
++  tests/rules/test_controlproxy_routeproxy_coherence_acceptance_0206_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
+diff --git a/tools/run_controlproxy_routeproxy_coherence_acceptance.py b/tools/run_controlproxy_routeproxy_coherence_acceptance.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/run_controlproxy_routeproxy_coherence_acceptance.py
+@@ -0,0 +1,433 @@
++#!/usr/bin/env python3
++"""Run and accept ControlProxy/RouteProxy coherence from the 0205 plan.
++
++0206 is the Bloc D ControlProxy RouteProxy coherence acceptance patch.
++
++It reads controlproxy_stale_priority_zone_smoke_plan.json from 0205, reuses the
++existing tools/run_isolated_route_pipeline_smoke.py execution surface, and
++writes controlproxy_routeproxy_coherence_acceptance.json.
++
++Reuse/adapt existing surfaces first.
++doc/code-rules/code_rule.md remains the primary rule.
++0206 must reuse the 0205 stale priority zone smoke plan and audited existing surfaces.
++
++0206 explicitly unlocks controlled stale priority zone coherence smoke execution
++for this phase only.
++
++0206 must not add a new ControlProxy runtime.
++0206 must not add a new RouteProxy runtime.
++0206 must not add a new Scheduler hook implementation.
++0206 must not introduce a new runtime handler, adapter, bus, Scheduler, SQL
++backend, Qdrant backend, GitHub client, graph renderer, or inference path.
++
++0206 does not execute Scheduler.run.
++0206 does not modify Scheduler.run.
++0206 does not import runtime handler modules directly.
++0206 does not write ControlProxy frames.
++0206 does not call mark_route_frame_stale directly.
++0206 does not call GitHub API or use network.
++0206 requires RouteProxy writes to stay inside target_isolated_runtime_root.
++
++ControlProxy remains coordination, not business authority.
++Scheduler/policy/zone remain authority.
++RouteProxy remains the fast data-plane frame surface.
++"""
++
++from __future__ import annotations
++
++import argparse
++import json
++import subprocess
++import sys
++from pathlib import Path
++from typing import Any, Mapping
++
++
++CONTROLPROXY_ROUTEPROXY_COHERENCE_ACCEPTANCE_SCHEMA = (
++    "missipy.controlproxy.routeproxy_coherence_acceptance.v1"
++)
++EXPECTED_PLAN_SCHEMA = "missipy.controlproxy.stale_priority_zone_smoke_plan.v1"
++EXPECTED_EXECUTION_TOOL = "tools/run_isolated_route_pipeline_smoke.py"
++DEFAULT_OUTPUT_NAME = "controlproxy_routeproxy_coherence_acceptance.json"
++PIPELINE_OUTPUT_NAME = "isolated_route_pipeline_smoke.json"
++
++FALSE_PLAN_FLAGS = (
++    "runtime_imports_executed_by_0205",
++    "scheduler_run_executed",
++    "scheduler_run_modified",
++    "handler_called_by_0205",
++    "routeproxy_prepared_by_0205",
++    "mark_route_frame_stale_called_by_0205",
++    "read_route_frame_called_by_0205",
++    "writer_permits_requested_by_0205",
++    "frames_written_by_0205",
++    "controlproxy_frames_written_by_0205",
++    "eventbus_instantiated_by_0205",
++    "network_used_by_0205",
++)
++
++FALSE_NEW_SURFACE_FLAGS = (
++    "new_runtime_handler_added",
++    "new_adapter_added",
++    "new_bus_added",
++    "new_scheduler_added",
++    "new_routeproxy_runtime_added",
++    "new_controlproxy_runtime_added",
++    "new_sql_backend_added",
++    "new_qdrant_backend_added",
++    "new_github_client_added",
++    "new_graph_renderer_added",
++    "new_inference_path_added",
++)
++
++
++class ControlProxyRouteProxyCoherenceAcceptanceError(ValueError):
++    """Raised when ControlProxy/RouteProxy coherence acceptance is unsafe."""
++
++
++def run_controlproxy_routeproxy_coherence_acceptance(
++    *,
++    stale_priority_zone_plan_path: Path | str,
++    context_bus_path: Path | str,
++    policy_decision_id: str,
++    output_path: Path | str | None = None,
++    repo_root: Path | str | None = None,
++) -> dict[str, Any]:
++    """Run controlled coherence smoke via the existing isolated route pipeline."""
++
++    plan_path = Path(stale_priority_zone_plan_path)
++    context_bus = Path(context_bus_path)
++    root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[1]
++    plan = _read_json_file(plan_path)
++    issues: list[str] = []
++    warnings: list[str] = []
++
++    _audit_plan(plan, issues, warnings)
++    _audit_policy_decision_id(policy_decision_id, issues)
++    _audit_context_bus(context_bus, issues)
++
++    target_runtime_root = Path(str(plan.get("target_runtime_root", "")))
++    target_isolated_runtime_root = Path(str(plan.get("target_isolated_runtime_root", "")))
++    pipeline_output = target_runtime_root / PIPELINE_OUTPUT_NAME
++    final_output = Path(output_path) if output_path is not None else target_runtime_root / DEFAULT_OUTPUT_NAME
++
++    if final_output.name != DEFAULT_OUTPUT_NAME:
++        issues.append("output filename must be controlproxy_routeproxy_coherence_acceptance.json")
++    if target_runtime_root.is_absolute() and final_output.is_absolute():
++        if not _is_within_or_equal(final_output, target_runtime_root):
++            issues.append("acceptance output must be inside target_runtime_root")
++
++    if issues:
++        report = _build_acceptance(
++            plan_path=plan_path,
++            context_bus=context_bus,
++            policy_decision_id=policy_decision_id,
++            plan=plan,
++            command=[],
++            pipeline_output=pipeline_output,
++            subprocess_returncode=None,
++            subprocess_stdout="",
++            subprocess_stderr="",
++            pipeline={},
++            issues=issues,
++            warnings=warnings,
++        )
++        if output_path is not None:
++            _write_acceptance(final_output, report)
++        return report
++
++    command = [
++        sys.executable,
++        str(root / EXPECTED_EXECUTION_TOOL),
++        "--context-bus",
++        str(context_bus),
++        "--runtime-root",
++        str(target_runtime_root),
++        "--policy-decision-id",
++        policy_decision_id,
++        "--isolated-runtime-root",
++        str(target_isolated_runtime_root),
++        "--output",
++        str(pipeline_output),
++        "--format",
++        "json",
++    ]
++
++    completed = subprocess.run(
++        command,
++        cwd=root,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        check=False,
++    )
++
++    pipeline: dict[str, Any] = {}
++    if pipeline_output.exists():
++        pipeline = _read_json_file(pipeline_output)
++    else:
++        issues.append("coherence pipeline output was not created")
++
++    if completed.returncode != 0:
++        issues.append(f"pipeline tool returned non-zero exit status: {completed.returncode}")
++
++    _audit_pipeline_result(pipeline, plan, issues)
++
++    acceptance = _build_acceptance(
++        plan_path=plan_path,
++        context_bus=context_bus,
++        policy_decision_id=policy_decision_id,
++        plan=plan,
++        command=command,
++        pipeline_output=pipeline_output,
++        subprocess_returncode=completed.returncode,
++        subprocess_stdout=completed.stdout,
++        subprocess_stderr=completed.stderr,
++        pipeline=pipeline,
++        issues=issues,
++        warnings=warnings,
++    )
++    _write_acceptance(final_output, acceptance)
++    return acceptance
++
++
++def _audit_plan(plan: Mapping[str, Any], issues: list[str], warnings: list[str]) -> None:
++    if plan.get("schema") != EXPECTED_PLAN_SCHEMA:
++        issues.append("stale priority zone smoke plan schema mismatch")
++    if plan.get("controlproxy_stale_priority_zone_smoke_plan_ready") is not True:
++        issues.append("controlproxy_stale_priority_zone_smoke_plan_ready must be true")
++    if plan.get("execution_allowed_by_0205") is not False:
++        issues.append("execution_allowed_by_0205 must be false")
++    if plan.get("controlproxy_frame_write_allowed_by_0205") is not False:
++        issues.append("controlproxy_frame_write_allowed_by_0205 must be false")
++    if plan.get("routeproxy_frame_write_allowed_by_0205") is not False:
++        issues.append("routeproxy_frame_write_allowed_by_0205 must be false")
++    if plan.get("p0206_may_execute_controlled_stale_priority_zone_smoke") is not True:
++        issues.append("p0206_may_execute_controlled_stale_priority_zone_smoke must be true")
++    if plan.get("planned_next_patch") != "0206-controlproxy_routeproxy_coherence_acceptance":
++        issues.append("planned_next_patch must be 0206-controlproxy_routeproxy_coherence_acceptance")
++    if plan.get("issues") not in ([], None):
++        issues.append("stale priority zone smoke plan issues must be empty")
++    if isinstance(plan.get("warnings"), list) and plan.get("warnings"):
++        warnings.extend(str(item) for item in plan.get("warnings", []))
++    if plan.get("existing_surfaces_reused") is not True:
++        issues.append("existing_surfaces_reused must be true")
++    for flag in FALSE_PLAN_FLAGS:
++        if plan.get(flag) is not False:
++            issues.append(f"{flag} must be false")
++    for flag in FALSE_NEW_SURFACE_FLAGS:
++        if plan.get(flag) is not False:
++            issues.append(f"{flag} must be false")
++    _audit_target_roots(plan, issues)
++
++
++def _audit_target_roots(plan: Mapping[str, Any], issues: list[str]) -> None:
++    target_runtime_root = Path(str(plan.get("target_runtime_root", "")))
++    target_isolated_runtime_root = Path(str(plan.get("target_isolated_runtime_root", "")))
++    if not target_runtime_root.is_absolute():
++        issues.append("target_runtime_root must be absolute")
++    if not target_isolated_runtime_root.is_absolute():
++        issues.append("target_isolated_runtime_root must be absolute")
++    if target_runtime_root == target_isolated_runtime_root:
++        issues.append("target_runtime_root and target_isolated_runtime_root must be distinct")
++    if target_runtime_root.is_absolute() and target_isolated_runtime_root.is_absolute():
++        if not _is_within_or_equal(target_isolated_runtime_root, target_runtime_root):
++            issues.append("target_isolated_runtime_root must be inside target_runtime_root")
++
++
++def _audit_policy_decision_id(policy_decision_id: str, issues: list[str]) -> None:
++    if not policy_decision_id:
++        issues.append("policy_decision_id must be present")
++    if not policy_decision_id.startswith("policy:allow:"):
++        issues.append("policy_decision_id must start with policy:allow:")
++    if "0206" not in policy_decision_id and "stale" not in policy_decision_id:
++        issues.append("policy_decision_id must identify stale priority zone or 0206 scope")
++
++
++def _audit_context_bus(context_bus: Path, issues: list[str]) -> None:
++    if not context_bus.is_absolute():
++        issues.append("context bus path must be absolute")
++    if not context_bus.exists():
++        issues.append("context bus path must exist")
++    if context_bus.name != "context.bus.jsonl":
++        issues.append("context bus filename must be context.bus.jsonl")
++
++
++def _audit_pipeline_result(pipeline: Mapping[str, Any], plan: Mapping[str, Any], issues: list[str]) -> None:
++    if not pipeline:
++        return
++    if pipeline.get("schema") != "missipy.route_pipeline.isolated_smoke.v1":
++        issues.append("pipeline schema mismatch")
++    if pipeline.get("pipeline_success") is not True:
++        issues.append("pipeline_success must be true")
++    for key in (
++        "queued_count",
++        "policy_scoped_queued_count",
++        "command_plan_ready_count",
++        "command_built_count",
++        "handler_executed_count",
++        "frames_written_count",
++        "readback_count",
++    ):
++        if pipeline.get(key) != 1:
++            issues.append(f"{key} must be 1")
++    if pipeline.get("controlproxy_frames_written") is not False:
++        issues.append("ControlProxy frames must remain false")
++    if pipeline.get("scheduler_modified") is not False:
++        issues.append("Scheduler modified must remain false")
++    if pipeline.get("eventbus_instantiated") is not False:
++        issues.append("EventBus instantiated must remain false")
++    if pipeline.get("network_used") is not False:
++        issues.append("network used must remain false")
++    isolated = Path(str(pipeline.get("isolated_runtime_root", "")))
++    expected = Path(str(plan.get("target_isolated_runtime_root", "")))
++    if isolated != expected:
++        issues.append("pipeline isolated_runtime_root must match target_isolated_runtime_root")
++
++
++def _build_acceptance(
++    *,
++    plan_path: Path,
++    context_bus: Path,
++    policy_decision_id: str,
++    plan: Mapping[str, Any],
++    command: list[str],
++    pipeline_output: Path,
++    subprocess_returncode: int | None,
++    subprocess_stdout: str,
++    subprocess_stderr: str,
++    pipeline: Mapping[str, Any],
++    issues: list[str],
++    warnings: list[str],
++) -> dict[str, Any]:
++    accepted = not issues and pipeline.get("pipeline_success") is True
++    return {
++        "schema": CONTROLPROXY_ROUTEPROXY_COHERENCE_ACCEPTANCE_SCHEMA,
++        "bloc": "D",
++        "bloc_name": "controlproxy-contract-and-priority",
++        "stale_priority_zone_plan_path": str(plan_path),
++        "stale_priority_zone_plan_schema": plan.get("schema"),
++        "context_bus_path": str(context_bus),
++        "policy_decision_id": policy_decision_id,
++        "accepted_baseline": "controlproxy-routeproxy-stale-priority-zone-coherence-v1",
++        "target_runtime_root": plan.get("target_runtime_root"),
++        "target_isolated_runtime_root": plan.get("target_isolated_runtime_root"),
++        "execution_tool_reused": EXPECTED_EXECUTION_TOOL,
++        "controlproxy_routeproxy_coherence_executed": subprocess_returncode is not None,
++        "controlproxy_routeproxy_coherence_accepted": accepted,
++        "stale_priority_zone_contract_accepted": accepted,
++        "bloc_d_complete": accepted,
++        "phase_re_evaluated": True,
++        "next_bloc": "E",
++        "next_bloc_name": "sql-qdrant-provenance-repair",
++        "next_recommended_patch": "0207-provenance_repair_audit",
++        "execution_unlocked_by_0206": True,
++        "execution_allowed_by_0206": True,
++        "controlproxy_frame_write_allowed_by_0206": False,
++        "routeproxy_frame_write_allowed_by_0206": True,
++        "scheduler_run_executed": False,
++        "scheduler_run_modified": False,
++        "new_controlproxy_runtime_added": False,
++        "new_routeproxy_runtime_added": False,
++        "new_scheduler_hook_implementation_added": False,
++        "mark_route_frame_stale_called_by_0206": False,
++        "pipeline_output": str(pipeline_output),
++        "subprocess_command": command,
++        "subprocess_returncode": subprocess_returncode,
++        "subprocess_stdout": subprocess_stdout,
++        "subprocess_stderr": subprocess_stderr,
++        "pipeline_success": pipeline.get("pipeline_success") is True,
++        "queued_count": pipeline.get("queued_count"),
++        "policy_scoped_queued_count": pipeline.get("policy_scoped_queued_count"),
++        "command_plan_ready_count": pipeline.get("command_plan_ready_count"),
++        "command_built_count": pipeline.get("command_built_count"),
++        "handler_executed_count": pipeline.get("handler_executed_count"),
++        "frames_written_count": pipeline.get("frames_written_count"),
++        "readback_count": pipeline.get("readback_count"),
++        "provenance_repair_items": list(plan.get("provenance_repair_items", []))
++        if isinstance(plan.get("provenance_repair_items"), list)
++        else [],
++        "contract_decisions": list(plan.get("contract_decisions", []))
++        if isinstance(plan.get("contract_decisions"), list)
++        else [],
++        "issues": issues,
++        "warnings": warnings,
++        "existing_surfaces_reused": True,
++        "new_runtime_handler_added": False,
++        "new_adapter_added": False,
++        "new_bus_added": False,
++        "new_scheduler_added": False,
++        "new_sql_backend_added": False,
++        "new_qdrant_backend_added": False,
++        "new_github_client_added": False,
++        "new_graph_renderer_added": False,
++        "new_inference_path_added": False,
++        "runtime_imports_executed_by_0206_wrapper": False,
++        "handler_called": bool(pipeline.get("handler_executed_count")),
++        "routeproxy_prepared": bool(pipeline.get("handler_executed_count")),
++        "read_route_frame_called": bool(pipeline.get("readback_count")),
++        "writer_permits_requested": bool(pipeline.get("frames_written_count")),
++        "frames_written": bool(pipeline.get("frames_written_count")),
++        "controlproxy_frames_written": bool(pipeline.get("controlproxy_frames_written")),
++        "scheduler_modified": bool(pipeline.get("scheduler_modified")),
++        "eventbus_instantiated": bool(pipeline.get("eventbus_instantiated")),
++        "network_used": bool(pipeline.get("network_used")),
++    }
++
++
++def _is_within_or_equal(path: Path, root: Path) -> bool:
++    try:
++        path.resolve().relative_to(root.resolve())
++    except ValueError:
++        return False
++    return True
++
++
++def _read_json_file(path: Path) -> dict[str, Any]:
++    raw = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(raw, dict):
++        raise ControlProxyRouteProxyCoherenceAcceptanceError("input must be a JSON object")
++    return raw
++
++
++def _write_acceptance(path: Path, acceptance: dict[str, Any]) -> None:
++    if path.name != DEFAULT_OUTPUT_NAME:
++        raise ControlProxyRouteProxyCoherenceAcceptanceError(
++            "output filename must be controlproxy_routeproxy_coherence_acceptance.json"
++        )
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(acceptance, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(description="Run ControlProxy/RouteProxy coherence acceptance.")
++    parser.add_argument("--stale-priority-zone-plan", required=True, help="Path to controlproxy_stale_priority_zone_smoke_plan.json.")
++    parser.add_argument("--context-bus", required=True, help="Path to context.bus.jsonl.")
++    parser.add_argument("--policy-decision-id", required=True, help="Explicit policy decision id for P0206.")
++    parser.add_argument("--output", help="Optional controlproxy_routeproxy_coherence_acceptance.json output path.")
++    parser.add_argument("--repo-root", help="Repository root, defaults to tool parent.")
++    parser.add_argument("--format", choices=("json", "text"), default="text")
++    args = parser.parse_args(argv)
++
++    acceptance = run_controlproxy_routeproxy_coherence_acceptance(
++        stale_priority_zone_plan_path=Path(args.stale_priority_zone_plan),
++        context_bus_path=Path(args.context_bus),
++        policy_decision_id=args.policy_decision_id,
++        output_path=Path(args.output) if args.output else None,
++        repo_root=Path(args.repo_root) if args.repo_root else None,
++    )
++
++    if args.format == "json":
++        print(json.dumps(acceptance, indent=2, sort_keys=True))
++    else:
++        print(f"controlproxy_routeproxy_coherence_accepted: {acceptance['controlproxy_routeproxy_coherence_accepted']}")
++        print(f"bloc_d_complete: {acceptance['bloc_d_complete']}")
++        print(f"execution_allowed_by_0206: {acceptance['execution_allowed_by_0206']}")
++        print(f"controlproxy_frames_written: {acceptance['controlproxy_frames_written']}")
++        print(f"next_bloc: {acceptance['next_bloc']}")
++        print(f"issues: {len(acceptance['issues'])}")
++    return 0 if acceptance["controlproxy_routeproxy_coherence_accepted"] else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_run_controlproxy_routeproxy_coherence_acceptance_0206.py b/tests/tools/test_run_controlproxy_routeproxy_coherence_acceptance_0206.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_run_controlproxy_routeproxy_coherence_acceptance_0206.py
+@@ -0,0 +1,166 @@
++from pathlib import Path
++import importlib.util
++import json
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "run_controlproxy_routeproxy_coherence_acceptance.py"
++
++
++def _load_tool_module():
++    spec = importlib.util.spec_from_file_location("run_controlproxy_routeproxy_coherence_acceptance_tool", TOOL)
++    assert spec is not None
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[spec.name] = module
++    assert spec.loader is not None
++    spec.loader.exec_module(module)
++    return module
++
++
++def _plan_fixture(tmp_path: Path, *, ready: bool = True) -> dict:
++    runtime = tmp_path / "runtime" / "dev-controlled"
++    return {
++        "schema": "missipy.controlproxy.stale_priority_zone_smoke_plan.v1",
++        "controlproxy_stale_priority_zone_smoke_plan_ready": ready,
++        "execution_allowed_by_0205": False,
++        "controlproxy_frame_write_allowed_by_0205": False,
++        "routeproxy_frame_write_allowed_by_0205": False,
++        "p0206_may_execute_controlled_stale_priority_zone_smoke": ready,
++        "planned_next_patch": "0206-controlproxy_routeproxy_coherence_acceptance",
++        "issues": [] if ready else ["controlproxy_stale_priority_zone_smoke_plan_ready must be true"],
++        "warnings": [],
++        "existing_surfaces_reused": True,
++        "target_runtime_root": str(runtime),
++        "target_isolated_runtime_root": str(runtime / "routeproxy-isolated"),
++        "provenance_repair_items": ["source_baseline_ref or source_entry_digest missing"],
++        "contract_decisions": ["ControlProxy remains coordination, not business authority."],
++        "runtime_imports_executed_by_0205": False,
++        "scheduler_run_executed": False,
++        "scheduler_run_modified": False,
++        "handler_called_by_0205": False,
++        "routeproxy_prepared_by_0205": False,
++        "mark_route_frame_stale_called_by_0205": False,
++        "read_route_frame_called_by_0205": False,
++        "writer_permits_requested_by_0205": False,
++        "frames_written_by_0205": False,
++        "controlproxy_frames_written_by_0205": False,
++        "eventbus_instantiated_by_0205": False,
++        "network_used_by_0205": False,
++        "new_runtime_handler_added": False,
++        "new_adapter_added": False,
++        "new_bus_added": False,
++        "new_scheduler_added": False,
++        "new_routeproxy_runtime_added": False,
++        "new_controlproxy_runtime_added": False,
++        "new_sql_backend_added": False,
++        "new_qdrant_backend_added": False,
++        "new_github_client_added": False,
++        "new_graph_renderer_added": False,
++        "new_inference_path_added": False,
++    }
++
++
++class _Completed:
++    def __init__(self, returncode: int = 0) -> None:
++        self.returncode = returncode
++        self.stdout = '{"pipeline_success": true}'
++        self.stderr = ""
++
++
++def test_0206_runs_coherence_acceptance_from_clean_plan(tmp_path: Path, monkeypatch) -> None:
++    module = _load_tool_module()
++    runtime = tmp_path / "runtime" / "dev-controlled"
++    runtime.mkdir(parents=True)
++    plan_path = tmp_path / "controlproxy_stale_priority_zone_smoke_plan.json"
++    context_bus = tmp_path / "context.bus.jsonl"
++    output = runtime / "controlproxy_routeproxy_coherence_acceptance.json"
++    plan_path.write_text(json.dumps(_plan_fixture(tmp_path), indent=2), encoding="utf-8")
++    context_bus.write_text("{}", encoding="utf-8")
++
++    captured = {}
++
++    def fake_run(command, cwd, text, stdout, stderr, check):
++        captured["command"] = command
++        pipeline_output = Path(command[command.index("--output") + 1])
++        pipeline_output.write_text(
++            json.dumps(
++                {
++                    "schema": "missipy.route_pipeline.isolated_smoke.v1",
++                    "pipeline_success": True,
++                    "queued_count": 1,
++                    "policy_scoped_queued_count": 1,
++                    "command_plan_ready_count": 1,
++                    "command_built_count": 1,
++                    "handler_executed_count": 1,
++                    "frames_written_count": 1,
++                    "readback_count": 1,
++                    "isolated_runtime_root": str(runtime / "routeproxy-isolated"),
++                    "controlproxy_frames_written": False,
++                    "scheduler_modified": False,
++                    "eventbus_instantiated": False,
++                    "network_used": False,
++                },
++                indent=2,
++            ),
++            encoding="utf-8",
++        )
++        return _Completed()
++
++    monkeypatch.setattr(module.subprocess, "run", fake_run)
++
++    acceptance = module.run_controlproxy_routeproxy_coherence_acceptance(
++        stale_priority_zone_plan_path=plan_path,
++        context_bus_path=context_bus,
++        policy_decision_id="policy:allow:stale-priority-zone:manual0206",
++        output_path=output,
++        repo_root=ROOT,
++    )
++
++    assert acceptance["controlproxy_routeproxy_coherence_accepted"] is True
++    assert acceptance["stale_priority_zone_contract_accepted"] is True
++    assert acceptance["bloc_d_complete"] is True
++    assert acceptance["execution_allowed_by_0206"] is True
++    assert acceptance["controlproxy_frame_write_allowed_by_0206"] is False
++    assert acceptance["routeproxy_frame_write_allowed_by_0206"] is True
++    assert acceptance["scheduler_run_executed"] is False
++    assert acceptance["scheduler_run_modified"] is False
++    assert acceptance["new_controlproxy_runtime_added"] is False
++    assert acceptance["new_routeproxy_runtime_added"] is False
++    assert acceptance["mark_route_frame_stale_called_by_0206"] is False
++    assert acceptance["frames_written_count"] == 1
++    assert acceptance["readback_count"] == 1
++    assert acceptance["controlproxy_frames_written"] is False
++    assert acceptance["next_recommended_patch"] == "0207-provenance_repair_audit"
++    assert "tools/run_isolated_route_pipeline_smoke.py" in captured["command"][1]
++    assert output.exists()
++
++
++def test_0206_rejects_unready_plan_without_subprocess(tmp_path: Path, monkeypatch) -> None:
++    module = _load_tool_module()
++    runtime = tmp_path / "runtime" / "dev-controlled"
++    runtime.mkdir(parents=True)
++    plan_path = tmp_path / "controlproxy_stale_priority_zone_smoke_plan.json"
++    context_bus = tmp_path / "context.bus.jsonl"
++    plan_path.write_text(json.dumps(_plan_fixture(tmp_path, ready=False), indent=2), encoding="utf-8")
++    context_bus.write_text("{}", encoding="utf-8")
++
++    called = {"value": False}
++
++    def fake_run(*args, **kwargs):
++        called["value"] = True
++        return _Completed()
++
++    monkeypatch.setattr(module.subprocess, "run", fake_run)
++
++    acceptance = module.run_controlproxy_routeproxy_coherence_acceptance(
++        stale_priority_zone_plan_path=plan_path,
++        context_bus_path=context_bus,
++        policy_decision_id="policy:allow:stale-priority-zone:manual0206",
++        repo_root=ROOT,
++    )
++
++    assert acceptance["controlproxy_routeproxy_coherence_accepted"] is False
++    assert called["value"] is False
++    assert "controlproxy_stale_priority_zone_smoke_plan_ready must be true" in acceptance["issues"]
++    assert "p0206_may_execute_controlled_stale_priority_zone_smoke must be true" in acceptance["issues"]
+diff --git a/tests/rules/test_controlproxy_routeproxy_coherence_acceptance_0206_rule.py b/tests/rules/test_controlproxy_routeproxy_coherence_acceptance_0206_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_controlproxy_routeproxy_coherence_acceptance_0206_rule.py
+@@ -0,0 +1,87 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools" / "run_controlproxy_routeproxy_coherence_acceptance.py"
++DOC = ROOT / "doc" / "architecture" / "CONTROLPROXY_ROUTEPROXY_COHERENCE_ACCEPTANCE_0206.md"
++RULE = ROOT / "doc" / "code-rules" / "0206_controlproxy_routeproxy_coherence_acceptance_rule.md"
++MANIFEST = ROOT / "doc" / "manifests" / "MANIFEST_0206_CHANGED_FILES.md"
++
++
++def test_0206_tool_executes_controlled_coherence_without_controlproxy_frames() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    for token in [
++        "0206 is the Bloc D ControlProxy RouteProxy coherence acceptance patch",
++        "controlproxy_stale_priority_zone_smoke_plan.json",
++        "controlproxy_routeproxy_coherence_acceptance.json",
++        "tools/run_isolated_route_pipeline_smoke.py",
++        "Reuse/adapt existing surfaces first",
++        "0206 explicitly unlocks controlled stale priority zone coherence smoke execution",
++        "0206 must not add a new ControlProxy runtime",
++        "0206 must not add a new RouteProxy runtime",
++        "0206 must not add a new Scheduler hook implementation",
++        "0206 does not execute Scheduler.run",
++        "0206 does not modify Scheduler.run",
++        "0206 does not import runtime handler modules directly",
++        "0206 does not write ControlProxy frames",
++        "0206 does not call mark_route_frame_stale directly",
++        "0206 does not call GitHub API or use network",
++        "0206 requires RouteProxy writes to stay inside target_isolated_runtime_root",
++        "ControlProxy remains coordination, not business authority",
++        "Scheduler/policy/zone remain authority",
++        "RouteProxy remains the fast data-plane frame surface",
++        "controlproxy-routeproxy-stale-priority-zone-coherence-v1",
++        "0207-provenance_repair_audit",
++    ]:
++        assert token in source
++    assert "from runtime." not in source
++    assert "import runtime." not in source
++    assert "import requests" not in source
++    assert "from requests" not in source
++
++
++def test_0206_doc_locks_coherence_acceptance_boundary() -> None:
++    doc = DOC.read_text(encoding="utf-8")
++    for token in [
++        "0206 closes Bloc D with ControlProxy/RouteProxy coherence acceptance",
++        "The input is controlproxy_stale_priority_zone_smoke_plan.json",
++        "The output is controlproxy_routeproxy_coherence_acceptance.json",
++        "Reuse/adapt existing surfaces first",
++        "doc/code-rules/code_rule.md remains the primary rule",
++        "0206 unlocks controlled stale priority zone coherence smoke execution",
++        "0206 still does not execute Scheduler.run",
++        "0206 still does not write ControlProxy frames",
++        "The execution surface reused is tools/run_isolated_route_pipeline_smoke.py",
++        "The next recommended patch is P0207 provenance repair audit",
++    ]:
++        assert token in doc
++
++
++def test_0206_rule_requires_coherence_acceptance_only() -> None:
++    rule = RULE.read_text(encoding="utf-8")
++    for token in [
++        "Read controlproxy_stale_priority_zone_smoke_plan.json from 0205",
++        "Reuse tools/run_isolated_route_pipeline_smoke.py",
++        "Allow controlled stale priority zone coherence smoke execution in 0206",
++        "Do not execute Scheduler.run in 0206",
++        "Do not modify Scheduler.run in 0206",
++        "Do not write ControlProxy frames in 0206",
++        "Do not call mark_route_frame_stale directly in 0206",
++        "Require explicit policy_decision_id",
++        "Require RouteProxy writes to stay inside target_isolated_runtime_root",
++        "Require ControlProxy frames false",
++        "Open Bloc E only after acceptance",
++    ]:
++        assert token in rule
++
++
++def test_0206_manifest_lists_coherence_acceptance_files() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    for token in [
++        "tools/run_controlproxy_routeproxy_coherence_acceptance.py",
++        "tests/tools/test_run_controlproxy_routeproxy_coherence_acceptance_0206.py",
++        "tests/rules/test_controlproxy_routeproxy_coherence_acceptance_0206_rule.py",
++        "doc/architecture/CONTROLPROXY_ROUTEPROXY_COHERENCE_ACCEPTANCE_0206.md",
++        "doc/code-rules/0206_controlproxy_routeproxy_coherence_acceptance_rule.md",
++    ]:
++        assert token in manifest
+diff --git a/doc/architecture/CONTROLPROXY_ROUTEPROXY_COHERENCE_ACCEPTANCE_0206.md b/doc/architecture/CONTROLPROXY_ROUTEPROXY_COHERENCE_ACCEPTANCE_0206.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/CONTROLPROXY_ROUTEPROXY_COHERENCE_ACCEPTANCE_0206.md
+@@ -0,0 +1,75 @@
++# 0206 — ControlProxy / RouteProxy coherence acceptance
++
++## Decision
++
++0206 closes Bloc D with ControlProxy/RouteProxy coherence acceptance.
++
++The input is controlproxy_stale_priority_zone_smoke_plan.json.
++The output is controlproxy_routeproxy_coherence_acceptance.json.
++
++Reuse/adapt existing surfaces first.
++doc/code-rules/code_rule.md remains the primary rule.
++docs, graph, changelog, manifest, and rule are updated with the patch.
++
++0206 unlocks controlled stale priority zone coherence smoke execution.
++0206 still does not execute Scheduler.run.
++0206 still does not write ControlProxy frames.
++The execution surface reused is tools/run_isolated_route_pipeline_smoke.py.
++The next recommended patch is P0207 provenance repair audit.
++
++## Why this exists
++
++0205 planned stale, priority, and zone coherence from existing contract surfaces.
++0206 executes a bounded RouteProxy write/readback smoke through the existing
++pipeline and accepts the ControlProxy/RouteProxy contract without adding a new
++ControlProxy runtime.
++
++## Boundary
++
++0206:
++
++- reads `controlproxy_stale_priority_zone_smoke_plan.json`,
++- requires explicit `policy_decision_id`,
++- requires `context.bus.jsonl`,
++- reuses `tools/run_isolated_route_pipeline_smoke.py`,
++- writes `isolated_route_pipeline_smoke.json`,
++- writes optional `controlproxy_routeproxy_coherence_acceptance.json`,
++- closes Bloc D when coherence is accepted.
++
++0206 does not:
++
++- execute Scheduler.run,
++- modify Scheduler.run,
++- add a new ControlProxy runtime,
++- add a new RouteProxy runtime,
++- add a new Scheduler hook implementation,
++- add a new runtime handler,
++- add a new adapter,
++- add a new bus,
++- call mark_route_frame_stale directly,
++- write ControlProxy frames,
++- call GitHub API,
++- use network,
++- write SQL,
++- write Qdrant,
++- write directly to VisPy.
++
++## Acceptance
++
++Bloc D is accepted as `controlproxy-routeproxy-stale-priority-zone-coherence-v1` when:
++
++- P0205 plan is clean,
++- explicit policy decision is present,
++- existing execution surface is reused,
++- pipeline success is true,
++- one policy-scoped request is executed,
++- one RouteProxy frame is written,
++- one RouteProxy frame is read back,
++- ControlProxy frames remain false,
++- Scheduler modified remains false,
++- Scheduler.run remains unexecuted,
++- network remains unused.
++
++## Next
++
++Bloc E starts with P0207 provenance repair audit.
+diff --git a/doc/code-rules/0206_controlproxy_routeproxy_coherence_acceptance_rule.md b/doc/code-rules/0206_controlproxy_routeproxy_coherence_acceptance_rule.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/code-rules/0206_controlproxy_routeproxy_coherence_acceptance_rule.md
+@@ -0,0 +1,41 @@
++# 0206 ControlProxy RouteProxy coherence acceptance rule
++
++0206 executes controlled coherence acceptance only.
++
++Rules:
++
++- Read controlproxy_stale_priority_zone_smoke_plan.json from 0205.
++- Reuse the existing 0205 plan artifact.
++- Reuse tools/run_isolated_route_pipeline_smoke.py.
++- Apply doc/code-rules/code_rule.md as the primary rule.
++- Keep docs, graph, changelog, manifest, and rule updated with the patch.
++- Allow controlled stale priority zone coherence smoke execution in 0206.
++- Require explicit policy_decision_id.
++- Require context.bus.jsonl.
++- Require RouteProxy writes to stay inside target_isolated_runtime_root.
++- Require ControlProxy frames false.
++- Require Scheduler modified false.
++- Require network used false.
++- Do not execute Scheduler.run in 0206.
++- Do not modify Scheduler.run in 0206.
++- Do not add a new ControlProxy runtime.
++- Do not add a new RouteProxy runtime.
++- Do not add a new Scheduler hook implementation.
++- Do not add a new runtime handler.
++- Do not add a new adapter.
++- Do not add a new bus.
++- Do not add a new Scheduler.
++- Do not add a new SQL backend.
++- Do not add a new Qdrant backend.
++- Do not add a new GitHub client.
++- Do not add a new graph renderer.
++- Do not add a new inference path.
++- Do not call mark_route_frame_stale directly in 0206.
++- Do not approve production route writes.
++- Do not write ControlProxy frames in 0206.
++- Do not call GitHub API.
++- Do not use network.
++- Do not write SQL.
++- Do not write Qdrant.
++- Do not write directly to VisPy.
++- Open Bloc E only after acceptance.
+diff --git a/doc/docs/architecture/runtime/206_controlproxy_routeproxy_coherence_acceptance.dot b/doc/docs/architecture/runtime/206_controlproxy_routeproxy_coherence_acceptance.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/206_controlproxy_routeproxy_coherence_acceptance.dot
+@@ -0,0 +1,18 @@
++digraph controlproxy_routeproxy_coherence_acceptance_0206 {
++  rankdir=LR;
++  label="0206 ControlProxy RouteProxy coherence acceptance";
++  labelloc=t;
++
++  plan [label="controlproxy_stale_priority_zone_smoke_plan.json"];
++  context [label="context.bus.jsonl"];
++  tool [label="tools/run_isolated_route_pipeline_smoke.py"];
++  pipeline [label="isolated_route_pipeline_smoke.json"];
++  acceptance [label="controlproxy_routeproxy_coherence_acceptance.json"];
++  blocE [label="Bloc E provenance repair audit"];
++
++  plan -> tool [label="reuse existing execution surface"];
++  context -> tool [label="input"];
++  tool -> pipeline [label="controlled coherence smoke"];
++  pipeline -> acceptance [label="acceptance"];
++  acceptance -> blocE [label="next P0207"];
++}
+diff --git a/doc/CHANGELOG_0206_CONTROLPROXY_ROUTEPROXY_COHERENCE_ACCEPTANCE.md b/doc/CHANGELOG_0206_CONTROLPROXY_ROUTEPROXY_COHERENCE_ACCEPTANCE.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0206_CONTROLPROXY_ROUTEPROXY_COHERENCE_ACCEPTANCE.md
+@@ -0,0 +1,21 @@
++# Changelog — 0206 ControlProxy RouteProxy coherence acceptance
++
++## Added
++
++- Controlled ControlProxy/RouteProxy coherence execution and acceptance.
++- Explicit reuse of `tools/run_isolated_route_pipeline_smoke.py`.
++- Bloc D acceptance baseline `controlproxy-routeproxy-stale-priority-zone-coherence-v1`.
++- Next Bloc E direction toward provenance repair audit.
++- Documentation, graph, changelog, manifest, and code-rule entry for the patch.
++
++## Not changed
++
++- No Scheduler.run execution or modification.
++- No new ControlProxy runtime.
++- No new RouteProxy runtime.
++- No new Scheduler hook implementation.
++- No direct `mark_route_frame_stale` call.
++- No new runtime handler, adapter, bus, Scheduler, SQL backend, Qdrant backend,
++  GitHub client, graph renderer, or inference path.
++- No ControlProxy frame write.
++- No production route write.
+diff --git a/doc/manifests/MANIFEST_0206_CHANGED_FILES.md b/doc/manifests/MANIFEST_0206_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0206_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest — 0206 ControlProxy RouteProxy coherence acceptance
++
++- PHASE0206_TEST_REPORT.md
++- tools/run_controlproxy_routeproxy_coherence_acceptance.py
++- tests/tools/test_run_controlproxy_routeproxy_coherence_acceptance_0206.py
++- tests/rules/test_controlproxy_routeproxy_coherence_acceptance_0206_rule.py
++- doc/architecture/CONTROLPROXY_ROUTEPROXY_COHERENCE_ACCEPTANCE_0206.md
++- doc/code-rules/0206_controlproxy_routeproxy_coherence_acceptance_rule.md
++- doc/docs/architecture/runtime/206_controlproxy_routeproxy_coherence_acceptance.dot
++- doc/CHANGELOG_0206_CONTROLPROXY_ROUTEPROXY_COHERENCE_ACCEPTANCE.md
++- doc/manifests/MANIFEST_0206_CHANGED_FILES.md
