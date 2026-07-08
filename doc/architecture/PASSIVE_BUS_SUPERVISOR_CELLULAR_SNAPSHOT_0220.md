@@ -96,3 +96,25 @@ The snapshot contains:
 
 This gives the following patches a stable observation target before live GitHub,
 fetch, promotion, pushback, proxy, SHM, and policy work continues.
+
+## 0221 Bus-Direct Supervisor Sink Update
+
+Patch 0221 keeps the same passive supervisor surface and updates it instead of
+creating a parallel bridge. The canonical runtime path is:
+
+```text
+Scheduler / RouteProxy / ControlProxy / SHM / Policy
+  -> EventBus -> PassiveSupervisorSink.accept(event)
+  -> in-memory CellularState
+  -> snapshot on demand
+  -> optional audit/replay JSONL
+```
+
+The Scheduler remains the orchestration authority. It is an upstream EventBus
+emitter, not a dependency controlled by the supervisor. The passive supervisor
+must observe Scheduler events after they have reached the EventBus and must not
+call `Scheduler.run`, dispatch handlers, or mutate runtime state.
+
+`events.jsonl` is no longer a mandatory spine. It is an optional audit/replay
+surface used for tests, diagnostics, and reproducibility. The live supervision
+path is the in-memory sink fed by canonical EventBus events.

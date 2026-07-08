@@ -9,7 +9,10 @@ SQL, Qdrant, GitHub, SHM, or proxy control planes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Iterable, Mapping
+import json
+
 
 
 CELL_KINDS = frozenset(
@@ -305,3 +308,92 @@ def build_cellular_snapshot(
         stale_count=sum(1 for cell in cells if cell.state == "stale"),
         metadata=_as_string_mapping(metadata),
     )
+
+
+class PassiveSupervisorSink:
+    """Downstream-only sink for canonical EventBus supervision events.
+
+    The scheduler remains the orchestration authority and an upstream EventBus
+    emitter. This sink only accepts events that have already reached the bus. It
+    keeps an in-memory cellular projection and can optionally write audit JSONL
+    records for replay/debug. Audit output is not part of the hot path.
+    """
+
+    def __init__(
+        self,
+        *,
+        metadata: Mapping[str, Any] | None = None,
+        audit_jsonl: Path | None = None,
+    ) -> None:
+        self._events: list[BusSupervisorEvent] = []
+        self._metadata = _as_string_mapping(metadata)
+        self._audit_jsonl = audit_jsonl
+
+    def accept(
+        self,
+        event: BusSupervisorEvent | Mapping[str, Any],
+    ) -> BusSupervisorEvent:
+        """Accept one canonical EventBus event without controlling its source."""
+
+        normalized = event if isinstance(event, BusSupervisorEvent) else event_from_mapping(event)
+        self._events.append(normalized)
+        if self._audit_jsonl is not None:
+            self._write_audit_event(normalized)
+        return normalized
+
+    def event_count(self) -> int:
+        return len(self._events)
+
+    def events(self) -> tuple[BusSupervisorEvent, ...]:
+        return tuple(self._events)
+
+    def snapshot(
+        self,
+        *,
+        generated_at: str,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> PassiveBusSupervisorSnapshot:
+        merged_metadata = dict(self._metadata)
+        merged_metadata.update(_as_string_mapping(metadata))
+        merged_metadata.setdefault("source", "eventbus_passive_supervisor_sink")
+        merged_metadata.setdefault("scheduler_role", "upstream_orchestration_authority")
+        merged_metadata.setdefault("eventbus_role", "canonical_runtime_event_transport")
+        if self._audit_jsonl is not None:
+            merged_metadata.setdefault("audit_jsonl", str(self._audit_jsonl))
+        return build_cellular_snapshot(
+            self._events,
+            generated_at=generated_at,
+            metadata=merged_metadata,
+        )
+
+    def snapshot_payload(
+        self,
+        *,
+        generated_at: str,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = self.snapshot(generated_at=generated_at, metadata=metadata).to_dict()
+        payload["cellular_snapshot_written"] = False
+        payload["audit_journal_enabled"] = self._audit_jsonl is not None
+        payload["supervision_authority_violation"] = False
+        return payload
+
+    def write_snapshot(
+        self,
+        path: Path,
+        *,
+        generated_at: str,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload = self.snapshot_payload(generated_at=generated_at, metadata=metadata)
+        payload["cellular_snapshot_written"] = True
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return payload
+
+    def _write_audit_event(self, event: BusSupervisorEvent) -> None:
+        if self._audit_jsonl is None:
+            return
+        self._audit_jsonl.parent.mkdir(parents=True, exist_ok=True)
+        with self._audit_jsonl.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(event.to_dict(), sort_keys=True) + "\n")

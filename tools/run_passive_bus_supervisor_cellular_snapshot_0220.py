@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Build a passive bus supervisor cellular snapshot from JSONL events."""
+"""Build a passive bus supervisor cellular snapshot from passive events.
+
+The direct EventBus sink is the canonical path. JSON/JSONL inputs in this tool
+are replay and test harnesses only; they are not the runtime hot path.
+"""
 
 from __future__ import annotations
 
@@ -15,8 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.context.passive_bus_supervisor_cellular_snapshot import (
-    build_cellular_snapshot,
-    event_from_mapping,
+    PassiveSupervisorSink,
 )
 
 
@@ -41,26 +44,48 @@ def _load_jsonl_events(path: Path) -> list[dict[str, Any]]:
     return events
 
 
+def _load_json_event(raw_json: str) -> dict[str, Any]:
+    try:
+        event = json.loads(raw_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"invalid --event-json value: {exc}") from exc
+    if not isinstance(event, dict):
+        raise ValueError("--event-json must be a JSON object")
+    return event
+
+
 def build_snapshot_payload(
     *,
-    events_jsonl: Path,
+    events_jsonl: Path | None = None,
+    event_mappings: list[dict[str, Any]] | None = None,
     generated_at: str,
     source_label: str,
+    audit_jsonl: Path | None = None,
 ) -> dict[str, Any]:
-    raw_events = _load_jsonl_events(events_jsonl)
-    events = [event_from_mapping(event) for event in raw_events]
-    snapshot = build_cellular_snapshot(
-        events,
-        generated_at=generated_at,
+    sink = PassiveSupervisorSink(
         metadata={
             "source": source_label,
-            "events_jsonl": str(events_jsonl),
-            "patch_id": "0220-passive_bus_supervisor_cellular_snapshot",
+            "patch_id": "0221-bus_direct_passive_supervisor_sink",
+            "runtime_path": "eventbus_direct_sink",
+            "jsonl_role": "optional_replay_or_audit_only",
         },
+        audit_jsonl=audit_jsonl,
     )
-    payload = snapshot.to_dict()
-    payload["cellular_snapshot_written"] = True
-    payload["supervision_authority_violation"] = False
+    accepted = 0
+    if events_jsonl is not None:
+        for event in _load_jsonl_events(events_jsonl):
+            sink.accept(event)
+            accepted += 1
+    for event in event_mappings or []:
+        sink.accept(event)
+        accepted += 1
+    if accepted == 0:
+        raise ValueError("at least one EventBus event is required")
+
+    metadata = {}
+    if events_jsonl is not None:
+        metadata["events_jsonl"] = str(events_jsonl)
+    payload = sink.snapshot_payload(generated_at=generated_at, metadata=metadata)
     return payload
 
 
@@ -73,9 +98,25 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--events-jsonl",
-        required=True,
         type=Path,
-        help="Path to passive bus events in JSONL format.",
+        help=(
+            "Optional replay input with canonical EventBus events in JSONL format. "
+            "This is not the runtime hot path."
+        ),
+    )
+    parser.add_argument(
+        "--event-json",
+        action="append",
+        default=[],
+        help=(
+            "Optional single canonical EventBus event JSON object. May be repeated "
+            "for fileless smoke tests."
+        ),
+    )
+    parser.add_argument(
+        "--audit-jsonl",
+        type=Path,
+        help="Optional audit/replay journal written by the passive sink.",
     )
     parser.add_argument(
         "--output",
@@ -90,7 +131,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--source-label",
-        default="passive_bus_supervisor",
+        default="eventbus_passive_supervisor_sink",
         help="Metadata label for the event source.",
     )
     parser.add_argument(
@@ -106,11 +147,15 @@ def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
     generated_at = args.generated_at or _utc_now()
+    event_mappings = [_load_json_event(value) for value in args.event_json]
     payload = build_snapshot_payload(
         events_jsonl=args.events_jsonl,
+        event_mappings=event_mappings,
         generated_at=generated_at,
         source_label=args.source_label,
+        audit_jsonl=args.audit_jsonl,
     )
+    payload["cellular_snapshot_written"] = True
     _write_payload(args.output, payload)
     print(json.dumps(payload, sort_keys=True))
     return 0

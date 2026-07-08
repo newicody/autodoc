@@ -69,3 +69,45 @@ def test_run_passive_bus_supervisor_cellular_snapshot_writes_snapshot(
     assert payload["cells"][0]["cell_id"] == "artifact"
     assert payload["cells"][0]["state"] == "success"
     assert payload["cells"][0]["refs"]["artifact_ref"] == "artifact-1"
+
+
+def test_run_passive_bus_supervisor_cellular_snapshot_accepts_event_json_without_jsonl(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "snapshot.json"
+    event = json.dumps(
+        {
+            "event_id": "evt-scheduler-1",
+            "event_kind": "scheduler_completed",
+            "cell_id": "scheduler",
+            "cell_kind": "SCHEDULER",
+            "state": "success",
+            "observed_at": "2026-07-08T00:00:00Z",
+        }
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "tools/run_passive_bus_supervisor_cellular_snapshot_0220.py",
+            "--event-json",
+            event,
+            "--output",
+            str(output),
+            "--generated-at",
+            "2026-07-08T00:00:01Z",
+            "--format",
+            "json",
+        ],
+        check=True,
+        cwd=Path(__file__).resolve().parents[2],
+        text=True,
+        capture_output=True,
+    )
+
+    payload = json.loads(result.stdout)
+    assert output.exists()
+    assert payload["event_count"] == 1
+    assert payload["metadata"]["runtime_path"] == "eventbus_direct_sink"
+    assert payload["metadata"]["jsonl_role"] == "optional_replay_or_audit_only"
+    assert payload["cells"][0]["cell_kind"] == "SCHEDULER"

@@ -83,3 +83,84 @@ def test_authority_boundary_is_passive_and_stdlib_only() -> None:
     assert AUTHORITY_BOUNDARY["allows_github_mutation"] is False
     assert AUTHORITY_BOUNDARY["allows_proxy_control"] is False
     assert AUTHORITY_BOUNDARY["requires_non_stdlib"] is False
+
+
+def test_passive_supervisor_sink_accepts_scheduler_bus_events_without_journal() -> None:
+    from src.context.passive_bus_supervisor_cellular_snapshot import PassiveSupervisorSink
+
+    sink = PassiveSupervisorSink(metadata={"surface": "eventbus"})
+    normalized = sink.accept(
+        {
+            "event_id": "evt-scheduler-1",
+            "event_kind": "scheduler_handler_completed",
+            "cell_id": "scheduler:default",
+            "cell_kind": "SCHEDULER",
+            "state": "success",
+            "observed_at": "2026-07-08T00:00:00Z",
+            "source_ref": "scheduler:default",
+            "payload": {"handler": "existing"},
+        }
+    )
+    sink.accept(
+        {
+            "event_id": "evt-policy-1",
+            "event_kind": "policy_decision_observed",
+            "cell_id": "policy:gate",
+            "cell_kind": "POLICY_GATE",
+            "state": "blocked",
+            "observed_at": "2026-07-08T00:00:01Z",
+            "policy_decision_id": "policy-1",
+            "artifact_ref": "artifact-1",
+            "sql_ref": "sql-1",
+            "qdrant_ref": "qdrant-1",
+        }
+    )
+
+    assert normalized.event_kind == "scheduler_handler_completed"
+    assert sink.event_count() == 2
+
+    payload = sink.snapshot_payload(generated_at="2026-07-08T00:00:02Z")
+    cells = {cell["cell_id"]: cell for cell in payload["cells"]}
+
+    assert payload["event_count"] == 2
+    assert payload["blocked_count"] == 1
+    assert payload["audit_journal_enabled"] is False
+    assert payload["cellular_snapshot_written"] is False
+    assert payload["metadata"]["scheduler_role"] == "upstream_orchestration_authority"
+    assert payload["metadata"]["eventbus_role"] == "canonical_runtime_event_transport"
+    assert cells["scheduler:default"]["cell_kind"] == "SCHEDULER"
+    assert cells["policy:gate"]["refs"]["policy_decision_id"] == "policy-1"
+    assert cells["policy:gate"]["refs"]["artifact_ref"] == "artifact-1"
+    assert cells["policy:gate"]["refs"]["sql_ref"] == "sql-1"
+    assert cells["policy:gate"]["refs"]["qdrant_ref"] == "qdrant-1"
+
+
+def test_passive_supervisor_sink_audit_is_optional(tmp_path) -> None:
+    from src.context.passive_bus_supervisor_cellular_snapshot import PassiveSupervisorSink
+
+    audit_jsonl = tmp_path / "audit" / "events.jsonl"
+    snapshot_json = tmp_path / "snapshot.json"
+    sink = PassiveSupervisorSink(audit_jsonl=audit_jsonl)
+
+    sink.accept(
+        {
+            "event_id": "evt-route-1",
+            "event_kind": "routeproxy_status_observed",
+            "cell_id": "routeproxy:main",
+            "cell_kind": "ROUTEPROXY",
+            "state": "running",
+            "observed_at": "2026-07-08T00:00:00Z",
+            "route_ref": "route-1",
+            "shm_ref": "shm-ring-1",
+        }
+    )
+    payload = sink.write_snapshot(
+        snapshot_json,
+        generated_at="2026-07-08T00:00:01Z",
+    )
+
+    assert audit_jsonl.exists()
+    assert snapshot_json.exists()
+    assert payload["cellular_snapshot_written"] is True
+    assert payload["audit_journal_enabled"] is True
+    assert "routeproxy_status_observed" in audit_jsonl.read_text(encoding="utf-8")
