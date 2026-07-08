@@ -1,0 +1,17 @@
+# Manifest — 0234 all-surfaces passive supervisor smoke
+
+Changed files:
+
+```text
+tools/run_all_surfaces_passive_supervisor_smoke_0234.py
+tests/tools/test_run_all_surfaces_passive_supervisor_smoke_0234.py
+tests/rules/test_all_surfaces_passive_supervisor_smoke_0234_rule.py
+doc/architecture/ALL_SURFACES_PASSIVE_SUPERVISOR_SMOKE_0234.md
+doc/code-rules/0234_all_surfaces_passive_supervisor_smoke_rule.md
+doc/docs/architecture/runtime/234_all_surfaces_passive_supervisor_smoke.dot
+doc/CHANGELOG_0234_ALL_SURFACES_PASSIVE_SUPERVISOR_SMOKE.md
+doc/manifests/MANIFEST_0234_ALL_SURFACES_PASSIVE_SUPERVISOR_SMOKE_CHANGED_FILES.md
+PHASE0234_ALL_SURFACES_PASSIVE_SUPERVISOR_SMOKE_TEST_REPORT.md
+```
+
+No non-stdlib dependency added.

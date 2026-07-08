@@ -33,6 +33,8 @@ CELL_KINDS = frozenset(
         "POLICY_GATE",
         "PUSHBACK",
         "UNKNOWN",
+        "SQL_STORE",
+        "REHYDRATION",
     }
 )
 
@@ -314,6 +316,305 @@ def scheduler_supervision_event(
         shm_ref=shm_ref,
         error=error,
         payload=extra_payload,
+    )
+
+
+
+DATA_SURFACE_CELL_KINDS = frozenset(
+    {
+        "GITHUB_ARTIFACT",
+        "SOURCE_CANDIDATE",
+        "SQL_STORE",
+        "QDRANT_PROJECTION",
+        "REHYDRATION",
+        "PUSHBACK",
+    }
+)
+
+
+DATA_SURFACE_CELL_KIND_ALIASES = {
+    "GITHUB_ARTIFACT": "GITHUB_ARTIFACT",
+    "GITHUBARTIFACT": "GITHUB_ARTIFACT",
+    "SOURCE_CANDIDATE": "SOURCE_CANDIDATE",
+    "SOURCECANDIDATE": "SOURCE_CANDIDATE",
+    "SQL": "SQL_STORE",
+    "SQL_STORE": "SQL_STORE",
+    "SQLSTORE": "SQL_STORE",
+    "QDRANT": "QDRANT_PROJECTION",
+    "QDRANT_PROJECTION": "QDRANT_PROJECTION",
+    "QDRANTPROJECTION": "QDRANT_PROJECTION",
+    "REHYDRATION": "REHYDRATION",
+    "REHYDRATE": "REHYDRATION",
+    "PUSHBACK": "PUSHBACK",
+}
+
+_DATA_SURFACE_PREFIX = {
+    "GITHUB_ARTIFACT": "github_artifact",
+    "SOURCE_CANDIDATE": "source_candidate",
+    "SQL_STORE": "sql_store",
+    "QDRANT_PROJECTION": "qdrant_projection",
+    "REHYDRATION": "rehydration",
+    "PUSHBACK": "pushback",
+}
+
+
+def _data_surface_cell_id(cell_kind: str, surface_ref: str) -> str:
+    prefix = _DATA_SURFACE_PREFIX.get(cell_kind, "data_surface")
+    suffix = _as_string(surface_ref).strip() or "default"
+    return f"{prefix}:{suffix}"
+
+
+def data_surface_supervision_event(
+    *,
+    event_id: str,
+    event_kind: str,
+    cell_kind: str,
+    surface_ref: str,
+    state: str,
+    observed_at: str,
+    source_ref: str = "",
+    route_ref: str = "",
+    policy_decision_id: str = "",
+    artifact_ref: str = "",
+    source_candidate_ref: str = "",
+    sql_ref: str = "",
+    qdrant_ref: str = "",
+    shm_ref: str = "",
+    error: str = "",
+    payload: Mapping[str, Any] | None = None,
+) -> BusSupervisorEvent:
+    """Create a canonical data-surface event for passive supervision.
+
+    This helper covers GitHub artifacts, SourceCandidate, SQL, Qdrant,
+    rehydration, and pushback surfaces that publish on the existing EventBus
+    path. It is data-only: it does not call GitHub, does not promote source
+    candidates, does not read or write SQL/Qdrant, and does not execute
+    rehydration or pushback.
+    """
+
+    raw_kind = _as_string(cell_kind).strip().upper().replace("-", "_").replace(" ", "_")
+    fallback_kind = _normalize_cell_kind(cell_kind)
+    normalized_kind = DATA_SURFACE_CELL_KIND_ALIASES.get(
+        raw_kind,
+        DATA_SURFACE_CELL_KIND_ALIASES.get(fallback_kind, fallback_kind),
+    )
+    if normalized_kind not in DATA_SURFACE_CELL_KINDS:
+        raise ValueError(
+            "cell_kind must be one of GITHUB_ARTIFACT, SOURCE_CANDIDATE, "
+            "SQL_STORE, QDRANT_PROJECTION, REHYDRATION, or PUSHBACK"
+        )
+
+    surface_name = _as_string(surface_ref).strip() or "default"
+    extra_payload = dict(_as_string_mapping(payload))
+    extra_payload.setdefault("surface_ref", surface_name)
+    if source_candidate_ref:
+        extra_payload.setdefault("source_candidate_ref", _as_string(source_candidate_ref))
+    default_source_ref = _data_surface_cell_id(normalized_kind, surface_name)
+
+    return BusSupervisorEvent(
+        event_id=event_id,
+        event_kind=event_kind,
+        cell_id=default_source_ref,
+        cell_kind=normalized_kind,
+        state=state,
+        observed_at=observed_at,
+        source_ref=_as_string(source_ref).strip() or default_source_ref,
+        route_ref=route_ref,
+        policy_decision_id=policy_decision_id,
+        artifact_ref=artifact_ref,
+        sql_ref=sql_ref,
+        qdrant_ref=qdrant_ref,
+        shm_ref=shm_ref,
+        error=error,
+        payload=extra_payload,
+    )
+
+
+def github_artifact_supervision_event(
+    *,
+    event_id: str,
+    event_kind: str,
+    artifact_ref: str,
+    state: str,
+    observed_at: str,
+    source_candidate_ref: str = "",
+    sql_ref: str = "",
+    qdrant_ref: str = "",
+    error: str = "",
+    payload: Mapping[str, Any] | None = None,
+) -> BusSupervisorEvent:
+    """Create a read-only GitHub artifact supervision event."""
+
+    return data_surface_supervision_event(
+        event_id=event_id,
+        event_kind=event_kind,
+        cell_kind="GITHUB_ARTIFACT",
+        surface_ref=artifact_ref,
+        state=state,
+        observed_at=observed_at,
+        artifact_ref=artifact_ref,
+        source_candidate_ref=source_candidate_ref,
+        sql_ref=sql_ref,
+        qdrant_ref=qdrant_ref,
+        error=error,
+        payload=payload,
+    )
+
+
+def source_candidate_supervision_event(
+    *,
+    event_id: str,
+    event_kind: str,
+    source_candidate_ref: str,
+    state: str,
+    observed_at: str,
+    artifact_ref: str = "",
+    sql_ref: str = "",
+    qdrant_ref: str = "",
+    error: str = "",
+    payload: Mapping[str, Any] | None = None,
+) -> BusSupervisorEvent:
+    """Create a SourceCandidate flow supervision event."""
+
+    return data_surface_supervision_event(
+        event_id=event_id,
+        event_kind=event_kind,
+        cell_kind="SOURCE_CANDIDATE",
+        surface_ref=source_candidate_ref,
+        state=state,
+        observed_at=observed_at,
+        artifact_ref=artifact_ref,
+        source_candidate_ref=source_candidate_ref,
+        sql_ref=sql_ref,
+        qdrant_ref=qdrant_ref,
+        error=error,
+        payload=payload,
+    )
+
+
+def sql_supervision_event(
+    *,
+    event_id: str,
+    event_kind: str,
+    sql_ref: str,
+    state: str,
+    observed_at: str,
+    artifact_ref: str = "",
+    source_candidate_ref: str = "",
+    qdrant_ref: str = "",
+    error: str = "",
+    payload: Mapping[str, Any] | None = None,
+) -> BusSupervisorEvent:
+    """Create a SQL-store supervision event without reading or writing SQL."""
+
+    return data_surface_supervision_event(
+        event_id=event_id,
+        event_kind=event_kind,
+        cell_kind="SQL_STORE",
+        surface_ref=sql_ref,
+        state=state,
+        observed_at=observed_at,
+        artifact_ref=artifact_ref,
+        source_candidate_ref=source_candidate_ref,
+        sql_ref=sql_ref,
+        qdrant_ref=qdrant_ref,
+        error=error,
+        payload=payload,
+    )
+
+
+def qdrant_supervision_event(
+    *,
+    event_id: str,
+    event_kind: str,
+    qdrant_ref: str,
+    state: str,
+    observed_at: str,
+    artifact_ref: str = "",
+    source_candidate_ref: str = "",
+    sql_ref: str = "",
+    error: str = "",
+    payload: Mapping[str, Any] | None = None,
+) -> BusSupervisorEvent:
+    """Create a Qdrant projection/recall supervision event without querying Qdrant."""
+
+    return data_surface_supervision_event(
+        event_id=event_id,
+        event_kind=event_kind,
+        cell_kind="QDRANT_PROJECTION",
+        surface_ref=qdrant_ref,
+        state=state,
+        observed_at=observed_at,
+        artifact_ref=artifact_ref,
+        source_candidate_ref=source_candidate_ref,
+        sql_ref=sql_ref,
+        qdrant_ref=qdrant_ref,
+        error=error,
+        payload=payload,
+    )
+
+
+def rehydration_supervision_event(
+    *,
+    event_id: str,
+    event_kind: str,
+    rehydrate_ref: str,
+    state: str,
+    observed_at: str,
+    artifact_ref: str = "",
+    source_candidate_ref: str = "",
+    sql_ref: str = "",
+    qdrant_ref: str = "",
+    error: str = "",
+    payload: Mapping[str, Any] | None = None,
+) -> BusSupervisorEvent:
+    """Create a rehydration supervision event without executing rehydration."""
+
+    return data_surface_supervision_event(
+        event_id=event_id,
+        event_kind=event_kind,
+        cell_kind="REHYDRATION",
+        surface_ref=rehydrate_ref,
+        state=state,
+        observed_at=observed_at,
+        artifact_ref=artifact_ref,
+        source_candidate_ref=source_candidate_ref,
+        sql_ref=sql_ref,
+        qdrant_ref=qdrant_ref,
+        error=error,
+        payload=payload,
+    )
+
+
+def pushback_supervision_event(
+    *,
+    event_id: str,
+    event_kind: str,
+    pushback_ref: str,
+    state: str,
+    observed_at: str,
+    artifact_ref: str = "",
+    source_candidate_ref: str = "",
+    sql_ref: str = "",
+    qdrant_ref: str = "",
+    error: str = "",
+    payload: Mapping[str, Any] | None = None,
+) -> BusSupervisorEvent:
+    """Create a pushback supervision event without mutating GitHub."""
+
+    return data_surface_supervision_event(
+        event_id=event_id,
+        event_kind=event_kind,
+        cell_kind="PUSHBACK",
+        surface_ref=pushback_ref,
+        state=state,
+        observed_at=observed_at,
+        artifact_ref=artifact_ref,
+        source_candidate_ref=source_candidate_ref,
+        sql_ref=sql_ref,
+        qdrant_ref=qdrant_ref,
+        error=error,
+        payload=payload,
     )
 
 

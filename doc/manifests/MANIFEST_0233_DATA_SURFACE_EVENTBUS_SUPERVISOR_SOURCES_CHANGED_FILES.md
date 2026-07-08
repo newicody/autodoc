@@ -1,0 +1,13 @@
+# Manifest 0233 — changed files
+
+```text
+src/context/passive_bus_supervisor_cellular_snapshot.py
+tests/context/test_data_surface_eventbus_supervisor_sources_0233.py
+tests/rules/test_data_surface_eventbus_supervisor_sources_0233_rule.py
+doc/architecture/DATA_SURFACE_EVENTBUS_SUPERVISOR_SOURCES_0233.md
+doc/code-rules/0233_data_surface_eventbus_supervisor_sources_rule.md
+doc/docs/architecture/runtime/233_data_surface_eventbus_supervisor_sources.dot
+doc/CHANGELOG_0233_DATA_SURFACE_EVENTBUS_SUPERVISOR_SOURCES.md
+doc/manifests/MANIFEST_0233_DATA_SURFACE_EVENTBUS_SUPERVISOR_SOURCES_CHANGED_FILES.md
+PHASE0233_DATA_SURFACE_EVENTBUS_SUPERVISOR_SOURCES_TEST_REPORT.md
+```
