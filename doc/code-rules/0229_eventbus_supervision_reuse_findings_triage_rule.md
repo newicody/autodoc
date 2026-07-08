@@ -15,3 +15,8 @@ It must not mutate SHM, SQL, Qdrant, GitHub, or policy state.
 It may classify evidence from doc, tests, patch, phase reports, and `.var` outputs as non-runtime trace evidence.
 
 It must mark findings in `src/` and `tools/` as requiring runtime review before the functional EventBus -> PassiveSupervisorSink implementation resumes.
+
+
+## 0229-r3 refinement
+
+Evidence that comes from the forbidden-pattern declarations inside `tools/audit_eventbus_supervision_reuse_0228.py` is classified as `allowed_audit_self_pattern` when the matched text is the raw regex literal itself. This prevents the audit tool from blocking functional resumption because it contains the patterns it is designed to detect.

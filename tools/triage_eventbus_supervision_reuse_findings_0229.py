@@ -34,6 +34,9 @@ RUNTIME_PREFIXES = (
     "src/",
     "tools/",
 )
+AUDIT_SELF_PATTERN_PATHS = (
+    "tools/audit_eventbus_supervision_reuse_0228.py",
+)
 FORBIDDEN_KEY_PARTS = (
     "forbidden",
     "violation",
@@ -120,9 +123,19 @@ def _walk_forbidden_objects(value: Any, parent_key: str = "") -> Iterable[Mappin
             yield from _walk_forbidden_objects(child, parent_key)
 
 
-def _classify_path(path: str) -> str:
+def _is_audit_self_pattern(path: str, evidence: str) -> bool:
+    normalized = path.replace("\\", "/")
+    stripped = evidence.strip()
+    return normalized in AUDIT_SELF_PATTERN_PATHS and (
+        stripped.startswith('r"') or stripped.startswith("r'")
+    )
+
+
+def _classify_path(path: str, evidence: str = "") -> str:
     normalized = path.replace("\\", "/")
     name = Path(normalized).name
+    if _is_audit_self_pattern(normalized, evidence):
+        return "allowed_audit_self_pattern"
     if normalized.startswith(DOC_OR_TRACE_PREFIXES) or name.startswith(DOC_OR_TRACE_FILENAMES):
         return "allowed_doc_test_trace"
     if normalized.startswith(RUNTIME_PREFIXES):
@@ -142,7 +155,7 @@ def _finding_from_mapping(mapping: Mapping[str, Any]) -> Finding:
     return Finding(
         path=path,
         line=line,
-        category=_classify_path(path),
+        category=_classify_path(path, evidence),
         evidence=evidence,
         raw=mapping,
     )
@@ -178,12 +191,14 @@ def build_triage(report: Mapping[str, Any]) -> dict[str, Any]:
     findings = extract_findings(report)
     runtime_review = [item for item in findings if item.category.endswith("review_required")]
     allowed = [item for item in findings if item.category == "allowed_doc_test_trace"]
+    allowed_audit_self = [item for item in findings if item.category == "allowed_audit_self_pattern"]
     return {
         "eventbus_supervision_reuse_findings_triaged": True,
         "source_report_kind": report.get("report_kind") or report.get("kind") or "eventbus_supervision_reuse_0228",
         "input_forbidden_runtime_evidence_count": report.get("forbidden_runtime_evidence_count"),
         "extracted_forbidden_evidence_count": len(findings),
         "allowed_doc_test_trace_count": len(allowed),
+        "allowed_audit_self_pattern_count": len(allowed_audit_self),
         "runtime_review_required_count": len(runtime_review),
         "may_resume_functional_supervision_patch": len(runtime_review) == 0,
         "next_action": (
@@ -240,6 +255,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"{triage['eventbus_supervision_reuse_findings_triaged']} "
             f"extracted={triage['extracted_forbidden_evidence_count']} "
             f"allowed_doc_test_trace={triage['allowed_doc_test_trace_count']} "
+            f"allowed_audit_self_pattern={triage['allowed_audit_self_pattern_count']} "
             f"runtime_review_required={triage['runtime_review_required_count']} "
             f"may_resume={triage['may_resume_functional_supervision_patch']}"
         )

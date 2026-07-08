@@ -58,3 +58,8 @@ python tools/triage_eventbus_supervision_reuse_findings_0229.py \
 ```
 
 If `may_resume_functional_supervision_patch` is true, the next patch may implement the direct sink by reusing existing surfaces. If it is false, the runtime review findings must be inspected first.
+
+
+## 0229-r3 refinement
+
+Evidence that comes from the forbidden-pattern declarations inside `tools/audit_eventbus_supervision_reuse_0228.py` is classified as `allowed_audit_self_pattern` when the matched text is the raw regex literal itself. This prevents the audit tool from blocking functional resumption because it contains the patterns it is designed to detect.

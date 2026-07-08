@@ -61,6 +61,32 @@ def test_extract_findings_handles_nested_forbidden_shapes() -> None:
     assert findings[0].category == "runtime_review_required"
 
 
+def test_triage_allows_audit_tool_regex_self_patterns() -> None:
+    report = {
+        "forbidden_runtime_evidence_count": 2,
+        "forbidden_runtime_evidence": [
+            {
+                "path": "tools/audit_eventbus_supervision_reuse_0228.py",
+                "line": 85,
+                "pattern": "PassiveSupervisor.*(?:write_sql|upsert|qdrant|github|control_proxy|claim_lease)",
+                "text": "r\"PassiveSupervisor.*(?:write_sql|upsert|qdrant|github|control_proxy|claim_lease)\",",
+            },
+            {
+                "path": "tools/audit_eventbus_supervision_reuse_0228.py",
+                "line": 86,
+                "pattern": "supervisor.*(?:policy_decision|decide_policy|mutate_github|write_shm)",
+                "text": "r\"supervisor.*(?:policy_decision|decide_policy|mutate_github|write_shm)\",",
+            },
+        ],
+    }
+
+    triage = build_triage(report)
+
+    assert triage["allowed_audit_self_pattern_count"] == 2
+    assert triage["runtime_review_required_count"] == 0
+    assert triage["may_resume_functional_supervision_patch"] is True
+
+
 def test_cli_writes_summary_and_output(tmp_path: Path) -> None:
     report = tmp_path / "report.json"
     output = tmp_path / "triage.json"
