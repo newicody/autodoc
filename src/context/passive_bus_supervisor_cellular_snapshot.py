@@ -317,6 +317,199 @@ def scheduler_supervision_event(
     )
 
 
+
+RUNTIME_SURFACE_CELL_KINDS = frozenset(
+    {"ROUTEPROXY", "CONTROLPROXY", "SHM_RING", "POLICY_GATE"}
+)
+
+_RUNTIME_SURFACE_PREFIX = {
+    "ROUTEPROXY": "routeproxy",
+    "CONTROLPROXY": "controlproxy",
+    "SHM_RING": "shm",
+    "POLICY_GATE": "policy",
+}
+
+
+def _surface_cell_id(cell_kind: str, surface_ref: str) -> str:
+    prefix = _RUNTIME_SURFACE_PREFIX.get(cell_kind, "surface")
+    suffix = _as_string(surface_ref).strip() or "default"
+    return f"{prefix}:{suffix}"
+
+
+def runtime_surface_supervision_event(
+    *,
+    event_id: str,
+    event_kind: str,
+    cell_kind: str,
+    surface_ref: str,
+    state: str,
+    observed_at: str,
+    source_ref: str = "",
+    route_ref: str = "",
+    policy_decision_id: str = "",
+    artifact_ref: str = "",
+    sql_ref: str = "",
+    qdrant_ref: str = "",
+    shm_ref: str = "",
+    error: str = "",
+    payload: Mapping[str, Any] | None = None,
+) -> BusSupervisorEvent:
+    """Create a canonical runtime-surface event for EventBus supervision.
+
+    This helper covers RouteProxy, ControlProxy, SHM ring/status, and policy
+    gate events already emitted on the existing EventBus path. It is not a
+    proxy controller, does not read raw shared memory, and does not decide
+    policy.
+    """
+
+    normalized_kind = _normalize_cell_kind(cell_kind)
+    if normalized_kind not in RUNTIME_SURFACE_CELL_KINDS:
+        raise ValueError(
+            "cell_kind must be one of ROUTEPROXY, CONTROLPROXY, SHM_RING, "
+            "or POLICY_GATE"
+        )
+    surface_name = _as_string(surface_ref).strip() or "default"
+    extra_payload = dict(_as_string_mapping(payload))
+    extra_payload.setdefault("surface_ref", surface_name)
+    default_source_ref = _surface_cell_id(normalized_kind, surface_name)
+
+    return BusSupervisorEvent(
+        event_id=event_id,
+        event_kind=event_kind,
+        cell_id=default_source_ref,
+        cell_kind=normalized_kind,
+        state=state,
+        observed_at=observed_at,
+        source_ref=_as_string(source_ref).strip() or default_source_ref,
+        route_ref=route_ref,
+        policy_decision_id=policy_decision_id,
+        artifact_ref=artifact_ref,
+        sql_ref=sql_ref,
+        qdrant_ref=qdrant_ref,
+        shm_ref=shm_ref,
+        error=error,
+        payload=extra_payload,
+    )
+
+
+def proxy_supervision_event(
+    *,
+    event_id: str,
+    event_kind: str,
+    proxy_kind: str,
+    proxy_ref: str,
+    state: str,
+    observed_at: str,
+    route_ref: str = "",
+    policy_decision_id: str = "",
+    artifact_ref: str = "",
+    sql_ref: str = "",
+    qdrant_ref: str = "",
+    shm_ref: str = "",
+    error: str = "",
+    payload: Mapping[str, Any] | None = None,
+) -> BusSupervisorEvent:
+    """Create a RouteProxy or ControlProxy EventBus supervision event."""
+
+    normalized_proxy = _as_string(proxy_kind).strip().lower()
+    if normalized_proxy in {"routeproxy", "route", "route_proxy"}:
+        cell_kind = "ROUTEPROXY"
+    elif normalized_proxy in {"controlproxy", "control", "control_proxy"}:
+        cell_kind = "CONTROLPROXY"
+    else:
+        raise ValueError("proxy_kind must be routeproxy or controlproxy")
+    return runtime_surface_supervision_event(
+        event_id=event_id,
+        event_kind=event_kind,
+        cell_kind=cell_kind,
+        surface_ref=proxy_ref,
+        state=state,
+        observed_at=observed_at,
+        route_ref=route_ref,
+        policy_decision_id=policy_decision_id,
+        artifact_ref=artifact_ref,
+        sql_ref=sql_ref,
+        qdrant_ref=qdrant_ref,
+        shm_ref=shm_ref,
+        error=error,
+        payload=payload,
+    )
+
+
+def shm_supervision_event(
+    *,
+    event_id: str,
+    event_kind: str,
+    shm_ref: str,
+    state: str,
+    observed_at: str,
+    route_ref: str = "",
+    policy_decision_id: str = "",
+    artifact_ref: str = "",
+    sql_ref: str = "",
+    qdrant_ref: str = "",
+    error: str = "",
+    payload: Mapping[str, Any] | None = None,
+) -> BusSupervisorEvent:
+    """Create an SHM ring/status EventBus supervision event."""
+
+    return runtime_surface_supervision_event(
+        event_id=event_id,
+        event_kind=event_kind,
+        cell_kind="SHM_RING",
+        surface_ref=shm_ref,
+        state=state,
+        observed_at=observed_at,
+        route_ref=route_ref,
+        policy_decision_id=policy_decision_id,
+        artifact_ref=artifact_ref,
+        sql_ref=sql_ref,
+        qdrant_ref=qdrant_ref,
+        shm_ref=shm_ref,
+        error=error,
+        payload=payload,
+    )
+
+
+def policy_supervision_event(
+    *,
+    event_id: str,
+    event_kind: str,
+    policy_ref: str,
+    state: str,
+    observed_at: str,
+    policy_decision_id: str = "",
+    route_ref: str = "",
+    artifact_ref: str = "",
+    sql_ref: str = "",
+    qdrant_ref: str = "",
+    shm_ref: str = "",
+    error: str = "",
+    decision: str = "",
+    payload: Mapping[str, Any] | None = None,
+) -> BusSupervisorEvent:
+    """Create a policy gate EventBus supervision event without deciding policy."""
+
+    extra_payload = dict(_as_string_mapping(payload))
+    if decision:
+        extra_payload.setdefault("decision", decision)
+    return runtime_surface_supervision_event(
+        event_id=event_id,
+        event_kind=event_kind,
+        cell_kind="POLICY_GATE",
+        surface_ref=policy_ref,
+        state=state,
+        observed_at=observed_at,
+        route_ref=route_ref,
+        policy_decision_id=policy_decision_id,
+        artifact_ref=artifact_ref,
+        sql_ref=sql_ref,
+        qdrant_ref=qdrant_ref,
+        shm_ref=shm_ref,
+        error=error,
+        payload=extra_payload,
+    )
+
 def build_cellular_snapshot(
     events: Iterable[BusSupervisorEvent],
     *,
@@ -428,6 +621,160 @@ class PassiveSupervisorSink:
                 qdrant_ref=qdrant_ref,
                 shm_ref=shm_ref,
                 error=error,
+                payload=payload,
+            )
+        )
+
+    def accept_runtime_surface_event(
+        self,
+        *,
+        event_id: str,
+        event_kind: str,
+        cell_kind: str,
+        surface_ref: str,
+        state: str,
+        observed_at: str,
+        source_ref: str = "",
+        route_ref: str = "",
+        policy_decision_id: str = "",
+        artifact_ref: str = "",
+        sql_ref: str = "",
+        qdrant_ref: str = "",
+        shm_ref: str = "",
+        error: str = "",
+        payload: Mapping[str, Any] | None = None,
+    ) -> BusSupervisorEvent:
+        """Accept a runtime surface event already emitted through EventBus."""
+
+        return self.accept(
+            runtime_surface_supervision_event(
+                event_id=event_id,
+                event_kind=event_kind,
+                cell_kind=cell_kind,
+                surface_ref=surface_ref,
+                state=state,
+                observed_at=observed_at,
+                source_ref=source_ref,
+                route_ref=route_ref,
+                policy_decision_id=policy_decision_id,
+                artifact_ref=artifact_ref,
+                sql_ref=sql_ref,
+                qdrant_ref=qdrant_ref,
+                shm_ref=shm_ref,
+                error=error,
+                payload=payload,
+            )
+        )
+
+    def accept_proxy_event(
+        self,
+        *,
+        event_id: str,
+        event_kind: str,
+        proxy_kind: str,
+        proxy_ref: str,
+        state: str,
+        observed_at: str,
+        route_ref: str = "",
+        policy_decision_id: str = "",
+        artifact_ref: str = "",
+        sql_ref: str = "",
+        qdrant_ref: str = "",
+        shm_ref: str = "",
+        error: str = "",
+        payload: Mapping[str, Any] | None = None,
+    ) -> BusSupervisorEvent:
+        """Accept a RouteProxy or ControlProxy EventBus event passively."""
+
+        return self.accept(
+            proxy_supervision_event(
+                event_id=event_id,
+                event_kind=event_kind,
+                proxy_kind=proxy_kind,
+                proxy_ref=proxy_ref,
+                state=state,
+                observed_at=observed_at,
+                route_ref=route_ref,
+                policy_decision_id=policy_decision_id,
+                artifact_ref=artifact_ref,
+                sql_ref=sql_ref,
+                qdrant_ref=qdrant_ref,
+                shm_ref=shm_ref,
+                error=error,
+                payload=payload,
+            )
+        )
+
+    def accept_shm_event(
+        self,
+        *,
+        event_id: str,
+        event_kind: str,
+        shm_ref: str,
+        state: str,
+        observed_at: str,
+        route_ref: str = "",
+        policy_decision_id: str = "",
+        artifact_ref: str = "",
+        sql_ref: str = "",
+        qdrant_ref: str = "",
+        error: str = "",
+        payload: Mapping[str, Any] | None = None,
+    ) -> BusSupervisorEvent:
+        """Accept an SHM ring/status EventBus event passively."""
+
+        return self.accept(
+            shm_supervision_event(
+                event_id=event_id,
+                event_kind=event_kind,
+                shm_ref=shm_ref,
+                state=state,
+                observed_at=observed_at,
+                route_ref=route_ref,
+                policy_decision_id=policy_decision_id,
+                artifact_ref=artifact_ref,
+                sql_ref=sql_ref,
+                qdrant_ref=qdrant_ref,
+                error=error,
+                payload=payload,
+            )
+        )
+
+    def accept_policy_event(
+        self,
+        *,
+        event_id: str,
+        event_kind: str,
+        policy_ref: str,
+        state: str,
+        observed_at: str,
+        policy_decision_id: str = "",
+        route_ref: str = "",
+        artifact_ref: str = "",
+        sql_ref: str = "",
+        qdrant_ref: str = "",
+        shm_ref: str = "",
+        error: str = "",
+        decision: str = "",
+        payload: Mapping[str, Any] | None = None,
+    ) -> BusSupervisorEvent:
+        """Accept a policy gate EventBus event without making a decision."""
+
+        return self.accept(
+            policy_supervision_event(
+                event_id=event_id,
+                event_kind=event_kind,
+                policy_ref=policy_ref,
+                state=state,
+                observed_at=observed_at,
+                policy_decision_id=policy_decision_id,
+                route_ref=route_ref,
+                artifact_ref=artifact_ref,
+                sql_ref=sql_ref,
+                qdrant_ref=qdrant_ref,
+                shm_ref=shm_ref,
+                error=error,
+                decision=decision,
                 payload=payload,
             )
         )

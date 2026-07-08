@@ -215,3 +215,150 @@ def test_passive_supervisor_sink_accept_scheduler_event_keeps_scheduler_downstre
     assert snapshot["event_count"] == 1
     assert snapshot["cells"][0]["health"] == "active"
     assert snapshot["supervision_authority_violation"] is False
+
+
+def test_runtime_surface_events_keep_proxy_shm_policy_refs() -> None:
+    from src.context.passive_bus_supervisor_cellular_snapshot import (
+        PassiveSupervisorSink,
+        policy_supervision_event,
+        proxy_supervision_event,
+        shm_supervision_event,
+    )
+
+    sink = PassiveSupervisorSink(metadata={"surface": "eventbus"})
+    sink.accept(
+        proxy_supervision_event(
+            event_id="evt-routeproxy-1",
+            event_kind="routeproxy_route_active",
+            proxy_kind="routeproxy",
+            proxy_ref="main",
+            state="running",
+            observed_at="2026-07-08T00:00:00Z",
+            route_ref="route-1",
+            shm_ref="route-ring-1",
+        )
+    )
+    sink.accept(
+        proxy_supervision_event(
+            event_id="evt-controlproxy-1",
+            event_kind="controlproxy_zone_visible",
+            proxy_kind="controlproxy",
+            proxy_ref="main",
+            state="running",
+            observed_at="2026-07-08T00:00:01Z",
+            route_ref="route-1",
+            shm_ref="route-ring-1",
+        )
+    )
+    sink.accept(
+        shm_supervision_event(
+            event_id="evt-shm-1",
+            event_kind="shm_ring_status_observed",
+            shm_ref="route-ring-1",
+            state="running",
+            observed_at="2026-07-08T00:00:02Z",
+            route_ref="route-1",
+        )
+    )
+    sink.accept(
+        policy_supervision_event(
+            event_id="evt-policy-1",
+            event_kind="policy_gate_decision_observed",
+            policy_ref="gate",
+            state="blocked",
+            observed_at="2026-07-08T00:00:03Z",
+            policy_decision_id="policy-1",
+            route_ref="route-1",
+            artifact_ref="artifact-1",
+            sql_ref="sql-1",
+            qdrant_ref="qdrant-1",
+            shm_ref="route-ring-1",
+            decision="blocked",
+        )
+    )
+
+    payload = sink.snapshot_payload(generated_at="2026-07-08T00:00:04Z")
+    cells = {cell["cell_id"]: cell for cell in payload["cells"]}
+
+    assert payload["event_count"] == 4
+    assert payload["blocked_count"] == 1
+    assert cells["routeproxy:main"]["cell_kind"] == "ROUTEPROXY"
+    assert cells["controlproxy:main"]["cell_kind"] == "CONTROLPROXY"
+    assert cells["shm:route-ring-1"]["refs"]["shm_ref"] == "route-ring-1"
+    assert cells["policy:gate"]["health"] == "blocked"
+    assert cells["policy:gate"]["refs"]["policy_decision_id"] == "policy-1"
+    assert cells["policy:gate"]["refs"]["artifact_ref"] == "artifact-1"
+    assert cells["policy:gate"]["refs"]["sql_ref"] == "sql-1"
+    assert cells["policy:gate"]["refs"]["qdrant_ref"] == "qdrant-1"
+    assert payload["authority_boundary"]["allows_proxy_control"] is False
+    assert payload["authority_boundary"]["allows_policy_decision"] is False
+
+
+def test_passive_supervisor_sink_accepts_runtime_surface_helpers() -> None:
+    from src.context.passive_bus_supervisor_cellular_snapshot import PassiveSupervisorSink
+
+    sink = PassiveSupervisorSink()
+    route_event = sink.accept_proxy_event(
+        event_id="evt-routeproxy-accept-1",
+        event_kind="routeproxy_eventbus_status_observed",
+        proxy_kind="routeproxy",
+        proxy_ref="main",
+        state="running",
+        observed_at="2026-07-08T00:00:00Z",
+        route_ref="route-1",
+    )
+    control_event = sink.accept_runtime_surface_event(
+        event_id="evt-controlproxy-accept-1",
+        event_kind="controlproxy_eventbus_status_observed",
+        cell_kind="CONTROLPROXY",
+        surface_ref="main",
+        state="running",
+        observed_at="2026-07-08T00:00:01Z",
+        route_ref="route-1",
+    )
+    shm_event = sink.accept_shm_event(
+        event_id="evt-shm-accept-1",
+        event_kind="shm_ring_eventbus_status_observed",
+        shm_ref="route-ring-1",
+        state="running",
+        observed_at="2026-07-08T00:00:02Z",
+    )
+    policy_event = sink.accept_policy_event(
+        event_id="evt-policy-accept-1",
+        event_kind="policy_gate_eventbus_decision_observed",
+        policy_ref="gate",
+        state="success",
+        observed_at="2026-07-08T00:00:03Z",
+        policy_decision_id="policy-1",
+        decision="allow",
+    )
+
+    snapshot = sink.snapshot_payload(generated_at="2026-07-08T00:00:04Z")
+    cells = {cell["cell_id"]: cell for cell in snapshot["cells"]}
+
+    assert route_event.cell_id == "routeproxy:main"
+    assert control_event.cell_id == "controlproxy:main"
+    assert shm_event.cell_id == "shm:route-ring-1"
+    assert policy_event.cell_id == "policy:gate"
+    assert policy_event.payload["decision"] == "allow"
+    assert snapshot["cell_count"] == 4
+    assert cells["routeproxy:main"]["health"] == "active"
+    assert cells["policy:gate"]["refs"]["policy_decision_id"] == "policy-1"
+
+
+def test_runtime_surface_event_rejects_unknown_surface_kind() -> None:
+    import pytest
+
+    from src.context.passive_bus_supervisor_cellular_snapshot import (
+        runtime_surface_supervision_event,
+    )
+
+    with pytest.raises(ValueError):
+        runtime_surface_supervision_event(
+            event_id="evt-invalid",
+            event_kind="invalid_surface",
+            cell_kind="SQL_AUTHORITY",
+            surface_ref="sql",
+            state="running",
+            observed_at="2026-07-08T00:00:00Z",
+        )

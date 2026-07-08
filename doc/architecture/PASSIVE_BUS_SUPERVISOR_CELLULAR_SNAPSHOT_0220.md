@@ -140,3 +140,29 @@ used by later RouteProxy, policy, SQL, Qdrant, SHM, GitHub, and rehydrate events
 The passive supervisor still does not import Scheduler, does not call
 `Scheduler.run`, and does not dispatch handlers. It only observes events that are
 already on the EventBus path.
+
+## 0223 Runtime Surface EventBus Supervisor Sources Update
+
+Patch 0223 extends the same passive supervisor surface to the runtime surfaces
+that must become visible next to Scheduler events:
+
+```text
+Scheduler / RouteProxy / ControlProxy / SHM ring/status / Policy gate
+  -> existing EventBus
+  -> PassiveSupervisorSink
+  -> in-memory CellularState
+  -> optional snapshot/audit
+```
+
+The update standardizes canonical EventBus event helpers for RouteProxy,
+ControlProxy, SHM ring/status, and policy gate decisions. These helpers preserve
+`route_ref`, `shm_ref`, `policy_decision_id`, `artifact_ref`, `sql_ref`, and
+`qdrant_ref` as first-level supervision refs so later GitHub, SQL/Qdrant, and
+rehydration stages can remain visible in the same cellular projection.
+
+The passive supervisor remains downstream-only. It does not control RouteProxy or
+ControlProxy, does not read raw SHM buffers, does not decide policy, does not
+implement a new EventBus, and does not call `Scheduler.run`.
+
+`events.jsonl` remains optional audit/replay output. The runtime path remains the
+existing EventBus feeding `PassiveSupervisorSink` directly.
