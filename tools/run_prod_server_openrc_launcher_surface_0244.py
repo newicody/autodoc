@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+"""Validate the phase 0244 OpenRC launcher surface."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SRC_ROOT = REPO_ROOT / "src"
+for _path in (str(SRC_ROOT), str(REPO_ROOT)):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
+
+from context.prod_server_openrc_launcher_surface_0244 import (  # noqa: E402
+    OPENRC_LAUNCHER_SURFACE_BOUNDARY,
+    openrc_surface_to_dict,
+    validate_openrc_surface,
+    write_openrc_surface_report,
+)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", default="doc/examples/autodoc_prod_server_initial_0241.ini")
+    parser.add_argument("--initd", default="doc/examples/openrc_autodoc_0244.initd")
+    parser.add_argument(
+        "--output",
+        default=".var/reports/prod_server_openrc_launcher_surface_0244.json",
+    )
+    parser.add_argument("--check-only", action="store_true")
+    parser.add_argument("--format", choices=("json", "summary"), default="json")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    config_path = Path(args.config)
+    initd_path = Path(args.initd)
+    output_path = Path(args.output)
+
+    if args.check_only:
+        report = validate_openrc_surface(config_path=config_path, initd_path=initd_path)
+        payload = {
+            "production_server_openrc_launcher_surface_valid": report.valid,
+            "openrc_surface": openrc_surface_to_dict(report),
+            "boundary": dict(OPENRC_LAUNCHER_SURFACE_BOUNDARY),
+        }
+    else:
+        payload = write_openrc_surface_report(
+            config_path=config_path,
+            initd_path=initd_path,
+            output_path=output_path,
+        )
+        report = validate_openrc_surface(config_path=config_path, initd_path=initd_path)
+
+    if args.format == "summary":
+        issue_count = len(report.issues)
+        commands = ",".join(report.expected_commands)
+        if args.check_only:
+            print(
+                "production_server_openrc_launcher_surface_valid="
+                f"{str(report.valid)} issues={issue_count} commands={commands}"
+            )
+        else:
+            print(
+                "production_server_openrc_launcher_surface_written=True "
+                f"valid={str(report.valid)} issues={issue_count} output={output_path}"
+            )
+    else:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+
+    return 0 if report.valid else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
