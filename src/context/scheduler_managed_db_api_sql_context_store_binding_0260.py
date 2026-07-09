@@ -24,6 +24,11 @@ import sqlite3
 import sys
 from typing import Any, Mapping, Sequence
 
+from context.scheduler_managed_db_api_sql_context_store_record_adapter_0260 import (
+    adapt_db_api_sql_context_store_for_scheduler_usage_0260,
+)
+
+RECORD_ADAPTER_MODULE_PRESENT_0260 = True
 from context.scheduler_managed_sql_context_store_usage_0259 import (
     run_scheduler_managed_sql_context_store_usage,
 )
@@ -423,7 +428,7 @@ def run_scheduler_managed_db_api_sql_context_store_binding(
         text=text,
         execute=execute,
         policy_decision_id=policy_decision_id,
-        store=store,
+        store=adapt_db_api_sql_context_store_for_scheduler_usage_0260(store),
         metadata={"binding_candidate": binding.selected_candidate.to_dict() if binding.selected_candidate else {}},
     )
     return SchedulerManagedDbApiSqlContextStoreBindingResult(
