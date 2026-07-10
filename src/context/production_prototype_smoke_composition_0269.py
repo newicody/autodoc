@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
+from urllib.parse import urlparse
 
 SCHEMA = "autodoc.production_prototype_smoke_composition.v1"
 PHASES = ("0260", "0261", "0262", "0263", "0264", "0265", "0266", "0267", "0268")
@@ -62,6 +63,8 @@ class ProductionPrototypeSmokeCommand:
     qdrant_prefer_grpc: bool = False
     qdrant_grpc_port: int = 6334
     qdrant_api_key_env: str = "QDRANT_API_KEY"
+    sql_authority_namespace: str = "autodoc-local"
+    strict_data_grpc: bool = False
 
     def issues(self, policy: ProductionPrototypeSmokePolicy) -> tuple[str, ...]:
         issues: list[str] = []
@@ -86,6 +89,20 @@ class ProductionPrototypeSmokeCommand:
                 issues.append("qdrant_grpc_port must be between 1 and 65535")
             if not self.qdrant_api_key_env.strip():
                 issues.append("qdrant_api_key_env must not be empty")
+            if not self.sql_authority_namespace.strip():
+                issues.append("sql_authority_namespace must not be empty")
+            if not self.qdrant_prefer_grpc:
+                issues.append("live_qdrant requires qdrant_prefer_grpc")
+            if not self.strict_data_grpc:
+                issues.append("live_qdrant requires strict_data_grpc")
+            parsed = urlparse(self.qdrant_url)
+            try:
+                rest_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+            except ValueError:
+                rest_port = None
+                issues.append("qdrant_url contains an invalid port")
+            if rest_port == self.qdrant_grpc_port:
+                issues.append("qdrant REST administration port must differ from gRPC port")
         return tuple(issues)
 
 
@@ -274,10 +291,13 @@ def build_production_prototype_smoke_plan(
             str(command.qdrant_grpc_port),
             "--qdrant-api-key-env",
             command.qdrant_api_key_env,
+            "--sql-authority-namespace",
+            command.sql_authority_namespace,
+            "--strict-data-grpc",
         ]
         if command.qdrant_prefer_grpc:
             live_args.append("--qdrant-prefer-grpc")
-        execute_0262.extend(live_args)
+        execute_0262.extend(["--db-path", str(command.database_path), *live_args])
         execute_0263.extend(live_args)
 
     model_args: list[str] = []
@@ -523,9 +543,25 @@ def run_production_prototype_smoke(
             if checks.get(name) is not False:
                 issues.append(f"required false boundary check failed or missing: {name}")
         if command.live_qdrant:
-            for name in ("qdrant_projection_live", "qdrant_recall_live"):
+            for name in (
+                "qdrant_projection_live",
+                "qdrant_recall_live",
+                "qdrant_projection_scoped",
+                "qdrant_recall_scoped",
+                "strict_data_grpc",
+                "rest_admin_only",
+            ):
                 if checks.get(name) is not True:
                     issues.append(f"required live Qdrant check failed or missing: {name}")
+            authority_refs = [
+                dict(outcome.references).get("sql_authority_ref", "")
+                for outcome in outcomes
+                if outcome.phase in {"0262", "0263"}
+            ]
+            if len(authority_refs) != 2 or any(not ref for ref in authority_refs):
+                issues.append("0262 and 0263 must both report sql_authority_ref")
+            elif len(set(authority_refs)) != 1:
+                issues.append("0262 and 0263 must report one shared sql_authority_ref")
 
     valid = not issues and len(outcomes) == len(plan) and all(outcome.valid for outcome in outcomes)
     return ProductionPrototypeSmokeResult(

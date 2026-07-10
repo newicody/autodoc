@@ -25,6 +25,7 @@ def _command(tmp_path: Path) -> ProductionPrototypeSmokeCommand:
         qdrant_prefer_grpc=True,
         qdrant_grpc_port=6334,
         qdrant_api_key_env="AUTODOC_TEST_QDRANT_API_KEY",
+        strict_data_grpc=True,
     )
 
 
@@ -38,6 +39,7 @@ def test_live_plan_injects_existing_executor_mode_into_0262_and_0263(tmp_path: P
         assert "--collection" in argv
         assert "autodoc_live_test" in argv
         assert "--qdrant-prefer-grpc" in argv
+        assert "--strict-data-grpc" in argv
         assert "AUTODOC_TEST_QDRANT_API_KEY" in argv
         assert "secret" not in " ".join(argv).lower()
 

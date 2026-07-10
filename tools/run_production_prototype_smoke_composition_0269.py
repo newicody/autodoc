@@ -57,6 +57,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--qdrant-prefer-grpc", action="store_true")
     parser.add_argument("--qdrant-grpc-port", type=int, default=6334)
     parser.add_argument("--qdrant-api-key-env", default="QDRANT_API_KEY")
+    parser.add_argument("--sql-authority-namespace", default="autodoc-local")
+    parser.add_argument("--strict-data-grpc", action="store_true")
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
     parser.add_argument("--format", choices=("json", "summary"), default="json")
     return parser.parse_args()
@@ -123,6 +125,10 @@ def _load_report(path: Path) -> tuple[bool | None, tuple[tuple[str, str], ...], 
             "qdrant_projection_live",
             "qdrant_recall_live",
             "uses_qdrant_client_executor",
+            "qdrant_projection_scoped",
+            "qdrant_recall_scoped",
+            "strict_data_grpc",
+            "rest_admin_only",
         },
     )
     references = tuple(
@@ -205,6 +211,8 @@ def _command_from_args(args: argparse.Namespace) -> ProductionPrototypeSmokeComm
         qdrant_prefer_grpc=args.qdrant_prefer_grpc,
         qdrant_grpc_port=args.qdrant_grpc_port,
         qdrant_api_key_env=args.qdrant_api_key_env,
+        sql_authority_namespace=args.sql_authority_namespace,
+        strict_data_grpc=args.strict_data_grpc,
     )
 
 

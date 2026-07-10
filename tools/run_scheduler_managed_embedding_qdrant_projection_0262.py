@@ -28,12 +28,20 @@ from inference.qdrant_client_projection_executor import (  # noqa: E402
     QdrantClientEffectGate,
     build_qdrant_client_projection_executor,
 )
+from inference.qdrant_sql_authority_scope import (  # noqa: E402
+    QdrantStrictGrpcTransportPolicy,
+    SqlAuthorityScopedQdrantExecutor,
+    derive_sqlite_authority_scope,
+)
 
+DEFAULT_DB_PATH = ROOT / ".var/local/scheduler_managed_db_api_sql_context_store_0260.sqlite3"
 DEFAULT_EMBEDDING_REPORT = ROOT / ".var/reports/scheduler_managed_sql_ref_openvino_embedding_0261.json"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--db-path", default=str(DEFAULT_DB_PATH))
+    parser.add_argument("--sql-authority-namespace", default="autodoc-local")
     parser.add_argument("--embedding-report", default=str(DEFAULT_EMBEDDING_REPORT))
     parser.add_argument("--output", default="")
     parser.add_argument("--execute", action="store_true")
@@ -45,6 +53,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--qdrant-timeout-seconds", type=float, default=10.0)
     parser.add_argument("--qdrant-prefer-grpc", action="store_true")
     parser.add_argument("--qdrant-grpc-port", type=int, default=6334)
+    parser.add_argument("--strict-data-grpc", action="store_true")
     parser.add_argument("--qdrant-api-key-env", default="QDRANT_API_KEY")
     parser.add_argument("--collection", default="autodoc_context_embeddings")
     parser.add_argument("--dimension", type=int, default=384)
@@ -61,6 +70,16 @@ def _mode(args: argparse.Namespace) -> str:
 
 
 def _build_live_executor(args: argparse.Namespace):
+    transport = QdrantStrictGrpcTransportPolicy(
+        rest_admin_url=args.qdrant_url,
+        grpc_port=args.qdrant_grpc_port,
+        prefer_grpc=args.qdrant_prefer_grpc,
+        strict_data_grpc=args.strict_data_grpc,
+    )
+    scope = derive_sqlite_authority_scope(
+        args.db_path,
+        namespace=args.sql_authority_namespace,
+    )
     config = QdrantClientConnectionConfig(
         url=args.qdrant_url,
         timeout_seconds=args.qdrant_timeout_seconds,
@@ -73,7 +92,8 @@ def _build_live_executor(args: argparse.Namespace):
         allow_search=False,
     )
     api_key = os.environ.get(args.qdrant_api_key_env) if args.qdrant_api_key_env else None
-    return build_qdrant_client_projection_executor(config, gate, api_key=api_key), config
+    delegate = build_qdrant_client_projection_executor(config, gate, api_key=api_key)
+    return SqlAuthorityScopedQdrantExecutor(delegate, scope), config, scope, transport
 
 
 def _failure_payload(args: argparse.Namespace, exc: Exception) -> dict[str, Any]:
@@ -86,6 +106,9 @@ def _failure_payload(args: argparse.Namespace, exc: Exception) -> dict[str, Any]
         "qdrant_mode": _mode(args),
         "uses_qdrant_client_executor": args.live_qdrant,
         "qdrant_projection_live": False,
+        "qdrant_projection_scoped": False,
+        "strict_data_grpc": False,
+        "rest_admin_only": False,
         "starts_qdrant": False,
         "touches_shm": False,
         "sql_remains_authority": True,
@@ -102,13 +125,19 @@ def main() -> int:
     )
     executor = None
     config = None
+    scope = None
+    transport = None
     try:
         if args.live_qdrant and not args.execute:
             raise ValueError("live_qdrant requires --execute")
+        if args.live_qdrant and not args.qdrant_prefer_grpc:
+            raise ValueError("live_qdrant requires --qdrant-prefer-grpc")
+        if args.live_qdrant and not args.strict_data_grpc:
+            raise ValueError("live_qdrant requires --strict-data-grpc")
         if args.demo_qdrant:
             executor = DemoQdrantProjectionExecutor()
         elif args.live_qdrant:
-            executor, config = _build_live_executor(args)
+            executor, config, scope, transport = _build_live_executor(args)
         result = run_scheduler_managed_embedding_qdrant_projection_usage(
             report,
             request,
@@ -119,9 +148,21 @@ def main() -> int:
         payload["qdrant_mode"] = _mode(args)
         payload["uses_qdrant_client_executor"] = args.live_qdrant
         payload["qdrant_projection_live"] = bool(args.live_qdrant and args.execute and payload["valid"])
+        payload["qdrant_projection_scoped"] = bool(
+            scope is not None and payload["qdrant_projection_live"]
+        )
+        payload["strict_data_grpc"] = bool(
+            transport is not None and transport.strict_data_grpc
+        )
+        payload["rest_admin_only"] = bool(transport is not None)
         payload["touches_shm"] = False
         if config is not None:
             payload["qdrant_connection"] = config.to_mapping()
+        if scope is not None:
+            payload["sql_authority_ref"] = scope.authority_ref
+            payload["sql_authority_scope"] = scope.to_mapping()
+        if transport is not None:
+            payload["qdrant_transport_policy"] = transport.to_mapping()
     except Exception as exc:
         payload = _failure_payload(args, exc)
     finally:
