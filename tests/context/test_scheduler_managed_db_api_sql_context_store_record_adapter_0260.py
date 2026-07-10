@@ -5,7 +5,7 @@ from context.scheduler_managed_db_api_sql_context_store_record_adapter_0260 impo
 
 class UpsertOnlyStore:
     def upsert_record(self, record):
-        assert record.context_ref == "intent:0260:test"
+        assert record.context_ref.startswith("sql:")
         assert record.content == "payload text"
         return record
 
@@ -26,8 +26,8 @@ def test_record_adapter_builds_record_for_upsert_only_store() -> None:
         }
     )
 
-    assert result["sql_ref"] == "intent:0260:test"
-    assert result["record"]["context_ref"] == "intent:0260:test"
+    assert result["sql_ref"] == "sql:intent:0260:test"
+    assert result["record"]["context_ref"] == "sql:intent:0260:test"
 
 
 def test_record_adapter_delegates_controlled_write_store() -> None:
@@ -35,3 +35,16 @@ def test_record_adapter_delegates_controlled_write_store() -> None:
     result = adapter.controlled_write({"intent_id": "intent:0260:test", "text": "payload text"})
 
     assert result["sql_ref"] == "sql:controlled/intent:0260:test"
+
+
+def test_record_adapter_keeps_existing_sql_typed_context_ref() -> None:
+    adapter = adapt_db_api_sql_context_store_for_scheduler_usage_0260(UpsertOnlyStore())
+    result = adapter.controlled_write(
+        {
+            "intent_id": "intent:ignored",
+            "text": "payload text",
+            "metadata": {"context_ref": "sql:already-typed"},
+        }
+    )
+
+    assert result["sql_ref"] == "sql:already-typed"

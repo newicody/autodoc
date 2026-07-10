@@ -14,3 +14,9 @@ does not create a new SQL store
 uses existing DbApiSqlContextStore
 does not modify Scheduler.run
 ```
+
+## r9
+
+The real `DbApiSqlContextStore` validates `context_ref` as a typed SQL
+reference.  The adapter now normalises generated context references so they
+start with `sql:` while preserving already-typed `sql:` references.

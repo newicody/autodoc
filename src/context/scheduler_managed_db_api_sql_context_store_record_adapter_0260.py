@@ -18,9 +18,18 @@ from typing import Any, Mapping
 import uuid
 
 
+def _sql_typed_context_ref(value: object) -> str:
+    """Return a SQL-typed context_ref required by DbApiSqlContextStore."""
+
+    text = str(value or uuid.uuid4().hex)
+    if text.startswith("sql:"):
+        return text
+    return "sql:" + text
+
+
 def _record_values_from_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     metadata = dict(payload.get("metadata", {}))
-    context_ref = str(
+    context_ref = _sql_typed_context_ref(
         metadata.get("context_ref")
         or payload.get("context_ref")
         or payload.get("intent_id")
