@@ -1,6 +1,7 @@
 # Autodoc / MissiPy
 
-Autodoc / MissiPy is a local-first engineering workspace for turning files, notes, artifacts and operator decisions into explicit, auditable context.
+Autodoc / MissiPy is a local-first engineering workspace for turning files,
+notes, artifacts and operator decisions into explicit, auditable context.
 
 The project is built around a simple rule:
 
@@ -11,43 +12,59 @@ external services are workflow surfaces, not the authority.
 
 ## Why this exists
 
-The goal is to build a small but strict context engine that can ingest candidate sources, review them, decide what to do with them, audit those decisions and prepare controlled handoffs.
+The goal is to build a small but strict context engine that can ingest candidate
+sources, review them, decide what to do with them, audit those decisions and
+prepare controlled handoffs.
 
-This is useful for workflows where a human operator wants to keep ownership of the evolving knowledge base while still using automation, local inference and future external project surfaces.
-
-Autodoc / MissiPy is not designed as a remote-first agent. It is designed as a local, inspectable and progressively extensible system.
+This is useful when a human operator wants to keep ownership of the evolving
+knowledge base while still using automation, local inference and external review
+surfaces. Autodoc / MissiPy is local, inspectable and progressively extensible;
+it is not designed as a remote-first agent.
 
 ## Current architecture
 
-The current SourceCandidate chain is local and auditable:
+### Current operational baseline
+
+The current production-prototype smoke is a controlled, one-shot composition of
+existing phase tools:
 
 ```text
-SourceCandidate store
--> review
--> decision
--> decision audit
--> review audit summary
--> operator report
--> operator report file
--> operator bundle
--> operator CLI
--> projection preview
--> projection bundle
--> projection gate
--> projection gate report
--> handoff dry-run
--> closure audit
+0260 SQL write
+-> 0261 SQL rehydrate + OpenVINO/E5 embedding
+-> 0262 Qdrant projection with payload.sql_ref
+-> 0263 Qdrant recall refs + SQL rehydrate
+-> 0264 closed ResultFrame
+-> 0265 EventBus observation-only facts
+-> 0266 PassiveSupervisor read model
+-> 0267 local GitHub scan-once handoff
+-> 0268 OpenRC/launcher readiness
+-> 0269 production prototype smoke report
 ```
 
-The local operator/projection chain is now ready to support external boundary work. The next steps are contracts and dry-runs before any remote mutation.
+The validated boundary is:
+
+```text
+Scheduler = Autodoc orchestration authority
+SQL = durable authority
+Qdrant = projection and recall only
+OpenVINO/E5 = explicit vector generation
+EventBus = observation only
+PassiveSupervisor = observation only
+GitHub = review/workflow surface
+OpenRC / OS / admin = external process authority
+```
+
+The 0269 execution path uses real SQL and real OpenVINO/E5. The current Qdrant
+executor remains an explicit demonstration gate until a controlled real executor
+is selected and validated. No phase in this baseline starts PostgreSQL, Qdrant or
+OpenVINO daemons.
 
 ## Source of truth
 
-The local/server machine remains authoritative.
-
-GitHub, future project trackers or other external systems are treated as projection and review surfaces. They may receive derived artifacts, status or operator-facing summaries, but they do not own the evolving local context.
-
-The intended model is:
+The local/server machine remains authoritative. GitHub, future project trackers
+and other external systems are projection, review and synchronization surfaces.
+They may receive derived artifacts, status or operator-facing summaries, but they
+do not own the evolving local context.
 
 ```text
 local/server = authoritative evolving source
@@ -57,7 +74,6 @@ external surfaces = review, workflow and synchronization interfaces
 ## Patch queue workflow
 
 Development is organized as small patch queue bundles under `patch/<patch-id>/`.
-
 A patch bundle contains:
 
 ```text
@@ -70,51 +86,66 @@ patch/<patch-id>/
 Typical usage:
 
 ```bash
-python apply_patch_queue.py --patch <patch-id> --dry-run
-python apply_patch_queue.py --patch <patch-id> --commit --push
+python apply_patch_queue.py --patch <patch-id> --dry-run --allow-dirty
+python apply_patch_queue.py --patch <patch-id> --commit --push --allow-dirty
 ```
 
-Repository status can be inspected with:
+Before generating or applying a new patch, capture the exact checkout state:
 
 ```bash
-python apply_patch_queue.py --status
+git status --short
+git log --oneline -5
+git diff
 ```
 
-Generated or local-only files such as SVG renders, Python bytecode and local patch queue config must not be versioned.
+Generated or local-only files such as SVG renders, Python bytecode, reports and
+local patch queue configuration must not be versioned unless a phase manifest
+explicitly requires them.
 
 ## Tests
 
 Common gates:
 
 ```bash
-PYTHONPATH=src python -m compileall -q src tests
-PYTHONPATH=src pytest -q tests/rules
-PYTHONPATH=src pytest -q
+PYTHONPATH=src:. python -m compileall -q src tests tools
+PYTHONPATH=src:. python -m pytest -q tests/rules
+PYTHONPATH=src:. python -m pytest -q
 ```
 
-Specific phase tests are listed in the corresponding test report files.
+Specific phase tests and smoke commands are recorded in the corresponding phase
+test reports.
 
 ## Documentation map
 
-Important documentation lives in:
+Use these documents as the current map:
 
 ```text
-doc/releases/
-doc/CHANGELOG_*
-doc/*_CODE_RULE_ALIGNMENT.md
-MANIFEST_*_CHANGED_FILES.md
-doc/docs/architecture/
+doc/architecture/CURRENT_ARCHITECTURE_STATE_0154.md
+doc/architecture/OPERATIONAL_DOCUMENTATION_CONSOLIDATION_0270.md
+doc/ARCHITECTURE_LAYERS.md
+doc/docs/architecture/00_global.dot
+doc/code-rules/code_rule.md
 ```
 
-The root README is intentionally stable. It is an entrypoint, not a phase changelog.
+Historical phase documents remain implementation evidence. They do not override
+the current-state index or the 0270 operational decisions.
+
+The root README is intentionally stable. It is an entrypoint, not a phase
+changelog.
 
 ## AI-assisted development
 
-This project is developed with help from several AI systems, including ChatGPT, Claude, Gemini, Perplexity and Mistral.
+This project is developed with help from several AI systems, including ChatGPT,
+Claude, Gemini, Perplexity and Mistral.
 
-That is a practical choice: the project is intentionally designed to run on accessible local hardware, without requiring an expensive dedicated GPU. The current direction favors CPU/iGPU-friendly components, local artifacts, explicit contracts and controlled handoffs over blind dependence on high-end accelerator hardware.
+That is a practical choice: the project is intentionally designed to run on
+accessible local hardware, without requiring an expensive dedicated GPU. The
+current direction favors CPU/iGPU-friendly components, local artifacts, explicit
+contracts and controlled handoffs over blind dependence on high-end accelerator
+hardware.
 
-In other words: the project uses AI assistance to design, review and verify the system, while keeping the operational architecture local-first, inspectable and hardware-conscious.
+AI assistance is used to design, review and verify the system while keeping the
+operational architecture local-first, inspectable and hardware-conscious.
 
 ## Current boundary
 
@@ -125,29 +156,31 @@ remote mutation by default
 network dependency in local gates
 GitHub API writes
 tokens committed to the repository
-Qdrant dependency in SourceCandidate control paths
-LLM/OpenVINO dependency in local audit gates
-Scheduler changes without explicit live-path justification
+implicit Qdrant durable authority
+hidden OpenVINO execution inside Scheduler
+Scheduler-owned external service lifecycle
 ```
 
-External systems must be approached through explicit contracts, dry-runs, reports and gates.
+External systems must be approached through explicit contracts, dry-runs,
+reports and gates. GitHub remote mutation remains forbidden in the validated
+0260-0269 baseline. Scheduler.run is not modified by the 0270 documentation
+consolidation.
 
 ## Roadmap orientation
 
-Immediate direction:
+The next runtime changes require separate, explicit decisions. Current priority
+order is:
 
 ```text
-7.0  root README operator entrypoint
-7.1  external projection contract v1
-7.2  GitHub projection payload dry-run
-7.3  remote mutation gate
-7.4  GitHub adapter interface with fake adapter first
-7.5  GitHub export bundle
-7.6  operator external review report
-7.7  read-only external probe
+1. controlled real Qdrant executor, reusing the existing projection/recall surfaces
+2. read-only real GitHub scan adapter, before any remote mutation gate
+3. explicit remote GitHub mutation gate with operator approval, only after read-only validation
+4. optional OpenRC service wrapper outside Scheduler, only if operationally necessary
+5. specialist and distributed extensions after the durable/recall path is stable
 ```
 
-Actual remote mutation should come later, behind explicit gates and operator approval.
+Each item must begin with an audit of existing code. A new manager, orchestrator,
+worker or adapter is forbidden when an existing surface can be extended.
 
 ## Non-goals
 
@@ -160,6 +193,7 @@ a GitHub bot with write access by default
 a replacement for human operator review
 a hidden background daemon
 a system that stores secrets in Git
+a Scheduler-owned service manager
 ```
 
-The project grows by small, auditable patches.
+The project grows by small, auditable patches and explicit gates.

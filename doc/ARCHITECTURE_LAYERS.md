@@ -2,6 +2,37 @@
 
 Ce document décrit l'état actuel du prototype après ajout du corpus local depuis sources TXT/Markdown et du rapport de recherche E5 avec contexte source en Phase 3.14.
 
+Ce document conserve les notes détaillées des anciennes phases. La section suivante est la synthèse courante; les sections Phase 3.x plus bas sont historiques et ne doivent pas être utilisées comme état opérationnel actuel.
+
+## Current operational baseline — 0270
+
+La chaîne prototype validée réutilise les surfaces 0260 à 0268 et les compose en 0269 :
+
+```text
+0260 SQL durable write
+-> 0261 SQL rehydrate + OpenVINO/E5
+-> 0262 Qdrant projection payload.sql_ref
+-> 0263 recall refs + SQL rehydrate
+-> 0264 closed ResultFrame
+-> 0265 EventBus observation facts
+-> 0266 PassiveSupervisor read model
+-> 0267 local GitHub handoff
+-> 0268 external-service readiness
+-> 0269 one-shot production prototype smoke
+```
+
+Les couches actives doivent respecter ces autorités :
+
+- Scheduler orchestre des intentions typées mais ne démarre aucun daemon ;
+- SQL est l'autorité durable ;
+- Qdrant est une projection de rappel reconstruisible avec `payload.sql_ref` ;
+- OpenVINO/E5 produit explicitement les embeddings ;
+- EventBus et PassiveSupervisor restent strictement observation-only ;
+- GitHub reste une surface de review/workflow sans mutation distante implicite ;
+- OpenRC, l'OS et l'administrateur possèdent le cycle de vie des services externes.
+
+Le chemin 0269 utilise SQL et OpenVINO/E5 réels. Qdrant reste derrière une gate de démonstration explicite jusqu'à validation d'un exécuteur réel contrôlé. Cette synthèse prévaut sur les mentions historiques « future », « fictif » ou « non branché » présentes dans les sections anciennes.
+
 La règle centrale reste inchangée : le Scheduler ne contient pas de logique métier. Il orchestre l'entrée des événements, délègue l'autorisation au `PolicyEngine`, route par `PriorityQueue` puis `Dispatcher`, et expose son activité via une observabilité passive.
 
 ## Synthèse courte

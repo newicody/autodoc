@@ -1,40 +1,77 @@
-# Current architecture state — 0154
+# Current architecture state — canonical index refreshed by 0270
 
-This page is the current-state index after the 0153 documentation and surface audit. Historical phase documents remain useful as implementation history, but this page is the canonical high-level map for the active architecture.
+This path remains the canonical high-level current-state index. The filename is
+kept for compatibility with earlier documentation links; revision 0270 replaces
+the obsolete 0154 completeness snapshot without deleting historical phase docs.
 
-## Current boundary model
-
-The active system is organized around four durable roles and two execution roles:
+## Authority and boundary model
 
 | Role | Current surface | Responsibility | Must not become |
 | --- | --- | --- | --- |
-| SQL durable authority | `src/context/sql_context_store.py` | Stores typed context records, provenance, metadata, and readback state. | Vector index, inference runtime, scheduler. |
-| Qdrant projection index | `src/inference/qdrant_projection_adapter.py` plus `tools/run_qdrant_projection_live_smoke.py` | Stores recall projections with `sql_ref` payloads. | Durable truth. |
-| OpenVINO/E5 embedding path | `tools/embed_e5.py`, `src/inference/openvino_embedding_adapter.py`, `src/inference/openvino_runtime.py` | Produces normalized E5 vectors. | Database or scheduler. |
-| RouteProxy runtime | `src/runtime/route_proxy_runtime_minimal.py` | Fast request/result frames and readback. | Policy authority or durable store. |
-| Scheduler-shaped boundary | `src/runtime/scheduler_route_handler_minimal.py` | Writes route frames and carries command-shaped intent. | Embedding runner or Qdrant client. |
-| Artifact surface | `tools/run_local_artifact_vector_indexing_runner.py`, `src/context/artifact_intake_contract.py`, `src/context/artifact_route_refs.py` | Human/replayable artifact input, reports, and dynamic refs. | Hidden bus. |
+| Scheduler orchestration authority | existing Scheduler, policy and dispatcher surfaces | Accept typed intentions, apply policy, order and dispatch work. | Service manager, SQL implementation, Qdrant client or OpenVINO runtime. |
+| SQL durable authority | `DbApiSqlContextStore`, `SqlContextRecord`, controlled write/readback tools | Persist typed context and provide authoritative rehydration by `sql_ref`. | Vector index or event bus. |
+| Qdrant projection/recall | existing Qdrant projection and recall adapters/tools | Store rebuildable vectors and return references whose payload includes `sql_ref`. | Durable authority. |
+| OpenVINO/E5 embedding | existing E5/OpenVINO pipeline and adapter surfaces | Produce explicit normalized embeddings from rehydrated SQL content. | Hidden Scheduler backend or database. |
+| RouteProxy fast data plane | existing RouteProxy runtime and frame surfaces | Carry fast request/result frames and readback state. | Policy authority or durable store. |
+| EventBus observation | existing EventBus publication surfaces | Publish copies/facts for observation. | Command or authorization path. |
+| PassiveSupervisor read model | existing passive supervisor surfaces | Consume accepted facts and expose a read-only view. | Controller or actuator. |
+| GitHub workflow surface | scan-once handoff and future gated adapters | Review, workflow and synchronization projection. | Local authority or implicit mutation channel. |
+| External process authority | OpenRC, OS and administrator | Start and supervise PostgreSQL, Qdrant and OpenVINO-related services when needed. | Scheduler-owned lifecycle. |
 
-## Current validated P1 chain
+## Validated production-prototype chain
 
-The validated local path is:
+The current one-shot composition is:
 
 ```text
-artifact local
--> ArtifactIntakeContract
--> dynamic artifact route refs
--> Scheduler-shaped vector request frame
--> RouteProxyRuntime readback
--> OpenVINO/E5 full-vector JSON
--> Qdrant projection/search with sql_ref
--> RouteProxyRuntime result frame
--> SQL persistence handoff
--> SQLContextStore persistence record
--> DbApiSqlContextStore.upsert_record
--> SQL readback OK
+0260 real DbApiSqlContextStore write
+-> 0261 sql_ref -> SQL rehydrate -> real OpenVINO/E5 embedding
+-> 0262 embedding -> Qdrant projection batch with payload.sql_ref
+-> 0263 Qdrant recall refs -> unique sql_ref -> SQL rehydrate
+-> 0264 closed ResultFrame
+-> 0265 EventBus observation-only facts
+-> 0266 PassiveSupervisor observation-only read model
+-> 0267 local GitHub scan-once handoff, remote_mutation_allowed=False
+-> 0268 OpenRC/launcher readiness, services_started=False
+-> 0269 one-shot production prototype smoke report
 ```
 
-The stable local SQL database is resolved by the controlled write smoke in this order:
+A successful 0269 execution requires all nine step reports, propagated
+`sql_ref`, `embedding_ref`, `handoff_ref` and `readiness_ref`, and the locked
+no-mutation/no-service-start/observation-only boundaries.
+
+References are run-scoped outputs. They prove propagation for one execution; they
+are not hard-coded architecture identifiers.
+
+## Backend status
+
+```text
+SQL write/readback: real
+OpenVINO/E5 embedding: real by default
+Qdrant executor in 0269: explicit demo gate
+EventBus publication in 0269: explicit in-memory demo gate
+GitHub API: not called
+GitHub remote mutation: forbidden
+OpenRC service start: not called
+```
+
+The demo membranes are explicit transition surfaces. They must not be described
+as production backends, and replacing them requires a controlled adapter decision
+and live validation.
+
+## Compatibility invariants retained from 0154
+
+The 0270 refresh preserves the established authority wording used by the existing
+documentation rules:
+
+```text
+SQL owns durable context.
+Qdrant owns recall projections.
+OpenVINO/E5 owns vector generation.
+RouteProxy owns fast frames.
+```
+
+The validated SQL path continues to use `DbApiSqlContextStore.upsert_record`. The
+configured local database resolution contract remains:
 
 ```text
 1. --db-path
@@ -42,31 +79,32 @@ The stable local SQL database is resolved by the controlled write smoke in this 
 3. .var/local/sql_context_store.sqlite3
 ```
 
-## Meaning of E5, OpenVINO, Qdrant, and SQL
+## Reuse-first decisions
 
-- E5 is the embedding model. It converts text into vectors.
-- OpenVINO is the local Intel inference runtime used to execute E5.
-- Qdrant is the vector recall index. It stores projections and metadata such as `sql_ref`.
-- SQL is the durable authority. It stores context records and makes Qdrant rebuildable.
+Before adding any runtime, handler, adapter, worker or launcher:
 
-The current invariant is:
+1. inspect the current implementation and phase tools;
+2. extend or bind an existing surface when its contract is compatible;
+3. document the exact gap before adding a new module;
+4. keep effects at CLI/IO adapters and immutable contracts in the core;
+5. keep `Scheduler.run` unchanged unless a documented exception and dedicated gate exist.
 
-```text
-SQL owns durable context. Qdrant owns recall projections. OpenVINO/E5 owns vector generation. RouteProxy owns fast frames.
-```
+Explicitly avoid parallel `RuntimeManager`, SQL orchestrator, Qdrant adapter,
+OpenVINO embedding adapter or GitHub mutation path unless reuse has been proven
+impossible.
 
-## Current completeness snapshot from the 0153 audit
+## Next controlled decisions
 
-The 0153 audit reported P1 near complete, P2 not started, P3 partially prepared, and VisPy/GitHub/distribution missing. The reported OpenVINO/E5 partial status is a static audit warning, not a live failure: the strict machine-vector handoff has been validated by the 0142/0143/0147/0151 smoke chain.
+1. Select and validate a real Qdrant executor behind an explicit policy gate.
+2. Add a read-only real GitHub scan adapter before designing remote mutation.
+3. Design remote GitHub mutation as a separate operator-approved gate.
+4. Add an OpenRC wrapper only outside Scheduler and only when operational need is demonstrated.
+5. Revisit specialist/distributed work after the durable SQL and recall path is stable.
 
-## Reuse-first rule
+## Canonical companions
 
-Before adding new runtime, handler, adapter, or worker surfaces, inspect existing code and prefer extension of the current surfaces above. New surfaces are allowed only when an explicit gap is documented.
-
-## Current non-goals
-
-- No separate SQL worker or SQL orchestrator.
-- No new vector adapter parallel to the existing Qdrant projection adapter.
-- No new OpenVINO embedding adapter parallel to the existing embedding membrane.
-- No direct Qdrant or OpenVINO backend imports from Scheduler, RouteProxy, or context contracts.
-- No deletion of historical phase docs during current-state refresh.
+- `README.md`
+- `doc/architecture/OPERATIONAL_DOCUMENTATION_CONSOLIDATION_0270.md`
+- `doc/ARCHITECTURE_LAYERS.md`
+- `doc/docs/architecture/00_global.dot`
+- `doc/code-rules/code_rule.md`
