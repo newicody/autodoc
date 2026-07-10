@@ -162,11 +162,31 @@ def _build_record_for_existing_store(store: object, payload: Mapping[str, Any]) 
     return SimpleNamespace(**values)
 
 
+def _call_existing_schema_bootstrap(store: object) -> bool:
+    """Call an existing schema bootstrap hook when the store exposes one."""
+
+    for name in (
+        "ensure_schema",
+        "initialize_schema",
+        "init_schema",
+        "create_schema",
+        "setup_schema",
+        "bootstrap_schema",
+        "migrate",
+    ):
+        hook = getattr(store, name, None)
+        if callable(hook):
+            hook()
+            return True
+    return False
+
+
 class SchedulerManagedDbApiSqlContextStoreRecordAdapter:
     """Expose ``controlled_write(payload)`` over an existing SQL store object."""
 
     def __init__(self, store: object) -> None:
         self.store = store
+        self.schema_bootstrap_called = _call_existing_schema_bootstrap(store)
 
     def controlled_write(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         controlled_write = getattr(self.store, "controlled_write", None)

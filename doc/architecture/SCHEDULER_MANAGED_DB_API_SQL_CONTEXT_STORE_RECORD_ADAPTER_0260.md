@@ -20,3 +20,10 @@ does not modify Scheduler.run
 The real `DbApiSqlContextStore` validates `context_ref` as a typed SQL
 reference.  The adapter now normalises generated context references so they
 start with `sql:` while preserving already-typed `sql:` references.
+
+## r10
+
+The real execution path reached SQLite and failed when the target database had
+no `sql_context_records` table.  The adapter now calls an existing schema
+bootstrap hook when the bound store exposes one.  This does not invent a schema;
+it delegates schema readiness to the existing DbApiSqlContextStore surface.

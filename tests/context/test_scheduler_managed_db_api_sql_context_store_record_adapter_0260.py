@@ -48,3 +48,30 @@ def test_record_adapter_keeps_existing_sql_typed_context_ref() -> None:
     )
 
     assert result["sql_ref"] == "sql:already-typed"
+
+
+class SchemaBootstrapStore(UpsertOnlyStore):
+    def __init__(self) -> None:
+        self.schema_ready = False
+
+    def ensure_schema(self) -> None:
+        self.schema_ready = True
+
+    def upsert_record(self, record):
+        assert self.schema_ready is True
+        return super().upsert_record(record)
+
+
+def test_record_adapter_calls_existing_schema_bootstrap_hook() -> None:
+    store = SchemaBootstrapStore()
+    adapter = adapt_db_api_sql_context_store_for_scheduler_usage_0260(store)
+
+    assert adapter.schema_bootstrap_called is True
+    result = adapter.controlled_write(
+        {
+            "intent_id": "intent:0260:schema",
+            "text": "payload text",
+            "metadata": {},
+        }
+    )
+    assert result["sql_ref"] == "sql:intent:0260:schema"
