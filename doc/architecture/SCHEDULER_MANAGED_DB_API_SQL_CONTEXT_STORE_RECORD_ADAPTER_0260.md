@@ -27,3 +27,10 @@ The real execution path reached SQLite and failed when the target database had
 no `sql_context_records` table.  The adapter now calls an existing schema
 bootstrap hook when the bound store exposes one.  This does not invent a schema;
 it delegates schema readiness to the existing DbApiSqlContextStore surface.
+
+## r11
+
+The adapter now reuses the existing `build_sql_context_record` helper exposed by
+`context.sql_context_store`.  It no longer uses a generic SimpleNamespace as the
+primary record path.  Scheduler text kinds such as `passage` and `query` are
+mapped to the existing SQL kind `inference_context`.

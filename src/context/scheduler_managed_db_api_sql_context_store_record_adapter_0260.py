@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
 import inspect
-from types import SimpleNamespace
 from typing import Any, Mapping
 import uuid
 
@@ -68,6 +67,10 @@ def _public_record_mapping(record: object) -> dict[str, Any]:
         "text",
         "text_kind",
         "source_ref",
+        "kind",
+        "title",
+        "body",
+        "parent_ref",
         "metadata",
     ):
         if hasattr(record, name):
@@ -122,6 +125,87 @@ def _result_to_mapping(result: object, fallback_record: object | None = None) ->
     return payload
 
 
+def _sql_record_kind(values: Mapping[str, Any]) -> str:
+    """Map Scheduler text kinds to existing SqlContextRecord allowed kinds."""
+
+    metadata = values.get("metadata")
+    preferred = ""
+    if isinstance(metadata, Mapping):
+        preferred = str(metadata.get("sql_kind") or metadata.get("kind") or "")
+    preferred = preferred or str(values.get("kind") or values.get("text_kind") or "")
+    if preferred in {
+        "source",
+        "document",
+        "chunk",
+        "fact",
+        "artifact",
+        "objective",
+        "axis",
+        "trajectory",
+        "inference_context",
+        "specialist_output",
+        "feedback",
+        "github_artifact",
+    }:
+        return preferred
+    return "inference_context"
+
+
+def _sql_record_identity(values: Mapping[str, Any]) -> str:
+    """Return a stable identity accepted by build_sql_context_record."""
+
+    for key in ("context_ref", "record_ref", "record_id", "id"):
+        value = values.get(key)
+        if value:
+            return str(value).removeprefix("sql:")
+    return uuid.uuid4().hex
+
+
+def _sql_record_title(values: Mapping[str, Any]) -> str:
+    """Return a non-empty title for the existing SqlContextRecord."""
+
+    metadata = values.get("metadata")
+    if isinstance(metadata, Mapping):
+        title = str(metadata.get("title") or "")
+        if title.strip():
+            return title
+    source_ref = str(values.get("source_ref") or "")
+    if source_ref.strip():
+        return source_ref
+    return str(values.get("context_ref") or "Scheduler-managed SQL context write")
+
+
+def _sql_record_metadata_tuple(values: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
+    """Return metadata in the tuple form expected by SqlContextRecord."""
+
+    metadata = values.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return ()
+    normalized: list[tuple[str, str]] = []
+    for key, value in sorted(metadata.items()):
+        text_key = str(key)
+        text_value = str(value)
+        if text_key and text_value:
+            normalized.append((text_key, text_value))
+    return tuple(normalized)
+
+
+def _build_existing_sql_context_record_with_module(store_module: object, values: Mapping[str, Any]) -> object | None:
+    """Use the existing build_sql_context_record helper when available."""
+
+    builder = getattr(store_module, "build_sql_context_record", None)
+    if not callable(builder):
+        return None
+    return builder(
+        kind=_sql_record_kind(values),
+        identity=_sql_record_identity(values),
+        title=_sql_record_title(values),
+        body=str(values.get("body") or values.get("content") or values.get("text") or ""),
+        parent_ref=values.get("parent_ref"),
+        metadata=_sql_record_metadata_tuple(values),
+    )
+
+
 def _construct_existing_record_class(record_class: type[Any], values: Mapping[str, Any]) -> object:
     signature = inspect.signature(record_class)
     kwargs: dict[str, Any] = {}
@@ -147,6 +231,10 @@ def _construct_existing_record_class(record_class: type[Any], values: Mapping[st
 def _build_record_for_existing_store(store: object, payload: Mapping[str, Any]) -> object:
     values = _record_values_from_payload(payload)
     store_module = inspect.getmodule(store.__class__)
+    if store_module is not None:
+        record = _build_existing_sql_context_record_with_module(store_module, values)
+        if record is not None:
+            return record
     for name in (
         "SqlContextRecord",
         "ContextRecord",
@@ -159,7 +247,7 @@ def _build_record_for_existing_store(store: object, payload: Mapping[str, Any]) 
                 return _construct_existing_record_class(record_class, values)
             except TypeError:
                 continue
-    return SimpleNamespace(**values)
+    raise TypeError("existing SQLContextStore record builder was not found")
 
 
 def _call_existing_schema_bootstrap(store: object) -> bool:
