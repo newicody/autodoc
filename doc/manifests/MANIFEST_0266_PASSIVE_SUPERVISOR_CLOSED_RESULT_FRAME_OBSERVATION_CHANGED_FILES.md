@@ -1,0 +1,13 @@
+# Manifest 0266 - PassiveSupervisor closed ResultFrame observation
+
+- `src/context/passive_supervisor_closed_result_frame_observation_0266.py`
+- `tools/build_passive_supervisor_closed_result_frame_observation_0266.py`
+- `tests/context/test_passive_supervisor_closed_result_frame_observation_0266.py`
+- `tests/tools/test_build_passive_supervisor_closed_result_frame_observation_0266.py`
+- `tests/rules/test_passive_supervisor_closed_result_frame_observation_0266_rule.py`
+- `doc/architecture/PASSIVE_SUPERVISOR_CLOSED_RESULT_FRAME_OBSERVATION_0266.md`
+- `doc/code-rules/0266_passive_supervisor_closed_result_frame_observation_rule.md`
+- `doc/docs/architecture/runtime/266_passive_supervisor_closed_result_frame_observation.dot`
+- `doc/CHANGELOG_0266_PASSIVE_SUPERVISOR_CLOSED_RESULT_FRAME_OBSERVATION.md`
+- `doc/manifests/MANIFEST_0266_PASSIVE_SUPERVISOR_CLOSED_RESULT_FRAME_OBSERVATION_CHANGED_FILES.md`
+- `PHASE0266_PASSIVE_SUPERVISOR_CLOSED_RESULT_FRAME_OBSERVATION_TEST_REPORT.md`
