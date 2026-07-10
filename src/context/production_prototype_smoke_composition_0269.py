@@ -55,6 +55,13 @@ class ProductionPrototypeSmokeCommand:
     demo_embedding: bool = False
     demo_eventbus: bool = False
     demo_qdrant: bool = False
+    live_qdrant: bool = False
+    qdrant_url: str = "http://127.0.0.1:6333"
+    qdrant_collection: str = "autodoc_context_embeddings"
+    qdrant_timeout_seconds: float = 10.0
+    qdrant_prefer_grpc: bool = False
+    qdrant_grpc_port: int = 6334
+    qdrant_api_key_env: str = "QDRANT_API_KEY"
 
     def issues(self, policy: ProductionPrototypeSmokePolicy) -> tuple[str, ...]:
         issues: list[str] = []
@@ -64,10 +71,21 @@ class ProductionPrototypeSmokeCommand:
             issues.append("repository is required")
         if self.execute and policy.require_policy_decision_id and not self.policy_decision_id.strip():
             issues.append("execute requires policy_decision_id")
-        if self.execute and policy.require_explicit_demo_qdrant and not self.demo_qdrant:
-            issues.append(
-                "execute currently requires explicit demo_qdrant because 0262/0263 expose no real Qdrant executor"
-            )
+        if self.demo_qdrant and self.live_qdrant:
+            issues.append("demo_qdrant and live_qdrant are mutually exclusive")
+        if self.execute and policy.require_explicit_demo_qdrant and not (self.demo_qdrant or self.live_qdrant):
+            issues.append("execute requires explicit demo_qdrant or live_qdrant")
+        if self.live_qdrant:
+            if not self.qdrant_url.startswith(("http://", "https://")):
+                issues.append("live_qdrant requires an http(s) qdrant_url")
+            if not self.qdrant_collection.strip():
+                issues.append("qdrant_collection must not be empty")
+            if self.qdrant_timeout_seconds <= 0:
+                issues.append("qdrant_timeout_seconds must be > 0")
+            if not 1 <= self.qdrant_grpc_port <= 65535:
+                issues.append("qdrant_grpc_port must be between 1 and 65535")
+            if not self.qdrant_api_key_env.strip():
+                issues.append("qdrant_api_key_env must not be empty")
         return tuple(issues)
 
 
@@ -174,6 +192,7 @@ class ProductionPrototypeSmokeResult:
             "outcomes": [outcome.to_mapping() for outcome in self.outcomes],
             "references": self.references(),
             "checks": checks,
+            "qdrant_mode": "live" if any(value for key, value in checks.items() if key in {"qdrant_projection_live", "qdrant_recall_live"}) else ("demo" if self.execute else "plan"),
             "boundaries": {
                 "scheduler_starts_external_services": self.policy.scheduler_starts_external_services,
                 "remote_github_mutation_allowed": self.policy.remote_github_mutation_allowed,
@@ -242,6 +261,24 @@ def build_production_prototype_smoke_plan(
     if command.demo_qdrant:
         execute_0262.append("--demo-qdrant")
         execute_0263.append("--demo-qdrant")
+    if command.live_qdrant:
+        live_args = [
+            "--live-qdrant",
+            "--qdrant-url",
+            command.qdrant_url,
+            "--collection",
+            command.qdrant_collection,
+            "--qdrant-timeout-seconds",
+            str(command.qdrant_timeout_seconds),
+            "--qdrant-grpc-port",
+            str(command.qdrant_grpc_port),
+            "--qdrant-api-key-env",
+            command.qdrant_api_key_env,
+        ]
+        if command.qdrant_prefer_grpc:
+            live_args.append("--qdrant-prefer-grpc")
+        execute_0262.extend(live_args)
+        execute_0263.extend(live_args)
 
     model_args: list[str] = []
     if command.model_dir is not None:
@@ -485,6 +522,10 @@ def run_production_prototype_smoke(
         for name in REQUIRED_FALSE_CHECKS:
             if checks.get(name) is not False:
                 issues.append(f"required false boundary check failed or missing: {name}")
+        if command.live_qdrant:
+            for name in ("qdrant_projection_live", "qdrant_recall_live"):
+                if checks.get(name) is not True:
+                    issues.append(f"required live Qdrant check failed or missing: {name}")
 
     valid = not issues and len(outcomes) == len(plan) and all(outcome.valid for outcome in outcomes)
     return ProductionPrototypeSmokeResult(

@@ -48,7 +48,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--policy-decision-id", default="")
     parser.add_argument("--demo-embedding", action="store_true")
     parser.add_argument("--demo-eventbus", action="store_true")
-    parser.add_argument("--demo-qdrant", action="store_true")
+    qdrant_mode = parser.add_mutually_exclusive_group()
+    qdrant_mode.add_argument("--demo-qdrant", action="store_true")
+    qdrant_mode.add_argument("--live-qdrant", action="store_true")
+    parser.add_argument("--qdrant-url", default="http://127.0.0.1:6333")
+    parser.add_argument("--qdrant-collection", default="autodoc_context_embeddings")
+    parser.add_argument("--qdrant-timeout-seconds", type=float, default=10.0)
+    parser.add_argument("--qdrant-prefer-grpc", action="store_true")
+    parser.add_argument("--qdrant-grpc-port", type=int, default=6334)
+    parser.add_argument("--qdrant-api-key-env", default="QDRANT_API_KEY")
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
     parser.add_argument("--format", choices=("json", "summary"), default="json")
     return parser.parse_args()
@@ -112,6 +120,9 @@ def _load_report(path: Path) -> tuple[bool | None, tuple[tuple[str, str], ...], 
             "passive_supervisor_observation_only",
             "sqlite_database_present",
             "readiness_only",
+            "qdrant_projection_live",
+            "qdrant_recall_live",
+            "uses_qdrant_client_executor",
         },
     )
     references = tuple(
@@ -187,6 +198,13 @@ def _command_from_args(args: argparse.Namespace) -> ProductionPrototypeSmokeComm
         demo_embedding=args.demo_embedding,
         demo_eventbus=args.demo_eventbus,
         demo_qdrant=args.demo_qdrant,
+        live_qdrant=args.live_qdrant,
+        qdrant_url=args.qdrant_url,
+        qdrant_collection=args.qdrant_collection,
+        qdrant_timeout_seconds=args.qdrant_timeout_seconds,
+        qdrant_prefer_grpc=args.qdrant_prefer_grpc,
+        qdrant_grpc_port=args.qdrant_grpc_port,
+        qdrant_api_key_env=args.qdrant_api_key_env,
     )
 
 
@@ -204,6 +222,7 @@ def _summary(payload: Mapping[str, object]) -> str:
         "production_prototype_smoke_composition_valid="
         f"{payload.get('valid')} issues={len(payload.get('issues', []))} "
         f"execute={payload.get('execute')} "
+        f"qdrant_mode={payload.get('qdrant_mode', '-')} "
         f"steps={payload.get('valid_step_count', 0)}/{payload.get('planned_step_count', 0)} "
         f"sql_ref={references.get('sql_ref', '-')} "
         f"embedding_ref={references.get('embedding_ref', '-')} "
