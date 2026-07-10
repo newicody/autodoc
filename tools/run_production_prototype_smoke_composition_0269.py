@@ -108,6 +108,7 @@ def _load_report(path: Path) -> tuple[bool | None, tuple[tuple[str, str], ...], 
         payload,
         {
             "sql_ref",
+            "sql_authority_ref",
             "embedding_ref",
             "handoff_ref",
             "readiness_ref",
@@ -233,6 +234,7 @@ def _summary(payload: Mapping[str, object]) -> str:
         f"qdrant_mode={payload.get('qdrant_mode', '-')} "
         f"steps={payload.get('valid_step_count', 0)}/{payload.get('planned_step_count', 0)} "
         f"sql_ref={references.get('sql_ref', '-')} "
+        f"sql_authority_ref={references.get('sql_authority_ref', '-')} "
         f"embedding_ref={references.get('embedding_ref', '-')} "
         f"handoff_ref={references.get('handoff_ref', '-')} "
         f"readiness_ref={references.get('readiness_ref', '-')} "
