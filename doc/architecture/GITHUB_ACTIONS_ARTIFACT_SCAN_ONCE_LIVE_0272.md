@@ -58,3 +58,15 @@ The 0272-r1 wording that proposed a new issue-scan client is superseded. The
 existing Actions artifact transport is the correct reusable path; the missing
 piece was only a gated live composition of the already-started Project/Action,
 fetch and dataset-sync surfaces.
+
+## 0272-r3 source realignment
+
+The configured Actions artifact path remains a secondary, optional exchange
+surface.  The canonical immediate source is now the user ProjectV2
+`newicody / project 2`, read through the separate query-only snapshot boundary
+`tools/run_github_project_v2_query_only_snapshot_0272.py`.
+
+The r2 prohibition on direct Project GraphQL applies to the Actions artifact
+fetch itself: that fetch must not silently turn into a second Project reader.
+It does not prohibit the dedicated r3 ProjectV2 query-only source, which has its
+own typed contract, query validation and immutable local snapshot.
