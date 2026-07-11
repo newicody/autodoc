@@ -197,3 +197,71 @@ a Scheduler-owned service manager
 ```
 
 The project grows by small, auditable patches and explicit gates.
+
+## GitHub ProjectV2 operator path
+
+The current GitHub intake starts from the user ProjectV2 configured in
+`config/github_project_v2_query_only.example.ini`.  It is operated with Python
+commands and that configuration file only; there is no installation script and
+no Scheduler-owned service lifecycle.
+
+First export the token named by `github.token_env` in the configuration:
+
+```bash
+export GITHUB_TOKEN='...'
+```
+
+Test the local files and safety boundaries without contacting GitHub:
+
+```bash
+PYTHONPATH=src:. python \
+  tools/run_github_project_system_deployment_readiness_0272.py \
+  --config config/github_project_v2_query_only.example.ini \
+  --format summary
+```
+
+Test the already-deployed ProjectV2 and GitHub Actions workflow through
+query-only API calls:
+
+```bash
+PYTHONPATH=src:. python \
+  tools/run_github_project_system_deployment_readiness_0272.py \
+  --config config/github_project_v2_query_only.example.ini \
+  --execute \
+  --policy-decision-id policy:0272:deployment-readiness \
+  --format summary
+```
+
+The readiness command does not install files, deploy a workflow, dispatch an
+Action, write a secret, or mutate GitHub.  Before the live check can be green,
+the operator must have copied the existing templates into the configured
+external repository:
+
+```text
+templates/github/autodoc-ticket-artifact.yml
+  -> .github/workflows/autodoc-ticket-artifact.yml
+
+templates/github/scripts/build_autodoc_ticket_artifact.py
+  -> scripts/build_autodoc_ticket_artifact.py
+```
+
+The normal incoming flow is then launched explicitly:
+
+```bash
+PYTHONPATH=src:. python \
+  tools/run_github_project_v2_query_only_snapshot_0272.py \
+  --config config/github_project_v2_query_only.example.ini \
+  --execute \
+  --policy-decision-id policy:0272:project-v2-query-only \
+  --format summary
+
+PYTHONPATH=src:. python \
+  tools/detect_github_project_v2_snapshot_changes_0272.py \
+  --execute \
+  --policy-decision-id policy:0272:project-v2-change-detection \
+  --format summary
+```
+
+ProjectV2 is the canonical GitHub read source.  The Actions artifact workflow
+is a separately verified secondary exchange path.  Local snapshots and future
+accepted handoffs remain under local authority.
