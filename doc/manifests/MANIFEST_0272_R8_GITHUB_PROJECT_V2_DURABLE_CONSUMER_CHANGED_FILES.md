@@ -1,0 +1,28 @@
+# Manifest — 0272-r8 ProjectV2 durable consumer
+
+## Added files
+
+```text
+PHASE0272_R8_GITHUB_PROJECT_V2_DURABLE_CONSUMER_TEST_REPORT.md
+doc/CHANGELOG_0272_R8_GITHUB_PROJECT_V2_DURABLE_CONSUMER.md
+doc/architecture/GITHUB_PROJECT_V2_SOURCE_CANDIDATE_DURABLE_CONSUMER_0272.md
+doc/docs/architecture/runtime/272_r8_github_project_v2_durable_consumer.dot
+doc/manifests/MANIFEST_0272_R8_GITHUB_PROJECT_V2_DURABLE_CONSUMER_CHANGED_FILES.md
+doc/releases/0272-r8-github-project-v2-durable-consumer.md
+src/context/github_project_v2_source_candidate_durable_consumer_0272.py
+tests/context/test_github_project_v2_source_candidate_durable_consumer_0272.py
+tests/rules/test_github_project_v2_source_candidate_durable_consumer_0272_rule.py
+tests/tools/test_consume_github_project_v2_source_candidate_gate_0272.py
+tools/consume_github_project_v2_source_candidate_gate_0272.py
+```
+
+## Existing surfaces reused
+
+```text
+context.github_project_v2_source_candidate_gate_0272.GATE_RECORD_SCHEMA
+context.sql_context_store.SqlContextRecord
+context.sql_context_store.build_sql_context_record
+context.scheduler_managed_db_api_sql_context_store_binding_0260
+```
+
+No existing runtime, Scheduler, SHM, Qdrant or OpenVINO module is modified.
