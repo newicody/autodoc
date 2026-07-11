@@ -1,0 +1,52 @@
+name: Autodoc dual request and Copilot advisory
+on:
+  issues:
+    types: [opened, edited, reopened, labeled, unlabeled]
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: read
+  actions: read
+jobs:
+  build-dual-artifacts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with: {python-version: '3.13'}
+      - name: Build authoritative request
+        env:
+          AUTODOC_OUTPUT: out/authoritative_request.json
+        run: python templates/github/scripts/build_autodoc_authoritative_request.py
+      - name: Install Copilot CLI
+        if: ${{ vars.AUTODOC_COPILOT_ADVISORY_ENABLED == 'true' }}
+        run: npm install -g @github/copilot
+      - name: Build optional Copilot advisory
+        if: ${{ vars.AUTODOC_COPILOT_ADVISORY_ENABLED == 'true' }}
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.AUTODOC_COPILOT_TOKEN }}
+          AUTODOC_REQUEST: out/authoritative_request.json
+          AUTODOC_ADVISORY: out/copilot_advisory.json
+        run: python templates/github/scripts/run_autodoc_copilot_advisory.py
+      - name: Build linking manifest
+        env:
+          AUTODOC_REQUEST: out/authoritative_request.json
+          AUTODOC_ADVISORY: out/copilot_advisory.json
+          AUTODOC_MANIFEST: out/dual_artifact_manifest.json
+        run: python templates/github/scripts/build_autodoc_dual_manifest.py
+      - name: Upload authoritative request
+        uses: actions/upload-artifact@v7
+        with:
+          name: autodoc-authoritative-request
+          path: out/authoritative_request.json
+      - name: Upload optional Copilot advisory
+        if: ${{ hashFiles('out/copilot_advisory.json') != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: autodoc-copilot-advisory
+          path: out/copilot_advisory.json
+      - name: Upload manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: autodoc-dual-artifact-manifest
+          path: out/dual_artifact_manifest.json
