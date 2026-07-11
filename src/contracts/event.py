@@ -36,6 +36,10 @@ class EventType(Enum):
     SOURCE_CANDIDATE_DECISION = auto()
     SOURCE_CANDIDATE_DECISION_RESULT = auto()
 
+    # Laboratoire spécialiste — Phase 0274-r1 live Scheduler binding
+    LABORATORY_VISIT_REQUEST = auto()
+    LABORATORY_VISIT_RESULT = auto()
+
     # Politique kernel
     POLICY_DENIED = auto()
 
