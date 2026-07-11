@@ -1,0 +1,49 @@
+# Manifest — 0272-r10 ProjectV2 closed-loop smoke
+
+```text
+code_rule_review: done
+code_rule_update_required: false
+context_contract_changed: true
+non_stdlib_dependency_added: false
+scheduler_run_modified: false
+shm_surface_modified: false
+sql_remains_authority: true
+```
+
+## Added files
+
+```text
+PHASE0272_R10_GITHUB_PROJECT_V2_CLOSED_LOOP_SMOKE_TEST_REPORT.md
+doc/CHANGELOG_0272_R10_GITHUB_PROJECT_V2_CLOSED_LOOP_SMOKE.md
+doc/architecture/GITHUB_PROJECT_V2_SOURCE_CANDIDATE_CLOSED_LOOP_SMOKE_0272.md
+doc/docs/architecture/runtime/272_r10_github_project_v2_closed_loop_smoke.dot
+doc/manifests/MANIFEST_0272_R10_GITHUB_PROJECT_V2_CLOSED_LOOP_SMOKE_CHANGED_FILES.md
+doc/releases/0272-r10-github-project-v2-closed-loop-smoke.md
+src/context/github_project_v2_source_candidate_closed_loop_smoke_0272.py
+tests/context/test_github_project_v2_source_candidate_closed_loop_smoke_0272.py
+tests/context/test_scheduler_managed_sql_ref_openvino_embedding_query_role_0272.py
+tests/rules/test_github_project_v2_source_candidate_closed_loop_smoke_0272_rule.py
+tests/tools/test_run_github_project_v2_source_candidate_closed_loop_smoke_0272.py
+tools/run_github_project_v2_source_candidate_closed_loop_smoke_0272.py
+```
+
+## Modified files
+
+```text
+src/context/scheduler_managed_sql_ref_openvino_embedding_usage_0261.py
+```
+
+The existing 0261 surface is made role-aware for its already-declared `query` role; no second embedding adapter is added.
+
+## Existing surfaces reused
+
+```text
+context.github_project_v2_source_candidate_gate_0272
+context.github_project_v2_source_candidate_durable_consumer_0272
+context.github_project_v2_source_candidate_vector_projection_0272
+context.scheduler_managed_sql_ref_openvino_embedding_usage_0261
+context.scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263
+context.scheduler_managed_db_api_sql_context_store_binding_0260
+inference.qdrant_client_projection_executor
+inference.qdrant_projection_adapter
+```

@@ -137,14 +137,26 @@ def record_to_public_mapping(record: object) -> dict[str, Any]:
     return public
 
 
-def build_openvino_passage_text_from_sql_record(record: Mapping[str, Any]) -> str:
-    """Build the explicit E5 passage text from a hydrated SQL record."""
+def build_openvino_text_from_sql_record(
+    record: Mapping[str, Any],
+    *,
+    role: str,
+) -> str:
+    """Build explicit E5 text from a hydrated SQL record for one role."""
 
+    if role not in ("passage", "query"):
+        raise ValueError("role must be passage or query")
     title = str(record.get("title") or record.get("context_ref") or "SQL context record").strip()
     body = str(record.get("body") or record.get("content") or record.get("text") or "").strip()
     if not body:
         raise ValueError("SQL record body must not be empty")
-    return f"passage: {title}\n{body}"
+    return f"{role}: {title}\n{body}"
+
+
+def build_openvino_passage_text_from_sql_record(record: Mapping[str, Any]) -> str:
+    """Build the compatibility E5 passage text from a hydrated SQL record."""
+
+    return build_openvino_text_from_sql_record(record, role="passage")
 
 
 def build_embedding_ref(sql_ref: str, role: str, text: str) -> str:
@@ -250,10 +262,11 @@ def embed_with_existing_openvino_e5_pipeline(
     )
     bundle = build_multilingual_e5_small_pipeline(config)
     e5_text = ensure_e5_text(text, default_role=role)
+    effective_role = "query" if e5_text.prefixed.startswith("query:") else "passage"
     result = asyncio.run(bundle.pipeline.embed_text(e5_text.prefixed))
     return build_embedding_mapping(
         sql_ref=sql_ref,
-        role=role,
+        role=effective_role,
         text=e5_text.prefixed,
         vector=result.vector.values,
         model=result.model,
@@ -287,7 +300,10 @@ def run_scheduler_managed_sql_ref_openvino_embedding_usage(
         else:
             record_mapping = record_to_public_mapping(record_obj)
             try:
-                embedding_text = build_openvino_passage_text_from_sql_record(record_mapping)
+                embedding_text = build_openvino_text_from_sql_record(
+                    record_mapping,
+                    role=request.role,
+                )
             except ValueError as exc:
                 issues.append(str(exc))
 
@@ -313,8 +329,21 @@ def run_scheduler_managed_sql_ref_openvino_embedding_usage(
             embedding_text=embedding_text,
         )
 
-    effective_embedder = embedder or embed_with_existing_openvino_e5_pipeline
-    embedding = effective_embedder(embedding_text, request.sql_ref, request.model_dir, request.device)
+    if embedder is None:
+        embedding = embed_with_existing_openvino_e5_pipeline(
+            embedding_text,
+            request.sql_ref,
+            request.model_dir,
+            request.device,
+            role=request.role,
+        )
+    else:
+        embedding = embedder(
+            embedding_text,
+            request.sql_ref,
+            request.model_dir,
+            request.device,
+        )
     return SchedulerManagedSqlRefOpenVinoEmbeddingResult(
         valid=True,
         issues=(),
