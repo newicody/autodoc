@@ -233,9 +233,16 @@ PYTHONPATH=src:. python \
 ```
 
 The readiness command does not install files, deploy a workflow, dispatch an
-Action, write a secret, or mutate GitHub.  Before the live check can be green,
-the operator must have copied the existing templates into the configured
-external repository:
+Action, write a secret, or mutate GitHub. The complete manual configuration,
+including repository settings, token scope, Actions permissions and the
+important distinction between ProjectV2 drafts and repository Issues, is in:
+
+```text
+doc/operator/GITHUB_PROJECT_ACTIONS_CONFIGURATION_0272.md
+```
+
+Before the live check can be green, the operator must have copied the existing
+templates into the configured external repository:
 
 ```text
 templates/github/autodoc-ticket-artifact.yml
@@ -260,8 +267,18 @@ PYTHONPATH=src:. python \
   --execute \
   --policy-decision-id policy:0272:project-v2-change-detection \
   --format summary
+
+PYTHONPATH=src:. python \
+  tools/build_github_project_v2_change_handoffs_0272.py \
+  --config config/github_project_v2_query_only.example.ini \
+  --execute \
+  --policy-decision-id policy:0272:project-v2-change-handoff \
+  --format summary
 ```
 
-ProjectV2 is the canonical GitHub read source.  The Actions artifact workflow
-is a separately verified secondary exchange path.  Local snapshots and future
-accepted handoffs remain under local authority.
+ProjectV2 is the canonical GitHub read source. The Actions artifact workflow
+is a separately verified secondary exchange path for real repository Issue
+events; a ProjectV2 `DRAFT_ISSUE` is handled by the direct GraphQL snapshot and
+does not trigger that workflow. Local snapshots, change sets and SourceCandidate
+handoffs remain under local authority. R6 does not write SQL or Qdrant; every
+handoff is held for the future operator gate.

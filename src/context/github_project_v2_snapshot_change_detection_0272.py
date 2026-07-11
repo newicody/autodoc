@@ -407,6 +407,7 @@ def _item_summary(item: Mapping[str, Any]) -> dict[str, Any]:
         "item_type": str(item.get("type", "")),
         "content_id": str(content.get("id", "")),
         "title": _item_title(item),
+        "body": str(content.get("body", "")),
         "status": _item_status(item),
         "repository": str(_mapping(content.get("repository")).get("nameWithOwner", "")),
         "number": int(content.get("number", 0) or 0),
