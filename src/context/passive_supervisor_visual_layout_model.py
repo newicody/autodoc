@@ -98,16 +98,22 @@ def _edges_from_model(model: Mapping[str, Any]) -> list[dict[str, Any]]:
     for index, item in enumerate(_as_sequence(model.get("edges"))):
         mapping = _as_mapping(item)
         source = _as_string(mapping.get("source", "")).strip()
-        target = _as_string(mapping.get("target", "")).strip()
+        target = _as_string(
+            mapping.get("target", mapping.get("target_ref", ""))
+        ).strip()
         if not source or not target:
             continue
-        edge_id = _as_string(mapping.get("id", f"edge:{index}")).strip() or f"edge:{index}"
+        edge_id = _as_string(
+            mapping.get("id", mapping.get("edge_id", f"edge:{index}"))
+        ).strip() or f"edge:{index}"
         edges.append(
             {
                 "id": edge_id,
                 "source": source,
                 "target": target,
-                "kind": _as_string(mapping.get("kind", "observes")).strip() or "observes",
+                "kind": _as_string(
+                    mapping.get("kind", mapping.get("edge_kind", "observes"))
+                ).strip() or "observes",
             }
         )
     return edges

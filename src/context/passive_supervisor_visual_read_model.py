@@ -28,6 +28,12 @@ REF_KEYS: tuple[str, ...] = (
     "qdrant_ref",
     "handoff_ref",
     "pushback_ref",
+    "laboratory_ref",
+    "specialist_ref",
+    "visit_ref",
+    "conversation_ref",
+    "synthesis_ref",
+    "final_ref",
 )
 
 
@@ -43,6 +49,11 @@ ZONE_BY_CELL_KIND: Mapping[str, str] = {
     "QDRANT_PROJECTION": "index",
     "REHYDRATION": "context",
     "PUSHBACK": "feedback",
+    "LABORATORY": "laboratory",
+    "SPECIALIST": "laboratory",
+    "DELIBERATION": "laboratory",
+    "SYNTHESIS": "laboratory",
+    "FINAL_ARTIFACT": "data",
     "UNKNOWN": "unknown",
 }
 
