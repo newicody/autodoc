@@ -200,18 +200,29 @@ The project grows by small, auditable patches and explicit gates.
 
 ## GitHub ProjectV2 operator path
 
-The current GitHub intake starts from the user ProjectV2 configured in
-`config/github_project_v2_query_only.example.ini`.  It is operated with Python
-commands and that configuration file only; there is no installation script and
-no Scheduler-owned service lifecycle.
+The current intake is **Project-native**. It reads the user ProjectV2 configured
+in `config/github_project_v2_query_only.example.ini` directly through GraphQL
+query-only calls. A separate repository and GitHub Actions workflow are not
+required for ProjectV2 `DRAFT_ISSUE` items.
 
-First export the token named by `github.token_env` in the configuration:
+```text
+GitHub ProjectV2 newicody/2
+-> query-only snapshot
+-> local snapshot diff
+-> SourceCandidate handoff batch
+-> explicit local operator gate
+```
+
+There is no installation script, deployment script or Scheduler-owned service
+lifecycle. Export the token named by `github.token_env`:
 
 ```bash
 export GITHUB_TOKEN='...'
 ```
 
-Test the local files and safety boundaries without contacting GitHub:
+### 1. Test the Project-native system
+
+Local safety/readiness check without network access:
 
 ```bash
 PYTHONPATH=src:. python \
@@ -220,39 +231,22 @@ PYTHONPATH=src:. python \
   --format summary
 ```
 
-Test the already-deployed ProjectV2 and GitHub Actions workflow through
-query-only API calls:
+Live query-only ProjectV2 check:
 
 ```bash
 PYTHONPATH=src:. python \
   tools/run_github_project_system_deployment_readiness_0272.py \
   --config config/github_project_v2_query_only.example.ini \
   --execute \
-  --policy-decision-id policy:0272:deployment-readiness \
+  --policy-decision-id policy:0272:project-native-readiness \
   --format summary
 ```
 
-The readiness command does not install files, deploy a workflow, dispatch an
-Action, write a secret, or mutate GitHub. The complete manual configuration,
-including repository settings, token scope, Actions permissions and the
-important distinction between ProjectV2 drafts and repository Issues, is in:
+With the default configuration, `system_ready=True` requires the local Python
+surfaces and the expected ProjectV2 identity. It does **not** require an external
+Issues repository or an Actions workflow.
 
-```text
-doc/operator/GITHUB_PROJECT_ACTIONS_CONFIGURATION_0272.md
-```
-
-Before the live check can be green, the operator must have copied the existing
-templates into the configured external repository:
-
-```text
-templates/github/autodoc-ticket-artifact.yml
-  -> .github/workflows/autodoc-ticket-artifact.yml
-
-templates/github/scripts/build_autodoc_ticket_artifact.py
-  -> scripts/build_autodoc_ticket_artifact.py
-```
-
-The normal incoming flow is then launched explicitly:
+### 2. Run the inbound ProjectV2 chain
 
 ```bash
 PYTHONPATH=src:. python \
@@ -276,9 +270,56 @@ PYTHONPATH=src:. python \
   --format summary
 ```
 
-ProjectV2 is the canonical GitHub read source. The Actions artifact workflow
-is a separately verified secondary exchange path for real repository Issue
-events; a ProjectV2 `DRAFT_ISSUE` is handled by the direct GraphQL snapshot and
-does not trigger that workflow. Local snapshots, change sets and SourceCandidate
-handoffs remain under local authority. R6 does not write SQL or Qdrant; every
-handoff is held for the future operator gate.
+The first r4 run may be a baseline. After a Project item changes, rerun snapshot,
+diff and handoff creation. The r6 summary gives a candidate count; the immutable
+handoff batch is written under `.var/github/project_v2/handoffs/`.
+
+### 3. Apply one explicit candidate decision
+
+Inspect a handoff batch JSON to obtain a `candidate_id`, then apply one existing
+`SourceCandidate` decision:
+
+```bash
+PYTHONPATH=src:. python \
+  tools/gate_github_project_v2_source_candidate_0272.py \
+  --config config/github_project_v2_query_only.example.ini \
+  --candidate-id ghpv2-... \
+  --action promote \
+  --reason "accepted for durable local ingestion" \
+  --execute \
+  --policy-decision-id policy:0272:source-candidate-gate \
+  --format summary
+```
+
+Allowed decisions are `inspect`, `relaunch`, `reject`, `archive`, `promote` and
+`merge`. `merge` also requires `--target-context-id`. Only `promote` and `merge`
+open a future durable-ingestion authorization; r7 itself still performs no SQL
+write or Qdrant projection. Removed Project items remain advisory and cannot be
+promoted or merged.
+
+### Optional repository-Issue Actions bridge
+
+The existing Actions template is a secondary path for real `issues` events in
+an external repository. It is not part of the required Project-native setup and
+it does not run for a ProjectV2-only draft.
+
+To verify an already deployed optional bridge, add:
+
+```bash
+PYTHONPATH=src:. python \
+  tools/run_github_project_system_deployment_readiness_0272.py \
+  --config config/github_project_v2_query_only.example.ini \
+  --execute \
+  --check-actions-bridge \
+  --policy-decision-id policy:0272:actions-bridge-readiness \
+  --format summary
+```
+
+This command only reads GitHub state. It does not copy a workflow, dispatch an
+Action, create a repository, install a service, commit, push or mutate GitHub.
+The optional bridge procedure and the Project-native distinction are documented
+in `doc/operator/GITHUB_PROJECT_ACTIONS_CONFIGURATION_0272.md`.
+
+Local snapshots, change sets, handoffs and decision records remain under local
+authority. GitHub is the workflow/review surface; SQL and Qdrant remain closed
+until the next accepted-ingestion phase.

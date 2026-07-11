@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import configparser
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -40,6 +41,11 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--policy-decision-id", default="")
     parser.add_argument("--fixture-json", type=Path, default=None)
+    parser.add_argument(
+        "--check-actions-bridge",
+        action="store_true",
+        help="Also verify the optional repository-Issue GitHub Actions bridge.",
+    )
     parser.add_argument("--output", type=Path, default=_DEFAULT_OUTPUT)
     parser.add_argument("--format", choices=("summary", "json"), default="summary")
     return parser.parse_args(argv)
@@ -48,6 +54,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(tuple(sys.argv[1:] if argv is None else argv))
     config = _load_config(args.config)
+    if args.check_actions_bridge and not config.require_actions_deployment:
+        config = replace(config, require_actions_deployment=True)
     local_paths = {
         "config": args.config,
         "workflow_template": _repo_path(config.workflow_template_path),
@@ -92,19 +100,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 token = os.environ[config.token_env]
                 external_call_performed = True
                 project_payload = _query_project(config, token)
-                workflow_payload = _get_json(
-                    config.api_url,
-                    token,
-                    f"/repos/{config.workflow_repository}/actions/workflows/{quote(config.workflow_name, safe='')}",
+                if config.require_actions_deployment:
+                    workflow_payload = _get_json(
+                        config.api_url,
+                        token,
+                        f"/repos/{config.workflow_repository}/actions/workflows/{quote(config.workflow_name, safe='')}",
+                    )
+                    remote_workflow_text = _get_repository_text(
+                        config, token, config.workflow_path
+                    )
+                    remote_builder = _get_repository_bytes(config, token, config.builder_path)
+                else:
+                    remote_workflow_text = ""
+                    remote_builder = b""
+            if workflow_payload is not None:
+                remote_analysis = analyze_workflow(
+                    remote_workflow_text, expected_builder_path=config.builder_path
                 )
-                remote_workflow_text = _get_repository_text(
-                    config, token, config.workflow_path
-                )
-                remote_builder = _get_repository_bytes(config, token, config.builder_path)
-            remote_analysis = analyze_workflow(
-                remote_workflow_text, expected_builder_path=config.builder_path
-            )
-            remote_builder_sha256 = sha256_bytes(remote_builder)
+                remote_builder_sha256 = sha256_bytes(remote_builder)
         except (OSError, ValueError, KeyError, RuntimeError) as exc:
             errors.append(f"{type(exc).__name__}:{exc}")
     result = close_result(

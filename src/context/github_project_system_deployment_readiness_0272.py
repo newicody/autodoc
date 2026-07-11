@@ -260,8 +260,24 @@ def build_plan(
     token_present: bool,
 ) -> GitHubProjectSystemReadinessPlan:
     issues = list(validate_config(config))
-    issues.extend(f"local:{name}:missing" for name, ok in local_checks.items() if not ok)
-    issues.extend(local_workflow_analysis.issues)
+    project_local_checks = {
+        "config",
+        "snapshot_tool",
+        "change_detection_tool",
+        "snapshot_dir_parent",
+        "report_dir_parent",
+    }
+    actions_local_checks = {"workflow_template", "builder_template"}
+    required_local_checks = set(project_local_checks)
+    if config.require_actions_deployment:
+        required_local_checks.update(actions_local_checks)
+    issues.extend(
+        f"local:{name}:missing"
+        for name in sorted(required_local_checks)
+        if not local_checks.get(name, False)
+    )
+    if config.require_actions_deployment:
+        issues.extend(local_workflow_analysis.issues)
     if command.execute and not command.policy_decision_id.strip():
         issues.append("gate:policy_decision_id:required")
     if command.execute and not command.fixture_mode and not token_present:
@@ -304,7 +320,22 @@ def close_result(
 ) -> GitHubProjectSystemReadinessResult:
     issues = list(plan.issues)
     issues.extend(str(error) for error in errors)
-    local_ready = all(plan.local_checks.values()) and plan.local_workflow_analysis.valid
+    project_local_checks = (
+        "config",
+        "snapshot_tool",
+        "change_detection_tool",
+        "snapshot_dir_parent",
+        "report_dir_parent",
+    )
+    project_local_ready = all(plan.local_checks.get(name, False) for name in project_local_checks)
+    actions_local_ready = (
+        plan.local_checks.get("workflow_template", False)
+        and plan.local_checks.get("builder_template", False)
+        and plan.local_workflow_analysis.valid
+    )
+    local_ready = project_local_ready and (
+        actions_local_ready or not plan.config.require_actions_deployment
+    )
     project_read_ready = False
     workflow_state = ""
     workflow_path = ""
@@ -367,6 +398,8 @@ def close_result(
             "local_workflow": plan.local_workflow_analysis.to_json_dict(),
             "remote_workflow": remote_workflow_analysis.to_json_dict() if remote_workflow_analysis else None,
             "require_actions_deployment": plan.config.require_actions_deployment,
+            "project_native_ready": project_local_ready and project_read_ready,
+            "actions_bridge_optional": not plan.config.require_actions_deployment,
             "boundaries": dict(plan.boundaries),
         },
     )

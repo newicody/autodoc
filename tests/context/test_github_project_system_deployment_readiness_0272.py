@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from context.github_project_system_deployment_readiness_0272 import (
     GitHubProjectSystemReadinessCommand,
     GitHubProjectSystemReadinessConfig,
@@ -61,7 +63,15 @@ def test_workflow_policy_rejects_dispatch_and_write() -> None:
 def test_fixture_closes_green_readiness() -> None:
     analysis = analyze_workflow(WORKFLOW, expected_builder_path="scripts/build_autodoc_ticket_artifact.py")
     plan = build_plan(config(), GitHubProjectSystemReadinessCommand(True, "policy:test", True),
-                      local_checks={"config": True, "workflow_template": True},
+                      local_checks={
+                          "config": True,
+                          "snapshot_tool": True,
+                          "change_detection_tool": True,
+                          "snapshot_dir_parent": True,
+                          "report_dir_parent": True,
+                          "workflow_template": True,
+                          "builder_template": True,
+                      },
                       local_workflow_analysis=analysis, token_present=False)
     result = close_result(
         plan,
@@ -74,3 +84,36 @@ def test_fixture_closes_green_readiness() -> None:
     assert result.system_ready
     assert not result.installation_performed
     assert not result.deployment_performed
+
+
+def test_project_native_mode_is_ready_without_actions_bridge() -> None:
+    native = replace(config(), require_actions_deployment=False)
+    analysis = analyze_workflow(
+        WORKFLOW,
+        expected_builder_path="scripts/build_autodoc_ticket_artifact.py",
+    )
+    local_checks = {
+        "config": True,
+        "snapshot_tool": True,
+        "change_detection_tool": True,
+        "snapshot_dir_parent": True,
+        "report_dir_parent": True,
+        "workflow_template": False,
+        "builder_template": False,
+    }
+    plan = build_plan(
+        native,
+        GitHubProjectSystemReadinessCommand(True, "policy:project-native", True),
+        local_checks=local_checks,
+        local_workflow_analysis=analysis,
+        token_present=False,
+    )
+    result = close_result(
+        plan,
+        project_payload={"id": native.project_id, "number": 2, "url": native.project_url},
+    )
+    assert result.valid is True
+    assert result.project_read_ready is True
+    assert result.actions_deployment_ready is False
+    assert result.system_ready is True
+    assert result.details["actions_bridge_optional"] is True
