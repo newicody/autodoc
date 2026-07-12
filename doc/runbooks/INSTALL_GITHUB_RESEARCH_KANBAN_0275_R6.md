@@ -38,7 +38,7 @@ Conserver les champs natifs GitHub.
 
 Créer ou renommer deux champs personnalisés seulement.
 
-### Champ `Étape`
+### Champ `Status`
 
 Type :
 
@@ -78,7 +78,7 @@ Créer une vue :
 ```text
 Nom         : Recherches
 Disposition : Board
-Colonnes    : Étape
+Colonnes    : Status
 Groupement  : Thème
 ```
 
@@ -97,7 +97,7 @@ Ne pas afficher les champs techniques du serveur.
 
 ```text
 Disposition : Table
-Filtre      : Étape = Terminé
+Filtre      : Status = Terminé
 ```
 
 ### `Sans thème`
@@ -109,7 +109,7 @@ si l'interface le permet.
 
 ```text
 Disposition : Table
-Filtre      : Étape = Terminé OU Étape = Drop
+Filtre      : Status = Terminé OU Étape = Drop
 ```
 
 ## 6. Configurer l'ajout automatique
@@ -124,7 +124,7 @@ newicody/projects
 Une nouvelle issue doit être ajoutée au Project sans lancer immédiatement une
 recherche.
 
-Définir sa valeur initiale `Étape` à une valeur non déclenchante si GitHub
+Définir sa valeur initiale `Status` à une valeur non déclenchante si GitHub
 l'exige. Tant que le champ ne propose pas de colonne Brouillon, laisser
 l'élément sans valeur puis le déplacer manuellement vers `Recherche`,
 `Développement` ou `Production` au moment voulu.
@@ -189,7 +189,7 @@ pour vérifier uniquement le rendu visuel du Board.
 ```text
 repository_management = newicody/projects
 development_repository = newicody/autodoc
-project_has_field_Etape = true
+project_has_field_Status = true
 project_has_optional_field_Theme = true
 board_columns_match_contract = true
 board_can_group_by_theme = true

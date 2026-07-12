@@ -23,7 +23,7 @@ manager, daemon, Scheduler, worker, backend, appel réseau ou mutation GitHub.
 ```text
 ligne facultative = Thème
 carte              = ticket de recherche durable
-colonne            = Étape et intention opérateur
+colonne            = Status et intention opérateur
 cycle              = nouvelle exécution du même ticket
 lien #issue        = autre recherche disponible comme contexte
 case cochée        = exclusion explicite du prochain cycle
@@ -68,9 +68,9 @@ tickets et ne sélectionne aucun laboratoire ou spécialiste.
 
 Une recherche peut rester sans thème.
 
-### Étape
+### Status
 
-Le champ Project `Étape` forme les colonnes du Board.
+Le champ Project `Status` forme les colonnes du Board.
 
 Valeurs retenues :
 
@@ -220,7 +220,7 @@ même en mode minimal.
 Le modèle minimal contient uniquement :
 
 ```text
-Étape
+Status
 Thème
 ```
 
@@ -247,7 +247,7 @@ Configuration canonique :
 ```text
 Nom         : Recherches
 Disposition : Board
-Colonnes    : Étape
+Colonnes    : Status
 Groupement  : Thème
 ```
 
@@ -271,7 +271,7 @@ Historique
 ```
 
 - `Recherches` : Board principal, groupé par `Thème` ;
-- `Résultats` : table filtrée sur `Étape = Terminé` ;
+- `Résultats` : table filtrée sur `Status = Terminé` ;
 - `Sans thème` : vue sans groupement ou filtrée sur thème vide ;
 - `Historique` : table incluant `Terminé` et `Drop`.
 
@@ -337,7 +337,7 @@ doit être introduit sans preuve qu'aucune surface existante ne convient.
 0275-r7  bundle du dépôt newicody/projects : formulaire + workflow contrôlé
 0275-r8  contrat autoritatif enrichi : cycles, liens, médias, exclusions
 0275-r9  collecteur lecture seule : issue, commentaires, refs et pièces jointes
-0275-r10 détecteur idempotent des transitions Étape
+0275-r10 détecteur idempotent des transitions Status
 0275-r11 déclenchement contrôlé, corrélation du run et récupération des artefacts
 0275-r12 wrapper OpenRC réutilisant les surfaces existantes
 0275-r13 restitution locale minimale et preview GitHub

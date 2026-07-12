@@ -18,7 +18,7 @@ def test_0275_r6_locks_human_facing_kanban_model() -> None:
     required = (
         "ligne facultative = Thème",
         "carte              = ticket de recherche durable",
-        "colonne            = Étape et intention opérateur",
+        "colonne            = Status et intention opérateur",
         "cycle              = nouvelle exécution du même ticket",
         "Recherche",
         "En cours",
@@ -53,7 +53,7 @@ def test_0275_r6_keeps_server_architecture_out_of_project_fields() -> None:
     text = MODEL.read_text(encoding="utf-8")
 
     assert "Le modèle minimal contient uniquement" in text
-    assert "Étape\nThème" in text
+    assert "Status\nThème" in text
     assert "Aucune vue ne doit refléter l'architecture interne du serveur." in text
     assert "scheduler_modified: false" in text
     assert "scheduler_run_modified: false" in text

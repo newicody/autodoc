@@ -1,0 +1,126 @@
+name: Autodoc controlled research request
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Numéro de l'issue à traiter
+        required: true
+        type: string
+      requested_status:
+        description: Intention correspondant à la colonne Status
+        required: true
+        type: choice
+        options:
+          - Recherche
+          - Développement
+          - Production
+      request_mode:
+        description: Nature du cycle
+        required: true
+        type: choice
+        options:
+          - initial
+          - continuation
+          - transversal
+      parent_event_ref:
+        description: Événement parent ou précédent, si applicable
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  issues: read
+  actions: read
+
+jobs:
+  build-dual-artifacts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Autodoc runtime
+        uses: actions/checkout@v6
+        with:
+          repository: newicody/autodoc
+          path: autodoc-runtime
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Prepare output directory
+        run: mkdir -p out
+
+      - name: Read selected issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: >
+          gh api
+          "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}"
+          > out/issue.json
+
+      - name: Build controlled issue event
+        env:
+          AUTODOC_ISSUE_JSON: out/issue.json
+          AUTODOC_EVENT_OUTPUT: out/autodoc_issue_event.json
+          AUTODOC_REQUESTED_STATUS: ${{ inputs.requested_status }}
+          AUTODOC_REQUEST_MODE: ${{ inputs.request_mode }}
+          AUTODOC_PARENT_EVENT_REF: ${{ inputs.parent_event_ref }}
+        run: >
+          python
+          autodoc-runtime/templates/github/projects-repository/scripts/build_workflow_dispatch_issue_event.py
+
+      - name: Build authoritative request
+        env:
+          GITHUB_EVENT_PATH: ${{ github.workspace }}/out/autodoc_issue_event.json
+          AUTODOC_OUTPUT: out/authoritative_request.json
+        run: >
+          python
+          autodoc-runtime/templates/github/scripts/build_autodoc_authoritative_request.py
+
+      - name: Install Copilot CLI
+        if: ${{ vars.AUTODOC_COPILOT_ADVISORY_ENABLED == 'true' }}
+        run: npm install --global @github/copilot
+
+      - name: Build optional Copilot advisory
+        if: ${{ vars.AUTODOC_COPILOT_ADVISORY_ENABLED == 'true' }}
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ secrets.AUTODOC_COPILOT_TOKEN }}
+          AUTODOC_REQUEST: out/authoritative_request.json
+          AUTODOC_ADVISORY: out/copilot_advisory.json
+        run: >
+          python
+          autodoc-runtime/templates/github/scripts/run_autodoc_copilot_advisory.py
+
+      - name: Build linking manifest
+        env:
+          AUTODOC_REQUEST: out/authoritative_request.json
+          AUTODOC_ADVISORY: out/copilot_advisory.json
+          AUTODOC_MANIFEST: out/dual_artifact_manifest.json
+        run: >
+          python
+          autodoc-runtime/templates/github/scripts/build_autodoc_dual_manifest.py
+
+      - name: Upload authoritative request
+        uses: actions/upload-artifact@v7
+        with:
+          name: autodoc-authoritative-request
+          path: out/authoritative_request.json
+          if-no-files-found: error
+
+      - name: Upload optional Copilot advisory
+        if: ${{ hashFiles('out/copilot_advisory.json') != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: autodoc-copilot-advisory
+          path: out/copilot_advisory.json
+          if-no-files-found: error
+
+      - name: Upload manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: autodoc-dual-artifact-manifest
+          path: out/dual_artifact_manifest.json
+          if-no-files-found: error
