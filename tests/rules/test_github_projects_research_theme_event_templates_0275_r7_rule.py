@@ -64,6 +64,11 @@ def test_0275_r7_workflow_is_explicit_read_only_and_not_issue_triggered() -> Non
     assert "parent_event_ref:" in text
     assert "issues: read" in text
     assert "contents: read" in text
-    assert "write" not in text
+    assert "copilot-requests: write" in text
+    assert "contents: write" not in text
+    assert "issues: write" not in text
+    assert "actions: write" not in text
     assert "AUTODOC_GITHUB_TOKEN" not in text
     assert "AUTODOC_PROJECT_TOKEN" not in text
+    assert "AUTODOC_COPILOT_TOKEN" not in text
+    assert "GITHUB_TOKEN: ${{ github.token }}" in text
