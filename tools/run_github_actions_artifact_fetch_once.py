@@ -230,7 +230,92 @@ class GitHubActionsClient:
         if not url:
             artifact_id = quote(str(artifact.get("id", "")), safe="")
             url = f"{self.api_url}/repos/{repository}/actions/artifacts/{artifact_id}/zip"
-        return self._get_bytes(url, absolute=True)
+        return self._download_artifact_archive(url)
+
+    def _download_artifact_archive(self, url: str) -> bytes:
+        from urllib.error import HTTPError
+        from urllib.parse import urlsplit
+        from urllib.request import (
+            HTTPRedirectHandler,
+            Request,
+            build_opener,
+            urlopen,
+        )
+
+        class _NoRedirectHandler(HTTPRedirectHandler):
+            def redirect_request(
+                self,
+                req,
+                fp,
+                code,
+                msg,
+                headers,
+                newurl,
+            ):
+                return None
+
+        api_origin = urlsplit(self.api_url)
+        download_origin = urlsplit(url)
+        if (
+            download_origin.scheme.lower()
+            != api_origin.scheme.lower()
+            or download_origin.netloc.lower()
+            != api_origin.netloc.lower()
+        ):
+            raise ValueError(
+                "artifact API download URL must remain on the "
+                "configured GitHub API origin"
+            )
+
+        api_request = Request(url)
+        api_request.add_header(
+            "Accept",
+            "application/vnd.github+json",
+        )
+        api_request.add_header(
+            "Authorization",
+            f"Bearer {self.token}",
+        )
+        api_request.add_header(
+            "X-GitHub-Api-Version",
+            "2022-11-28",
+        )
+
+        opener = build_opener(_NoRedirectHandler())
+        try:
+            with opener.open(api_request, timeout=30) as response:
+                return response.read()
+        except HTTPError as exc:
+            try:
+                if exc.code not in (301, 302, 303, 307, 308):
+                    raise
+                location = str(
+                    exc.headers.get("Location", "")
+                    if exc.headers is not None
+                    else ""
+                ).strip()
+            finally:
+                exc.close()
+
+        redirected = urlsplit(location)
+        if (
+            redirected.scheme.lower() != "https"
+            or not redirected.hostname
+            or redirected.username is not None
+            or redirected.password is not None
+        ):
+            raise ValueError(
+                "artifact redirect URL must be credential-free HTTPS"
+            )
+
+        artifact_request = Request(location)
+        artifact_request.add_header(
+            "Accept",
+            "application/zip",
+        )
+        with urlopen(artifact_request, timeout=30) as response:
+            return response.read()
+
 
     def _get_json(self, path: str) -> Mapping[str, Any]:
         data = self._get_bytes(f"{self.api_url}{path}", absolute=True)
