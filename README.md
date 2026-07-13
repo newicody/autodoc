@@ -122,6 +122,7 @@ Use these documents as the current map:
 ```text
 doc/architecture/CURRENT_ARCHITECTURE_STATE_0154.md
 doc/architecture/OPERATIONAL_DOCUMENTATION_CONSOLIDATION_0270.md
+doc/README_CURRENT.md
 doc/ARCHITECTURE_LAYERS.md
 doc/docs/architecture/00_global.dot
 doc/code-rules/code_rule.md
@@ -168,19 +169,23 @@ consolidation.
 
 ## Roadmap orientation
 
-The next runtime changes require separate, explicit decisions. Current priority
-order is:
+The active roadmap is maintained in `doc/README_CURRENT.md`. The immediate
+walking-skeleton objective is to complete the existing GitHub dual-artifact path:
 
 ```text
-1. controlled real Qdrant executor, reusing the existing projection/recall surfaces
-2. read-only real GitHub scan adapter, before any remote mutation gate
-3. explicit remote GitHub mutation gate with operator approval, only after read-only validation
-4. optional OpenRC service wrapper outside Scheduler, only if operationally necessary
-5. specialist and distributed extensions after the durable/recall path is stable
+GitHub Issue
+-> authoritative request + Copilot advisory + correlation manifest
+-> read-only local run assembly and 0275 intake
+-> explicit operator decision
+-> existing-Scheduler fake laboratory
+-> controlled, idempotent publication
 ```
 
-Each item must begin with an audit of existing code. A new manager, orchestrator,
-worker or adapter is forbidden when an existing surface can be extended.
+The Copilot CLI runtime must also be pinned and cached so repeated Actions runs
+do not reinstall the complete npm dependency tree. Copilot output remains a
+non-authoritative hint. Each item begins with an audit of existing code. A new
+manager, orchestrator, worker, scheduler, queue, bus or registry is forbidden
+when an existing surface can be extended.
 
 ## Non-goals
 
