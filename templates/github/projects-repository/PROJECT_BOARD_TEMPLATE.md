@@ -1,138 +1,202 @@
-# Modèle de Project — dépôt `newicody/projects`
+# Interface GitHub finale — dépôt `newicody/projects`
 
-## Champs
+## Principe
+
+Le Board principal affiche uniquement le résultat courant de chaque recherche.
+Les tickets, groupes, résultats liés, dépôts, fichiers et URL restent des
+références dans l'issue et ne sont jamais dupliqués sous forme de cartes.
+
+Une carte cliquée ouvre le panneau latéral natif de l'issue. La carte présente
+un résumé court ; le panneau contient le résultat complet, l'avis Copilot et
+les sources repliables.
+
+## Champs du Project
 
 ### `Status`
 
-Utiliser le champ GitHub par défaut et remplacer ses options par :
-
 ```text
 Recherche
-En cours
-Terminé
 Développement
 Production
+En cours
+Terminé
 Drop
 ```
 
-La colonne `En cours` est la commande opérateur. Le passage depuis une colonne
-d'intention lance une seule exécution :
+Le passage vers `En cours` reste l'acte de lancement :
 
 ```text
-Recherche      → En cours → requested_status = Recherche
-Développement → En cours → requested_status = Développement
-Production     → En cours → requested_status = Production
-sans valeur    → En cours → requested_status = Recherche
+Recherche      → En cours
+Développement → En cours
+Production     → En cours
 ```
 
-Une carte qui reste dans `En cours` ne relance rien. Pour relancer un ticket
-terminé, le replacer d'abord dans `Recherche`, `Développement` ou `Production`,
-puis le glisser dans `En cours`.
+`Drop` ne déclenche aucun traitement.
 
 ### `Thème`
 
-Champ facultatif utilisé pour les groupes horizontaux :
+Groupe horizontal facultatif et purement humain.
+
+### `Type`
 
 ```text
-Chalouf
-Architecture réseau
-Modèles d'inférence
-Documentation
+Recherche
+Actualisation
 ```
 
-Ajouter les valeurs au fil des recherches. Ne pas créer de taxonomie serveur.
+- `Recherche` transforme l'issue d'action en nouveau résultat courant ;
+- `Actualisation` ajoute un UPDATE sous un résultat existant.
 
-### Champs natifs de hiérarchie
-
-Activer aussi dans les champs visibles du Project :
+### `Affichage`
 
 ```text
-Parent issue
-Sub-issue progress
+Résultat courant
+Historique
+Action
+Groupe
 ```
 
-Le ticket `[Thème]` devient la boîte englobante. Les recherches du thème sont
-ajoutées comme sous-issues de ce ticket. La parenté est humaine et visuelle :
-elle ne choisit aucun laboratoire, backend ou route serveur.
+### Champs visibles de résultat
 
-## Vue `Recherches`
+```text
+Résumé
+Avis Copilot
+Serveur
+Copilot
+Dernière mise à jour
+```
+
+Valeurs recommandées :
+
+```text
+Serveur : En attente, En cours, Terminé, Partiel, Erreur
+Copilot : Non demandé, En attente, Terminé, Erreur
+```
+
+Les états doivent être écrits en texte et ne jamais dépendre uniquement des
+couleurs.
+
+## Vue `Résultats`
 
 ```text
 Layout       : Board
 Column field : Status
 Group by     : Thème
+Filter       : Affichage = Résultat courant
+Fields       : Résumé, Avis Copilot, Serveur, Copilot, Dernière mise à jour
 ```
 
-Chaque valeur `Thème` forme une bande horizontale visible contenant ses cartes.
-Cette vue reste pratique pour les recherches sans parent ou liées à plusieurs
-thèmes.
+Le résumé serveur et le résumé Copilot restent courts et lisibles sur la
+carte. Le résultat complet est accessible en cliquant sur la carte.
 
-## Vue `Boîtes de thèmes`
+## Vue `Actions serveur`
 
 ```text
 Layout       : Board
 Column field : Status
-Group by     : Parent issue
-Fields       : Parent issue, Sub-issue progress, Thème
+Group by     : Thème
+Filter       : Affichage = Action
+Fields       : Type, Serveur, Copilot, Dernière mise à jour
 ```
 
-Cette vue affiche les vraies boîtes hiérarchiques :
+Une nouvelle recherche et une actualisation commencent comme actions.
 
 ```text
-[Thème] Chalouf
-├── Recherche #12
-├── Recherche #18
-└── Événement lié #24
+Type = Recherche
+→ après succès, la même issue devient Résultat courant
+
+Type = Actualisation
+→ après succès, le résultat cible reçoit un UPDATE
+→ l'issue d'action est fermée
 ```
 
-Un ticket ne possède qu'un parent principal. Les thèmes supplémentaires restent
-inscrits dans le champ `Thème`, le corps du ticket ou les références de
-l'événement transversal.
-
-## Vue `Thèmes`
-
-```text
-Layout : Table
-```
-
-Afficher les tickets dont le titre commence par `[Thème]` et le champ
-`Sub-issue progress`. Cette vue permet de maintenir les boîtes et de suivre leur
-progression.
-
-## Vue `Événements liés`
+## Vue `Historique`
 
 ```text
 Layout : Table
+Filter : Affichage = Historique
+Fields : Thème, Type, Dernière mise à jour
 ```
 
-Afficher les tickets dont le titre commence par `[Événement lié]`. Chaque
-événement est indépendant, tout en conservant ses références de provenance et
-son éventuel `Parent issue`.
+## Vue `Groupes`
 
-## Recherches sans thème
+```text
+Layout : Table
+Filter : Affichage = Groupe
+```
 
-Les tickets sans thème gardent le champ `Thème` et `Parent issue` vides. Ils
-restent visibles dans le groupe sans valeur ou dans une vue non groupée.
+Un groupe est uniquement une référence de contexte réutilisable.
+
+## Vue `Tous`
+
+```text
+Layout : Table
+Filter : aucun
+```
+
+Cette vue sert au diagnostic et n'ajoute aucune sémantique d'exécution.
+
+## Nouvelle recherche
+
+Le formulaire distingue :
+
+```text
+result_parent_ref
+related_result_refs[]
+group_refs[]
+issue_refs[]
+repository_sources[]
+attachment_refs[]
+external_links[]
+```
+
+Le parent établit une filiation unique. Les résultats liés sont de simples
+sources par lien. Ils ne sont pas copiés dans le Board.
+
+Après réussite, l'issue de recherche devient le nouveau résultat courant. Si
+un parent est indiqué, l'ancien résultat devient `Historique`.
+
+## Actualisation
+
+Une actualisation cible obligatoirement un résultat existant. Elle ne crée pas
+un nouveau parent. Le serveur ajoute sous l'existant un commentaire immuable :
+
+```text
+UPDATE — date et heure
+nouveaux paramètres
+nouvelles références
+résultat serveur
+avis Copilot
+artefacts et provenance
+```
+
+Les champs `Résumé`, `Avis Copilot`, `Serveur`, `Copilot` et
+`Dernière mise à jour` reflètent le dernier état, tandis que les commentaires
+conservent l'historique complet.
+
+## Fin automatique
+
+Après publication complète :
+
+```text
+fermer l'issue d'action
+→ workflow Project « Item closed »
+→ Status = Terminé
+```
+
+Si le serveur échoue, l'issue reste ouverte. Si Copilot a été demandé et
+échoue, le résultat est marqué `Partiel` et l'action reste ouverte jusqu'à
+décision explicite.
 
 ## Déclenchement
 
-Le serveur local exécute une passe bornée :
+Le détecteur local reste borné et idempotent :
 
 ```text
-snapshot ProjectV2 query-only 0272
-→ diff local de snapshots 0272
-→ sélection des transitions vers En cours
+snapshot ProjectV2 query-only
+→ diff local
+→ transition vers En cours
 → workflow_dispatch dans newicody/projects
 ```
 
-Le workflow reçoit :
-
-```text
-issue_number
-requested_status
-request_mode
-parent_event_ref
-```
-
-Le Project et l'issue ne sont pas mutés par le détecteur. Seul le lancement
-explicite du workflow Actions est autorisé.
+Cette phase d'interface n'ajoute encore aucune publication ou mutation GitHub.

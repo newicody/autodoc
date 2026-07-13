@@ -4,8 +4,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 BUNDLE = ROOT / "templates/github/projects-repository"
 RESEARCH = BUNDLE / ".github/ISSUE_TEMPLATE/research.yml"
+UPDATE = BUNDLE / ".github/ISSUE_TEMPLATE/update.yml"
 THEME = BUNDLE / ".github/ISSUE_TEMPLATE/theme.yml"
-EVENT = BUNDLE / ".github/ISSUE_TEMPLATE/transversal-event.yml"
+LEGACY_EVENT = BUNDLE / ".github/ISSUE_TEMPLATE/transversal-event.yml"
 WORKFLOW = BUNDLE / ".github/workflows/autodoc-controlled-research.yml"
 BOARD = BUNDLE / "PROJECT_BOARD_TEMPLATE.md"
 R6_MODEL = ROOT / "doc/architecture/GITHUB_RESEARCH_KANBAN_OPERATOR_MODEL_0275_R6.md"
@@ -19,38 +20,38 @@ def test_0275_r7_uses_default_status_field_and_optional_theme_rows() -> None:
     assert "Status\nThème" in model
     assert "Column field : Status" in board
     assert "Group by     : Thème" in board
-    assert "Les tickets sans thème" in board
+    assert "Thème" in board
 
 
-def test_0275_r7_research_form_exposes_refinement_sources_and_exclusions() -> None:
+def test_0275_r7_research_form_exposes_selected_source_references() -> None:
     text = RESEARCH.read_text(encoding="utf-8")
 
     required = (
-        "Affinage pour le prochain cycle",
-        "Chercher sur : tickets et recherches",
-        "Chercher sur : dépôts",
-        "Chercher sur : documents, médias et liens",
-        "Chercher sur : thèmes",
-        "Plusieurs thèmes sélectionnés",
-        "Exclure les recherches liées",
-        "Lancer également une inférence sur un moteur externe",
-        "Origine et liens hiérarchiques",
+        "Question ou objectif",
+        "Résultat parent facultatif",
+        "Résultats liés",
+        "Groupes ou thèmes liés",
+        "Tickets liés",
+        "Dépôts et données internes",
+        "Pièces jointes et liens externes",
+        "Paramètres et précisions",
+        "Produire également un avis Copilot séparé",
     )
     for phrase in required:
         assert phrase in text
 
 
-def test_0275_r7_theme_and_transversal_event_keep_hierarchy_without_server_taxonomy() -> None:
+def test_0275_r7_group_and_update_forms_replace_transversal_event() -> None:
     theme = THEME.read_text(encoding="utf-8")
-    event = EVENT.read_text(encoding="utf-8")
+    update = UPDATE.read_text(encoding="utf-8")
 
-    assert "Tickets de recherche englobés" in theme
-    assert "Recherche spécifique sur ce thème" in theme
-    assert "ne choisit\n        aucun laboratoire" in theme
-    assert "Recherche d'origine" in event
-    assert "Thèmes sélectionnés" in event
-    assert "Événement parent ou précédent" in event
-    assert "devient une recherche indépendante" in event
+    assert "Nouveau groupe de contexte" in theme
+    assert "ni un" in theme
+    assert "résultat, ni une action de traitement" in theme
+    assert "Actualiser un résultat" in update
+    assert "Résultat cible" in update
+    assert "Nouveaux paramètres" in update
+    assert LEGACY_EVENT.exists() is False
 
 
 def test_0275_r7_workflow_is_explicit_read_only_and_not_issue_triggered() -> None:

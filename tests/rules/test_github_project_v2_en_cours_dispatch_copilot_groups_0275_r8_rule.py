@@ -39,16 +39,17 @@ def test_0275_r8_workflow_activates_copilot_without_durable_secret() -> None:
     assert "actions: write" not in text
 
 
-def test_0275_r8_board_exposes_theme_rows_and_parent_boxes() -> None:
+def test_0275_r8_board_keeps_theme_rows_and_en_cours_command() -> None:
     text = BOARD.read_text(encoding="utf-8")
 
     assert "Group by     : Thème" in text
-    assert "Vue `Boîtes de thèmes`" in text
-    assert "Group by     : Parent issue" in text
-    assert "Sub-issue progress" in text
+    assert "Vue `Résultats`" in text
+    assert "Vue `Actions serveur`" in text
     assert "Recherche      → En cours" in text
     assert "Développement → En cours" in text
     assert "Production     → En cours" in text
+    assert "Group by     : Parent issue" not in text
+    assert "Vue `Boîtes de thèmes`" not in text
 
 
 def test_0275_r8_scopes_dispatch_without_relaxing_query_only_snapshot() -> None:
