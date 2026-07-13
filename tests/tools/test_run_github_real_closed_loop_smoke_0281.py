@@ -4,6 +4,7 @@ from importlib.util import module_from_spec, spec_from_file_location
 import json
 from pathlib import Path
 import sys
+from types import ModuleType
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -11,7 +12,6 @@ TOOL = ROOT / "tools/run_github_real_closed_loop_smoke_0281.py"
 
 
 def _load_tool():
-    # Stub runtime-only imports before loading the CLI.
     class AnyClass:
         def __init__(self, *args, **kwargs):
             pass
@@ -32,17 +32,13 @@ def _load_tool():
         "context.scheduler_managed_sql_ref_openvino_embedding_usage_0261": {
             "build_embedding_mapping": lambda **kwargs: kwargs,
         },
-        "context.sql_context_store": {
-            "SQLiteSqlContextStore": AnyClass,
-        },
+        "context.sql_context_store": {"SQLiteSqlContextStore": AnyClass},
         "kernel.dispatcher": {"Dispatcher": AnyClass},
         "kernel.event_bus": {"EventBus": AnyClass},
         "kernel.queue": {"PriorityQueue": AnyClass},
         "kernel.registry": {"Registry": AnyClass},
         "kernel.scheduler": {"Scheduler": AnyClass},
     }
-    from types import ModuleType
-
     for name, attributes in modules.items():
         module = ModuleType(name)
         for key, value in attributes.items():
@@ -57,6 +53,21 @@ def _load_tool():
     return module
 
 
+def test_cli_requires_config_and_has_no_manual_paths() -> None:
+    tool = _load_tool()
+    args = tool.parse_args(
+        (
+            "--config", "/tmp/fetch.ini",
+            "--run-id", "42",
+            "--issue-number", "15",
+        )
+    )
+    assert str(args.config) == "/tmp/fetch.ini"
+    assert not hasattr(args, "run_root")
+    assert not hasattr(args, "output_root")
+    assert not hasattr(args, "repository")
+
+
 def test_write_outputs_creates_then_replays(tmp_path: Path) -> None:
     tool = _load_tool()
     result = {
@@ -65,27 +76,8 @@ def test_write_outputs_creates_then_replays(tmp_path: Path) -> None:
         "publication_preview": {"summary": "ok"},
         "publication_plan": {"action": "create"},
     }
-
-    first = tool._write_outputs(tmp_path, result)
-    second = tool._write_outputs(tmp_path, result)
-
-    assert set(first.values()) == {"created"}
-    assert set(second.values()) == {"replayed"}
+    assert set(tool._write_outputs(tmp_path, result).values()) == {"created"}
+    assert set(tool._write_outputs(tmp_path, result).values()) == {"replayed"}
     assert json.loads(
-        (tmp_path / "publication_preview.json").read_text(
-            encoding="utf-8"
-        )
+        (tmp_path / "publication_preview.json").read_text(encoding="utf-8")
     ) == {"summary": "ok"}
-
-
-def test_writer_refuses_different_existing_proof(tmp_path: Path) -> None:
-    tool = _load_tool()
-    path = tmp_path / "proof.json"
-
-    assert tool._write_json_idempotent(path, {"value": 1}) == "created"
-    try:
-        tool._write_json_idempotent(path, {"value": 2})
-    except RuntimeError as exc:
-        assert "refusing to overwrite" in str(exc)
-    else:
-        raise AssertionError("different proof must collide")

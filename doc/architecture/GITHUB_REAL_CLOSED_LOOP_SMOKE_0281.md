@@ -1,93 +1,42 @@
-# GitHub real closed-loop smoke — 0281-r7
+# GitHub real closed-loop smoke — 0281-r7-r1
 
-## Purpose
+The smoke consumes the existing fetch INI and resolves one ready r3 run-group
+from `server_dataset.index`. Artifact bytes are read exclusively from
+`server_dataset.raw`, using the recorded relative paths, sizes and SHA-256
+digests.
 
-Close the real local walking skeleton from one downloaded GitHub Actions run:
-
-```text
-authoritative request + Copilot advisory + manifest
--> 0281-r2 run assembly
--> 0275 intake
--> explicit operator promote decision
--> 0281-r5 advisory projection
--> existing platform Scheduler
--> 0274 fake laboratory SQL/projection/recall closure
--> publication_preview.json
--> 0281-r6 create/replay/collision publication plan
-```
-
-The smoke does not publish. The existing r6 tool remains the only Issue
-mutation adapter and still requires an exact operator-confirmed plan digest.
-
-## Real input
-
-Download the successful run into one directory:
-
-```bash
-gh run download 29246131317   --repo newicody/projects   --dir .var/staging/github_closed_loop_0281/29246131317
-```
-
-The collector recognizes these basenames recursively:
+The staging path stored in the run-group report is not trusted or used.
+Manual downloads and Git checkout paths are not accepted.
 
 ```text
-authoritative_request.json
-copilot_advisory.json
-dual_artifact_manifest.json
+ready imported run-group
+-> verified immutable raw members
+-> r2/0275 intake
+-> operator promote
+-> r5 advisory projection
+-> existing Scheduler
+-> 0274 fake laboratory closure
+-> r6 publication preview and plan
 ```
 
-The r2/0275 contracts validate all references and SHA-256 digests before the
-laboratory path runs.
-
-## Existing Scheduler
-
-The CLI starts the existing platform `kernel.scheduler.Scheduler` only as the
-standalone process entrypoint, registers the existing laboratory visit handler,
-and injects it into the r5/0274 path.
-
-It does not define or instantiate a laboratory-local Scheduler, manager,
-orchestrator, queue, bus or registry. The same kernel Scheduler implementation
-remains the sole orchestration authority.
-
-## Runtime adapters
-
-The real smoke reuses the already-existing deterministic local adapters used by
-the 0274 closed-loop tests:
+Outputs are written under:
 
 ```text
-SQLiteSqlContextStore
-DemoQdrantProjectionExecutor
-DemoQdrantRecallExecutor
-deterministic 384-dimensional embedding mapping
-EventBus observation
+server_dataset.index/github_closed_loop_0281/<repository>/<run-id>/
 ```
-
-This is a real integration smoke over the existing code path, not a claim that
-the production Qdrant/OpenVINO adapters are deployed.
-
-## Outputs
-
-The tool writes an idempotent proof directory:
-
-```text
-.var/reports/github_closed_loop_0281/
-  newicody__projects/<run_id>/
-    closed_loop_result.json
-    run_assembly.json
-    laboratory_projection.json
-    publication_preview.json
-    publication_plan.json
-```
-
-An identical rerun is accepted as replay. A different result cannot silently
-overwrite an existing proof.
-
-## Repository impact
 
 ```text
 newicody/autodoc: modification required
 newicody/projects: no Git-tracked modification required
 projects_repository_change_required: false
+fetch_ini_change_required: false
+new_storage_section_required: false
+existing_server_dataset_reused: true
 ```
 
-The external workflow already produced the three required artifacts. No
-workflow or Actions permission change is needed.
+## Forward correction from committed r7
+
+The first committed r7 accepted a manual `--run-root`. The r7-r1 correction
+removes that CLI and resolves a ready run exclusively through the existing
+fetch INI, `ServerDatasetLayout`, the r3 run-group report, and immutable raw
+dataset members.

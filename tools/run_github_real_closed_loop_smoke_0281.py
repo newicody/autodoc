@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Run the real local 0281 closed-loop smoke and write publication preview.
 
-Input is a directory produced by ``gh run download`` or the local 0168/0281-r3
-fetch path. The tool owns only the standalone process lifecycle of the existing
-platform Scheduler implementation. It does not introduce a laboratory
-Scheduler or mutate GitHub.
+Input is the same INI consumed by the 0167/0168 fetch path. The tool requires
+a ready 0281-r3 run-group report and resolves all bytes from
+``server_dataset.raw``. It never consumes a Git checkout or a manual download
+directory.
+
+The tool owns only the standalone process lifecycle of the existing platform
+Scheduler implementation. It does not introduce a laboratory Scheduler or
+mutate GitHub.
 """
 
 from __future__ import annotations
@@ -22,12 +26,15 @@ _SRC_ROOT = _REPO_ROOT / "src"
 if str(_SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(_SRC_ROOT))
 
+from context.github_artifact_server_fetch_config import (  # noqa: E402
+    load_github_artifact_server_fetch_config,
+)
 from context.github_project_v2_source_candidate_vector_projection_0272 import (  # noqa: E402
     EmbeddingSpaceProfile,
 )
 from context.github_real_closed_loop_smoke_0281 import (  # noqa: E402
     GitHubRealClosedLoopSmokeCommand,
-    collect_github_run_members,
+    load_imported_github_run_bundle,
     run_github_real_closed_loop_smoke,
 )
 from context.scheduler_laboratory_visit_binding_0274 import (  # noqa: E402
@@ -53,19 +60,13 @@ from kernel.scheduler import Scheduler  # noqa: E402
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run the real local GitHub dual-artifact -> existing Scheduler "
-            "-> fake laboratory -> publication preview smoke."
+            "Run the imported GitHub run-group -> existing Scheduler -> "
+            "fake laboratory -> publication preview smoke."
         )
     )
-    parser.add_argument("--repository", required=True)
+    parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--issue-number", type=int, required=True)
-    parser.add_argument("--run-root", type=Path, required=True)
-    parser.add_argument(
-        "--output-root",
-        type=Path,
-        default=Path(".var/reports/github_closed_loop_0281"),
-    )
     parser.add_argument(
         "--policy-decision-id",
         default="",
@@ -77,30 +78,44 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--operator-reason",
         default=(
-            "Operator-approved real local closed-loop smoke for correlated "
+            "Operator-approved real local closed-loop smoke for an imported "
             "GitHub request and Copilot advisory."
         ),
     )
     parser.add_argument("--allow-missing-advisory", action="store_true")
     parser.add_argument("--no-observations", action="store_true")
     parser.add_argument("--no-sql-replay", action="store_true")
-    parser.add_argument("--format", choices=("json", "summary"), default="summary")
+    parser.add_argument(
+        "--format",
+        choices=("json", "summary"),
+        default="summary",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(tuple(sys.argv[1:] if argv is None else argv))
+    config = load_github_artifact_server_fetch_config(args.config)
+    repository = config.external_repository
+    run_id = str(args.run_id)
+
+    imported = load_imported_github_run_bundle(
+        dataset_raw_path=config.dataset.raw_path,
+        dataset_index_path=config.dataset.index_path,
+        repository=repository,
+        run_id=run_id,
+    )
     policy_decision_id = args.policy_decision_id or (
         "policy:0281:r7:"
-        + _repository_slug(args.repository)
-        + f":{args.run_id}:{args.issue_number}"
+        + _repository_slug(repository)
+        + f":{run_id}:{args.issue_number}"
     )
-    members = collect_github_run_members(args.run_root)
     command = GitHubRealClosedLoopSmokeCommand(
-        repository=args.repository,
-        run_id=str(args.run_id),
+        repository=repository,
+        run_id=run_id,
         issue_number=args.issue_number,
-        members=members,
+        members=imported.members,
+        run_group_report_ref=imported.report_ref,
         policy_decision_id=policy_decision_id,
         operator_reason=args.operator_reason,
         require_advisory=not args.allow_missing_advisory,
@@ -110,19 +125,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     result = asyncio.run(_execute(command))
     result_mapping = result.to_mapping()
     output_dir = (
-        args.output_root
-        / _repository_slug(args.repository)
-        / str(args.run_id)
+        config.dataset.index_path
+        / "github_closed_loop_0281"
+        / _repository_slug(repository)
+        / run_id
     )
     write_actions = _write_outputs(output_dir, result_mapping)
     report = {
         "schema": "missipy.github.real_closed_loop_smoke_tool.v1",
         "valid": result.valid,
         "issues": list(result.issues),
-        "repository": args.repository,
-        "run_id": str(args.run_id),
+        "repository": repository,
+        "run_id": run_id,
         "issue_number": args.issue_number,
-        "run_root": str(args.run_root.resolve()),
+        "config_path": str(args.config.resolve()),
+        "dataset_root": str(config.dataset.root.resolve()),
+        "run_group_report_path": str(imported.report_path),
+        "run_group_report_ref": imported.report_ref,
+        "raw_run_root": str(imported.raw_run_root),
+        "input_source": "configured_server_dataset",
         "output_dir": str(output_dir.resolve()),
         "write_actions": write_actions,
         "publication_preview_path": str(
@@ -257,6 +278,8 @@ def _emit(report: Mapping[str, Any], output_format: str) -> None:
         return
     print(f"valid: {report['valid']}")
     print(f"run_id: {report['run_id']}")
+    print(f"dataset_root: {report['dataset_root']}")
+    print(f"run_group_report_path: {report['run_group_report_path']}")
     print(f"output_dir: {report['output_dir']}")
     print(f"publication_preview_path: {report['publication_preview_path']}")
     print(f"publication_plan_path: {report['publication_plan_path']}")

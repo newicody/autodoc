@@ -1,12 +1,14 @@
 """Real local smoke for the GitHub dual-artifact closed loop.
 
-The composition starts from already-downloaded Actions artifact members,
-validates their correlation through 0281-r2/0275, executes the existing
-Scheduler/fake-laboratory path through 0281-r5, and produces the exact
-publication preview consumed by 0281-r6.
+The composition starts from immutable members resolved from the configured
+server dataset and a ready 0281-r3 run-group report. It validates correlation
+through 0281-r2/0275, executes the existing Scheduler/fake-laboratory path
+through 0281-r5, and produces the exact publication preview consumed by
+0281-r6.
 
-This module does not fetch from GitHub, create a Scheduler, write files, or
-perform remote mutation. The caller injects the existing Scheduler and all
+This module never reads a Git checkout or a manual Actions download tree.
+It does not fetch from GitHub, create a Scheduler, write files, or perform
+remote mutation. The caller injects the existing Scheduler and all
 durable/vector/observation adapters.
 """
 
@@ -16,6 +18,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 import hashlib
+import json
 from typing import Any
 
 from context.fake_laboratory_closed_local_handoff_0274 import (
@@ -72,6 +75,7 @@ class GitHubRealClosedLoopSmokeCommand:
     run_id: str
     issue_number: int
     members: tuple[GitHubDualArtifactRunMember, ...]
+    run_group_report_ref: str
     policy_decision_id: str
     operator_reason: str
     require_advisory: bool = True
@@ -90,6 +94,12 @@ class GitHubRealClosedLoopSmokeCommand:
             raise ValueError("issue_number must be > 0")
         if not isinstance(self.members, tuple):
             object.__setattr__(self, "members", tuple(self.members))
+        if not self.run_group_report_ref.startswith(
+            "dataset-index:github-dual-artifact-run-group:"
+        ):
+            raise ValueError(
+                "run_group_report_ref must identify the imported run-group"
+            )
         if not self.policy_decision_id.startswith("policy:"):
             raise ValueError("policy_decision_id must start with policy:")
         if not self.operator_reason.strip():
@@ -109,6 +119,7 @@ class GitHubRealClosedLoopSmokeResult:
     repository: str
     run_id: str
     issue_number: int
+    run_group_report_ref: str
     assembly: Mapping[str, Any] = field(default_factory=dict)
     laboratory_projection: Mapping[str, Any] = field(default_factory=dict)
     publication_preview: Mapping[str, Any] = field(default_factory=dict)
@@ -135,6 +146,8 @@ class GitHubRealClosedLoopSmokeResult:
             "repository": self.repository,
             "run_id": self.run_id,
             "issue_number": self.issue_number,
+            "run_group_report_ref": self.run_group_report_ref,
+            "input_source": "configured_server_dataset",
             "assembly": dict(self.assembly),
             "laboratory_projection": dict(self.laboratory_projection),
             "publication_preview": dict(self.publication_preview),
@@ -362,40 +375,155 @@ def build_real_closed_loop_laboratory_command(
     )
 
 
-def collect_github_run_members(
-    run_root: Path,
-) -> tuple[GitHubDualArtifactRunMember, ...]:
-    """Collect the three known files from a gh-run-download directory."""
+@dataclass(frozen=True, slots=True)
+class ImportedGitHubRunBundle:
+    """Ready run-group report plus verified immutable raw dataset members."""
 
-    root = run_root.resolve()
-    if not root.exists() or not root.is_dir():
-        raise ValueError(f"run_root is not a directory: {run_root}")
-    if run_root.is_symlink():
-        raise ValueError("run_root must not be a symbolic link")
+    repository: str
+    run_id: str
+    report_path: Path
+    report_ref: str
+    raw_run_root: Path
+    members: tuple[GitHubDualArtifactRunMember, ...]
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {
+            "repository": self.repository,
+            "run_id": self.run_id,
+            "report_path": str(self.report_path),
+            "report_ref": self.report_ref,
+            "raw_run_root": str(self.raw_run_root),
+            "member_count": len(self.members),
+            "members": [member.to_mapping() for member in self.members],
+        }
+
+
+def load_imported_github_run_bundle(
+    *,
+    dataset_raw_path: Path,
+    dataset_index_path: Path,
+    repository: str,
+    run_id: str,
+) -> ImportedGitHubRunBundle:
+    """Resolve one ready r3 run exclusively through the server dataset."""
+
+    repository_slug = repository.replace("/", "__")
+    report_path = (
+        dataset_index_path
+        / "github_dual_artifact_run_groups"
+        / repository_slug
+        / f"{run_id}.json"
+    )
+    report = _read_json_mapping(report_path, name="run-group report")
+    if report.get("schema") != (
+        "missipy.github.dual_artifact_fetch_run_group.v1"
+    ):
+        raise ValueError("unexpected run-group report schema")
+    if report.get("status") != "ready":
+        raise ValueError("run-group report must have status=ready")
+    if report.get("repository") != repository:
+        raise ValueError("run-group repository does not match config")
+    if str(report.get("run_id", "")) != run_id:
+        raise ValueError("run-group run_id does not match command")
+
+    collected = report.get("collected_files")
+    if not isinstance(collected, list):
+        raise ValueError("run-group collected_files must be a JSON array")
+
+    raw_run_root = (
+        dataset_raw_path / repository_slug / run_id
+    ).resolve()
+    if not raw_run_root.exists() or not raw_run_root.is_dir():
+        raise ValueError(
+            f"imported raw run directory is missing: {raw_run_root}"
+        )
+    if raw_run_root.is_symlink():
+        raise ValueError("imported raw run directory must not be a symlink")
 
     members: list[GitHubDualArtifactRunMember] = []
-    seen: set[str] = set()
-    for path in sorted(root.rglob("*"), key=lambda item: str(item)):
-        if path.is_symlink():
+    seen_filenames: set[str] = set()
+    for item in collected:
+        if not isinstance(item, Mapping):
+            raise ValueError("collected file entry must be a JSON object")
+        artifact_name = str(item.get("artifact_name", "")).strip()
+        filename = str(item.get("filename", "")).strip()
+        relative_value = str(item.get("relative_path", "")).strip()
+        expected_artifact = _EXPECTED_ARTIFACT_BY_FILENAME.get(filename)
+        if expected_artifact is None:
+            continue
+        if artifact_name != expected_artifact:
             raise ValueError(
-                f"symbolic-link artifact member rejected: {path}"
+                f"artifact identity mismatch for {filename}"
             )
-        if not path.is_file():
-            continue
-        artifact_name = _EXPECTED_ARTIFACT_BY_FILENAME.get(path.name)
-        if artifact_name is None:
-            continue
-        if path.name in seen:
-            raise ValueError(f"duplicate artifact filename: {path.name}")
-        seen.add(path.name)
+        if filename in seen_filenames:
+            raise ValueError(f"duplicate imported member: {filename}")
+
+        relative = Path(relative_value)
+        if (
+            not relative_value
+            or relative.is_absolute()
+            or ".." in relative.parts
+        ):
+            raise ValueError(
+                f"unsafe imported relative_path: {relative_value}"
+            )
+        path = (raw_run_root / relative).resolve()
+        if not path.is_relative_to(raw_run_root):
+            raise ValueError(
+                f"imported member escaped raw dataset: {relative_value}"
+            )
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"imported member is missing: {path}")
+
+        content = path.read_bytes()
+        expected_size = int(item.get("size_bytes", -1))
+        expected_sha = str(item.get("sha256", "")).strip()
+        if expected_size != len(content):
+            raise ValueError(f"size mismatch for imported {filename}")
+        if hashlib.sha256(content).hexdigest() != expected_sha:
+            raise ValueError(f"sha256 mismatch for imported {filename}")
+
         members.append(
             GitHubDualArtifactRunMember(
                 artifact_name=artifact_name,
-                filename=path.name,
-                content=path.read_bytes(),
+                filename=filename,
+                content=content,
             )
         )
-    return tuple(members)
+        seen_filenames.add(filename)
+
+    required = {
+        "authoritative_request.json",
+        "dual_artifact_manifest.json",
+    }
+    missing = sorted(required - seen_filenames)
+    if missing:
+        raise ValueError(
+            "ready run-group is missing imported member(s): "
+            + ", ".join(missing)
+        )
+
+    report_ref = (
+        "dataset-index:github-dual-artifact-run-group:"
+        f"{repository_slug}:{run_id}"
+    )
+    return ImportedGitHubRunBundle(
+        repository=repository,
+        run_id=run_id,
+        report_path=report_path.resolve(),
+        report_ref=report_ref,
+        raw_run_root=raw_run_root,
+        members=tuple(members),
+    )
+
+
+def _read_json_mapping(path: Path, *, name: str) -> dict[str, Any]:
+    if not path.exists() or not path.is_file():
+        raise ValueError(f"{name} is missing: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, Mapping):
+        raise ValueError(f"{name} must be a JSON object")
+    return dict(payload)
 
 
 def _validate_request_identity(
@@ -450,6 +578,7 @@ def _result(
         repository=command.repository,
         run_id=command.run_id,
         issue_number=command.issue_number,
+        run_group_report_ref=command.run_group_report_ref,
         assembly=dict(assembly or {}),
         laboratory_projection=dict(laboratory_projection or {}),
         publication_preview=dict(publication_preview or {}),
@@ -477,7 +606,8 @@ __all__ = (
     "SCHEMA",
     "GitHubRealClosedLoopSmokeCommand",
     "GitHubRealClosedLoopSmokeResult",
+    "ImportedGitHubRunBundle",
     "build_real_closed_loop_laboratory_command",
-    "collect_github_run_members",
+    "load_imported_github_run_bundle",
     "run_github_real_closed_loop_smoke",
 )

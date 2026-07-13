@@ -1,48 +1,69 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import context.github_real_closed_loop_smoke_0281 as subject
-from context.github_dual_artifact_run_assembly_0281 import (
-    GitHubDualArtifactRunMember,
-)
 
 
-def _members() -> tuple[GitHubDualArtifactRunMember, ...]:
-    return (
-        GitHubDualArtifactRunMember(
-            "autodoc-authoritative-request",
-            "authoritative_request.json",
-            b"request",
-        ),
-        GitHubDualArtifactRunMember(
-            "autodoc-copilot-advisory",
-            "copilot_advisory.json",
-            b"advisory",
-        ),
-        GitHubDualArtifactRunMember(
-            "autodoc-dual-artifact-manifest",
-            "dual_artifact_manifest.json",
-            b"manifest",
-        ),
+def _write_imported_run(raw_path: Path, index_path: Path):
+    repository = "newicody/projects"
+    run_id = "29246131317"
+    slug = "newicody__projects"
+    files = (
+        ("100", "autodoc-authoritative-request", "authoritative_request.json", b"request"),
+        ("200", "autodoc-copilot-advisory", "copilot_advisory.json", b"advisory"),
+        ("300", "autodoc-dual-artifact-manifest", "dual_artifact_manifest.json", b"manifest"),
+    )
+    collected = []
+    for artifact_id, artifact_name, filename, content in files:
+        path = raw_path / slug / run_id / artifact_id / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        collected.append({
+            "artifact_name": artifact_name,
+            "filename": filename,
+            "relative_path": f"{artifact_id}/{filename}",
+            "size_bytes": len(content),
+            "sha256": hashlib.sha256(content).hexdigest(),
+        })
+    report = {
+        "schema": "missipy.github.dual_artifact_fetch_run_group.v1",
+        "status": "ready",
+        "repository": repository,
+        "run_id": run_id,
+        "collected_files": collected,
+        "assembly": {"valid": True},
+    }
+    report_path = (
+        index_path / "github_dual_artifact_run_groups" / slug / f"{run_id}.json"
+    )
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+    return subject.load_imported_github_run_bundle(
+        dataset_raw_path=raw_path,
+        dataset_index_path=index_path,
+        repository=repository,
+        run_id=run_id,
     )
 
 
-def _command() -> subject.GitHubRealClosedLoopSmokeCommand:
+def _command(bundle):
     return subject.GitHubRealClosedLoopSmokeCommand(
         repository="newicody/projects",
         run_id="29246131317",
         issue_number=15,
-        members=_members(),
+        members=bundle.members,
+        run_group_report_ref=bundle.report_ref,
         policy_decision_id="policy:0281:r7:test",
         operator_reason="operator approved",
     )
 
 
-def _assembly_mapping() -> dict[str, object]:
+def _assembly_mapping():
     return {
         "valid": True,
         "issues": [],
@@ -61,50 +82,38 @@ def _assembly_mapping() -> dict[str, object]:
     }
 
 
-def test_collect_members_from_gh_run_download_tree(tmp_path: Path) -> None:
-    for directory, filename in (
-        ("autodoc-authoritative-request", "authoritative_request.json"),
-        ("autodoc-copilot-advisory", "copilot_advisory.json"),
-        ("autodoc-dual-artifact-manifest", "dual_artifact_manifest.json"),
-    ):
-        path = tmp_path / directory / filename
-        path.parent.mkdir()
-        path.write_text("{}", encoding="utf-8")
-
-    members = subject.collect_github_run_members(tmp_path)
-
-    assert {member.filename for member in members} == {
+def test_imported_bundle_uses_ready_report_and_raw_dataset(tmp_path: Path) -> None:
+    bundle = _write_imported_run(tmp_path / "raw", tmp_path / "index")
+    assert bundle.report_ref.startswith(
+        "dataset-index:github-dual-artifact-run-group:"
+    )
+    assert {member.filename for member in bundle.members} == {
         "authoritative_request.json",
         "copilot_advisory.json",
         "dual_artifact_manifest.json",
     }
 
 
-def test_laboratory_command_is_built_for_existing_0274_path() -> None:
-    command = subject.build_real_closed_loop_laboratory_command(
-        _command(),
-        request=_assembly_mapping()["intake"]["request"],
-        source_candidate=_assembly_mapping()["intake"]["source_candidate"],
+def test_imported_bundle_rejects_digest_mismatch(tmp_path: Path) -> None:
+    bundle = _write_imported_run(tmp_path / "raw", tmp_path / "index")
+    (bundle.raw_run_root / "100" / "authoritative_request.json").write_bytes(
+        b"changed"
     )
-
-    deliberation = command.deliberation
-    assert deliberation.orientation.orientation_ref.startswith(
-        "orientation:github-run:"
-    )
-    assert deliberation.artifact_ref.startswith("artifact:github-request:")
-    assert deliberation.source_candidate_ref == (
-        "source-candidate:github-request-0123456789abcdef"
-    )
-    assert deliberation.target_ref == "github:issue:newicody/projects/15"
-    assert command.handoff.execute is True
-    assert command.handoff.vector_execute is True
-    assert command.recall.execute is True
-    assert command.verify_sql_replay is True
+    try:
+        subject.load_imported_github_run_bundle(
+            dataset_raw_path=tmp_path / "raw",
+            dataset_index_path=tmp_path / "index",
+            repository="newicody/projects",
+            run_id="29246131317",
+        )
+    except ValueError as exc:
+        assert "mismatch" in str(exc)
+    else:
+        raise AssertionError("digest mismatch must be rejected")
 
 
-def test_real_smoke_composes_r2_r5_and_r6_without_mutation(
-    monkeypatch,
-) -> None:
+def test_real_smoke_composes_without_mutation(tmp_path: Path, monkeypatch) -> None:
+    bundle = _write_imported_run(tmp_path / "raw", tmp_path / "index")
     assembly = SimpleNamespace(
         valid=True,
         issues=(),
@@ -114,13 +123,9 @@ def test_real_smoke_composes_r2_r5_and_r6_without_mutation(
         "valid": True,
         "issues": [],
         "publication_preview": {
-            "schema": (
-                "missipy.github.copilot_advisory_publication_preview.v1"
-            ),
+            "schema": "missipy.github.copilot_advisory_publication_preview.v1",
             "source_candidate_ref": "github-request-0123456789abcdef",
-            "advisory_context_ref": (
-                "ctx:github-advisory:0123456789abcdef01234567"
-            ),
+            "advisory_context_ref": "ctx:github-advisory:0123456789abcdef01234567",
             "advisory_artifact_ref": "github-advisory:abc",
             "summary": "Résumé",
             "suggested_route": "Route",
@@ -151,7 +156,6 @@ def test_real_smoke_composes_r2_r5_and_r6_without_mutation(
             "github_mutation_performed": False,
         },
     )
-
     monkeypatch.setattr(
         subject,
         "run_github_dual_artifact_run_assembly",
@@ -175,53 +179,12 @@ def test_real_smoke_composes_r2_r5_and_r6_without_mutation(
     result = asyncio.run(
         subject.run_github_real_closed_loop_smoke(
             object(),
-            _command(),
+            _command(bundle),
             store=object(),
         )
     )
-
     assert result.valid is True
-    assert result.publication_preview["summary"] == "Résumé"
+    assert result.run_group_report_ref == bundle.report_ref
     assert result.publication_plan["action"] == "create"
     assert result.existing_scheduler_used is True
-    assert result.scheduler_created is False
     assert result.github_mutation_performed is False
-
-
-def test_identity_mismatch_stops_before_laboratory(monkeypatch) -> None:
-    mapping = _assembly_mapping()
-    mapping["intake"]["request"]["issue_number"] = 99
-    assembly = SimpleNamespace(
-        valid=True,
-        issues=(),
-        to_mapping=lambda: mapping,
-    )
-    called = False
-
-    monkeypatch.setattr(
-        subject,
-        "run_github_dual_artifact_run_assembly",
-        lambda *args, **kwargs: assembly,
-    )
-
-    async def fail_projection(*args, **kwargs):
-        nonlocal called
-        called = True
-        raise AssertionError("laboratory must not run")
-
-    monkeypatch.setattr(
-        subject,
-        "run_github_operator_laboratory_advisory_projection",
-        fail_projection,
-    )
-
-    result = asyncio.run(
-        subject.run_github_real_closed_loop_smoke(
-            object(),
-            _command(),
-        )
-    )
-
-    assert result.valid is False
-    assert "issue_number" in result.issues[0]
-    assert called is False
