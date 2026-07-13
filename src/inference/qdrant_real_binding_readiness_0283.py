@@ -1,0 +1,590 @@
+"""Read-only real-Qdrant binding readiness for phase 0283-r6.
+
+The readiness surface reuses the validated 0283-r2 configuration and the
+read-only 0283-r3 factory inspection. It optionally performs one explicit live
+collection metadata read through qdrant-client.
+
+It never creates, recreates, updates or deletes a collection. It never upserts
+points, performs vector search, writes SQL, starts Qdrant, changes Scheduler.run,
+uses ControlProxy/EventBus as a command path or introduces another transport.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from importlib import import_module
+from typing import Any, Callable, Mapping, Protocol
+
+from inference.qdrant_client_projection_executor import (
+    QdrantClientDependencyReadiness,
+    inspect_qdrant_client_dependency,
+)
+from inference.qdrant_real_binding_configuration_0283 import (
+    QdrantRealBindingConfigurationResult,
+)
+from inference.qdrant_scoped_executor_factory_0283 import (
+    QdrantScopedExecutorFactoryPolicy,
+    inspect_qdrant_scoped_executor_factory,
+)
+
+
+QDRANT_REAL_BINDING_READINESS_SCHEMA = (
+    "missipy.qdrant.real_binding_readiness.v1"
+)
+
+
+class QdrantReadinessClient(Protocol):
+    """Minimal read-only client surface needed by readiness."""
+
+    def get_collection(self, collection_name: str) -> Any:
+        ...
+
+    def close(self) -> None:
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class QdrantRealBindingReadinessCommand:
+    configuration: QdrantRealBindingConfigurationResult
+    live_probe: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class QdrantRealBindingReadinessPolicy:
+    require_valid_configuration: bool = True
+    require_factory_readiness: bool = True
+    require_collection_present: bool = True
+    require_exact_vector_dimension: bool = True
+    require_exact_distance: bool = True
+    allowed_collection_statuses: tuple[str, ...] = (
+        "green",
+        "yellow",
+    )
+    close_client: bool = True
+
+    def __post_init__(self) -> None:
+        normalized = tuple(
+            status.strip().casefold()
+            for status in self.allowed_collection_statuses
+        )
+        if not normalized or any(not status for status in normalized):
+            raise ValueError(
+                "allowed_collection_statuses must not be empty"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class QdrantRealBindingReadinessResult:
+    valid: bool
+    issues: tuple[str, ...]
+    warnings: tuple[str, ...]
+    binding_ref: str
+    requested_operations: tuple[str, ...]
+    local_ready: bool
+    operational_ready: bool
+    projection_ready: bool
+    recall_ready: bool
+    dependency_report: Mapping[str, Any] = field(
+        default_factory=dict
+    )
+    factory_report: Mapping[str, Any] = field(
+        default_factory=dict
+    )
+    collection_report: Mapping[str, Any] = field(
+        default_factory=dict
+    )
+    live_probe_requested: bool = False
+    live_probe_performed: bool = False
+    client_constructed: bool = False
+    client_closed: bool = False
+    collection_read_performed: bool = False
+    boundaries: tuple[tuple[str, bool], ...] = ()
+
+    def to_json_dict(self) -> dict[str, Any]:
+        return {
+            "schema": QDRANT_REAL_BINDING_READINESS_SCHEMA,
+            "valid": self.valid,
+            "issues": list(self.issues),
+            "warnings": list(self.warnings),
+            "binding_ref": self.binding_ref,
+            "requested_operations": list(
+                self.requested_operations
+            ),
+            "local_ready": self.local_ready,
+            "operational_ready": self.operational_ready,
+            "projection_ready": self.projection_ready,
+            "recall_ready": self.recall_ready,
+            "dependency_report": dict(self.dependency_report),
+            "factory_report": dict(self.factory_report),
+            "collection_report": dict(self.collection_report),
+            "live_probe_requested": self.live_probe_requested,
+            "live_probe_performed": self.live_probe_performed,
+            "client_constructed": self.client_constructed,
+            "client_closed": self.client_closed,
+            "collection_read_performed": (
+                self.collection_read_performed
+            ),
+            "boundaries": dict(self.boundaries),
+        }
+
+    def to_summary(self) -> str:
+        return " ".join(
+            (
+                f"qdrant_binding_readiness_valid={self.valid}",
+                f"issues={len(self.issues)}",
+                f"warnings={len(self.warnings)}",
+                f"local_ready={self.local_ready}",
+                f"operational_ready={self.operational_ready}",
+                f"projection_ready={self.projection_ready}",
+                f"recall_ready={self.recall_ready}",
+                f"live_probe_performed={self.live_probe_performed}",
+            )
+        )
+
+
+def inspect_qdrant_real_binding_readiness(
+    command: QdrantRealBindingReadinessCommand,
+    policy: QdrantRealBindingReadinessPolicy | None = None,
+    *,
+    factory_policy: QdrantScopedExecutorFactoryPolicy | None = None,
+    dependency_inspector: Callable[
+        [], QdrantClientDependencyReadiness
+    ] = inspect_qdrant_client_dependency,
+    environment: Mapping[str, str] | None = None,
+    client_builder: Callable[..., QdrantReadinessClient] | None = None,
+) -> QdrantRealBindingReadinessResult:
+    """Inspect local and optionally live collection readiness."""
+
+    active_policy = (
+        policy or QdrantRealBindingReadinessPolicy()
+    )
+    configuration = command.configuration
+    issues: list[str] = []
+    warnings: list[str] = []
+
+    dependency = dependency_inspector()
+    dependency_report = dependency.to_mapping()
+    factory_report_object = inspect_qdrant_scoped_executor_factory(
+        configuration,
+        factory_policy,
+        dependency_inspector=lambda: dependency,
+        environment=environment,
+    )
+    factory_report = factory_report_object.to_json_dict()
+
+    if (
+        active_policy.require_valid_configuration
+        and not configuration.valid
+    ):
+        issues.append("binding configuration must be valid")
+        issues.extend(
+            f"configuration: {issue}"
+            for issue in configuration.issues
+        )
+
+    if (
+        active_policy.require_factory_readiness
+        and not factory_report_object.valid
+    ):
+        issues.extend(
+            f"factory: {issue}"
+            for issue in factory_report_object.issues
+        )
+
+    local_ready = not issues
+    if not command.live_probe:
+        warnings.append(
+            "live collection probe not requested"
+        )
+        return _result(
+            command,
+            issues=issues,
+            warnings=warnings,
+            local_ready=local_ready,
+            operational_ready=False,
+            dependency_report=dependency_report,
+            factory_report=factory_report,
+        )
+
+    if not local_ready:
+        warnings.append(
+            "live collection probe skipped because local readiness failed"
+        )
+        return _result(
+            command,
+            issues=issues,
+            warnings=warnings,
+            local_ready=False,
+            operational_ready=False,
+            dependency_report=dependency_report,
+            factory_report=factory_report,
+        )
+
+    builder = client_builder or _build_qdrant_readiness_client
+    client: QdrantReadinessClient | None = None
+    client_constructed = False
+    client_closed = False
+    collection_read_performed = False
+    collection_report: dict[str, Any] = {}
+
+    try:
+        client = builder(
+            configuration,
+            environment=environment,
+        )
+        client_constructed = True
+        info = client.get_collection(
+            configuration.target.collection_name
+        )
+        collection_read_performed = True
+        collection_report = _collection_report(
+            info,
+            expected_collection=(
+                configuration.target.collection_name
+            ),
+            expected_dimension=(
+                configuration.target.vector_dimension
+            ),
+            expected_distance=configuration.target.distance,
+            policy=active_policy,
+        )
+        issues.extend(
+            str(issue)
+            for issue in collection_report.get("issues", ())
+        )
+    except Exception as exc:
+        issues.append(
+            "collection readiness probe failed: "
+            f"{type(exc).__name__}: {_safe_message(exc)}"
+        )
+    finally:
+        if client is not None and active_policy.close_client:
+            try:
+                client.close()
+                client_closed = True
+            except Exception as exc:
+                issues.append(
+                    "readiness client close failed: "
+                    f"{type(exc).__name__}: {_safe_message(exc)}"
+                )
+
+    operational_ready = bool(
+        local_ready
+        and collection_read_performed
+        and collection_report.get("compatible") is True
+        and not issues
+    )
+    return _result(
+        command,
+        issues=issues,
+        warnings=warnings,
+        local_ready=local_ready,
+        operational_ready=operational_ready,
+        dependency_report=dependency_report,
+        factory_report=factory_report,
+        collection_report=collection_report,
+        live_probe_performed=True,
+        client_constructed=client_constructed,
+        client_closed=client_closed,
+        collection_read_performed=collection_read_performed,
+    )
+
+
+def _build_qdrant_readiness_client(
+    configuration: QdrantRealBindingConfigurationResult,
+    *,
+    environment: Mapping[str, str] | None = None,
+) -> QdrantReadinessClient:
+    """Build a qdrant-client instance for one read-only metadata request."""
+
+    package = import_module("qdrant_client")
+    factory = getattr(package, "QdrantClient")
+    connection = configuration.connection
+    kwargs: dict[str, object] = {
+        "url": connection.url,
+        "timeout": connection.timeout_seconds,
+        "prefer_grpc": connection.prefer_grpc,
+        "check_compatibility": connection.check_compatibility,
+    }
+    if connection.prefer_grpc:
+        kwargs["grpc_port"] = connection.grpc_port
+    if configuration.api_key_env_var:
+        source = environment if environment is not None else __import__("os").environ
+        api_key = str(
+            source.get(configuration.api_key_env_var, "")
+        ).strip()
+        if api_key:
+            kwargs["api_key"] = api_key
+    return factory(**kwargs)
+
+
+def _collection_report(
+    info: Any,
+    *,
+    expected_collection: str,
+    expected_dimension: int,
+    expected_distance: str,
+    policy: QdrantRealBindingReadinessPolicy,
+) -> dict[str, Any]:
+    issues: list[str] = []
+    status = _normalized_scalar(
+        _read_member(info, "status")
+    )
+    dimension, distance, vector_shape = _extract_vector_schema(
+        info
+    )
+
+    allowed_statuses = tuple(
+        item.strip().casefold()
+        for item in policy.allowed_collection_statuses
+    )
+    status_ready = status.casefold() in allowed_statuses
+    dimension_matches = dimension == expected_dimension
+    distance_matches = (
+        distance.casefold() == expected_distance.casefold()
+        if distance
+        else False
+    )
+
+    if not status:
+        issues.append("collection status is unavailable")
+    elif status.casefold() not in allowed_statuses:
+        issues.append(
+            "collection status is not allowed: "
+            f"{status}"
+        )
+
+    if dimension is None:
+        issues.append(
+            "collection vector dimension is unavailable"
+        )
+    elif (
+        policy.require_exact_vector_dimension
+        and not dimension_matches
+    ):
+        issues.append(
+            "collection vector dimension mismatch: "
+            f"expected {expected_dimension}, got {dimension}"
+        )
+
+    if not distance:
+        issues.append("collection distance is unavailable")
+    elif (
+        policy.require_exact_distance
+        and not distance_matches
+    ):
+        issues.append(
+            "collection distance mismatch: "
+            f"expected {expected_distance}, got {distance}"
+        )
+
+    compatible = bool(
+        status_ready
+        and (
+            dimension_matches
+            or not policy.require_exact_vector_dimension
+        )
+        and (
+            distance_matches
+            or not policy.require_exact_distance
+        )
+        and not issues
+    )
+    return {
+        "collection_name": expected_collection,
+        "present": True,
+        "status": status,
+        "status_ready": status_ready,
+        "allowed_statuses": list(allowed_statuses),
+        "vector_shape": vector_shape,
+        "vector_dimension": dimension,
+        "expected_vector_dimension": expected_dimension,
+        "dimension_matches": dimension_matches,
+        "distance": distance,
+        "expected_distance": expected_distance,
+        "distance_matches": distance_matches,
+        "compatible": compatible,
+        "issues": issues,
+        "read_only": True,
+    }
+
+
+def _extract_vector_schema(
+    info: Any,
+) -> tuple[int | None, str, str]:
+    config = _read_member(info, "config")
+    params = _read_member(config, "params")
+    vectors = _read_member(params, "vectors")
+
+    if vectors is None:
+        return None, "", "missing"
+
+    direct_size = _read_member(vectors, "size")
+    direct_distance = _read_member(vectors, "distance")
+    if direct_size is not None:
+        return (
+            _as_int(direct_size),
+            _normalized_scalar(direct_distance),
+            "unnamed",
+        )
+
+    if isinstance(vectors, Mapping):
+        if "size" in vectors:
+            return (
+                _as_int(vectors.get("size")),
+                _normalized_scalar(vectors.get("distance")),
+                "unnamed",
+            )
+        if "" in vectors:
+            unnamed = vectors[""]
+            return (
+                _as_int(_read_member(unnamed, "size")),
+                _normalized_scalar(
+                    _read_member(unnamed, "distance")
+                ),
+                "unnamed-empty-key",
+            )
+        return None, "", "named-vectors-unsupported"
+
+    dumped = _to_mapping(vectors)
+    if dumped:
+        if "size" in dumped:
+            return (
+                _as_int(dumped.get("size")),
+                _normalized_scalar(dumped.get("distance")),
+                "unnamed",
+            )
+        if "" in dumped:
+            unnamed = dumped[""]
+            return (
+                _as_int(_read_member(unnamed, "size")),
+                _normalized_scalar(
+                    _read_member(unnamed, "distance")
+                ),
+                "unnamed-empty-key",
+            )
+        return None, "", "named-vectors-unsupported"
+
+    return None, "", "unknown"
+
+
+def _read_member(value: Any, name: str) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        return value.get(name)
+    return getattr(value, name, None)
+
+
+def _to_mapping(value: Any) -> Mapping[str, Any]:
+    if isinstance(value, Mapping):
+        return value
+    for method_name in ("model_dump", "dict", "to_dict"):
+        method = getattr(value, method_name, None)
+        if callable(method):
+            payload = method()
+            if isinstance(payload, Mapping):
+                return payload
+    return {}
+
+
+def _normalized_scalar(value: Any) -> str:
+    if value is None:
+        return ""
+    candidate = getattr(value, "value", value)
+    text = str(candidate).strip()
+    if "." in text and text.upper() == text:
+        text = text.rsplit(".", 1)[-1]
+    return text.casefold().capitalize() if text else ""
+
+
+def _as_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _result(
+    command: QdrantRealBindingReadinessCommand,
+    *,
+    issues: list[str],
+    warnings: list[str],
+    local_ready: bool,
+    operational_ready: bool,
+    dependency_report: Mapping[str, Any],
+    factory_report: Mapping[str, Any],
+    collection_report: Mapping[str, Any] | None = None,
+    live_probe_performed: bool = False,
+    client_constructed: bool = False,
+    client_closed: bool = False,
+    collection_read_performed: bool = False,
+) -> QdrantRealBindingReadinessResult:
+    configuration = command.configuration
+    projection_requested = (
+        "projection" in configuration.requested_operations
+    )
+    recall_requested = (
+        "recall" in configuration.requested_operations
+    )
+    projection_ready = bool(
+        operational_ready
+        and projection_requested
+        and configuration.effect_gate.allow_write
+    )
+    recall_ready = bool(
+        operational_ready
+        and recall_requested
+        and configuration.effect_gate.allow_search
+    )
+    return QdrantRealBindingReadinessResult(
+        valid=not issues,
+        issues=tuple(issues),
+        warnings=tuple(warnings),
+        binding_ref=configuration.binding_ref,
+        requested_operations=configuration.requested_operations,
+        local_ready=local_ready,
+        operational_ready=operational_ready,
+        projection_ready=projection_ready,
+        recall_ready=recall_ready,
+        dependency_report=dict(dependency_report),
+        factory_report=dict(factory_report),
+        collection_report=dict(collection_report or {}),
+        live_probe_requested=command.live_probe,
+        live_probe_performed=live_probe_performed,
+        client_constructed=client_constructed,
+        client_closed=client_closed,
+        collection_read_performed=collection_read_performed,
+        boundaries=_boundaries(),
+    )
+
+
+def _safe_message(exc: Exception) -> str:
+    text = str(exc).strip() or type(exc).__name__
+    return text[:300]
+
+
+def _boundaries() -> tuple[tuple[str, bool], ...]:
+    return (
+        ("existing_r2_configuration_reused", True),
+        ("existing_r3_factory_inspection_reused", True),
+        ("existing_dependency_inspection_reused", True),
+        ("live_probe_is_explicit", True),
+        ("live_probe_read_only", True),
+        ("collection_created", False),
+        ("collection_updated", False),
+        ("collection_deleted", False),
+        ("qdrant_write_performed", False),
+        ("qdrant_search_performed", False),
+        ("sql_read_performed", False),
+        ("sql_write_performed", False),
+        ("qdrant_started", False),
+        ("new_scheduler_added", False),
+        ("scheduler_run_modified", False),
+        ("new_qdrant_executor_added", False),
+        ("new_transport_added", False),
+        ("control_proxy_integrated", False),
+        ("event_bus_integrated", False),
+        ("shm_or_mmio_integrated", False),
+        ("projects_repository_change_required", False),
+    )
