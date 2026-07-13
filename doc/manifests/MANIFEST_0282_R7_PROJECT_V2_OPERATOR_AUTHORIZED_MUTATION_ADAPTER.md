@@ -1,0 +1,29 @@
+# Manifest 0282-r7 — ProjectV2 operator-authorized mutation adapter
+
+## Added
+
+```text
+tools/apply_github_project_v2_operator_authorized_mutations_0282.py
+tests/tools/test_apply_github_project_v2_operator_authorized_mutations_0282.py
+tests/rules/test_github_project_v2_operator_authorized_mutation_adapter_0282_rule.py
+doc/architecture/GITHUB_PROJECT_V2_OPERATOR_AUTHORIZED_MUTATION_ADAPTER_0282.md
+doc/manifests/MANIFEST_0282_R7_PROJECT_V2_OPERATOR_AUTHORIZED_MUTATION_ADAPTER.md
+doc/CHANGELOG_0282_R7_PROJECT_V2_OPERATOR_AUTHORIZED_MUTATION_ADAPTER.md
+PHASE0282_R7_PROJECT_V2_OPERATOR_AUTHORIZED_MUTATION_ADAPTER_REPORT.md
+```
+
+```text
+Repo autodoc: OUI
+Repo projects: NON
+existing_gh_cli_boundary_reused: true
+preview_is_default: true
+exact_plan_digest_confirmation_required: true
+new_cli_added: true
+new_adapter_added: true
+network_added: true
+github_api_added: true
+view_grouping_automated: false
+scheduler_modified: false
+projects_repository_change_required: false
+external_dependencies_added: false
+```
