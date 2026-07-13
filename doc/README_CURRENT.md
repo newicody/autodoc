@@ -72,7 +72,41 @@ The authoritative request remains the authority. The Copilot advisory is
 consultative only. Its content must remain available for specialist/laboratory
 context and operator review without being copied into authoritative state.
 
-## Current gap
+## Current status after the real 0281 smoke
+
+The complete local GitHub/laboratory walking skeleton is now green:
+
+```text
+Issue #15
+-> three correlated Actions artifacts
+-> authenticated read-only fetch
+-> configured server dataset
+-> run-group intake
+-> existing-Scheduler fake laboratory
+-> closed-loop result
+-> publication preview and plan
+```
+
+`github_mutation_performed` remains false. The active development axis is now
+0282 ProjectV2 cycle history:
+
+```text
+r1 reuse audit [green]
+r2 immutable lineage [green]
+r3 parent/theme query normalization [green]
+r4 append-only history projection [current]
+r5/r6 mutation plans [next]
+r7 explicit adapter authorization
+r8 real smoke
+```
+
+Current diagrams:
+
+- `doc/architecture/GLOBAL_ARCHITECTURE_CURRENT_0282.md`;
+- `doc/architecture/PROJECTV2_CYCLE_HISTORY_DEVELOPMENT_0282.md`;
+- `doc/architecture/PROJECT_BEGINNING_CURRENT_COMPARISON_0282.md`.
+
+## Superseded 0281 gap description (historical)
 
 The generic 0168 fetcher downloads and synchronizes each Actions artifact
 separately. The existing 0275 intake already validates the request, optional

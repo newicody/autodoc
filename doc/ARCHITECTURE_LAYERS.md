@@ -1,39 +1,60 @@
-# Autodoc / MissiPy — Architecture logicielle Phase 3.14
+# Autodoc / MissiPy — architecture courante 0282 et historique Phase 3.x
 
 Ce document décrit l'état actuel du prototype après ajout du corpus local depuis sources TXT/Markdown et du rapport de recherche E5 avec contexte source en Phase 3.14.
 
 Ce document conserve les notes détaillées des anciennes phases. La section suivante est la synthèse courante; les sections Phase 3.x plus bas sont historiques et ne doivent pas être utilisées comme état opérationnel actuel.
 
-## Current operational baseline — 0270
+## Current operational baseline — 0270 (historical compatibility anchor)
 
-La chaîne prototype validée réutilise les surfaces 0260 à 0268 et les compose en 0269 :
+This heading is retained for stable rules and documentation links. The 0270
+baseline remains a validated foundation and is extended, not erased, by the
+current 0282-r4 synthesis below.
+
+## Current operational baseline — 0282-r4
+
+Trois axes sont maintenant composables sans confondre leurs autorités :
 
 ```text
-0260 SQL durable write
--> 0261 SQL rehydrate + OpenVINO/E5
+Axe contexte durable
+0260 SQL write -> 0261 SQL rehydrate + OpenVINO/E5
 -> 0262 Qdrant projection payload.sql_ref
 -> 0263 recall refs + SQL rehydrate
--> 0264 closed ResultFrame
--> 0265 EventBus observation facts
--> 0266 PassiveSupervisor read model
--> 0267 local GitHub handoff
--> 0268 external-service readiness
--> 0269 one-shot production prototype smoke
+-> 0264 closed ResultFrame -> 0265/0266 observation passive
+
+Axe GitHub / laboratoire
+0272 ProjectV2 query-only -> Actions dual artifacts
+-> fetch réel 0168 -> dataset raw/index
+-> SourceCandidate + gate opérateur -> Scheduler existant
+-> fake laboratory -> résultat fermé -> publication preview/plan
+
+Axe historique ProjectV2 en cours
+0282-r1 reuse audit -> r2 cycle lineage
+-> r3 parent/theme normalization -> r4 append-only history
+-> r5/r6 mutation plans -> r7 adapter autorisé -> r8 smoke réel
 ```
 
-Les couches actives doivent respecter ces autorités :
+Autorités verrouillées :
 
-- Scheduler orchestre des intentions typées mais ne démarre aucun daemon ;
-- SQL est l'autorité durable ;
-- Qdrant est une projection de rappel reconstruisible avec `payload.sql_ref` ;
-- OpenVINO/E5 produit explicitement les embeddings ;
-- EventBus et PassiveSupervisor restent strictement observation-only ;
-- GitHub reste une surface de review/workflow sans mutation distante implicite ;
-- OpenRC, l'OS et l'administrateur possèdent le cycle de vie des services externes.
+- Scheduler : seule autorité d'orchestration ;
+- SQL : autorité durable ;
+- Qdrant : projection et rappel reconstruisibles ;
+- OpenVINO/E5 : production vectorielle explicite ;
+- `/dev/shm` / RouteProxy : data-plane rapide ;
+- EventBus, PassiveSupervisor, DOT et VisPy : observation uniquement ;
+- GitHub : workflow, review et synchronisation ;
+- OpenRC, OS et administrateur : cycle de vie des services externes ;
+- laboratoires : environnements d'exécution derrière contrats/handlers/adapters,
+  sans Scheduler, queue, bus ou registre parallèle.
 
-Le chemin 0269 utilise SQL et OpenVINO/E5 réels. Qdrant reste derrière une gate de démonstration explicite jusqu'à validation d'un exécuteur réel contrôlé. Cette synthèse prévaut sur les mentions historiques « future », « fictif » ou « non branché » présentes dans les sections anciennes.
+Les diagrammes courants sont :
 
-La règle centrale reste inchangée : le Scheduler ne contient pas de logique métier. Il orchestre l'entrée des événements, délègue l'autorisation au `PolicyEngine`, route par `PriorityQueue` puis `Dispatcher`, et expose son activité via une observabilité passive.
+- `doc/architecture/GLOBAL_ARCHITECTURE_CURRENT_0282.md` ;
+- `doc/architecture/PROJECTV2_CYCLE_HISTORY_DEVELOPMENT_0282.md` ;
+- `doc/architecture/PROJECT_BEGINNING_CURRENT_COMPARISON_0282.md` ;
+- `doc/docs/architecture/runtime/174_rebuilt_runtime_global_current_state.dot`.
+
+Les sections Phase 3.x suivantes restent historiques et décrivent la genèse du
+pipeline E5 ; elles ne remplacent pas cette baseline.
 
 ## Synthèse courte
 

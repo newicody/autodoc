@@ -1,8 +1,30 @@
-# Current architecture state — canonical index refreshed by 0270
+# Current architecture state — canonical index refreshed by 0282-r4
 
 This path remains the canonical high-level current-state index. The filename is
-kept for compatibility with earlier documentation links; revision 0270 replaces
-the obsolete 0154 completeness snapshot without deleting historical phase docs.
+kept for compatibility with earlier documentation links; revision 0282-r4 now
+supersedes the 0270 snapshot without deleting historical phase docs.
+
+Compatibility anchor retained for stable rules and links: **canonical index refreshed by 0270**. The phrase identifies the preserved 0270 baseline; it does not override the current 0282-r4 state above.
+
+## Current integrated axes — 0282-r4
+
+```text
+0260..0269  SQL durable -> E5 -> Qdrant -> recall -> closed result -> observation
+0272..0281  ProjectV2/Issue -> Actions artifacts -> dataset -> fake laboratory -> preview
+0282-r1..r4 audit -> lineage -> parent/theme normalization -> append-only history
+```
+
+The real GitHub artifact fetch, run-group intake and local closed-loop smoke are
+validated. GitHub mutation remains disabled by default. The active ProjectV2
+work is now local cycle history: `append`, identical `replay`, or deterministic
+`collision`, with no remote effect.
+
+Canonical diagrams:
+
+- `doc/architecture/GLOBAL_ARCHITECTURE_CURRENT_0282.md`;
+- `doc/architecture/PROJECTV2_CYCLE_HISTORY_DEVELOPMENT_0282.md`;
+- `doc/architecture/PROJECT_BEGINNING_CURRENT_COMPARISON_0282.md`;
+- `doc/docs/architecture/runtime/174_rebuilt_runtime_global_current_state.dot`.
 
 ## Authority and boundary model
 
@@ -95,16 +117,20 @@ impossible.
 
 ## Next controlled decisions
 
-1. Select and validate a real Qdrant executor behind an explicit policy gate.
-2. Add a read-only real GitHub scan adapter before designing remote mutation.
-3. Design remote GitHub mutation as a separate operator-approved gate.
-4. Add an OpenRC wrapper only outside Scheduler and only when operational need is demonstrated.
-5. Revisit specialist/distributed work after the durable SQL and recall path is stable.
+1. Complete 0282 mutation plans, explicit adapter authorization and real cycle-history smoke.
+2. Continue the controlled real Qdrant executor through existing projection surfaces.
+3. Add portable specialist visits/transfers without a laboratory scheduler.
+4. Project the complete closed loop into VisPy / Cell Lens observation views.
+5. Run Chalouf as the final integrator scenario.
 
 ## Canonical companions
 
 - `README.md`
 - `doc/architecture/OPERATIONAL_DOCUMENTATION_CONSOLIDATION_0270.md`
 - `doc/ARCHITECTURE_LAYERS.md`
-- `doc/docs/architecture/00_global.dot`
+- `doc/docs/architecture/00_global.dot` (heritage)
+- `doc/docs/architecture/runtime/174_rebuilt_runtime_global_current_state.dot`
+- `doc/architecture/GLOBAL_ARCHITECTURE_CURRENT_0282.md`
+- `doc/architecture/PROJECTV2_CYCLE_HISTORY_DEVELOPMENT_0282.md`
+- `doc/architecture/PROJECT_BEGINNING_CURRENT_COMPARISON_0282.md`
 - `doc/code-rules/code_rule.md`
