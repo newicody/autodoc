@@ -7,10 +7,11 @@ from pathlib import Path
 
 import hashlib
 import json
+import math
 import os
 import subprocess
 import sys
-from typing import Any
+from typing import Any, Iterator
 
 _REQUIRED_RESPONSE_KEYS = (
     "summary",
@@ -53,6 +54,112 @@ def parse(text: str) -> dict[str, Any]:
     return payload
 
 
+def _validate_advisory(payload: dict[str, Any]) -> dict[str, Any]:
+    for key in ("summary", "suggested_route"):
+        if not isinstance(payload[key], str):
+            raise ValueError(f"Copilot response {key} must be a string")
+
+    for key in ("assumptions", "questions", "risks"):
+        values = payload[key]
+        if not all(isinstance(value, str) for value in values):
+            raise ValueError(
+                f"Copilot response {key} entries must be strings"
+            )
+
+    raw_confidence = payload["confidence"]
+    if isinstance(raw_confidence, bool):
+        raise ValueError("Copilot response confidence must be numeric")
+
+    confidence = float(raw_confidence)
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        raise ValueError(
+            "Copilot response confidence must be between 0 and 1"
+        )
+
+    normalized = dict(payload)
+    normalized["confidence"] = confidence
+    return normalized
+
+
+def _walk_json(value: object) -> Iterator[object]:
+    yield value
+    if isinstance(value, dict):
+        preferred = ("content", "message", "text", "response", "value")
+        for key in preferred:
+            if key in value:
+                yield from _walk_json(value[key])
+        for key, child in value.items():
+            if key not in preferred:
+                yield from _walk_json(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk_json(child)
+
+
+def _embedded_advisories(text: str) -> Iterator[dict[str, Any]]:
+    decoder = json.JSONDecoder()
+    for offset, character in enumerate(text):
+        if character != "{":
+            continue
+        try:
+            payload, _ = decoder.raw_decode(text[offset:])
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(payload, dict):
+            continue
+        try:
+            yield _validate_advisory(parse(json.dumps(payload)))
+        except (KeyError, TypeError, ValueError):
+            continue
+
+
+def extract_advisory(text: str) -> dict[str, Any]:
+    direct_error: Exception | None = None
+    try:
+        return _validate_advisory(parse(text))
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+        direct_error = exc
+
+    extracted: list[dict[str, Any]] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        for candidate in _walk_json(event):
+            if isinstance(candidate, dict):
+                try:
+                    extracted.append(
+                        _validate_advisory(parse(json.dumps(candidate)))
+                    )
+                except (KeyError, TypeError, ValueError):
+                    pass
+            elif isinstance(candidate, str):
+                try:
+                    extracted.append(_validate_advisory(parse(candidate)))
+                except (
+                    json.JSONDecodeError,
+                    KeyError,
+                    TypeError,
+                    ValueError,
+                ):
+                    extracted.extend(_embedded_advisories(candidate))
+
+    if not extracted:
+        extracted.extend(_embedded_advisories(text))
+
+    if extracted:
+        return extracted[-1]
+
+    if direct_error is not None:
+        raise direct_error
+    raise ValueError("Copilot response contains no advisory object")
+
+
 def _enabled(name: str, *, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None:
@@ -80,10 +187,14 @@ def main() -> int:
     output_path.unlink(missing_ok=True)
 
     prompt = (
-        "Return one JSON object only with keys summary, suggested_route, "
-        "assumptions, questions, risks, confidence. Treat the following GitHub "
-        "request as authoritative. Do not modify it, do not call tools, do not "
-        "authorize publication.\n"
+        "Return exactly one compact JSON object and no Markdown or commentary. "
+        "Required schema: "
+        '{"summary":"string","suggested_route":"string",'
+        '"assumptions":["string"],"questions":["string"],'
+        '"risks":["string"],"confidence":0.0}. '
+        "confidence must be a number between 0 and 1. Treat the following "
+        "GitHub request as authoritative. Do not modify it, do not call tools, "
+        "and do not authorize publication.\n"
         + json.dumps(
             {
                 "title": request["title"],
@@ -91,6 +202,7 @@ def main() -> int:
                 "labels": request.get("labels", []),
             },
             ensure_ascii=False,
+            separators=(",", ":"),
         )
     )
     command = os.environ.get("AUTODOC_COPILOT_COMMAND", "copilot")
@@ -103,10 +215,16 @@ def main() -> int:
                 command,
                 "-p",
                 prompt,
-                "-s",
+                "--output-format=json",
+                "--stream=off",
+                "--no-color",
+                "--no-custom-instructions",
                 "--no-ask-user",
+                "--deny-tool=read",
                 "--deny-tool=write",
                 "--deny-tool=shell",
+                "--deny-tool=url",
+                "--deny-tool=memory",
             ],
             capture_output=True,
             text=True,
@@ -130,8 +248,11 @@ def main() -> int:
         )
 
     try:
-        parsed = parse(process.stdout)
-        response_digest = hashlib.sha256(process.stdout.encode()).hexdigest()
+        parsed = extract_advisory(process.stdout)
+        semantic_response = canonical(parsed)
+        response_digest = hashlib.sha256(
+            semantic_response.encode("utf-8")
+        ).hexdigest()
         prompt_digest = hashlib.sha256(prompt.encode()).hexdigest()
         artifact_ref = "github-advisory:" + hashlib.sha256(
             (str(request["artifact_ref"]) + response_digest).encode()
@@ -144,12 +265,12 @@ def main() -> int:
             "request_artifact_ref": request["artifact_ref"],
             "prompt_digest": prompt_digest,
             "response_digest": response_digest,
-            "summary": str(parsed["summary"]),
-            "suggested_route": str(parsed["suggested_route"]),
+            "summary": parsed["summary"],
+            "suggested_route": parsed["suggested_route"],
             "assumptions": list(parsed["assumptions"]),
             "questions": list(parsed["questions"]),
             "risks": list(parsed["risks"]),
-            "confidence": float(parsed["confidence"]),
+            "confidence": parsed["confidence"],
             "producer_kind": "github_copilot_cli",
             "trusted": False,
             "usable_as_hint": True,
