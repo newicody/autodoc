@@ -37,7 +37,8 @@ def test_controlled_research_builds_the_issue_event_before_the_request() -> None
     text = WORKFLOWS[1].read_text(encoding="utf-8")
     assert "Read selected issue" in text
     assert "build_workflow_dispatch_issue_event.py" in text
-    assert "GITHUB_EVENT_PATH:" in text
+    assert "AUTODOC_EVENT_PATH:" in text
+    assert "GITHUB_EVENT_PATH:" not in text
 
 
 def test_copilot_is_optional_advisory_and_tool_denied() -> None:

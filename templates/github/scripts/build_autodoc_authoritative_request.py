@@ -27,7 +27,16 @@ def _require_mapping(value: object, *, name: str) -> dict[str, Any]:
 
 
 def main() -> int:
-    event_path = Path(os.environ["GITHUB_EVENT_PATH"])
+    event_path_value = (
+        os.environ.get("AUTODOC_EVENT_PATH")
+        or os.environ.get("GITHUB_EVENT_PATH")
+        or ""
+    ).strip()
+    if not event_path_value:
+        raise ValueError(
+            "authoritative request requires AUTODOC_EVENT_PATH or GITHUB_EVENT_PATH"
+        )
+    event_path = Path(event_path_value)
     event = _require_mapping(
         json.loads(event_path.read_text(encoding="utf-8")),
         name="GitHub event",

@@ -170,3 +170,50 @@ def test_authoritative_request_accepts_title_only_issue(tmp_path: Path) -> None:
     assert payload["issue_number"] == 8
     assert payload["title"] == "Real request"
     assert payload["body"] == ""
+
+
+def test_authoritative_request_prefers_controlled_event_path(tmp_path: Path) -> None:
+    native_event_path = tmp_path / "native-workflow-dispatch.json"
+    controlled_event_path = tmp_path / "controlled-issue-event.json"
+    output_path = tmp_path / "request.json"
+
+    native_event_path.write_text(
+        json.dumps({"inputs": {"issue_number": "8"}}),
+        encoding="utf-8",
+    )
+    controlled_event_path.write_text(
+        json.dumps(
+            {
+                "issue": {
+                    "number": 8,
+                    "title": "Controlled request",
+                    "body": "Research this issue.",
+                    "labels": [],
+                },
+                "repository": {"full_name": "newicody/projects"},
+                "sender": {"login": "newicody"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "GITHUB_EVENT_PATH": str(native_event_path),
+            "AUTODOC_EVENT_PATH": str(controlled_event_path),
+            "AUTODOC_OUTPUT": str(output_path),
+        }
+    )
+    result = subprocess.run(
+        [sys.executable, str(REQUEST_SCRIPT)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["issue_number"] == 8
+    assert payload["title"] == "Controlled request"
