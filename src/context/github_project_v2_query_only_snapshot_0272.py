@@ -86,6 +86,24 @@ query AutodocProjectV2Items(
               updatedAt
               closedAt
               repository { nameWithOwner }
+              parent {
+                id
+                number
+                title
+                url
+                repository { nameWithOwner }
+              }
+              subIssues(first: 100) {
+                totalCount
+                pageInfo { hasNextPage endCursor }
+                nodes {
+                  id
+                  number
+                  title
+                  url
+                  repository { nameWithOwner }
+                }
+              }
             }
             ... on PullRequest {
               id
