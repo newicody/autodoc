@@ -1,11 +1,14 @@
-# Mode ProjectV2 natif et pont GitHub Actions optionnel — phase 0272
+# Connecteur GitHub ProjectV2 et bundle externe — phase 0272
 
 ## Décision opérateur
 
-Le mode actuellement utilisé par Autodoc/MissiPy est le mode **Project-native** :
+Autodoc/MissiPy ne possède pas de mode de gestion de projet.
+
+Les capacités ProjectV2 présentes dans Autodoc sont des connecteurs explicites
+vers une surface externe :
 
 ```text
-GitHub ProjectV2 utilisateur newicody/2
+GitHub ProjectV2 utilisateur
 -> lecture GraphQL query-only
 -> snapshots locaux immuables
 -> détection locale des changements
@@ -13,46 +16,54 @@ GitHub ProjectV2 utilisateur newicody/2
 -> décision opérateur locale
 ```
 
-Ce chemin fonctionne avec des `DRAFT_ISSUE` du ProjectV2 et ne demande pas de
-dépôt d'idées externe, de workflow GitHub Actions ou de procédure d'installation.
+Le ProjectV2, ses vues, ses formulaires d'Issue, ses variables, ses secrets et
+ses workflows appartiennent au dépôt externe `newicody/projects`.
 
-Le workflow présent dans `templates/github/` est une seconde capacité,
-optionnelle, destinée à transformer les événements `issues` d'un dépôt GitHub en
-artefacts Actions. Il ne constitue pas l'installation du mode ProjectV2.
+La source à copier dans ce dépôt est :
 
-## 1. Configuration minimale du mode Project-native
+```text
+templates/github/projects-repository/
+```
 
-La configuration utilisée est :
+Les fichiers placés dans ce bundle peuvent appeler des scripts réutilisables
+conservés dans Autodoc. Ils ne doivent pas être activés sous `.github/` dans le
+dépôt Autodoc.
+
+## 1. Configuration du connecteur query-only
+
+La configuration de lecture locale est :
 
 ```text
 config/github_project_v2_query_only.example.ini
 ```
 
-Identité attendue :
-
-```ini
-[project]
-owner = newicody
-number = 2
-project_id = PVT_kwHOA3ouXM4Ba3Ar
-view_number_hint = 2
-```
-
-Le numéro de vue est un repère d'interface. L'identité durable est le couple
-`owner/number` vérifié avec le `project_id`.
-
-Le token n'est jamais placé dans le `.ini` :
+Elle décrit une cible externe et ne transforme pas Autodoc en gestionnaire de
+projet. Le token n'est jamais stocké dans le fichier de configuration :
 
 ```bash
 export GITHUB_TOKEN='...'
 ```
 
-Il doit permettre la lecture du ProjectV2. Les scripts interdisent les documents
-GraphQL contenant une mutation et ne sérialisent jamais le token.
+Les opérations de lecture, les snapshots, les changements et les handoffs
+restent sous autorité locale. Les documents GraphQL query-only ne contiennent
+aucune mutation.
 
-## 2. Test du système Project-native
+### Compatibilité terminologique avec la règle 0272
 
-Test local, sans réseau :
+La formulation historique mode **Project-native** désignait uniquement ce
+connecteur query-only. Elle ne définit plus un mode de gestion de projet dans
+Autodoc.
+
+Le paramètre historique `require_actions_deployment = false` signifiait que la
+lecture ProjectV2 pouvait être validée sans workflow externe. De même,
+l'expression historique pont secondaire désignait le bundle Actions facultatif.
+Ces marqueurs sont conservés uniquement pour la compatibilité des règles 0272 ;
+les workflows actifs, les formulaires, les vues et leur configuration restent
+la responsabilité de `newicody/projects`.
+
+## 2. Vérifier le connecteur
+
+Vérification locale, sans réseau :
 
 ```bash
 PYTHONPATH=src:. python \
@@ -61,7 +72,7 @@ PYTHONPATH=src:. python \
   --format summary
 ```
 
-Test réel, query-only :
+Vérification réelle en lecture seule :
 
 ```bash
 PYTHONPATH=src:. python \
@@ -72,19 +83,10 @@ PYTHONPATH=src:. python \
   --format summary
 ```
 
-Avec `require_actions_deployment = false`, le résultat Project-native peut être
-vert même si aucun dépôt externe ou workflow Actions n'existe :
+L'identifiant historique de policy est conservé pour compatibilité. Il ne
+définit pas un mode Project dans l'architecture.
 
-```text
-project_read_ready=True
-actions_deployment_ready=False
-system_ready=True
-```
-
-`actions_deployment_ready=False` n'est alors pas une panne ; cela signifie
-seulement que le pont secondaire n'a pas été demandé ou vérifié.
-
-## 3. Flux entrant ProjectV2
+## 3. Chaîne entrante
 
 ```bash
 PYTHONPATH=src:. python \
@@ -114,105 +116,64 @@ Les handoffs sont écrits sous :
 .var/github/project_v2/handoffs/
 ```
 
-Une décision est ensuite appliquée à une candidate précise :
-
-```bash
-PYTHONPATH=src:. python \
-  tools/gate_github_project_v2_source_candidate_0272.py \
-  --config config/github_project_v2_query_only.example.ini \
-  --candidate-id ghpv2-... \
-  --action inspect \
-  --reason "reviewed by operator" \
-  --execute \
-  --policy-decision-id policy:0272:source-candidate-gate \
-  --format summary
-```
-
-Les enregistrements de décision sont immuables et restent sous :
+Une décision locale explicite peut ensuite être appliquée à une candidate. Les
+enregistrements restent immuables sous :
 
 ```text
 .var/github/project_v2/decisions/
 ```
 
-## 4. À quoi sert le pont Actions optionnel ?
+## 4. Bundle destiné à `newicody/projects`
 
-Le pont Actions s'applique seulement à une vraie Issue d'un dépôt :
-
-```text
-Issue repository event
--> repository workflow
--> JSON artifact
--> future local artifact fetch/sync
-```
-
-Un `DRAFT_ISSUE` créé uniquement dans le ProjectV2 n'est pas un événement Issue
-de dépôt et passe directement par la lecture GraphQL ProjectV2.
-
-Ce pont peut être utile plus tard pour :
-
-- récupérer un contexte enrichi par un workflow lié à une Issue réelle ;
-- transporter des artefacts versionnés entre GitHub et la machine locale ;
-- comparer le chemin ProjectV2 direct et le chemin Issue/Actions ;
-- déclencher une analyse GitHub-side sans accorder de droit d'écriture à Autodoc.
-
-Il reste facultatif tant que le travail est réalisé avec les drafts du ProjectV2.
-
-## 5. Vérifier un pont Actions déjà déployé
-
-Pour demander explicitement ce contrôle :
-
-```bash
-PYTHONPATH=src:. python \
-  tools/run_github_project_system_deployment_readiness_0272.py \
-  --config config/github_project_v2_query_only.example.ini \
-  --execute \
-  --check-actions-bridge \
-  --policy-decision-id policy:0272:actions-bridge-readiness \
-  --format summary
-```
-
-Le script vérifie seulement par lecture :
-
-- le dépôt configuré ;
-- le workflow actif ;
-- le chemin du workflow ;
-- l'absence de `workflow_dispatch` ;
-- l'absence de permissions d'écriture ;
-- la correspondance avec les templates locaux.
-
-Il ne corrige et ne déploie rien.
-
-## 6. Déploiement manuel éventuel du pont
-
-Cette section ne concerne pas le mode Project-native minimal.
-
-Si un dépôt externe d'Issues est volontairement choisi, reporter son nom dans
-les sections `[artifact_source]`, `[safety]` et `[deployment_readiness]`, puis
-copier manuellement :
+Le bundle externe contient les surfaces de gestion :
 
 ```text
-templates/github/autodoc-ticket-artifact.yml
--> .github/workflows/autodoc-ticket-artifact.yml
-
-templates/github/scripts/build_autodoc_ticket_artifact.py
--> scripts/build_autodoc_ticket_artifact.py
+templates/github/projects-repository/
+├── .github/ISSUE_TEMPLATE/
+├── .github/workflows/
+├── scripts/
+└── documentation du board
 ```
 
-Le commit et le push sont des opérations opérateur ordinaires. Aucun script
-Autodoc ne les effectue. Le workflow doit conserver des permissions de lecture
-et ne doit pas exposer `workflow_dispatch`.
+Après copie, ces fichiers deviennent la configuration du dépôt
+`newicody/projects`. Le dépôt Autodoc conserve seulement :
+
+- les contrats et adaptateurs de connecteur ;
+- les outils locaux de lecture, d'intake et de publication verrouillée ;
+- les helpers réutilisables appelés par le dépôt externe ;
+- le bundle source destiné à la copie.
+
+Il ne conserve pas de workflow de recherche ni de formulaire de gestion actif
+sous sa propre arborescence `.github/`.
+
+## 5. Dette de configuration identifiée
+
+Le fichier nommé `github_project_v2_query_only.example.ini` contient encore des
+paramètres historiques de `workflow_dispatch`, consommés par un adaptateur de
+sortie existant. Les retirer sans migrer l'adaptateur casserait la surface
+opérationnelle.
+
+Cette dette doit être traitée dans un patch séparé :
+
+```text
+lecture query-only                    -> configuration de lecture
+workflow_dispatch / mutation distante -> configuration de connecteur sortant
+```
+
+Jusqu'à cette migration, la présence de ces paramètres ne définit pas un mode
+Project dans Autodoc ; elle constitue un mélange de responsabilités documenté.
 
 ## Frontières
 
 ```text
-mode ProjectV2 sans Actions : supporté et mode par défaut
-pont repository-Issue       : optionnel
-script d'installation       : absent
-script de déploiement        : absent
-déploiement automatique     : interdit
-workflow dispatch            : interdit
-mutation GraphQL             : interdite
-mutation GitHub distante     : interdite dans 0272
-SQL/Qdrant dans r7           : aucune écriture
-Scheduler.run() / SHM        : inchangés
+mode projet Autodoc                 : absent
+ProjectV2                           : surface externe
+source des vues et formulaires      : newicody/projects
+bundle à copier                     : templates/github/projects-repository/
+workflow de recherche actif Autodoc : absent
+formulaires de gestion actifs       : absents
+connecteurs de lecture/intake       : conservés
+publication distante                : explicite et verrouillée
+Scheduler / SHM                     : inchangés
+SQL / Qdrant                        : autorité locale inchangée
 ```

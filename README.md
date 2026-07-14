@@ -203,12 +203,13 @@ a Scheduler-owned service manager
 
 The project grows by small, auditable patches and explicit gates.
 
-## GitHub ProjectV2 operator path
+## External GitHub ProjectV2 connector
 
-The current intake is **Project-native**. It reads the user ProjectV2 configured
-in `config/github_project_v2_query_only.example.ini` directly through GraphQL
-query-only calls. A separate repository and GitHub Actions workflow are not
-required for ProjectV2 `DRAFT_ISSUE` items.
+Autodoc has no project-management mode. The ProjectV2 surfaces below are an
+explicit external connector: they read a configured user ProjectV2 through
+GraphQL query-only calls and convert remote items into local candidates. The
+Project board, its views, its Issue forms and its repository workflows belong to
+`newicody/projects`, not to the active `.github/` surface of Autodoc.
 
 ```text
 GitHub ProjectV2 newicody/2
@@ -225,7 +226,7 @@ lifecycle. Export the token named by `github.token_env`:
 export GITHUB_TOKEN='...'
 ```
 
-### 1. Test the Project-native system
+### 1. Test the external ProjectV2 connector
 
 Local safety/readiness check without network access:
 
@@ -304,9 +305,21 @@ promoted or merged.
 
 ### Optional repository-Issue Actions bridge
 
-The existing Actions template is a secondary path for real `issues` events in
-an external repository. It is not part of the required Project-native setup and
-it does not run for a ProjectV2-only draft.
+The repository bundle under `templates/github/projects-repository/` is the
+copy source for `newicody/projects`. Its workflows and Issue forms are not active
+Autodoc repository surfaces. They may call reusable Autodoc helpers after the
+bundle has been copied to the external repository.
+
+Compatibility wording retained for the historical 0272 rule:
+
+```text
+Actions workflow are not
+required by the query-only connector itself.
+```
+
+This sentence describes only the independence of the read-only connector. It
+neither activates a workflow in Autodoc nor transfers project ownership away
+from `newicody/projects`.
 
 To verify an already deployed optional bridge, add:
 
@@ -322,8 +335,8 @@ PYTHONPATH=src:. python \
 
 This command only reads GitHub state. It does not copy a workflow, dispatch an
 Action, create a repository, install a service, commit, push or mutate GitHub.
-The optional bridge procedure and the Project-native distinction are documented
-in `doc/operator/GITHUB_PROJECT_ACTIONS_CONFIGURATION_0272.md`.
+The external connector and repository-bundle boundary are documented in
+`doc/operator/GITHUB_PROJECT_ACTIONS_CONFIGURATION_0272.md`.
 
 Local snapshots, change sets, handoffs and decision records remain under local
 authority. GitHub is the workflow/review surface; SQL and Qdrant remain closed
