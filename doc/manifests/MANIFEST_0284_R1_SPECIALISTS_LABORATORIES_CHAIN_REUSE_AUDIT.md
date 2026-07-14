@@ -1,0 +1,40 @@
+# Manifest 0284-r1 — specialists/laboratories chain reuse audit
+
+## Added
+
+```text
+src/context/specialists_laboratories_chain_reuse_audit_0284.py
+tools/run_specialists_laboratories_chain_reuse_audit_0284.py
+tests/context/test_specialists_laboratories_chain_reuse_audit_0284.py
+tests/context/test_run_specialists_laboratories_chain_reuse_audit_0284.py
+tests/rules/test_specialists_laboratories_chain_reuse_audit_0284_rule.py
+doc/architecture/SPECIALISTS_LABORATORIES_CHAIN_REUSE_AUDIT_0284.md
+doc/manifests/MANIFEST_0284_R1_SPECIALISTS_LABORATORIES_CHAIN_REUSE_AUDIT.md
+doc/CHANGELOG_0284_R1_SPECIALISTS_LABORATORIES_CHAIN_REUSE_AUDIT.md
+PHASE0284_R1_SPECIALISTS_LABORATORIES_CHAIN_REUSE_AUDIT_REPORT.md
+```
+
+## Impact
+
+```text
+Repo autodoc: OUI
+Repo projects: NON
+architecture_preserved: true
+existing_laboratory_contract_reused: true
+existing_fake_provider_reused: true
+existing_scheduler_visit_binding_reused: true
+existing_specialist_route_frames_reused: true
+existing_handoff_recall_smoke_reused: true
+existing_qdrant_chain_reused: true
+portable_specialist_contract_missing: true
+new_laboratory_manager_justified: false
+new_scheduler_justified: false
+scheduler_modified: false
+eventbus_observation_only: true
+sql_remains_authority: true
+qdrant_projection_recall_only: true
+dev_shm_fast_route_plane: true
+control_proxy_lateral_only: true
+projects_repository_change_required: false
+external_dependencies_added: false
+```
