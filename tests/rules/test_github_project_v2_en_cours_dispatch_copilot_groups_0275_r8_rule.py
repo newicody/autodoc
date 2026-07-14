@@ -13,6 +13,7 @@ BOARD = (
 )
 README = ROOT / "templates/github/projects-repository/README.md"
 CONFIG = ROOT / "config/github_project_v2_query_only.example.ini"
+DISPATCH_CONFIG = ROOT / "config/github_projects_workflow_dispatch.example.ini"
 CONTRACT = (
     ROOT
     / "src/context/github_project_v2_en_cours_dispatch_0275_r8.py"
@@ -53,19 +54,22 @@ def test_0275_r8_board_keeps_theme_rows_and_en_cours_command() -> None:
 
 
 def test_0275_r8_scopes_dispatch_without_relaxing_query_only_snapshot() -> None:
-    text = CONFIG.read_text(encoding="utf-8")
+    query = CONFIG.read_text(encoding="utf-8")
+    dispatch = DISPATCH_CONFIG.read_text(encoding="utf-8")
 
-    assert "[safety]" in text
-    assert "query_only = true" in text
-    assert "graphql_mutation_allowed = false" in text
-    assert "allow_workflow_dispatch = false" in text
-    assert "allow_remote_mutation = false" in text
-    assert "[workflow_dispatch]" in text
-    assert "repository = newicody/projects" in text
-    assert "workflow_name = autodoc-controlled-research.yml" in text
-    assert "target_status = En cours" in text
-    assert "allow_workflow_dispatch = true" in text
-    assert "allow_remote_mutation = true" in text
+    assert "[safety]" in query
+    assert "query_only = true" in query
+    assert "graphql_mutation_allowed = false" in query
+    assert "allow_workflow_dispatch = false" in query
+    assert "allow_remote_mutation = false" in query
+    assert "[workflow_dispatch]" not in query
+
+    assert "[workflow_dispatch]" in dispatch
+    assert "repository = newicody/projects" in dispatch
+    assert "workflow_name = autodoc-controlled-research.yml" in dispatch
+    assert "target_status = En cours" in dispatch
+    assert "allow_workflow_dispatch = false" in dispatch
+    assert "allow_remote_mutation = false" in dispatch
 
 
 def test_0275_r8_reuses_0272_and_keeps_scheduler_untouched() -> None:

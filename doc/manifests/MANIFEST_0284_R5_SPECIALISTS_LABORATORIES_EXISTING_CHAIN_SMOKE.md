@@ -1,0 +1,37 @@
+# Manifest 0284-r5 — specialists/laboratories existing-chain smoke
+
+## Added files
+
+```text
+PHASE0284_R5_SPECIALISTS_LABORATORIES_EXISTING_CHAIN_SMOKE_REPORT.md
+doc/CHANGELOG_0284_R5_SPECIALISTS_LABORATORIES_EXISTING_CHAIN_SMOKE.md
+doc/architecture/SPECIALISTS_LABORATORIES_EXISTING_CHAIN_SMOKE_0284.md
+doc/architecture/SPECIALISTS_LABORATORIES_EXISTING_CHAIN_SMOKE_0284.dot
+doc/manifests/MANIFEST_0284_R5_SPECIALISTS_LABORATORIES_EXISTING_CHAIN_SMOKE.md
+src/context/specialists_laboratories_existing_chain_smoke_0284.py
+tests/context/test_specialists_laboratories_existing_chain_smoke_0284.py
+tests/rules/test_specialists_laboratories_existing_chain_smoke_0284_rule.py
+```
+
+## Boundary
+
+```text
+existing_scheduler_smoke_reused: true
+portable_specialist_contract_reused: true
+specialist_laboratory_message_contract_reused: true
+fake_specialist_functional: true
+live_path_status: transition
+live_path_uses_real_backend: false
+scheduler_modified: false
+new_scheduler_added: false
+new_laboratory_manager_added: false
+new_provider_added: false
+new_registry_added: false
+new_bus_added: false
+transfer_execution_performed: false
+eventbus_observation_only: true
+sql_remains_authority: true
+qdrant_projection_recall_only: true
+projects_repository_change_required: false
+external_dependencies_added: false
+```

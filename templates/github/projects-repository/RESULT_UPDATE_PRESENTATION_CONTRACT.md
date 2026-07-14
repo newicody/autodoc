@@ -138,3 +138,26 @@ forme de commentaires UPDATE successifs.
 - résultat complet accessible en cliquant sur la carte ;
 - sections longues repliables ;
 - aucune information portée uniquement par une couleur.
+
+## Projection Copilot contrôlée — 0284-r1-r4
+
+Le workflow producteur ne publie ni commentaire ni valeur ProjectV2. Après
+validation opérateur :
+
+```text
+publication_preview 0281
+→ commentaire d'Issue idempotent
+→ projection du dernier état dans les champs Copilot
+```
+
+La projection ProjectV2 est un read-model consultatif. Elle ne peut pas écrire
+les champs d'autorité locale :
+
+```text
+Résumé
+Serveur
+```
+
+Les anciens avis restent dans les commentaires append-only. Les champs
+`Avis Copilot`, `Route Copilot`, `Confiance Copilot`, `Copilot`, `Artefact` et
+`Cycle` reflètent uniquement le dernier avis approuvé pour l'affichage.

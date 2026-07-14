@@ -200,3 +200,39 @@ snapshot ProjectV2 query-only
 ```
 
 Cette phase d'interface n'ajoute encore aucune publication ou mutation GitHub.
+
+## Vues organisées — 0284-r1-r4
+
+La configuration versionnée ajoute les vues suivantes sans changer la
+sémantique d'exécution :
+
+```text
+Recherches
+Résultats
+Copilot
+Connaissances serveur
+Boîtes de thèmes
+Historique
+Tous
+```
+
+`Recherches` remplace le nom d'interface `Actions serveur`. La carte principale
+reste unique : une recherche n'est pas dupliquée pour afficher Copilot.
+
+La vue `Copilot` expose uniquement le dernier état consultatif :
+
+```text
+Avis Copilot
+Route Copilot
+Confiance Copilot
+Copilot
+Dernière mise à jour
+Artefact
+```
+
+Le commentaire d'Issue conserve le contenu complet et l'historique. Les champs
+servent seulement à la lecture rapide et au filtrage des vues.
+
+La vue `Connaissances serveur` reste séparée de `Résultats` afin qu'un résultat
+visible ne soit jamais présenté implicitement comme connaissance intégrée à
+SQL/Qdrant.
