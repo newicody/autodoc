@@ -78,7 +78,15 @@ def build_cell_lens_all_view_launch_profiles(
         CellLensAllViewLaunchProfile(
             name="vispy-desktop",
             purpose="Open the desktop Cell Lens viewer from the cell journal.",
-            command=("python", "tools/visualize_cell_population_vispy.py", "--journal", journal_text),
+            command=(
+                "python",
+                "tools/visualize_cell_population_vispy.py",
+                "--journal",
+                journal_text,
+                "--tail",
+                "--interval-seconds",
+                "0.25",
+            ),
             environment=(
                 ("PYTHONPATH", "src:."),
                 ("VISPY_APP", "pyqt6"),
@@ -87,6 +95,7 @@ def build_cell_lens_all_view_launch_profiles(
             notes=(
                 "Use wayland on a native Wayland session.",
                 "Use xcb only when the Qt XCB platform plugin dependencies are present.",
+                "Set MISSIPY_CELL_LENS_JOURNAL to this same journal path on the kernel process.",
             ),
         ),
         CellLensAllViewLaunchProfile(
