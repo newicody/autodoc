@@ -13,6 +13,7 @@ Le bundle contient actuellement :
 .github/ISSUE_TEMPLATE/research.yml
 .github/ISSUE_TEMPLATE/update.yml
 .github/ISSUE_TEMPLATE/theme.yml
+.github/ISSUE_TEMPLATE/specialist-capability-growth.yml
 .github/ISSUE_TEMPLATE/config.yml
 .github/workflows/autodoc-controlled-research.yml
 scripts/build_workflow_dispatch_issue_event.py
@@ -27,6 +28,11 @@ RESULT_UPDATE_PRESENTATION_CONTRACT.md
 
 `transversal-event.yml` est retiré : une recherche peut déjà référencer
 plusieurs groupes, tickets, résultats, dépôts, chemins, pièces jointes et URL.
+
+Le formulaire `specialist-capability-growth.yml` exprime une demande de capacité
+liée à un `specialist_ref` stable. Il peut signaler les preuves et contrats encore
+manquants, mais il ne peut ni approuver une révision, ni autoriser le Scheduler :
+la décision opérateur reste locale.
 
 Le workflow GitHub reste un producteur d'artefacts en lecture seule. Il ne
 s'auto-autorise ni à publier l'avis Copilot, ni à modifier ProjectV2 :

@@ -101,7 +101,7 @@ def test_phase_deliverables_exist_and_installation_review_is_documented() -> Non
     assert "Ne pas utiliser `--delete`" in installation
 
 
-def test_reuse_audit_advances_from_r2_to_r3() -> None:
+def test_reuse_audit_reaches_or_completes_r3() -> None:
     result = audit_specialist_capability_growth_projects_operator_workflow_reuse(
         load_audit_sources(ROOT)
     )
@@ -110,6 +110,8 @@ def test_reuse_audit_advances_from_r2_to_r3() -> None:
         "0286-r2-specialist-capability-growth-projects-review-projection-contract"
         in result.completed_phases
     )
-    assert result.next_recommended_patch == (
-        "0286-r3-specialist-capability-growth-projects-request-form-contract"
+    r3_patch = "0286-r3-specialist-capability-growth-projects-request-form-contract"
+    assert (
+        r3_patch in result.completed_phases
+        or result.next_recommended_patch == r3_patch
     )

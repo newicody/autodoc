@@ -4,7 +4,7 @@ Ce document est le mode opératoire cumulatif du bundle GitHub fourni par
 Autodoc. Il doit être mis à jour chaque fois que la copie, les Actions, les
 variables, les secrets, les vues ou les contrats du dépôt Projects évoluent.
 
-Version du guide : `0284-r9`.
+Version du guide : `0286-r3`.
 
 ## Frontière
 
@@ -397,4 +397,76 @@ phase en `transition` ou `red` et doit être corrigée avant la poursuite.
 |---|---|
 | `0284-r9` | Ajout de la vérification locale, corrélée et sans mutation du chemin spécialistes/laboratoires réel. |
 
-Repère historique conservé pour les règles cumulatives : Version du guide : `0284-r1-r5`.
+## 11. Installer et vérifier le formulaire d'évolution de capacité spécialiste
+
+Le bundle contient maintenant le formulaire dédié :
+
+```text
+.github/ISSUE_TEMPLATE/specialist-capability-growth.yml
+```
+
+Il sert à demander l'ajout, l'affinage, la dépréciation ou la restauration d'une
+capacité pour un `specialist_ref` stable. Il ne vaut jamais approbation : la
+décision opérateur reste locale dans Autodoc, SQL conserve l'historique durable
+et le Scheduler existant reste l'unique autorité d'orchestration.
+
+Après la copie contrôlée de la section 2, vérifier d'abord le changement sans
+mutation distante :
+
+```bash
+git -C "$DST" diff -- \
+  .github/ISSUE_TEMPLATE/specialist-capability-growth.yml \
+  INSTALLATION.md \
+  AUTODOC_PROJECTS_BUNDLE.md
+```
+
+Le fichier doit contenir au minimum les identifiants suivants :
+
+```text
+specialist_ref
+base_specialist_version
+action
+capability
+evidence_refs
+evidence_expectation
+requested_input_contract_refs
+requested_output_contract_refs
+requested_laboratory_capability_refs
+authority_boundary
+```
+
+Aucun nouveau secret, aucune variable, aucune permission Actions et aucune
+modification du workflow ne sont requis par `0286-r3`. Copilot conserve son
+défaut sûr :
+
+```text
+AUTODOC_COPILOT_ADVISORY_ENABLED=false
+```
+
+Après commit et push explicitement acceptés dans `newicody/projects`, ouvrir
+`Issues → New issue` et vérifier que le formulaire « Demander une évolution de
+capacité spécialiste » est proposé. Une Issue créée avec ce formulaire reste
+une demande non autoritative. Les champs ProjectV2 spécialisés et la vue de
+revue seront installés séparément par `0286-r4`.
+
+Pour comparer à nouveau le bundle source et la copie déployée :
+
+```bash
+rsync -aivn \
+  --exclude README.md \
+  "$SRC"/ \
+  "$DST"/
+```
+
+Ne pas utiliser `--delete` lors de cette mise à niveau.
+
+## Historique du guide — demandes de capacité spécialiste
+
+| Phase | Évolution |
+|---|---|
+| `0286-r3` | Ajout du formulaire dédié de demande d'évolution de capacité et du contrôle d'installation sans nouvelle permission. |
+
+Repères historiques conservés pour les règles cumulatives :
+
+- Version du guide : `0284-r9`.
+- Version du guide : `0284-r1-r5`.
