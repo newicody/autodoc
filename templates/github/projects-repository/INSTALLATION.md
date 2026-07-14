@@ -4,7 +4,7 @@ Ce document est le mode opératoire cumulatif du bundle GitHub fourni par
 Autodoc. Il doit être mis à jour chaque fois que la copie, les Actions, les
 variables, les secrets, les vues ou les contrats du dépôt Projects évoluent.
 
-Version du guide : `0284-r1-r4`.
+Version du guide : `0284-r1-r5`.
 
 ## Frontière
 
@@ -103,14 +103,31 @@ actions/upload-artifact@v7
 La politique peut rester restrictive en autorisant précisément ces Actions.
 Une phase ultérieure pourra les verrouiller par SHA complet.
 
-Créer la variable de dépôt :
+Créer d'abord la variable de dépôt avec la valeur sûre :
+
+```text
+AUTODOC_COPILOT_ADVISORY_ENABLED=false
+```
+
+Cette valeur est le défaut d'installation. Elle permet de valider le dispatch,
+la requête autoritative et le manifeste sans rendre Copilot nécessaire. Le
+workflow reste valide lorsqu'aucun artefact consultatif n'est produit.
+
+Le workflow utilise le `GITHUB_TOKEN` éphémère avec la permission
+`copilot-requests: write`. Ne pas créer de secret `AUTODOC_COPILOT_TOKEN` et ne
+pas enregistrer de token Copilot durable dans le dépôt.
+
+Après un premier dispatch validé sans Copilot, vérifier que la politique GitHub
+autorise Copilot CLI pour ce dépôt, puis activer explicitement l'avis
+consultatif :
 
 ```text
 AUTODOC_COPILOT_ADVISORY_ENABLED=true
 ```
 
-Le workflow utilise le `GITHUB_TOKEN` éphémère pour l'accès Copilot prévu. Ne
-pas enregistrer de token Copilot durable dans le dépôt.
+Copilot reste optionnel et non autoritatif. Si son exécution est indisponible ou
+invalide, le workflow conserve la requête autoritative et le manifeste sans
+bloquer le cycle.
 
 Le workflow produit les artefacts sans se donner de permission d'écriture sur
 les Issues ou ProjectV2. La publication et la projection sont déclenchées
@@ -333,3 +350,4 @@ décision opérateur.
 | Phase | Évolution |
 |---|---|
 | `0284-r1-r4` | Configuration versionnée des champs/vues et projection contrôlée du retour Copilot. |
+| `0284-r1-r5` | Démarrage Copilot désactivé, authentification éphémère et comportement optionnel explicités. |
