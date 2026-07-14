@@ -4,7 +4,7 @@ Ce document est le mode opératoire cumulatif du bundle GitHub fourni par
 Autodoc. Il doit être mis à jour chaque fois que la copie, les Actions, les
 variables, les secrets, les vues ou les contrats du dépôt Projects évoluent.
 
-Version du guide : `0284-r1-r5`.
+Version du guide : `0284-r9`.
 
 ## Frontière
 
@@ -351,3 +351,50 @@ décision opérateur.
 |---|---|
 | `0284-r1-r4` | Configuration versionnée des champs/vues et projection contrôlée du retour Copilot. |
 | `0284-r1-r5` | Démarrage Copilot désactivé, authentification éphémère et comportement optionnel explicités. |
+
+
+## 10. Vérifier la preuve corrélée du chemin réel 0284
+
+Cette étape est exécutée depuis `newicody/autodoc` après une exécution réelle,
+explicitement autorisée, du smoke intégré 0284-r7. Le fichier fourni à
+`--integrated-result` est la projection JSON stable de ce résultat. Le
+vérificateur ne déclenche aucun dispatch, ne contacte pas GitHub et ne réalise
+aucune écriture SQL, Qdrant, Issue ou ProjectV2.
+
+```bash
+cd /home/eric/projet/git/autodoc
+
+PYTHONPATH=src:. python \
+  tools/verify_specialists_laboratories_live_path_evidence_0284.py \
+  --integrated-result .var/reports/projects_copilot_specialist_integrated_smoke.json \
+  --repository-root . \
+  --evidence-ref evidence:0284-r9:<run-id> \
+  --repository newicody/projects \
+  --run-id '<run-id>' \
+  --source-revision "$(git rev-parse HEAD)" \
+  --report-file .var/reports/specialists_laboratories_live_path_evidence_0284.json \
+  --format summary
+```
+
+La clôture verte exige notamment :
+
+- le Scheduler existant et aucun orchestrateur parallèle ;
+- SQL comme autorité durable ;
+- OpenVINO `multilingual-e5-small` réellement exécuté ;
+- deux espaces Qdrant configurés en dimension exacte `384` ;
+- Qdrant limité aux références de rappel puis réhydratation SQL ;
+- la même décision de politique, le même `sql_ref` et le même run GitHub ;
+- un plan de publication et une projection ProjectV2 prêts mais non exécutés ;
+- `github_mutation_performed=false` et `projectv2_mutation_performed=false`.
+
+Le rapport est déterministe et porte deux empreintes SHA-256 : celle du résultat
+intégré reçu et celle de l'enveloppe de preuve. Une sortie non nulle laisse la
+phase en `transition` ou `red` et doit être corrigée avant la poursuite.
+
+## Historique du guide — preuve opérationnelle
+
+| Phase | Évolution |
+|---|---|
+| `0284-r9` | Ajout de la vérification locale, corrélée et sans mutation du chemin spécialistes/laboratoires réel. |
+
+Repère historique conservé pour les règles cumulatives : Version du guide : `0284-r1-r5`.

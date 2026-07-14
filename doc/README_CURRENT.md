@@ -1,66 +1,87 @@
 # Autodoc / MissiPy — current state and active roadmap
 
-Status date: 2026-07-13.
+Status date: 2026-07-14.
 
-This document is the detailed current-state and roadmap entrypoint. The root
-README remains stable and general. Historical phase documents remain evidence;
-they do not override this current map.
+This document is the current-state and roadmap entrypoint. Historical phase
+reports remain evidence but do not override this map.
 
 ## Locked architecture boundaries
 
 ```text
 Scheduler = the only orchestration authority
 SQL = durable authority
-Qdrant = projection and recall only
-OpenVINO/E5 = explicit vector generation
-/dev/shm = fast data plane
+Qdrant = projection and reference-only recall
+OpenVINO multilingual-e5-small = explicit 384-dimensional vectors
+/dev/shm = fast local data plane
 EventBus = observation only
 PassiveSupervisor / VisPy = observation only
 GitHub = workflow, review and synchronization surface
 OpenRC / OS / administrator = external process authority
 ```
 
-Laboratories are independent execution environments behind contracts, handlers
-and adapters. They do not own a scheduler, orchestrator, queue, bus or registry.
-The fake laboratory must continue to use the existing Scheduler path.
+Laboratories remain independent execution environments behind contracts,
+handlers and adapters. They do not own a Scheduler, orchestrator, queue, bus or
+parallel registry. Specialists preserve stable identity and context references
+across visits and transfers.
 
-The `autodoc` repository contains source, templates, contracts and validation.
-Automation settings and deployed workflow configuration belong to the external
-`newicody/projects` repository.
+`newicody/autodoc` owns the engine, contracts, adapters and source bundle.
+Deployed workflows, forms, ProjectV2 fields and views belong to
+`newicody/projects`.
 
-## Validated operational milestones
+## Validated implementation state
 
-The durable and recall walking skeleton is validated through the existing
-0260-0269 chain:
+The durable walking skeleton is implemented through the existing chain:
 
 ```text
 SQL write
--> SQL rehydrate
--> OpenVINO/E5 embedding
+-> SQL readback
+-> OpenVINO/E5 passage embedding (384)
 -> Qdrant projection with sql_ref
--> Qdrant recall refs
--> SQL rehydrate
+-> OpenVINO/E5 query embedding (384)
+-> Qdrant reference-only recall
+-> SQL rehydration
 -> closed ResultFrame
--> EventBus observation
--> PassiveSupervisor projection
+-> EventBus / PassiveSupervisor / VisPy observation
 ```
 
-The GitHub and laboratory continuation has reached:
+The GitHub and laboratory chain now includes:
 
 ```text
 0272 ProjectV2 query-only snapshot, change detection and operator gate
-0272 durable SourceCandidate consumer and closed-loop smoke
-0273 deterministic fake laboratory provider
-0274 fake laboratory closed loop through the existing Scheduler
-0275 dual-artifact contract, workflow, read-only intake and laboratory smoke
-0276 controlled publication boundary, contract and collision protection
-0277 optional Copilot execution boundary
-0278 controlled event-path boundary
-0279 structured Copilot response extraction
-0280 GitHub template Python syntax gate
+0273 deterministic local fake laboratory
+0274 fake laboratory through the existing Scheduler
+0275 dual Actions artifacts and laboratory smoke
+0276 controlled publication and collision protection
+0277 optional non-authoritative Copilot boundary
+0281 run-level artifact correlation and controlled publication plan
+0282 ProjectV2 cycle lineage/history surfaces
+0283 scoped real Qdrant executor factories
+0284-r1 reuse audit
+0284-r2 portable specialist contract
+0284-r3 immutable specialist/laboratory messages
+0284-r4 visit and transfer continuity contract
+0284-r5 existing-Scheduler portable specialist smoke
+0284-r6 real SQL/OpenVINO/Qdrant memory closure
+0284-r7 Projects/Copilot/specialist integrated smoke
+0284-r8 implementation closure audit
 ```
 
-A real GitHub Actions run now creates all three correlated artifacts:
+The 0284 implementation is complete. It is not considered operationally closed
+until one correlated real execution supplies immutable evidence to r8.
+
+## Stable historical compatibility index
+
+Current-state refreshes preserve the validated names consumed by executable
+architecture rules. These are traceability anchors and do not roll back the
+active 0284/0285 roadmap.
+
+Architecture views retained from 0282:
+
+- `GLOBAL_ARCHITECTURE_CURRENT_0282.md`;
+- `PROJECTV2_CYCLE_HISTORY_DEVELOPMENT_0282.md`;
+- `PROJECT_BEGINNING_CURRENT_COMPARISON_0282.md`.
+
+The correlated GitHub Actions artifact layout remains:
 
 ```text
 autodoc-authoritative-request/authoritative_request.json
@@ -68,182 +89,81 @@ autodoc-copilot-advisory/copilot_advisory.json
 autodoc-dual-artifact-manifest/dual_artifact_manifest.json
 ```
 
-The authoritative request remains the authority. The Copilot advisory is
-consultative only. Its content must remain available for specialist/laboratory
-context and operator review without being copied into authoritative state.
+Validated 0281 milestone names retained for traceability:
 
-## Current status after the real 0281 smoke
+- 0281-r2 — dual-artifact run assembly contract;
+- 0281-r3 — fetch-once run-group integration;
+- 0281-r4 — pinned and cached Copilot CLI runtime;
+- 0281-r5 — operator and laboratory advisory projection;
+- 0281-r6 — controlled Issue publication;
+- 0281-r7 — real closed-loop smoke.
 
-The complete local GitHub/laboratory walking skeleton is now green:
+The locked decisions remain: no new Scheduler or parallel orchestrator for
+laboratories, and Chalouf as the final integrator scenario.
 
-```text
-Issue #15
--> three correlated Actions artifacts
--> authenticated read-only fetch
--> configured server dataset
--> run-group intake
--> existing-Scheduler fake laboratory
--> closed-loop result
--> publication preview and plan
-```
+## Current patch
 
-`github_mutation_performed` remains false. The active development axis is now
-0282 ProjectV2 cycle history:
+### 0284-r9 — specialists/laboratories live-path evidence
 
-```text
-r1 reuse audit [green]
-r2 immutable lineage [green]
-r3 parent/theme query normalization [green]
-r4 append-only history projection [current]
-r5/r6 mutation plans [next]
-r7 explicit adapter authorization
-r8 real smoke
-```
+The patch adds an effect-free evidence use-case and a thin local verifier. It
+consumes the stable JSON projection of one already executed 0284-r7 result,
+checks correlation and real-backend flags, verifies exact dimension `384`,
+loads the required repository source surfaces, then delegates the closure
+decision to the existing r8 audit.
 
-Current diagrams:
+It does not execute or mutate Scheduler, SQL, OpenVINO, Qdrant, GitHub or
+ProjectV2. A green result proves the run; unit fixtures alone do not claim a
+real operational execution.
 
-- `doc/architecture/GLOBAL_ARCHITECTURE_CURRENT_0282.md`;
-- `doc/architecture/PROJECTV2_CYCLE_HISTORY_DEVELOPMENT_0282.md`;
-- `doc/architecture/PROJECT_BEGINNING_CURRENT_COMPARISON_0282.md`.
+## Next roadmap
 
-## Superseded 0281 gap description (historical)
+### 0285-r1 — specialist capability growth reuse audit
 
-The generic 0168 fetcher downloads and synchronizes each Actions artifact
-separately. The existing 0275 intake already validates the request, optional
-advisory, manifest, SHA-256 digests and correlation identifiers, but the fetch
-path does not yet assemble the three artifacts at run level and call that
-intake automatically.
+After a green r9 report, audit the next capability-growth axis before adding a
+new provider, specialist family or laboratory framework. Reuse existing
+capability, message, transfer, Scheduler routing, durable memory and observation
+surfaces first.
 
-Consequences:
+### 0285-r2 — capability selection policy
 
-- raw files can be downloaded and stored;
-- the full Copilot advisory exists in the raw artifact;
-- semantic correlation is not yet an automatic fetch result;
-- the advisory is not yet handed to the existing laboratory path;
-- no controlled advisory summary is yet published to the Issue.
+Add immutable capability matching and explicit policy decisions while keeping
+the Scheduler as the only orchestration authority.
 
-The workflow also installs the Copilot CLI npm tree on each GitHub-hosted run.
-This is operationally redundant and must be replaced by a pinned, cached local
-prefix, installed only on a cache miss.
+### 0285-r3 — multi-specialist intervention smoke
 
-## Active roadmap
+Exercise a bounded intervention between portable specialists through the
+existing Scheduler and laboratory handlers. Preserve conversation, context,
+return route and durable authority.
 
-### 0281-r2 — dual-artifact run assembly contract
+### 0285-r4 — passive observation replay
 
-Audit and reuse:
+Project the correlated multi-specialist path through EventBus,
+PassiveSupervisor and VisPy/Cell Lens without introducing command authority.
 
-- `tools/run_github_actions_artifact_fetch_once.py`;
-- `tools/run_github_artifact_server_sync_once.py`;
-- `src/context/github_dual_artifact_source_candidate_intake_0275.py`;
-- `src/context/github_dual_artifact_laboratory_smoke_0275.py`.
+### 0286 — GitHub Projects operational loop
 
-Add a typed, immutable run-assembly command/policy/result that:
+Stabilize the deployed `newicody/projects` workflow, artifact recovery,
+operator decision, controlled publication and ProjectV2 history update. Keep the
+cumulative `templates/github/projects-repository/INSTALLATION.md` synchronized
+with every useful deployment or configuration change.
 
-- groups files by repository and Actions run;
-- recognizes the authoritative request, optional advisory and manifest;
-- rejects duplicates and ambiguous members;
-- calls the existing 0275 intake;
-- preserves the complete advisory as a non-authoritative artifact reference;
-- performs no SQL write, Qdrant write, GitHub mutation or Scheduler change.
+### 0288 — Chalouf integrator
 
-`live_path_status` remains `transition` until the fetcher invokes this use-case.
-
-### 0281-r3 — fetch-once run-group integration
-
-Extend the existing 0168 fetch surface rather than creating a second fetcher.
-
-- preserve raw per-artifact dataset synchronization;
-- assemble only after all matching artifacts for a run are downloaded;
-- make replay idempotent by repository/run/manifest identity;
-- write a stable intake report and observation event;
-- mark the run semantically ingested only after successful correlation;
-- keep network access in the existing GitHub adapter boundary.
-
-### 0281-r4 — pinned and cached Copilot CLI runtime
-
-Update the existing workflow template and external deployment:
-
-- pin the Copilot CLI version;
-- install under a workflow-local prefix;
-- restore the complete prefix from cache;
-- run npm installation only on cache miss;
-- keep `GITHUB_TOKEN` scoped to the job;
-- keep Copilot tools denied by default;
-- retain a non-blocking mode only when policy says advisory is optional.
-
-The selected-actions policy in `newicody/projects` must explicitly allow the
-GitHub-owned cache action version used by the workflow. Automation parameters
-remain outside the `autodoc` source repository.
-
-### 0281-r5 — operator and laboratory advisory projection
-
-Reuse the existing SourceCandidate gate and fake laboratory closed loop:
-
-```text
-validated run intake
--> SourceCandidate
--> explicit promote or merge decision
--> existing Scheduler
--> fake laboratory
--> publication preview
-```
-
-The laboratory may read the advisory as a hint through an artifact/context
-reference. It must not reinterpret it as authority and must not create a second
-scheduler or orchestration path.
-
-### 0281-r6 — controlled Issue publication
-
-Reuse the existing 0276 publication boundary and collision guard.
-
-- publication requires an explicit operator-authorized decision;
-- publish an idempotent marker-based comment or update;
-- include advisory summary, proposed route, questions, risks and confidence;
-- label the advisory clearly as consultative and non-authoritative;
-- never publish raw secrets, tokens, transport logs or hidden prompts;
-- do not let a GitHub Actions producer self-authorize publication.
-
-### 0281-r7 — real closed-loop smoke
-
-Validate one real Issue through:
-
-```text
-Issue
--> three Actions artifacts
--> local read-only fetch
--> run-level correlation and intake
--> operator gate
--> existing-Scheduler fake laboratory
--> controlled publication preview
--> authorized idempotent Issue publication
-```
-
-The phase closes only when replay, missing-advisory mode, duplicate artifacts,
-digest mismatch, publication collision and no-mutation defaults are tested.
-
-## Following roadmap
-
-After the 0281 GitHub/laboratory walking skeleton is green:
-
-1. ProjectV2 cycle history, parent/sub-ticket links and theme grouping;
-2. controlled real Qdrant executor continuation through existing surfaces;
-3. portable specialist visits/transfers between laboratories using
-   `laboratory_ref`, `origin_laboratory_ref`, `target_laboratory_ref`,
-   `visit_ref`, `specialist_ref`, `conversation_ref`, `context_refs`,
-   `return_route_ref`;
-4. VisPy/Cell Lens projection of the complete closed loop;
-5. Chalouf as the final integrator scenario for need intake, research,
-   specialist contracts, cross-validation, synthesis and fabrication planning.
+Use Chalouf only after the generic path is stable: need intake, research,
+portable specialists, cross-validation, synthesis and fabrication planning.
 
 ## Development constraints
 
 - one patch at a time;
 - audit before adding a module, handler, adapter or runtime;
-- extend an existing surface whenever possible;
+- extend existing surfaces whenever possible;
 - standard library first;
 - typed immutable commands, policies and results;
 - no business logic in CLI parsing;
-- no direct GitHub, SQL, Qdrant, OpenVINO or LLM call from the kernel;
+- no direct backend call from the kernel;
 - no new Scheduler or parallel orchestrator for laboratories;
+- SQL remains authority and Qdrant remains projection/recall only;
+- E5 dimensions remain exactly 384;
 - every phase records code-rule review and live-path status;
-- every stable boundary receives executable tests under `tests/rules`.
+- every stable boundary receives executable tests under `tests/rules`;
+- every useful Projects deployment change updates the cumulative installation guide.
