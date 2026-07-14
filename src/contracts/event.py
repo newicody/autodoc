@@ -46,6 +46,10 @@ class EventType(Enum):
     # Système
     SHUTDOWN = auto()
 
+    # Sélection de révision spécialiste — Phase 0285-r6
+    SPECIALIST_REVISION_SELECTION = auto()
+    SPECIALIST_REVISION_SELECTION_RESULT = auto()
+
 
 @dataclass(frozen=True, slots=True)
 class Request:
