@@ -283,7 +283,7 @@ Copilot v2 projection through local intake             implemented
 Copilot v2 visible on ProjectV2 / source Issue         controlled adapters implemented
 periodic artifact fetch -> one research work package   partial
 research work package -> concrete laboratory           not connected
-portable specialist/message/transfer contracts         implemented contracts
+portable specialist/message/multitask contracts         implemented contracts
 real domain specialist execution                       absent
 liaison synthesis contracts and final envelope         implemented contracts
 real specialist analyses -> liaison synthesis          not connected
@@ -342,6 +342,38 @@ and error messages, and continuation across visits and specialists. Deep
 analysis contributions retain findings, evidence, uncertainties, contradictions,
 limitations and recommendations for the later liaison synthesis; no global
 synthesis is inferred unless the mission explicitly requests it.
+
+##### 0287-r7-r8-r1 — extensible multitask specialist model
+
+Keep the portable descriptor and the r8 message/deep-analysis contracts as
+stable foundations, then add a generic task layer. A specialist declares more
+than one versioned task type, each task invokes one explicit capability, and a
+Scheduler-owned acyclic plan may expose independent tasks for controlled
+parallel execution. Specialists may propose follow-up tasks or another
+specialist, but they never create or execute those tasks directly.
+
+Closure status: implemented as `missipy.specialist.task_type.v1`,
+`missipy.specialist.task_request.v1`, `missipy.specialist.task_plan.v1`,
+`missipy.specialist.task_result.v1` and
+`missipy.specialist.multitask_definition.v1`. The existing deep-analysis
+request/contribution pair is projected into this generic envelope as
+`specialist-task-type:analysis.deep`; it is not replaced. Existing OpenVINO
+execution is referenced through `missipy.specialist.task_execution_binding.v1`
+without importing or reimplementing OpenVINO. No global registry, Scheduler,
+worker, queue, laboratory runtime or model runtime is created.
+
+The following context/storage boundaries precede the domain specialists:
+
+- `0287-r7-r8-r2`: SQL-authoritative context revisions, relations, artifacts
+  and vector-projection metadata;
+- `0287-r7-r8-r3`: canonical Qdrant payload, named-vector, filter and index
+  profile while SQL remains authority;
+- `0287-r7-r8-r4`: dense E5 plus sparse retrieval, grouping, optional reranking
+  and SQL rehydration;
+- `0287-r7-r8-r5`: Scheduler-controlled snapshot, checkpoint-rebase, restart
+  and fork policies for significant context revisions;
+- `0287-r7-r8-r6`: ControlProxy transport of authorized notifications or route
+  changes only; the proxy does not own knowledge or semantic revisions.
 
 #### 0287-r7-r9 — love-study contracts and specialist descriptors
 
