@@ -43,7 +43,7 @@ MultiLaboratoryEvidenceVisitStatus = Literal[
     "completed", "failed", "needs_context", "needs_specialist", "rejected"
 ]
 
-_TYPED_REF_RE = re.compile(r"^[a-z][a-z0-9-]*:[^\\s].*$")
+_TYPED_REF_RE = re.compile(r"^[a-z][a-z0-9-]*:[^\s].*$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _PROVENANCE_PREFIXES = ("provenance:",)
 _EVIDENCE_PREFIXES = (

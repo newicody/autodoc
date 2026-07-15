@@ -54,12 +54,15 @@ def test_actual_repository_reuse_audit_progresses_cumulatively() -> None:
         load_audit_sources(ROOT)
     )
     r2 = "0287-r2-multi-laboratory-evidence-aggregation-contract"
-    assert result.valid is True
     r3 = "0287-r3-multi-laboratory-evidence-provenance-contract"
-    if r3 in result.completed_phases:
+    r4 = "0287-r4-multi-laboratory-evidence-digest-deduplication"
+    assert result.valid is True
+    if r4 in result.completed_phases:
         assert result.next_recommended_patch == (
-            "0287-r4-multi-laboratory-evidence-digest-deduplication"
+            "0287-r5-multi-laboratory-evidence-contradiction-detection"
         )
+    elif r3 in result.completed_phases:
+        assert result.next_recommended_patch == r4
     elif r2 in result.completed_phases:
         assert result.next_recommended_patch == r3
     else:

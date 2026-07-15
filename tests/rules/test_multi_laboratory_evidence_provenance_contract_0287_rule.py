@@ -52,14 +52,21 @@ def test_r3_has_no_backend_or_parallel_authority() -> None:
         assert marker in text
 
 
-def test_actual_audit_advances_to_r4() -> None:
+def test_actual_audit_progresses_cumulatively_after_r3() -> None:
     result = audit_multi_laboratory_evidence_aggregation_reuse(
         load_audit_sources(ROOT)
     )
-    assert "0287-r3-multi-laboratory-evidence-provenance-contract" in result.completed_phases
-    assert result.next_recommended_patch == (
-        "0287-r4-multi-laboratory-evidence-digest-deduplication"
+    r4 = "0287-r4-multi-laboratory-evidence-digest-deduplication"
+    assert (
+        "0287-r3-multi-laboratory-evidence-provenance-contract"
+        in result.completed_phases
     )
+    if r4 in result.completed_phases:
+        assert result.next_recommended_patch == (
+            "0287-r5-multi-laboratory-evidence-contradiction-detection"
+        )
+    else:
+        assert result.next_recommended_patch == r4
 
 
 def test_installation_was_reviewed_without_change() -> None:
