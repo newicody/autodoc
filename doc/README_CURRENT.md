@@ -316,6 +316,13 @@ authoritative request, Copilot advisory, manifest, attachment references,
 context references, success criteria, source Issue and return route. The
 package is the input to specialist work; Copilot remains hint-only.
 
+Closure status: implemented as `missipy.research.correlated_work_package.v1`.
+The builder consumes the validated 0281 run assembly, preserves the request and
+advisory in their public schemas, correlates fetched attachment references by
+Issue/frame/revision/run, excludes raw bytes and local paths, and creates no
+Scheduler route or durable write. The package is ready for the message/analysis
+contract in r8.
+
 #### 0287-r7-r8 — specialist/laboratory message v2 and analysis contribution
 
 Version and extend the existing message contract with explicit artifact
