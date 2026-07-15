@@ -1,6 +1,6 @@
 # Autodoc / MissiPy — current state and active roadmap
 
-Status date: 2026-07-14.
+Status date: 2026-07-15.
 
 This document is the current-state and roadmap entrypoint. Historical phase
 reports remain evidence but do not override this map.
@@ -56,24 +56,23 @@ The GitHub and laboratory chain now includes:
 0281 run-level artifact correlation and controlled publication plan
 0282 ProjectV2 cycle lineage/history surfaces
 0283 scoped real Qdrant executor factories
-0284-r1 reuse audit
-0284-r2 portable specialist contract
-0284-r3 immutable specialist/laboratory messages
-0284-r4 visit and transfer continuity contract
-0284-r5 existing-Scheduler portable specialist smoke
-0284-r6 real SQL/OpenVINO/Qdrant memory closure
-0284-r7 Projects/Copilot/specialist integrated smoke
-0284-r8 implementation closure audit
+0284-r1 through r9 portable specialists and correlated live-path evidence
+0285-r1 through r8 specialist capability-growth closed loop
+0286-r1 through r8 operator-authorized Projects capability-growth loop
+0287-r1 through r7 multi-laboratory evidence aggregation and durable history
+0287-r7-r1 controlled local Copilot advisory ProjectV2 publication path
 ```
 
-The 0284 implementation is complete. It is not considered operationally closed
-until one correlated real execution supplies immutable evidence to r8.
+The generic 0284, 0285 and 0286 chains are closed by correlated evidence. The
+active development objective is now to make the complete GitHub-to-local-to-
+ProjectV2 path operational, repeatable and covered by positive and negative
+end-to-end tests.
 
 ## Stable historical compatibility index
 
 Current-state refreshes preserve the validated names consumed by executable
 architecture rules. These are traceability anchors and do not roll back the
-active 0284/0285 roadmap.
+active 0287 roadmap.
 
 Architecture views retained from 0282:
 
@@ -99,58 +98,99 @@ Validated 0281 milestone names retained for traceability:
 - 0281-r7 — real closed-loop smoke.
 
 The locked decisions remain: no new Scheduler or parallel orchestrator for
-laboratories, and Chalouf as the final integrator scenario.
+laboratories. No product-specific integrator phase is scheduled. Development
+stays focused on the generic end-to-end path and its operational evidence.
+
+Historical compatibility marker: `Chalouf as the final integrator scenario`.
+This exact legacy token is retained only for executable documentation rules;
+it is retired from the active roadmap and does not schedule a phase 0288.
 
 ## Current patch
 
-### 0284-r9 — specialists/laboratories live-path evidence
+### 0287-r7-r2 — Copilot first-opinion advisory v2
 
-The patch adds an effect-free evidence use-case and a thin local verifier. It
-consumes the stable JSON projection of one already executed 0284-r7 result,
-checks correlation and real-backend flags, verifies exact dimension `384`,
-loads the required repository source surfaces, then delegates the closure
-decision to the existing r8 audit.
+The existing Copilot runner already receives the Issue title, body and labels.
+This patch corrects the public response contract rather than reinterpreting
+`missipy.github.copilot_advisory.v1`.
 
-It does not execute or mutate Scheduler, SQL, OpenVINO, Qdrant, GitHub or
-ProjectV2. A green result proves the run; unit fixtures alone do not claim a
-real operational execution.
+New runs produce `missipy.github.copilot_advisory.v2`. Its analytical content is
+limited to four fields:
 
-## Next roadmap
+1. `concrete_objective`;
+2. `expected_result`;
+3. `provided_constraints`;
+4. `success_criteria`.
 
-### 0285-r1 — specialist capability growth reuse audit
+The historical v1 extraction helper remains available during migration, while
+the active producer emits v2 only. Copilot remains optional, tool-denied,
+untrusted and unusable as publication authority.
 
-After a green r9 report, audit the next capability-growth axis before adding a
-new provider, specialist family or laboratory framework. Reuse existing
-capability, message, transfer, Scheduler routing, durable memory and observation
-surfaces first.
+## End-to-end operational roadmap
 
-### 0285-r2 — capability selection policy
+### 0287-r7-r3 — v1/v2 consumer migration
 
-Add immutable capability matching and explicit policy decisions while keeping
-the Scheduler as the only orchestration authority.
+Audit every durable reader of `copilot_advisory.json`. Add explicit v1 and v2
+normalization at existing boundaries, migrate active consumers to the four v2
+fields and keep historical v1 artifacts readable. No new manager or adapter is
+introduced unless the reuse audit proves one is required.
 
-### 0285-r3 — multi-specialist intervention smoke
+### 0287-r7-r4 — v2 publication-preview bridge
 
-Exercise a bounded intervention between portable specialists through the
-existing Scheduler and laboratory handlers. Preserve conversation, context,
-return route and durable authority.
+Map the four v2 analysis fields into the existing operator preview and ProjectV2
+projection. Keep the preview effect-free and preserve policy decision, exact
+`plan_digest`, mutation locks and `--execute` requirements.
 
-### 0285-r4 — passive observation replay
+### 0287-r7-r5 — deterministic full local end-to-end smoke
 
-Project the correlated multi-specialist path through EventBus,
-PassiveSupervisor and VisPy/Cell Lens without introducing command authority.
+Exercise one correlated chain with controlled fixtures:
 
-### 0286 — GitHub Projects operational loop
+```text
+Issue envelope
+-> authoritative request
+-> Copilot advisory v2
+-> dual-artifact manifest
+-> artifact fetch and run assembly
+-> source-candidate intake
+-> explicit operator decision
+-> existing-Scheduler fake laboratory
+-> publication preview
+```
 
-Stabilize the deployed `newicody/projects` workflow, artifact recovery,
-operator decision, controlled publication and ProjectV2 history update. Keep the
-cumulative `templates/github/projects-repository/INSTALLATION.md` synchronized
-with every useful deployment or configuration change.
+Prove identifiers, digests, lineage and authority boundaries at every hop.
 
-### 0288 — Chalouf integrator
+### 0287-r7-r6 — controlled remote publication and readback smoke
 
-Use Chalouf only after the generic path is stable: need intake, research,
-portable specialists, cross-validation, synthesis and fabrication planning.
+Execute the accepted plan against `newicody/projects` with both mutation locks,
+the exact confirmed digest and explicit operator approval. Verify ProjectV2 or
+Issue readback, collision protection and idempotent replay.
+
+### 0287-r7-r7 — real Copilot and Actions evidence
+
+Run a non-trivial Issue through the deployed workflow. Recover the three
+correlated artifacts, verify that the four v2 fields contain a concrete first
+opinion, and prove that advisory absence still leaves the authoritative request
+usable.
+
+### 0287-r7-r8 — recovery and negative-path matrix
+
+Cover disabled Copilot, timeout, command failure, malformed JSON, wrong schema,
+stale digest, mismatched correlation, duplicate publication, network failure,
+restart, replay and retry. Every failure must be observable and fail closed at
+the appropriate authority boundary.
+
+### 0287-r7-r9 — installation and deployment closure
+
+Compare `templates/github/projects-repository/` with the deployed private
+`newicody/projects` repository using preview-first synchronization and
+`git diff`. Verify Actions policy, variables, token availability, ProjectV2
+identity and OpenRC/local fetch configuration without storing secrets in Git.
+
+### 0287-r7-r10 — generic operational closure
+
+Run the complete green matrix with deterministic fixtures and one controlled
+real execution. Close only when the end-to-end path is repeatable, documented,
+recoverable, observable and idempotent. No Chalouf or other product-specific
+phase follows this closure.
 
 ## Development constraints
 

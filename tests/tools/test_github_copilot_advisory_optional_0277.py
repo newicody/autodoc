@@ -97,12 +97,10 @@ def test_valid_copilot_response_builds_non_authoritative_artifact(
     tmp_path: Path,
 ) -> None:
     response = {
-        "summary": "Advisory summary",
-        "suggested_route": "research",
-        "assumptions": [],
-        "questions": [],
-        "risks": ["advisory_only"],
-        "confidence": 0.5,
+        "concrete_objective": "Analyze the requested topic.",
+        "expected_result": "A structured first opinion.",
+        "provided_constraints": ["Issue content is authoritative."],
+        "success_criteria": ["The v2 artifact contains four analytical fields."],
     }
     command = _fake_command(
         tmp_path / "copilot-ok",
@@ -116,7 +114,9 @@ def test_valid_copilot_response_builds_non_authoritative_artifact(
     assert payload["trusted"] is False
     assert payload["usable_as_hint"] is True
     assert payload["usable_as_authority"] is False
-    assert payload["summary"] == "Advisory summary"
+    assert payload["schema"] == "missipy.github.copilot_advisory.v2"
+    assert payload["concrete_objective"] == response["concrete_objective"]
+    assert payload["expected_result"] == response["expected_result"]
 
 
 def _run_request(tmp_path: Path, event: dict[str, object]) -> subprocess.CompletedProcess[str]:

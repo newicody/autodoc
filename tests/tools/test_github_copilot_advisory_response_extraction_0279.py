@@ -96,11 +96,16 @@ def test_rejects_invalid_advisory_types_and_confidence() -> None:
 
 
 def test_jsonl_cli_response_builds_advisory_artifact(tmp_path: Path) -> None:
-    advisory = _advisory()
+    first_opinion = {
+        "concrete_objective": "Analyze the requested topic.",
+        "expected_result": "A structured first opinion artifact.",
+        "provided_constraints": ["Issue content is authoritative"],
+        "success_criteria": ["The v2 artifact is written and correlated"],
+    }
     jsonl = json.dumps(
         {
             "type": "assistant.message",
-            "data": {"content": json.dumps(advisory)},
+            "data": {"content": json.dumps(first_opinion)},
         }
     ) + "\n"
     command = _fake_copilot(tmp_path / "copilot", jsonl)
@@ -127,8 +132,9 @@ def test_jsonl_cli_response_builds_advisory_artifact(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     payload = json.loads(output_path.read_text(encoding="utf-8"))
-    assert payload["summary"] == advisory["summary"]
-    assert payload["confidence"] == 0.75
+    assert payload["schema"] == "missipy.github.copilot_advisory.v2"
+    assert payload["concrete_objective"] == first_opinion["concrete_objective"]
+    assert payload["success_criteria"] == first_opinion["success_criteria"]
     assert payload["trusted"] is False
     assert payload["usable_as_authority"] is False
 

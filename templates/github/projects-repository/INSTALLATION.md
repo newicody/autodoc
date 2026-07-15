@@ -2,6 +2,8 @@
 
 Version du guide : `0287-r5-r1`.
 
+Extension de contrat Copilot : `0287-r7-r2`.
+
 Ce document est le mode opératoire cumulatif simplifié pour installer et mettre à jour l’interface GitHub du projet.
 
 Ce guide installe uniquement l’interface GitHub du projet : formulaires
@@ -369,4 +371,5 @@ Repère historique de la preuve opérationnelle :
 ## Avis Copilot visibles
 
 Le workflow produit l’artefact sans s’auto-publier. Le mode opératoire
-preview-first est dans `COPILOT_ADVISORY_PUBLICATION.md`.
+preview-first est dans `COPILOT_ADVISORY_PUBLICATION.md`. Le contrat v2 du
+premier avis est décrit dans `COPILOT_ADVISORY_V2.md`.
