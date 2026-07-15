@@ -365,3 +365,8 @@ Repère historique de la preuve opérationnelle :
 | Phase | Évolution |
 |---|---|
 | `0284-r9` | Vérification corrélée du chemin réel sans mutation. |
+
+## Avis Copilot visibles
+
+Le workflow produit l’artefact sans s’auto-publier. Le mode opératoire
+preview-first est dans `COPILOT_ADVISORY_PUBLICATION.md`.
