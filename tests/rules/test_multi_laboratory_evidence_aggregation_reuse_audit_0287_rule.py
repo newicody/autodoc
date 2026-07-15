@@ -49,14 +49,18 @@ MANIFEST = (
 )
 
 
-def test_actual_repository_reuse_audit_is_green_and_recommends_r2() -> None:
+def test_actual_repository_reuse_audit_progresses_cumulatively() -> None:
     result = audit_multi_laboratory_evidence_aggregation_reuse(
         load_audit_sources(ROOT)
     )
+    r2 = "0287-r2-multi-laboratory-evidence-aggregation-contract"
     assert result.valid is True
-    assert result.next_recommended_patch == (
-        "0287-r2-multi-laboratory-evidence-aggregation-contract"
-    )
+    if r2 in result.completed_phases:
+        assert result.next_recommended_patch == (
+            "0287-r3-multi-laboratory-evidence-provenance-contract"
+        )
+    else:
+        assert result.next_recommended_patch == r2
 
 
 def test_audit_is_source_only() -> None:

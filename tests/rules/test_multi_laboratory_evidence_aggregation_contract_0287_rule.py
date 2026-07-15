@@ -1,0 +1,97 @@
+from pathlib import Path
+
+from context.multi_laboratory_evidence_aggregation_reuse_audit_0287 import (
+    audit_multi_laboratory_evidence_aggregation_reuse,
+    load_audit_sources,
+)
+
+ROOT = Path(__file__).resolve().parents[2]
+SOURCE = (
+    ROOT
+    / "src/context/multi_laboratory_evidence_aggregation_contract_0287.py"
+)
+INSTALLATION = ROOT / "templates/github/projects-repository/INSTALLATION.md"
+REPORT = (
+    ROOT
+    / "PHASE0287_R2_MULTI_LABORATORY_EVIDENCE_AGGREGATION_CONTRACT_REPORT.md"
+)
+ARCH = (
+    ROOT
+    / "doc/architecture/MULTI_LABORATORY_EVIDENCE_AGGREGATION_CONTRACT_0287.md"
+)
+DOT = (
+    ROOT
+    / "doc/architecture/MULTI_LABORATORY_EVIDENCE_AGGREGATION_CONTRACT_0287.dot"
+)
+CHANGELOG = (
+    ROOT
+    / "doc/CHANGELOG_0287_R2_MULTI_LABORATORY_EVIDENCE_AGGREGATION_CONTRACT.md"
+)
+MANIFEST = (
+    ROOT
+    / "doc/manifests/MANIFEST_0287_R2_MULTI_LABORATORY_EVIDENCE_AGGREGATION_CONTRACT.md"
+)
+
+
+def test_r2_reuses_the_existing_digest_bound_evidence_contract() -> None:
+    text = SOURCE.read_text(encoding="utf-8")
+    assert "from context.specialist_capability_growth_proposal_contract_0285" in text
+    assert "SpecialistCapabilityEvidenceRef" in text
+    assert "multi_laboratory_evidence_item_from_specialist_capability_evidence_ref" in text
+
+
+def test_r2_exposes_the_audit_markers() -> None:
+    text = SOURCE.read_text(encoding="utf-8")
+    assert "class MultiLaboratoryEvidenceItem" in text
+    assert "class MultiLaboratoryEvidenceAggregate" in text
+    assert "aggregation_digest" in text
+
+
+def test_r2_has_no_backend_or_parallel_authority() -> None:
+    text = SOURCE.read_text(encoding="utf-8")
+    for forbidden in (
+        "import subprocess",
+        "import requests",
+        "import urllib",
+        "import httpx",
+        "Scheduler(",
+        "EventBus(",
+        "LaboratoryManager",
+        "QdrantClient",
+    ):
+        assert forbidden not in text
+    for marker in (
+        "scheduler_selection_allowed",
+        "laboratory_self_authorization_allowed",
+        "specialist_self_authorization_allowed",
+        "qdrant_authoritative",
+        "github_projects_authoritative",
+    ):
+        assert marker in text
+
+
+def test_actual_audit_advances_to_r3() -> None:
+    result = audit_multi_laboratory_evidence_aggregation_reuse(
+        load_audit_sources(ROOT)
+    )
+    assert (
+        "0287-r2-multi-laboratory-evidence-aggregation-contract"
+        in result.completed_phases
+    )
+    assert result.next_recommended_patch == (
+        "0287-r3-multi-laboratory-evidence-provenance-contract"
+    )
+
+
+def test_installation_was_reviewed_without_change() -> None:
+    text = INSTALLATION.read_text(encoding="utf-8")
+    assert "Version du guide : `0286-r4`." in text
+    assert "Ne pas utiliser `--delete`" in text
+    report = REPORT.read_text(encoding="utf-8")
+    assert "INSTALLATION.md reviewed" in report
+    assert "No update required for 0287-r2" in report
+
+
+def test_systematic_deliverables_exist() -> None:
+    for path in (SOURCE, REPORT, ARCH, DOT, CHANGELOG, MANIFEST):
+        assert path.is_file(), path
