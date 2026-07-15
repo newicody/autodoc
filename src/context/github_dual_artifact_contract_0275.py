@@ -8,6 +8,8 @@ import hashlib, json, re
 
 REQUEST_SCHEMA="missipy.github.authoritative_request.v1"
 ADVISORY_SCHEMA="missipy.github.copilot_advisory.v1"
+ADVISORY_SCHEMA_V1=ADVISORY_SCHEMA
+ADVISORY_SCHEMA_V2="missipy.github.copilot_advisory.v2"
 MANIFEST_SCHEMA="missipy.github.dual_artifact_manifest.v1"
 _DIGEST=re.compile(r"^[0-9a-f]{64}$")
 _REPO=re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -64,6 +66,160 @@ class GitHubCopilotAdvisoryArtifact:
  def to_mapping(self): return {"schema":self.schema,"origin_frame_id":self.origin_frame_id,"ticket_revision_id":self.ticket_revision_id,"artifact_ref":self.artifact_ref,"request_artifact_ref":self.request_artifact_ref,"prompt_digest":self.prompt_digest,"response_digest":self.response_digest,"summary":self.summary,"suggested_route":self.suggested_route,"assumptions":list(self.assumptions),"questions":list(self.questions),"risks":list(self.risks),"confidence":self.confidence,"producer_kind":self.producer_kind,"trusted":False,"usable_as_hint":True,"usable_as_authority":False}
  @classmethod
  def from_mapping(cls,m): return cls(origin_frame_id=m["origin_frame_id"],ticket_revision_id=m["ticket_revision_id"],artifact_ref=m["artifact_ref"],request_artifact_ref=m["request_artifact_ref"],prompt_digest=m["prompt_digest"],response_digest=m["response_digest"],summary=m["summary"],suggested_route=m["suggested_route"],assumptions=tuple(m.get("assumptions",())),questions=tuple(m.get("questions",())),risks=tuple(m.get("risks",())),confidence=float(m.get("confidence",0)),producer_kind=str(m.get("producer_kind","github_copilot_cli")),schema=str(m.get("schema",ADVISORY_SCHEMA)),trusted=bool(m.get("trusted",False)),usable_as_hint=bool(m.get("usable_as_hint",False)),usable_as_authority=bool(m.get("usable_as_authority",False)))
+
+
+_COPILOT_ADVISORY_V2_KEYS = frozenset({
+    "schema",
+    "origin_frame_id",
+    "ticket_revision_id",
+    "artifact_ref",
+    "request_artifact_ref",
+    "prompt_digest",
+    "response_digest",
+    "concrete_objective",
+    "expected_result",
+    "provided_constraints",
+    "success_criteria",
+    "producer_kind",
+    "trusted",
+    "usable_as_hint",
+    "usable_as_authority",
+})
+
+
+def _strict_strings(name, value, *, empty=True):
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        raise GitHubDualArtifactContractError(f"{name} must be an array")
+    values = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise GitHubDualArtifactContractError(
+                f"{name} entries must be non-empty strings"
+            )
+        values.append(item.strip())
+    normalized = tuple(dict.fromkeys(values))
+    if not empty and not normalized:
+        raise GitHubDualArtifactContractError(f"{name} must not be empty")
+    return normalized
+
+
+@dataclass(frozen=True, slots=True)
+class GitHubCopilotFirstOpinionAdvisoryArtifact:
+    origin_frame_id: str
+    ticket_revision_id: str
+    artifact_ref: str
+    request_artifact_ref: str
+    prompt_digest: str
+    response_digest: str
+    concrete_objective: str
+    expected_result: str
+    provided_constraints: tuple[str, ...] = ()
+    success_criteria: tuple[str, ...] = ()
+    producer_kind: str = "github_copilot_cli"
+    schema: str = ADVISORY_SCHEMA_V2
+    trusted: bool = False
+    usable_as_hint: bool = True
+    usable_as_authority: bool = False
+
+    def __post_init__(self):
+        for name in (
+            "origin_frame_id",
+            "ticket_revision_id",
+            "artifact_ref",
+            "request_artifact_ref",
+            "concrete_objective",
+            "expected_result",
+            "producer_kind",
+        ):
+            object.__setattr__(self, name, _text(name, getattr(self, name)))
+        if not self.artifact_ref.startswith("github-advisory:"):
+            raise GitHubDualArtifactContractError("advisory artifact_ref is invalid")
+        if not self.request_artifact_ref.startswith("github-request:"):
+            raise GitHubDualArtifactContractError(
+                "advisory request_artifact_ref is invalid"
+            )
+        _digest("prompt_digest", self.prompt_digest)
+        _digest("response_digest", self.response_digest)
+        object.__setattr__(
+            self,
+            "provided_constraints",
+            _strict_strings("provided_constraints", self.provided_constraints),
+        )
+        object.__setattr__(
+            self,
+            "success_criteria",
+            _strict_strings(
+                "success_criteria",
+                self.success_criteria,
+                empty=False,
+            ),
+        )
+        if (
+            self.schema != ADVISORY_SCHEMA_V2
+            or self.trusted is not False
+            or self.usable_as_hint is not True
+            or self.usable_as_authority is not False
+        ):
+            raise GitHubDualArtifactContractError(
+                "advisory v2 authority flags are locked"
+            )
+
+    def to_mapping(self):
+        return {
+            "schema": self.schema,
+            "origin_frame_id": self.origin_frame_id,
+            "ticket_revision_id": self.ticket_revision_id,
+            "artifact_ref": self.artifact_ref,
+            "request_artifact_ref": self.request_artifact_ref,
+            "prompt_digest": self.prompt_digest,
+            "response_digest": self.response_digest,
+            "concrete_objective": self.concrete_objective,
+            "expected_result": self.expected_result,
+            "provided_constraints": list(self.provided_constraints),
+            "success_criteria": list(self.success_criteria),
+            "producer_kind": self.producer_kind,
+            "trusted": False,
+            "usable_as_hint": True,
+            "usable_as_authority": False,
+        }
+
+    @classmethod
+    def from_mapping(cls, mapping):
+        actual = frozenset(mapping)
+        if actual != _COPILOT_ADVISORY_V2_KEYS:
+            missing = sorted(_COPILOT_ADVISORY_V2_KEYS - actual)
+            extra = sorted(actual - _COPILOT_ADVISORY_V2_KEYS)
+            raise GitHubDualArtifactContractError(
+                f"advisory v2 field mismatch: missing={missing}, extra={extra}"
+            )
+        return cls(
+            origin_frame_id=mapping["origin_frame_id"],
+            ticket_revision_id=mapping["ticket_revision_id"],
+            artifact_ref=mapping["artifact_ref"],
+            request_artifact_ref=mapping["request_artifact_ref"],
+            prompt_digest=mapping["prompt_digest"],
+            response_digest=mapping["response_digest"],
+            concrete_objective=mapping["concrete_objective"],
+            expected_result=mapping["expected_result"],
+            provided_constraints=mapping["provided_constraints"],
+            success_criteria=mapping["success_criteria"],
+            producer_kind=mapping["producer_kind"],
+            schema=mapping["schema"],
+            trusted=mapping["trusted"],
+            usable_as_hint=mapping["usable_as_hint"],
+            usable_as_authority=mapping["usable_as_authority"],
+        )
+
+
+def parse_copilot_advisory_artifact(mapping):
+    schema = str(mapping.get("schema", ADVISORY_SCHEMA_V1))
+    if schema == ADVISORY_SCHEMA_V1:
+        return GitHubCopilotAdvisoryArtifact.from_mapping(mapping)
+    if schema == ADVISORY_SCHEMA_V2:
+        return GitHubCopilotFirstOpinionAdvisoryArtifact.from_mapping(mapping)
+    raise GitHubDualArtifactContractError(
+        f"unsupported Copilot advisory schema: {schema}"
+    )
 
 @dataclass(frozen=True,slots=True)
 class GitHubDualArtifactManifest:

@@ -24,3 +24,17 @@ Copilot est consultatif : `trusted=false`, `usable_as_hint=true` et
 `usable_as_authority=false`. Toute publication conserve le preview, la décision
 opérateur explicite, les deux verrous de mutation, le `plan_digest` exact et le
 readback décrits dans `COPILOT_ADVISORY_PUBLICATION.md`.
+
+
+## Compatibilité d’intake locale
+
+Le serveur local reconnaît explicitement les schémas v1 et v2 pendant la
+migration. Il conserve chaque artefact dans sa forme publique d’origine. Ainsi,
+aucun champ v1 n’est réinterprété comme objectif, résultat, contrainte ou critère
+v2.
+Le schéma v2 est validé strictement et tout champ analytique v1 ajouté à un
+artefact v2 provoque un rejet fermé.
+
+L’intake ne copie toujours aucun contenu Copilot dans la demande autoritative ou
+le `SourceCandidate`. Il conserve seulement la référence, l’empreinte de réponse
+et le nom du schéma comme métadonnées consultatives.

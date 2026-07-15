@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from typing import Any
 import json
 from context.github_dual_artifact_contract_0275 import GitHubAuthoritativeRequestArtifact,GitHubCopilotAdvisoryArtifact,GitHubDualArtifactManifest,sha256_bytes,validate_dual_artifact_correlation
+from context.github_dual_artifact_contract_0275 import parse_copilot_advisory_artifact
 from context.source_candidate import SourceCandidateInput,SourceCandidateOrigin,SourceCandidatePolicy,build_source_candidate
 
 INTAKE_SCHEMA="missipy.github.dual_artifact_source_candidate_intake.v1"
@@ -24,7 +25,13 @@ class GitHubDualArtifactIntakeResult:
 def run_github_dual_artifact_source_candidate_intake(request_bytes:bytes,manifest_bytes:bytes,advisory_bytes:bytes|None=None,*,command=None):
  cmd=command or GitHubDualArtifactIntakeCommand(); issues=[]
  try:
-  req=GitHubAuthoritativeRequestArtifact.from_mapping(json.loads(request_bytes)); man=GitHubDualArtifactManifest.from_mapping(json.loads(manifest_bytes)); adv=None if advisory_bytes is None else GitHubCopilotAdvisoryArtifact.from_mapping(json.loads(advisory_bytes))
+  req=GitHubAuthoritativeRequestArtifact.from_mapping(json.loads(request_bytes))
+  man=GitHubDualArtifactManifest.from_mapping(json.loads(manifest_bytes))
+  adv=(
+   None
+   if advisory_bytes is None
+   else parse_copilot_advisory_artifact(json.loads(advisory_bytes))
+  )
  except Exception as e: return GitHubDualArtifactIntakeResult(False,(str(e),))
  if man.request_sha256!=sha256_bytes(request_bytes): issues.append("request digest mismatch")
  if advisory_bytes is None:
@@ -35,5 +42,6 @@ def run_github_dual_artifact_source_candidate_intake(request_bytes:bytes,manifes
  issues.extend(validate_dual_artifact_correlation(req,man,adv))
  if issues: return GitHubDualArtifactIntakeResult(False,tuple(dict.fromkeys(issues)),req.to_mapping(),{} if adv is None else adv.to_mapping(),man.to_mapping())
  metadata={"request_artifact_ref":req.artifact_ref,"ticket_revision_id":req.ticket_revision_id,"origin_frame_id":req.origin_frame_id,"advisory_present":adv is not None,"advisory_ref":"" if adv is None else adv.artifact_ref,"advisory_response_digest":"" if adv is None else adv.response_digest,"advisory_content_copied":False,"request_authoritative":True}
+ metadata["advisory_schema"]="" if adv is None else adv.schema
  created=build_source_candidate(SourceCandidateInput(title=req.title,body=req.body,origin=SourceCandidateOrigin(kind="github",reference=req.artifact_ref,repository=req.repository),labels=tuple(dict.fromkeys(("github-request",*req.labels))),metadata=metadata),SourceCandidatePolicy(default_repository=req.repository,id_prefix="github-request"))
  return GitHubDualArtifactIntakeResult(True,(),req.to_mapping(),{} if adv is None else adv.to_mapping(),man.to_mapping(),created.candidate.to_json_dict())
