@@ -55,10 +55,13 @@ def test_actual_repository_reuse_audit_progresses_cumulatively() -> None:
     )
     r2 = "0287-r2-multi-laboratory-evidence-aggregation-contract"
     assert result.valid is True
-    if r2 in result.completed_phases:
+    r3 = "0287-r3-multi-laboratory-evidence-provenance-contract"
+    if r3 in result.completed_phases:
         assert result.next_recommended_patch == (
-            "0287-r3-multi-laboratory-evidence-provenance-contract"
+            "0287-r4-multi-laboratory-evidence-digest-deduplication"
         )
+    elif r2 in result.completed_phases:
+        assert result.next_recommended_patch == r3
     else:
         assert result.next_recommended_patch == r2
 
