@@ -331,6 +331,18 @@ messages, and cross-visit continuation. Define a generic deep-analysis
 contribution contract that maps deterministically into
 `SpecialistOutputFragment` without forcing early global synthesis.
 
+Closure status: implemented as the explicit companion schemas
+`missipy.specialist.laboratory_message.v2`,
+`missipy.specialist.laboratory_conversation.v2`,
+`missipy.specialist.deep_analysis_request.v1` and
+`missipy.specialist.deep_analysis_contribution.v1`. The historical v1 message
+module remains unchanged and readable. V2 adds digest-backed artifact
+references, stable correlation/idempotency identities, normalized completion
+and error messages, and continuation across visits and specialists. Deep
+analysis contributions retain findings, evidence, uncertainties, contradictions,
+limitations and recommendations for the later liaison synthesis; no global
+synthesis is inferred unless the mission explicitly requests it.
+
 #### 0287-r7-r9 — love-study contracts and specialist descriptors
 
 Define the input, two domain-analysis outputs and prototype result contracts.
