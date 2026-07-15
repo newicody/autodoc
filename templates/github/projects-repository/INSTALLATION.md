@@ -373,3 +373,6 @@ Repère historique de la preuve opérationnelle :
 Le workflow produit l’artefact sans s’auto-publier. Le mode opératoire
 preview-first est dans `COPILOT_ADVISORY_PUBLICATION.md`. Le contrat v2 du
 premier avis est décrit dans `COPILOT_ADVISORY_V2.md`.
+
+Repère d’exploitation `0287-r7-r6` : la publication Copilot v2 sur le board et
+l’Issue source est documentée dans `COPILOT_ADVISORY_V2.md`.

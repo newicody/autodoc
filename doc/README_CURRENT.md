@@ -280,7 +280,7 @@ provider is justified because the existing provider explicitly declares
 Issue -> dual Actions artifacts                         implemented
 Copilot v2 artifact                                    implemented
 Copilot v2 projection through local intake             implemented
-Copilot v2 visible on ProjectV2 / source Issue         not connected
+Copilot v2 visible on ProjectV2 / source Issue         controlled adapters implemented
 periodic artifact fetch -> one research work package   partial
 research work package -> concrete laboratory           not connected
 portable specialist/message/transfer contracts         implemented contracts
@@ -290,7 +290,7 @@ real specialist analyses -> liaison synthesis          not connected
 SQL/E5/Qdrant specialist memory closure                implemented separately
 0287 multi-laboratory evidence chain                   implemented separately
 final deliverable -> source Issue publication          absent
-full remote readback and replay proof                   absent
+publication-surface readback/replay                     implemented; full-chain proof pending
 ```
 
 ### Adapted product-final roadmap
@@ -301,6 +301,13 @@ Extend the existing publication planners and Projects scripts to render the
 four v2 fields, preserve the advisory artifact reference, compute an exact plan
 digest, publish only the advisory projection, and verify idempotent readback.
 No Copilot output may change an authoritative status or operator decision.
+
+Closure status: implemented as versioned preview, ProjectV2 projection and
+controlled source-Issue publication adapters. The v2 ProjectV2 path writes the
+four analytical values into the generic `Avis Copilot` field and deliberately
+leaves historical route/confidence fields untouched. Both ProjectV2 field and
+Issue comment adapters perform immediate exact readback; the private live-board
+evidence remains part of the real closed-loop smoke.
 
 #### 0287-r7-r7 — correlated research work package
 
