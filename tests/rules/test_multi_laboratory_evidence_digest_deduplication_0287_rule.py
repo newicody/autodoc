@@ -88,17 +88,21 @@ def test_r4_has_no_backend_or_parallel_authority() -> None:
         assert marker in text
 
 
-def test_actual_audit_advances_to_r5() -> None:
+def test_actual_audit_progresses_cumulatively_after_r4() -> None:
     result = audit_multi_laboratory_evidence_aggregation_reuse(
         load_audit_sources(ROOT)
     )
+    r5 = "0287-r5-multi-laboratory-evidence-contradiction-detection"
     assert (
         "0287-r4-multi-laboratory-evidence-digest-deduplication"
         in result.completed_phases
     )
-    assert result.next_recommended_patch == (
-        "0287-r5-multi-laboratory-evidence-contradiction-detection"
-    )
+    if r5 in result.completed_phases:
+        assert result.next_recommended_patch == (
+            "0287-r6-multi-laboratory-evidence-operator-weighting-policy"
+        )
+    else:
+        assert result.next_recommended_patch == r5
 
 
 def test_installation_was_reviewed_without_change() -> None:

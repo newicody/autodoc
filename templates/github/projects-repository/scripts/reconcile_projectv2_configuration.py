@@ -377,7 +377,7 @@ def execute_projectv2_configuration(
 
     if plan.unresolved_visible_fields:
         raise ValueError("visible fields remain unresolved after field creation")
-    views_endpoint = f"users/{plan.user_id}/projectsV2/{plan.number}/views"
+    views_endpoint = f"users/{plan.owner}/projectsV2/{plan.number}/views"
     for payload in plan.missing_views:
         transport.rest("POST", views_endpoint, payload)
 

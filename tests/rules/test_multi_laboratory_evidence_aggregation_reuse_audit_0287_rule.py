@@ -56,11 +56,14 @@ def test_actual_repository_reuse_audit_progresses_cumulatively() -> None:
     r2 = "0287-r2-multi-laboratory-evidence-aggregation-contract"
     r3 = "0287-r3-multi-laboratory-evidence-provenance-contract"
     r4 = "0287-r4-multi-laboratory-evidence-digest-deduplication"
+    r5 = "0287-r5-multi-laboratory-evidence-contradiction-detection"
     assert result.valid is True
-    if r4 in result.completed_phases:
+    if r5 in result.completed_phases:
         assert result.next_recommended_patch == (
-            "0287-r5-multi-laboratory-evidence-contradiction-detection"
+            "0287-r6-multi-laboratory-evidence-operator-weighting-policy"
         )
+    elif r4 in result.completed_phases:
+        assert result.next_recommended_patch == r5
     elif r3 in result.completed_phases:
         assert result.next_recommended_patch == r4
     elif r2 in result.completed_phases:
