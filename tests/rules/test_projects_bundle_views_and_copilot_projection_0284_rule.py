@@ -31,7 +31,7 @@ def test_configuration_preserves_the_organized_views_and_authority_split() -> No
     assert value["schema"] == "autodoc.github.projects_repository_configuration.v1"
     assert value["project"] == {"owner_kind": "user", "owner": "newicody", "number": 3}
     names = {view["name"] for view in value["views"]}
-    assert names == {
+    organized_view_names = {
         "Recherches",
         "Résultats",
         "Copilot",
@@ -40,6 +40,7 @@ def test_configuration_preserves_the_organized_views_and_authority_split() -> No
         "Historique",
         "Tous",
     }
+    assert organized_view_names.issubset(names)
     projection = value["copilot_projection"]
     assert "Résumé" not in projection.values()
     assert "Serveur" not in projection.values()

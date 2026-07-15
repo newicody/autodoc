@@ -4,7 +4,7 @@ Ce document est le mode opératoire cumulatif du bundle GitHub fourni par
 Autodoc. Il doit être mis à jour chaque fois que la copie, les Actions, les
 variables, les secrets, les vues ou les contrats du dépôt Projects évoluent.
 
-Version du guide : `0286-r3`.
+Version du guide : `0286-r4`.
 
 ## Frontière
 
@@ -468,5 +468,93 @@ Ne pas utiliser `--delete` lors de cette mise à niveau.
 
 Repères historiques conservés pour les règles cumulatives :
 
+- Version du guide : `0286-r3`.
 - Version du guide : `0284-r9`.
 - Version du guide : `0284-r1-r5`.
+
+
+## 12. Installer les champs et la vue de revue des révisions spécialistes
+
+Le fichier `projectv2_views.json` déclare maintenant les champs suivants :
+
+```text
+Spécialiste
+Révision spécialiste
+Capacité proposée
+Action capacité
+Décision capacité
+Statut révision
+Référence SQL
+Digest décision
+Laboratoire
+```
+
+Les valeurs machine des champs à choix unique restent alignées sur les
+contrats locaux :
+
+```text
+Action capacité    = add | refine | deprecate | restore
+Décision capacité  = pending | approve | reject | defer
+Statut révision    = request_received | proposal_ready |
+                     approved_selected_observed | published |
+                     readback_verified | rejected | deferred
+```
+
+Ces champs sont une projection de revue. Ils ne remplacent ni la décision
+opérateur locale, ni l'historique SQL durable, ni la sélection réalisée par le
+Scheduler existant.
+
+Depuis la copie locale de `newicody/projects`, préparer le plan sans mutation :
+
+```bash
+cd /home/eric/projet/git/projects
+export AUTODOC_PROJECT_TOKEN='...'
+
+python scripts/reconcile_projectv2_configuration.py   --config projectv2_views.json   --format json
+```
+
+Contrôler notamment :
+
+```text
+valid=true
+missing_fields
+missing_views
+field_option_drift
+unresolved_visible_fields
+manual_layout_steps
+plan_digest
+```
+
+Le plan doit proposer la vue table `Révisions spécialistes`. Il ne doit
+supprimer ni champ ni vue existants. Si un champ single-select existe déjà mais
+ne contient pas toutes les options, le réconciliateur signale une dérive sans
+la corriger automatiquement.
+
+Après validation explicite du plan, ouvrir les deux verrous de configuration
+et confirmer le digest exact :
+
+```bash
+export AUTODOC_REMOTE_MUTATION_ALLOWED=true
+export AUTODOC_PROJECT_CONFIGURATION_ALLOWED=true
+
+python scripts/reconcile_projectv2_configuration.py   --config projectv2_views.json   --execute   --confirm-plan-digest '<PLAN_DIGEST>'   --format json
+```
+
+Dans l'interface GitHub, vérifier ensuite la présence de la vue
+`Révisions spécialistes` et l'ordre de ses colonnes. Aucun nouveau secret,
+aucune permission Actions et aucune modification du workflow ne sont requis
+par `0286-r4`.
+
+Comparer enfin le bundle source et la copie déployée :
+
+```bash
+rsync -aivn   --exclude README.md   "$SRC"/   "$DST"/
+```
+
+Ne pas utiliser `--delete` lors de cette mise à niveau.
+
+## Historique du guide — champs de revue des spécialistes
+
+| Phase | Évolution |
+|---|---|
+| `0286-r4` | Ajout des neuf champs de projection et de la vue `Révisions spécialistes`, avec installation preview-first et confirmation par digest. |

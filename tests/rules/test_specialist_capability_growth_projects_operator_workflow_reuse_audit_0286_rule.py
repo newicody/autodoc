@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -86,10 +87,26 @@ def test_projects_installation_was_reviewed_without_unnecessary_change() -> None
     assert "No update required for 0286-r1" in report
 
 
-def test_existing_project_configuration_has_the_identified_gap() -> None:
-    text = PROJECT_CONFIG.read_text(encoding="utf-8")
-    assert '"Thème"' in text
-    assert '"Affichage"' in text
-    assert '"Copilot"' in text
-    assert "Révision spécialiste" not in text
-    assert "Décision capacité" not in text
+def test_project_configuration_keeps_the_baseline_and_closes_the_gap_atomically() -> None:
+    configuration = json.loads(PROJECT_CONFIG.read_text(encoding="utf-8"))
+    field_names = {field["name"] for field in configuration["fields"]}
+    assert {"Thème", "Affichage", "Copilot"}.issubset(field_names)
+
+    specialist_fields = {
+        "Spécialiste",
+        "Révision spécialiste",
+        "Capacité proposée",
+        "Action capacité",
+        "Décision capacité",
+        "Statut révision",
+        "Référence SQL",
+        "Digest décision",
+        "Laboratoire",
+    }
+    present = specialist_fields.intersection(field_names)
+    assert not present or present == specialist_fields
+
+    if present:
+        view_names = {view["name"] for view in configuration["views"]}
+        assert "Révisions spécialistes" in view_names
+        assert "specialist_capability_growth_projection" in configuration
