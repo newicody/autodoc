@@ -92,14 +92,18 @@ def test_actual_audit_progresses_cumulatively_after_r5() -> None:
         load_audit_sources(ROOT)
     )
     r6 = "0287-r6-multi-laboratory-evidence-operator-weighting-policy"
+    r7 = "0287-r7-multi-laboratory-evidence-durable-history"
     assert (
         "0287-r5-multi-laboratory-evidence-contradiction-detection"
         in result.completed_phases
     )
-    if r6 in result.completed_phases:
+    if r7 in result.completed_phases:
         assert result.next_recommended_patch == (
-            "0287-r7-multi-laboratory-evidence-durable-history"
+            "0287-r8-multi-laboratory-evidence-"
+            "scheduler-selection-constraints"
         )
+    elif r6 in result.completed_phases:
+        assert result.next_recommended_patch == r7
     else:
         assert result.next_recommended_patch == r6
 

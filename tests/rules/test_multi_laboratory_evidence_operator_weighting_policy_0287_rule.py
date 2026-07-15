@@ -85,19 +85,23 @@ def test_r6_has_no_backend_or_parallel_authority() -> None:
         assert marker in text
 
 
-def test_actual_audit_advances_to_r7() -> None:
+def test_actual_audit_progresses_cumulatively_after_r6() -> None:
     result = audit_multi_laboratory_evidence_aggregation_reuse(
         load_audit_sources(ROOT)
     )
+    r7 = "0287-r7-multi-laboratory-evidence-durable-history"
     assert (
         "0287-r6-multi-laboratory-evidence-operator-weighting-policy"
         in result.completed_phases
     )
-    assert result.next_recommended_patch == (
-        "0287-r7-multi-laboratory-evidence-durable-history"
-    )
+    if r7 in result.completed_phases:
+        assert result.next_recommended_patch == (
+            "0287-r8-multi-laboratory-evidence-"
+            "scheduler-selection-constraints"
+        )
+    else:
+        assert result.next_recommended_patch == r7
     assert result.weighting_policy_missing is False
-
 
 def test_installation_was_reviewed_without_change() -> None:
     text = INSTALLATION.read_text(encoding="utf-8")
