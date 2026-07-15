@@ -199,6 +199,24 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(tuple(sys.argv[1:] if argv is None else argv))
+    _require_input_file(
+        args.plan,
+        "r5 publication plan",
+        hint=(
+            "Generate a local verification set with "
+            "tools/build_specialist_capability_growth_projects_"
+            "readback_fixture_0286.py, or provide a real r5 plan."
+        ),
+    )
+    _require_input_file(
+        args.execution_result,
+        "r6 execution result",
+        hint=(
+            "Run tools/apply_specialist_capability_growth_projects_"
+            "projection_0286.py with --output after a real publication, "
+            "or use the local fixture builder."
+        ),
+    )
     plan = load_publication_plan(args.plan)
     execution = load_execution_result(args.execution_result)
 
@@ -218,6 +236,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "--issue-comments and --projectv2-fields are required "
                 "without --execute"
             )
+        _require_input_file(
+            args.issue_comments,
+            "Issue comment snapshot",
+            hint="Use the local fixture builder or a query-only export.",
+        )
+        _require_input_file(
+            args.projectv2_fields,
+            "ProjectV2 field snapshot",
+            hint="Use the local fixture builder or a query-only export.",
+        )
         comments = load_issue_comments(args.issue_comments)
         field_values = load_projectv2_fields(args.projectv2_fields)
         source_mode = "provided_snapshots"
@@ -360,6 +388,22 @@ def load_projectv2_fields(path: Path) -> tuple[tuple[str, str], ...]:
             )
         values.append((str(pair[0]), str(pair[1])))
     return tuple(sorted(values))
+
+
+def _require_input_file(
+    path: Path,
+    label: str,
+    *,
+    hint: str,
+) -> None:
+    if path.is_file():
+        return
+    raise SystemExit(
+        f"{label} not found: {path}\n"
+        f"{hint}\n"
+        "The r7 verifier consumes artifacts; it does not create or publish "
+        "them."
+    )
 
 
 def _assert_query_only_graphql(query: str) -> None:

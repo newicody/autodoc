@@ -287,6 +287,11 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--confirm-plan-digest", default="")
     parser.add_argument("--gh-command", default="gh")
     parser.add_argument(
+        "--output",
+        type=Path,
+        help="write the complete r6 execution report as JSON",
+    )
+    parser.add_argument(
         "--format",
         choices=("json", "summary"),
         default="summary",
@@ -344,9 +349,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             ),
             "boundaries": _boundaries(),
         }
+        _write_report(report, args.output)
         _emit(report, args.format)
         return 4
 
+    _write_report(report, args.output)
     _emit(report, args.format)
     result_mapping = _mapping(report["result"])
     return 0 if result_mapping.get("valid") is True else 3
@@ -562,6 +569,25 @@ def _optional_positive_int(value: object) -> int | None:
     if value is None:
         return None
     return _positive_int(value, "existing_comment_id")
+
+
+def _write_report(
+    report: Mapping[str, object],
+    output: Path | None,
+) -> None:
+    if output is None:
+        return
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(
+        json.dumps(
+            report,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
 
 def _emit(report: Mapping[str, object], output_format: str) -> None:
