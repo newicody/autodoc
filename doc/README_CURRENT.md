@@ -207,3 +207,171 @@ phase follows this closure.
 - every phase records code-rule review and live-path status;
 - every stable boundary receives executable tests under `tests/rules`;
 - every useful Projects deployment change updates the cumulative installation guide.
+
+## Product-final reuse audit and authoritative roadmap adaptation
+
+### 0287-r7-r5 — specialist exchange, synthesis and product-chain reuse audit
+
+This section is the authoritative continuation after 0287-r7-r4. The earlier
+r5-r10 walking-skeleton order is retained above as a compatibility record, but
+it is superseded for active development by the product-final order below.
+
+The target user-visible chain is:
+
+```text
+source Issue / ProjectV2 item
+-> authoritative research-context artifact
+-> Copilot advisory v2 artifact
+-> controlled advisory projection visible on the board
+-> local fetch and correlated research work package
+-> explicit operator decision
+-> existing Scheduler
+-> concrete native laboratory
+-> two domain specialists producing deep analyses
+-> later liaison synthesis and final artifact envelope
+-> controlled deliverable publication on the source Issue
+-> ProjectV2 readback, durable evidence and idempotent replay
+```
+
+The first concrete laboratory prototype is
+`laboratory:love-studies-local`. It executes two simple but real specialists:
+
+- `specialist:love-concept-and-affect-analyst`;
+- `specialist:love-relational-dynamics-analyst`.
+
+Their primary responsibility is deep domain analysis. A specialist may produce
+a local synthesis when its mission explicitly asks for one, but the default
+mutualized synthesis happens later through the existing liaison boundary.
+
+### Reuse decisions locked by r7-r5
+
+The existing `missipy.specialist.laboratory_message.v1` contract already owns
+message identity, conversation identity, sequence ordering, request/reply
+links, route references, context references, evidence references and immutable
+payloads. It must be extended through an explicit v2 migration; no unrelated
+`SpecialistExchangeEnvelope` module is to be invented.
+
+The following existing surfaces remain canonical and must be extended rather
+than replaced:
+
+- `specialist_laboratory_message_contract_0284.py` for specialist/laboratory
+  exchanges and ordered conversations;
+- `specialist_laboratory_transfer_contract_0284.py` for cross-laboratory
+  continuity;
+- `server_oriented_deliberation_cycle.py` for orientation, specialist demands,
+  rounds and the final artifact envelope;
+- `specialist_liaison_synthesis.py` for fragments, liaison synthesis and final
+  synthesis packets;
+- `portable_specialist_real_memory_closure_0284.py` for SQL-authoritative,
+  OpenVINO/E5-384 and Qdrant-reference-only memory closure;
+- the 0287 multi-laboratory evidence aggregation, provenance, contradiction,
+  operator-weighting and durable-history chain;
+- the existing controlled GitHub publication planners, collision guards,
+  digest confirmation and readback adapters.
+
+The deterministic fake laboratory remains test evidence only. It must not be
+silently renamed or converted into the concrete laboratory. A distinct native
+provider is justified because the existing provider explicitly declares
+`provider_kind=local_fake` and `real_backend_used=false`.
+
+### Current connection status
+
+```text
+Issue -> dual Actions artifacts                         implemented
+Copilot v2 artifact                                    implemented
+Copilot v2 projection through local intake             implemented
+Copilot v2 visible on ProjectV2 / source Issue         not connected
+periodic artifact fetch -> one research work package   partial
+research work package -> concrete laboratory           not connected
+portable specialist/message/transfer contracts         implemented contracts
+real domain specialist execution                       absent
+liaison synthesis contracts and final envelope         implemented contracts
+real specialist analyses -> liaison synthesis          not connected
+SQL/E5/Qdrant specialist memory closure                implemented separately
+0287 multi-laboratory evidence chain                   implemented separately
+final deliverable -> source Issue publication          absent
+full remote readback and replay proof                   absent
+```
+
+### Adapted product-final roadmap
+
+#### 0287-r7-r6 — Copilot advisory v2 board and Issue projection
+
+Extend the existing publication planners and Projects scripts to render the
+four v2 fields, preserve the advisory artifact reference, compute an exact plan
+digest, publish only the advisory projection, and verify idempotent readback.
+No Copilot output may change an authoritative status or operator decision.
+
+#### 0287-r7-r7 — correlated research work package
+
+Close fetch, run assembly and intake into one immutable package containing the
+authoritative request, Copilot advisory, manifest, attachment references,
+context references, success criteria, source Issue and return route. The
+package is the input to specialist work; Copilot remains hint-only.
+
+#### 0287-r7-r8 — specialist/laboratory message v2 and analysis contribution
+
+Version and extend the existing message contract with explicit artifact
+references and digests, correlation/idempotency identity, completion and error
+messages, and cross-visit continuation. Define a generic deep-analysis
+contribution contract that maps deterministically into
+`SpecialistOutputFragment` without forcing early global synthesis.
+
+#### 0287-r7-r9 — love-study contracts and specialist descriptors
+
+Define the input, two domain-analysis outputs and prototype result contracts.
+Declare the two portable specialists and the concrete laboratory descriptor.
+This phase remains contract-only.
+
+#### 0287-r7-r10 — concrete native laboratory and first specialist
+
+Register `laboratory:love-studies-local` behind the existing Scheduler-owned
+registry and execute `specialist:love-concept-and-affect-analyst`. The
+specialist performs real deterministic text analysis and produces evidence,
+uncertainties and a versioned analysis artifact.
+
+#### 0287-r7-r11 — second specialist and Scheduler-controlled collaboration
+
+Execute `specialist:love-relational-dynamics-analyst`. It consumes the research
+package and authorized artifacts from the first analysis through the versioned
+message contract. Any request for more context or another specialist returns to
+the existing Scheduler; specialists never invoke each other directly.
+
+#### 0287-r7-r12 — memory, evidence and liaison synthesis integration
+
+Persist authoritative analyses in SQL, project and recall references through
+OpenVINO/E5-384 and Qdrant, connect the 0287 evidence/contradiction/weighting
+chain, then map accepted analyses into the existing liaison synthesis and final
+artifact envelope. Contradictions and unresolved points must remain visible.
+
+#### 0287-r7-r13 — final deliverable publication plan
+
+Render the final artifact envelope as deterministic human-readable Markdown,
+build a distinct deliverable marker and plan digest, and prepare controlled
+publication on the source Issue plus a concise ProjectV2 status/readback
+projection. This path is separate from the initial Copilot advisory comment.
+
+#### 0287-r7-r14 — full deterministic local smoke
+
+Exercise Issue fixture, three GitHub artifacts, fetch/assembly, operator gate,
+concrete laboratory, two real specialists, durable analyses, liaison synthesis,
+final deliverable, publication preview and simulated readback in one correlated
+local proof.
+
+#### 0287-r7-r15 — real GitHub Actions closed-loop evidence
+
+Run one real source Issue through the deployed workflow, advisory board
+projection, local fetch, concrete laboratory, two specialists, final synthesis,
+controlled source-Issue publication and ProjectV2/Issue readback.
+
+#### 0287-r7-r16 — recovery, installation and prototype closure
+
+Close disabled/invalid Copilot, missing or mismatched artifacts, specialist
+failure, timeout, restart, replay, duplicate/collision, stale digest, network
+failure and partial publication. Verify OpenRC/fcron deployment, compare the
+Projects source bundle with the deployed repository, run the global suite and
+prove installation from a clean checkout.
+
+The prototype is complete only when the full real chain is repeatable,
+observable, recoverable and idempotent. There is no phase 0288 and no Chalouf
+integrator phase.
