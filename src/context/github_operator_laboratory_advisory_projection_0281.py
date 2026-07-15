@@ -14,6 +14,10 @@ from dataclasses import dataclass, field, replace
 import hashlib
 from typing import Any
 
+from context.github_dual_artifact_contract_0275 import (
+    ADVISORY_SCHEMA_V1,
+    ADVISORY_SCHEMA_V2,
+)
 from context.github_dual_artifact_laboratory_smoke_0275 import (
     GitHubDualArtifactLaboratorySmokeCommand,
     run_github_dual_artifact_laboratory_smoke,
@@ -25,8 +29,16 @@ from context.github_dual_artifact_source_candidate_intake_0275 import (
 
 SCHEMA = "missipy.github.operator_laboratory_advisory_projection.v1"
 PROJECTION_SCHEMA = "missipy.github.copilot_advisory_laboratory_context.v1"
+PROJECTION_SCHEMA_V1 = PROJECTION_SCHEMA
+PROJECTION_SCHEMA_V2 = (
+    "missipy.github.copilot_advisory_laboratory_context.v2"
+)
 PUBLICATION_PREVIEW_SCHEMA = (
     "missipy.github.copilot_advisory_publication_preview.v1"
+)
+PUBLICATION_PREVIEW_SCHEMA_V1 = PUBLICATION_PREVIEW_SCHEMA
+PUBLICATION_PREVIEW_SCHEMA_V2 = (
+    "missipy.github.copilot_advisory_publication_preview.v2"
 )
 
 _HINT_DIRECTIVE = (
@@ -113,6 +125,96 @@ class GitHubCopilotAdvisoryLaboratoryProjection:
             "content_retained_for_operator_and_laboratory": True,
             "content_copied_into_authoritative_request": False,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class GitHubCopilotFirstOpinionLaboratoryProjection:
+    """Typed v2 first-opinion projection with no v1 field reinterpretation."""
+
+    context_ref: str
+    advisory_artifact_ref: str
+    request_artifact_ref: str
+    origin_frame_id: str
+    ticket_revision_id: str
+    source_candidate_ref: str
+    concrete_objective: str
+    expected_result: str
+    provided_constraints: tuple[str, ...]
+    success_criteria: tuple[str, ...]
+    response_digest: str
+    producer_kind: str
+    trusted: bool = False
+    usable_as_hint: bool = True
+    usable_as_authority: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.context_ref.startswith("ctx:github-advisory:"):
+            raise ValueError(
+                "context_ref must start with ctx:github-advisory:"
+            )
+        if not self.advisory_artifact_ref.startswith("github-advisory:"):
+            raise ValueError(
+                "advisory_artifact_ref must start with github-advisory:"
+            )
+        if not self.request_artifact_ref.startswith("github-request:"):
+            raise ValueError(
+                "request_artifact_ref must start with github-request:"
+            )
+        if not self.source_candidate_ref.startswith("source-candidate:"):
+            raise ValueError(
+                "source_candidate_ref must start with source-candidate:"
+            )
+        if not self.concrete_objective.strip():
+            raise ValueError("concrete_objective must not be empty")
+        if not self.expected_result.strip():
+            raise ValueError("expected_result must not be empty")
+        object.__setattr__(
+            self,
+            "provided_constraints",
+            _strict_string_tuple(
+                "provided_constraints",
+                self.provided_constraints,
+            ),
+        )
+        object.__setattr__(
+            self,
+            "success_criteria",
+            _strict_string_tuple(
+                "success_criteria",
+                self.success_criteria,
+                empty=False,
+            ),
+        )
+        if self.trusted or not self.usable_as_hint or self.usable_as_authority:
+            raise ValueError("advisory authority flags are locked")
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {
+            "schema": PROJECTION_SCHEMA_V2,
+            "context_ref": self.context_ref,
+            "advisory_artifact_ref": self.advisory_artifact_ref,
+            "request_artifact_ref": self.request_artifact_ref,
+            "origin_frame_id": self.origin_frame_id,
+            "ticket_revision_id": self.ticket_revision_id,
+            "source_candidate_ref": self.source_candidate_ref,
+            "concrete_objective": self.concrete_objective,
+            "expected_result": self.expected_result,
+            "provided_constraints": list(self.provided_constraints),
+            "success_criteria": list(self.success_criteria),
+            "response_digest": self.response_digest,
+            "producer_kind": self.producer_kind,
+            "trusted": False,
+            "usable_as_hint": True,
+            "usable_as_authority": False,
+            "content_retained_for_operator_and_laboratory": True,
+            "content_copied_into_authoritative_request": False,
+        }
+
+
+CopilotAdvisoryLaboratoryProjection = (
+    GitHubCopilotAdvisoryLaboratoryProjection
+    | GitHubCopilotFirstOpinionLaboratoryProjection
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,8 +396,8 @@ async def run_github_operator_laboratory_advisory_projection(
 
 def build_copilot_advisory_laboratory_projection(
     intake_mapping: Mapping[str, Any],
-) -> GitHubCopilotAdvisoryLaboratoryProjection:
-    """Build one typed context projection from a validated 0275 intake."""
+) -> CopilotAdvisoryLaboratoryProjection:
+    """Build one version-specific context projection from validated intake."""
 
     if intake_mapping.get("valid") is not True:
         raise ValueError("intake must be valid before advisory projection")
@@ -343,41 +445,71 @@ def build_copilot_advisory_laboratory_projection(
         "ctx:github-advisory:"
         + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
     )
-    return GitHubCopilotAdvisoryLaboratoryProjection(
-        context_ref=context_ref,
-        advisory_artifact_ref=advisory_ref,
-        request_artifact_ref=_required_text(
+    common = {
+        "context_ref": context_ref,
+        "advisory_artifact_ref": advisory_ref,
+        "request_artifact_ref": _required_text(
             "request.artifact_ref",
             request.get("artifact_ref"),
         ),
-        origin_frame_id=_required_text(
+        "origin_frame_id": _required_text(
             "advisory.origin_frame_id",
             advisory.get("origin_frame_id"),
         ),
-        ticket_revision_id=_required_text(
+        "ticket_revision_id": _required_text(
             "advisory.ticket_revision_id",
             advisory.get("ticket_revision_id"),
         ),
-        source_candidate_ref=f"source-candidate:{candidate_id}",
-        summary=_required_text("advisory.summary", advisory.get("summary")),
-        suggested_route=_required_text(
-            "advisory.suggested_route",
-            advisory.get("suggested_route"),
-        ),
-        assumptions=_string_tuple(advisory.get("assumptions")),
-        questions=_string_tuple(advisory.get("questions")),
-        risks=_string_tuple(advisory.get("risks")),
-        confidence=float(advisory.get("confidence", 0.0)),
-        response_digest=response_digest,
-        producer_kind=str(
+        "source_candidate_ref": f"source-candidate:{candidate_id}",
+        "response_digest": response_digest,
+        "producer_kind": str(
             advisory.get("producer_kind", "github_copilot_cli")
         ),
-    )
+    }
+    schema = str(advisory.get("schema", ADVISORY_SCHEMA_V1))
+    if schema == ADVISORY_SCHEMA_V1:
+        return GitHubCopilotAdvisoryLaboratoryProjection(
+            **common,
+            summary=_required_text(
+                "advisory.summary",
+                advisory.get("summary"),
+            ),
+            suggested_route=_required_text(
+                "advisory.suggested_route",
+                advisory.get("suggested_route"),
+            ),
+            assumptions=_string_tuple(advisory.get("assumptions")),
+            questions=_string_tuple(advisory.get("questions")),
+            risks=_string_tuple(advisory.get("risks")),
+            confidence=float(advisory.get("confidence", 0.0)),
+        )
+    if schema == ADVISORY_SCHEMA_V2:
+        return GitHubCopilotFirstOpinionLaboratoryProjection(
+            **common,
+            concrete_objective=_required_text(
+                "advisory.concrete_objective",
+                advisory.get("concrete_objective"),
+            ),
+            expected_result=_required_text(
+                "advisory.expected_result",
+                advisory.get("expected_result"),
+            ),
+            provided_constraints=_strict_string_tuple(
+                "advisory.provided_constraints",
+                advisory.get("provided_constraints"),
+            ),
+            success_criteria=_strict_string_tuple(
+                "advisory.success_criteria",
+                advisory.get("success_criteria"),
+                empty=False,
+            ),
+        )
+    raise ValueError(f"unsupported Copilot advisory schema: {schema}")
 
 
 def _project_into_smoke_command(
     smoke: GitHubDualArtifactLaboratorySmokeCommand,
-    projection: GitHubCopilotAdvisoryLaboratoryProjection,
+    projection: CopilotAdvisoryLaboratoryProjection,
     *,
     inject_context_ref: bool,
     increment_context_generation: bool,
@@ -404,6 +536,9 @@ def _project_into_smoke_command(
             "copilot_advisory_hint_only": "true",
             "copilot_advisory_response_digest": (
                 projection.response_digest
+            ),
+            "copilot_advisory_projection_schema": (
+                projection.to_mapping()["schema"]
             ),
         }
     )
@@ -441,32 +576,20 @@ def _project_into_smoke_command(
 def _publication_preview(
     *,
     intake_mapping: Mapping[str, Any],
-    projection: GitHubCopilotAdvisoryLaboratoryProjection | None,
+    projection: CopilotAdvisoryLaboratoryProjection | None,
     laboratory_mapping: Mapping[str, Any],
 ) -> dict[str, Any]:
     candidate = _mapping(intake_mapping.get("source_candidate"))
     laboratory_preview = _mapping(
         laboratory_mapping.get("publication_preview")
     )
-    return {
-        "schema": PUBLICATION_PREVIEW_SCHEMA,
+    common = {
         "source_candidate_ref": candidate.get("candidate_id", ""),
         "advisory_context_ref": (
             "" if projection is None else projection.context_ref
         ),
         "advisory_artifact_ref": (
             "" if projection is None else projection.advisory_artifact_ref
-        ),
-        "summary": "" if projection is None else projection.summary,
-        "suggested_route": (
-            "" if projection is None else projection.suggested_route
-        ),
-        "questions": (
-            [] if projection is None else list(projection.questions)
-        ),
-        "risks": [] if projection is None else list(projection.risks),
-        "confidence": (
-            None if projection is None else projection.confidence
         ),
         "laboratory_source_sql_ref": laboratory_preview.get(
             "source_sql_ref",
@@ -481,6 +604,34 @@ def _publication_preview(
         "publication_gate_required": True,
         "remote_mutation_allowed": False,
         "github_mutation_performed": False,
+    }
+    if projection is None:
+        return {
+            "schema": PUBLICATION_PREVIEW_SCHEMA_V1,
+            **common,
+            "summary": "",
+            "suggested_route": "",
+            "questions": [],
+            "risks": [],
+            "confidence": None,
+        }
+    if isinstance(projection, GitHubCopilotAdvisoryLaboratoryProjection):
+        return {
+            "schema": PUBLICATION_PREVIEW_SCHEMA_V1,
+            **common,
+            "summary": projection.summary,
+            "suggested_route": projection.suggested_route,
+            "questions": list(projection.questions),
+            "risks": list(projection.risks),
+            "confidence": projection.confidence,
+        }
+    return {
+        "schema": PUBLICATION_PREVIEW_SCHEMA_V2,
+        **common,
+        "concrete_objective": projection.concrete_objective,
+        "expected_result": projection.expected_result,
+        "provided_constraints": list(projection.provided_constraints),
+        "success_criteria": list(projection.success_criteria),
     }
 
 
@@ -521,15 +672,44 @@ def _string_tuple(value: object) -> tuple[str, ...]:
     )
 
 
+def _strict_string_tuple(
+    name: str,
+    value: object,
+    *,
+    empty: bool = True,
+) -> tuple[str, ...]:
+    if isinstance(value, (str, bytes)) or not isinstance(
+        value,
+        Sequence,
+    ):
+        raise ValueError(f"{name} must be an array")
+    normalized = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(
+                f"{name} entries must be non-empty strings"
+            )
+        normalized.append(item.strip())
+    values = tuple(dict.fromkeys(normalized))
+    if not empty and not values:
+        raise ValueError(f"{name} must not be empty")
+    return values
+
+
 def _unique_text(values: Sequence[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(value for value in values if value))
 
 
 __all__ = (
     "PROJECTION_SCHEMA",
+    "PROJECTION_SCHEMA_V1",
+    "PROJECTION_SCHEMA_V2",
     "PUBLICATION_PREVIEW_SCHEMA",
+    "PUBLICATION_PREVIEW_SCHEMA_V1",
+    "PUBLICATION_PREVIEW_SCHEMA_V2",
     "SCHEMA",
     "GitHubCopilotAdvisoryLaboratoryProjection",
+    "GitHubCopilotFirstOpinionLaboratoryProjection",
     "GitHubOperatorLaboratoryAdvisoryProjectionCommand",
     "GitHubOperatorLaboratoryAdvisoryProjectionResult",
     "build_copilot_advisory_laboratory_projection",

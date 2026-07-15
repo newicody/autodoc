@@ -38,3 +38,23 @@ artefact v2 provoque un rejet fermé.
 L’intake ne copie toujours aucun contenu Copilot dans la demande autoritative ou
 le `SourceCandidate`. Il conserve seulement la référence, l’empreinte de réponse
 et le nom du schéma comme métadonnées consultatives.
+
+
+## Projection opérateur/laboratoire
+
+Après validation par l’intake local, un artefact v2 devient une projection
+consultative versionnée. La projection conserve uniquement :
+
+- `concrete_objective` ;
+- `expected_result` ;
+- `provided_constraints` ;
+- `success_criteria`.
+
+Aucun champ v1 n’est créé, inféré ou renommé. Les références techniques sont
+injectées dans l’orientation du laboratoire existant comme contexte
+consultatif. Le Scheduler existant reste l’unique autorité d’orchestration.
+
+La publication preview v2 est également distincte de la preview v1. À cette
+étape, elle reste une preview locale sans mutation distante. Son rendu Markdown,
+son plan digest et son exécution contrôlée sont câblés dans les étapes
+suivantes.
