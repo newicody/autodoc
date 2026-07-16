@@ -479,9 +479,17 @@ specialist handler.
 #### 0287-r7-r10 — concrete native laboratory and first specialist
 
 Register `laboratory:love-studies-local` behind the existing Scheduler-owned
-registry and execute `specialist:love-concept-and-affect-analyst`. The
-specialist performs real deterministic text analysis and produces evidence,
-uncertainties and a versioned analysis artifact.
+registry and execute `specialist:love-concept-and-affect-analyst` through the
+existing Scheduler/Dispatcher visit path. The specialist performs real,
+content-dependent sentence evidence extraction, concept analysis, affect mapping
+and optional local synthesis. The initial backend is `stdlib_lexical_v1`; it
+does not fake scenarios and does not reimplement or claim OpenVINO use.
+
+Closure status: native provider, immutable runtime registration, existing
+Scheduler binding, injected resolver, first specialist handler and deterministic
+content-dependent outputs are implemented and tested. SQL/Qdrant persistence,
+the second specialist and global liaison synthesis remain outside r10. The next
+unit is `0287-r7-r11`.
 
 #### 0287-r7-r11 — second specialist and Scheduler-controlled collaboration
 
