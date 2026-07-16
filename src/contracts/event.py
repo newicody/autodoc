@@ -23,6 +23,9 @@ class EventType(Enum):
     # Contexte global
     CONTEXT_REQUEST = auto()
     CONTEXT_REPLY = auto()
+    CONTEXT_IMPACT_EXECUTION = auto()
+    CONTEXT_IMPACT_EXECUTION_RESULT = auto()
+    LABORATORY_CONTEXT_UPDATE = auto()
 
     # Inférence
     INFERENCE_REQUEST = auto()

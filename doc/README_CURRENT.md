@@ -440,6 +440,27 @@ remains transport-only. The next unit is `0287-r7-r8-r6`, which applies accepted
 Scheduler decisions through existing execution/observation boundaries and uses
 ControlProxy only when an authorized notification or route transition is needed.
 
+##### 0287-r7-r8-r6 — authorized context-impact execution
+
+Execute an immutable r8-r5 impact plan only after an explicit Scheduler policy
+authorization and exact plan digest verification. The existing Dispatcher event
+boundary receives `CONTEXT_IMPACT_EXECUTION`; a Scheduler-owned task mutation
+port applies idempotent rebind, checkpoint rebase, restart, fork and stale-result
+transitions. EventBus receives an observation result and affected laboratories
+receive Scheduler-issued context-update notifications.
+
+ControlProxy is called only for an explicit transport transition declared by the
+execution target and only through the existing
+`missipy.scheduler.route_adapter_request.v1` boundary. A semantic context change
+never implies a route change by itself. SQL remains the knowledge authority,
+EventBus remains observation-only, and no Scheduler, queue, laboratory manager or
+parallel orchestrator is added.
+
+Closure status: executable handler, task mutation reference port, route-adapter
+seam, laboratory notifications, event types, digest authorization, replay and
+negative-path tests are implemented. The next unit is
+`0287-r7-r9 — love-study contracts and specialist descriptors`.
+
 #### 0287-r7-r9 — love-study contracts and specialist descriptors
 
 Define the input, two domain-analysis outputs and prototype result contracts.
