@@ -418,7 +418,27 @@ against the r8-r2 SQL authority.
 Closure status: executable composition implemented behind injected ports. Raw
 dense vectors are not serialized, Qdrant payloads remain reference-only, and
 no Qdrant write, Scheduler, EventBus or ControlProxy mutation is introduced.
-The next unit is r8-r5 context-revision impact and Scheduler decision policy.
+
+##### 0287-r7-r8-r5 — context revision task-impact policy
+
+Bind each specialist task to one accepted SQL semantic revision and one explicit
+update policy. Build a reference-only change set for a direct accepted child
+revision, assess dependency and significance impact, then produce an effect-free
+Scheduler decision proposal.
+
+The supported policies are `snapshot`, `checkpoint_rebase`,
+`restart_on_material_change`, `fork_on_material_change`, `notify_only` and
+`ignore_noncritical`. A completed result is never rewritten; it remains
+reproducible against its original revision and may be marked stale against the
+new revision. Every decision declares that no task, route or event has yet been
+created or changed.
+
+Closure status: contracts, deterministic policy composition and tests are
+implemented. SQL semantic revision remains authority, Scheduler decision remains
+the only execution authority, EventBus remains observation-only and ControlProxy
+remains transport-only. The next unit is `0287-r7-r8-r6`, which applies accepted
+Scheduler decisions through existing execution/observation boundaries and uses
+ControlProxy only when an authorized notification or route transition is needed.
 
 #### 0287-r7-r9 — love-study contracts and specialist descriptors
 
