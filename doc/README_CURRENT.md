@@ -463,9 +463,18 @@ negative-path tests are implemented. The next unit is
 
 #### 0287-r7-r9 — love-study contracts and specialist descriptors
 
-Define the input, two domain-analysis outputs and prototype result contracts.
-Declare the two portable specialists and the concrete laboratory descriptor.
-This phase remains contract-only.
+Define the input, attributable findings, two domain-analysis outputs and
+prototype result contracts. Declare `laboratory:love-studies-local` as a disabled
+`autodoc_native` laboratory descriptor and declare two portable, extensible,
+multitask specialists. Their primary outputs are deep domain analyses; local
+synthesis is an explicit optional task and global synthesis remains a later
+liaison step.
+
+Closure status: implemented as contract-only. The laboratory is declared but no
+provider, handler, Scheduler registration, OpenVINO runtime, SQL/Qdrant write or
+GitHub mutation is created. `0287-r7-r10` attaches the concrete native provider
+through the existing Scheduler-owned registry and implements the first real
+specialist handler.
 
 #### 0287-r7-r10 — concrete native laboratory and first specialist
 
