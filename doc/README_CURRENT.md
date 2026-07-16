@@ -375,6 +375,28 @@ The following context/storage boundaries precede the domain specialists:
 - `0287-r7-r8-r6`: ControlProxy transport of authorized notifications or route
   changes only; the proxy does not own knowledge or semantic revisions.
 
+##### 0287-r7-r8-r2 — context revision SQL authority
+
+Keep `missipy.sql_context_store.v1` unchanged for historical records and add a
+versioned companion authority for semantic context DAGs. SQL now has an
+executable DB-API schema for authority objects, content-addressed artifact
+metadata, multi-parent revisions, complete membership snapshots, graph
+relations and vector-projection provenance. An explicit bridge imports a
+historical `SqlContextRecord` without changing its identity or original store.
+
+The store records source digests, embedding profiles, model revisions,
+collections, named vectors and point identifiers, but never raw vector values,
+MMIO addresses or mmap pointers. Heavy bytes remain behind content-addressed
+storage references. Qdrant stays reconstructible, the Scheduler remains the
+impact authority. ControlProxy route generations remain transport state
+only. This phase does not call OpenVINO, mutate Qdrant, alter Scheduler routes,
+publish EventBus events or change GitHub.
+
+Closure status: executable SQL/SQLite boundary and targeted tests implemented;
+production-chain wiring intentionally deferred. The next phase defines the
+canonical Qdrant payload, named-vector and filter/index profile over this SQL
+authority.
+
 #### 0287-r7-r9 — love-study contracts and specialist descriptors
 
 Define the input, two domain-analysis outputs and prototype result contracts.
