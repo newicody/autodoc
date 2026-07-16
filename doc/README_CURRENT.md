@@ -397,6 +397,29 @@ production-chain wiring intentionally deferred. The next phase defines the
 canonical Qdrant payload, named-vector and filter/index profile over this SQL
 authority.
 
+##### 0287-r7-r8-r3 — canonical Qdrant profile
+
+Define shared point identity, dense/sparse/multivector named spaces, canonical
+reference payloads, payload indexes and model migration plans. SQL remains the
+authority and no Qdrant mutation occurs in this contract-only phase.
+
+Closure status: implemented and validated. The active E5 projection is exposed
+as `dense_e5_v1`; future sparse and late-interaction representations share the
+same point only when they represent the same SQL-authoritative object.
+
+##### 0287-r7-r8-r4 — hybrid retrieval and SQL rehydration
+
+Compose the existing E5/OpenVINO query embedding boundary with dense and sparse
+Qdrant named-vector searches under one revision/branch/project/security scope.
+Fuse candidates by reciprocal rank, group them by document, contribution or
+source, then accept content only after active-membership and digest validation
+against the r8-r2 SQL authority.
+
+Closure status: executable composition implemented behind injected ports. Raw
+dense vectors are not serialized, Qdrant payloads remain reference-only, and
+no Qdrant write, Scheduler, EventBus or ControlProxy mutation is introduced.
+The next unit is r8-r5 context-revision impact and Scheduler decision policy.
+
 #### 0287-r7-r9 — love-study contracts and specialist descriptors
 
 Define the input, two domain-analysis outputs and prototype result contracts.
