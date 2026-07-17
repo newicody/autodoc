@@ -69,3 +69,12 @@ def test_r10_keeps_legacy_qdrant_constructor_compatible() -> None:
         'self.collection_alias.strip() or collection',
     ):
         assert marker in source
+
+
+def test_sdk_enum_readback_is_normalized_before_serialization() -> None:
+    admin = (
+        ROOT / "src/inference/qdrant_client_named_collection_admin_0287.py"
+    ).read_text(encoding="utf-8")
+    assert "from enum import Enum" in admin
+    assert "isinstance(value, Enum)" in admin
+    assert "return value.value" in admin

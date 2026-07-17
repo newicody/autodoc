@@ -46,3 +46,6 @@ physical collection while keeping point payloads reference-only.
 ## r10-r1 compatibility correction
 
 Legacy direct constructors now receive safe defaults for the new named-vector fields.
+## r10-r2 readback correction
+
+The qdrant-client membrane now normalizes SDK enum values before building the serializable collection shape. This fixes distance, status and payload-index type readback without performing another mutation.

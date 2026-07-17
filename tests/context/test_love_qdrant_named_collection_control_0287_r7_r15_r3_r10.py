@@ -263,3 +263,4 @@ def test_legacy_qdrant_runtime_settings_constructor_keeps_old_callers() -> None:
     assert settings.collection_alias == "autodoc_context_current"
     assert settings.dense_vector_name == "dense_e5_v1"
     assert settings.sparse_vector_name == "sparse_lexical_v1"
+# r10-r2 retains the same control-plan behavior after SDK enum normalization.

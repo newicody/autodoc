@@ -410,3 +410,4 @@ __all__ = (
     "inspect_love_qdrant_named_collection",
 )
 # r10-r1 does not change the controlled mutation boundary.
+# r10-r2 changes readback normalization only; control effects remain unchanged.

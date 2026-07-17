@@ -497,3 +497,4 @@ __all__ = (
     "inspect_qdrant_readiness",
 )
 # r10-r1 keeps legacy unnamed settings compatible before this readiness boundary.
+# r10-r2 keeps manual readiness read-only; SDK normalization stays in inference I/O.

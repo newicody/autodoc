@@ -9,3 +9,5 @@
 - Added controlled physical collection and canonical payload-index creation.
 - Explicitly excluded deletion, alias mutation and point writes.
 - r10-r1: restored compatibility for existing direct `QdrantRuntimeSettings` callers.
+- r10-r2: normalized qdrant-client SDK enums during collection readback.
+- r10-r2: retained the r10-r1 backward-compatible Qdrant settings defaults.

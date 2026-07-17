@@ -26,3 +26,4 @@ payload:             SQL/provenance references only
 The alias is not created or switched in this phase. The existing
 `autodoc_context_current` target is not deleted or modified.
 The r10-r1 correction preserves legacy direct settings construction without changing named mode.
+The r10-r2 correction normalizes SDK enums at the I/O membrane; the control and authority boundaries are unchanged.

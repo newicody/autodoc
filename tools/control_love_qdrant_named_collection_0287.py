@@ -150,3 +150,4 @@ def main(argv: Sequence[str] | None = None) -> int:
 if __name__ == "__main__":
     raise SystemExit(main())
 # r10-r1 preserves preview-first CLI behavior.
+# r10-r2 requires no CLI change; enum normalization remains inside the SDK membrane.

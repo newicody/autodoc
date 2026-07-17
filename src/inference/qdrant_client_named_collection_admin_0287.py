@@ -11,6 +11,7 @@ collection, vector, payload index or alias, and it never mutates aliases.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from importlib import import_module
 import math
 from types import MappingProxyType
@@ -308,6 +309,8 @@ def _mapping(value: object) -> Mapping[str, Any]:
 
 
 def _plain(value: object) -> Any:
+    if isinstance(value, Enum):
+        return value.value
     if isinstance(value, Mapping):
         return {str(key): _plain(item) for key, item in value.items()}
     if isinstance(value, (tuple, list)):

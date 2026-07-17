@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 
 from inference.qdrant_client_named_collection_admin_0287 import (
     QdrantClientNamedCollectionAdmin,
@@ -117,3 +118,73 @@ def test_sdk_admin_creates_and_reads_named_collection() -> None:
     assert shape.payload_indexes["sql_ref"] == "keyword"
     assert "vectors" not in shape.to_mapping()
 # r10-r1 leaves the admin membrane behavior unchanged.
+
+class _SdkDistance(str, Enum):
+    COSINE = "Cosine"
+
+
+class _SdkPayloadSchemaType(str, Enum):
+    KEYWORD = "keyword"
+    BOOL = "bool"
+
+
+class _SdkCollectionStatus(str, Enum):
+    GREEN = "green"
+
+
+class _SdkResponse:
+    def model_dump(self):
+        return {
+            "status": _SdkCollectionStatus.GREEN,
+            "points_count": 0,
+            "config": {
+                "params": {
+                    "vectors": {
+                        "dense_e5_v1": {
+                            "size": 384,
+                            "distance": _SdkDistance.COSINE,
+                        }
+                    },
+                    "sparse_vectors": {
+                        "sparse_lexical_v1": {},
+                    },
+                }
+            },
+            "payload_schema": {
+                "sql_ref": {
+                    "data_type": _SdkPayloadSchemaType.KEYWORD,
+                    "points": 0,
+                },
+                "valid": {
+                    "data_type": _SdkPayloadSchemaType.BOOL,
+                    "points": 0,
+                },
+            },
+        }
+
+
+class _SdkReadClient:
+    def get_collection(self, collection_name):
+        return _SdkResponse()
+
+
+def test_sdk_enum_values_are_normalized_during_readback() -> None:
+    admin = QdrantClientNamedCollectionAdmin(
+        client=_SdkReadClient(),
+        models_module=_Models,
+        config=_Config(),
+        gate=_Gate(allow_write=False),
+    )
+
+    shape = admin.read_collection("autodoc_context_e5_384_hybrid_v1")
+
+    assert shape.status == "green"
+    assert shape.dense_vectors["dense_e5_v1"] == {
+        "size": 384,
+        "distance": "Cosine",
+    }
+    assert shape.sparse_vectors == ("sparse_lexical_v1",)
+    assert shape.payload_indexes == {
+        "sql_ref": "keyword",
+        "valid": "bool",
+    }

@@ -32,3 +32,6 @@
 ## r10-r1 correction
 
 All r10 artifacts are staged together after the initial global-suite failure.
+## r10-r2 correction
+
+The cumulative correction includes backward-compatible settings and SDK enum normalization.
