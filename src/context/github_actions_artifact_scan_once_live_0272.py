@@ -12,11 +12,23 @@ from dataclasses import dataclass, field
 import shlex
 from typing import Any, Mapping
 
+from context.human_readable_artifact_identity_0287 import (
+    matches_actions_artifact_name,
+)
+
 SCAN_SCHEMA = "missipy.github_actions.artifact_scan_once_live.v1"
 _FETCH_REPORT_SCHEMA = "missipy.github_actions.artifact_fetch_once_report.v1"
 _DEFAULT_FETCH_TOOL = "tools/run_github_actions_artifact_fetch_once.py"
 _DEFAULT_LIVE_TOOL = "tools/run_github_actions_artifact_scan_once_live_0272.py"
 _LEGACY_SCAN_TOOL = "tools/run_github_artifact_scan_once.py"
+
+
+_EXPECTED_CORRELATED_ARTIFACTS = (
+    ("authoritative_request", "autodoc-authoritative-request"),
+    ("copilot_advisory", "autodoc-copilot-advisory"),
+    ("run_manifest", "autodoc-dual-artifact-manifest"),
+)
+_AVAILABLE_SKIP_REASONS = frozenset({"already_synced"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,6 +160,8 @@ class GitHubActionsArtifactScanResult:
     downloaded_artifacts: tuple[Mapping[str, Any], ...] = ()
     skipped: tuple[Mapping[str, Any], ...] = ()
     errors: tuple[Mapping[str, Any], ...] = ()
+    ready_runs: tuple[Mapping[str, Any], ...] = ()
+    deferred_runs: tuple[Mapping[str, Any], ...] = ()
     external_call_performed: bool = False
     boundaries: Mapping[str, bool] = field(default_factory=dict)
 
@@ -174,6 +188,8 @@ class GitHubActionsArtifactScanResult:
             "downloaded_artifacts": [dict(item) for item in self.downloaded_artifacts],
             "skipped": [dict(item) for item in self.skipped],
             "errors": [dict(item) for item in self.errors],
+            "ready_runs": [dict(item) for item in self.ready_runs],
+            "deferred_runs": [dict(item) for item in self.deferred_runs],
             "external_call_performed": self.external_call_performed,
             "boundaries": dict(self.boundaries),
         }
@@ -189,6 +205,8 @@ class GitHubActionsArtifactScanResult:
                 f"downloaded={self.counts.get('downloaded_count', 0)}",
                 f"synced={self.counts.get('synced_count', 0)}",
                 f"skipped={self.counts.get('skipped_count', 0)}",
+                f"ready_runs={self.counts.get('ready_run_count', 0)}",
+                f"deferred_runs={self.counts.get('deferred_run_count', 0)}",
                 f"external_call_performed={self.external_call_performed}",
                 "direct_issue_scan_required=False",
                 "remote_mutation_allowed=False",
@@ -236,6 +254,18 @@ def close_github_actions_artifact_scan_result(
     issues = list(plan.issues)
     status = str(report.get("status", "planned" if not plan.execute else "missing"))
     counts = _counts(report.get("counts"))
+    downloaded_artifacts = _mapping_tuple(
+        report.get("downloaded_artifacts")
+    )
+    skipped = _mapping_tuple(report.get("skipped"))
+    ready_runs, deferred_runs = _correlate_fetched_runs(
+        repository=plan.repository,
+        downloaded_artifacts=downloaded_artifacts,
+        skipped=skipped,
+    )
+    counts = dict(counts)
+    counts["ready_run_count"] = len(ready_runs)
+    counts["deferred_run_count"] = len(deferred_runs)
     external_call_performed = bool(report.get("external_call_performed", False))
 
     if plan.execute:
@@ -281,6 +311,9 @@ def close_github_actions_artifact_scan_result(
             "remote_mutation_allowed": False,
             "token_value_serialized": False,
             "local_dataset_write_only": True,
+            "correlated_three_artifact_runs": True,
+            "ready_runs_are_local_handoffs": True,
+            "laboratory_execution_started": False,
         }
     )
 
@@ -301,9 +334,11 @@ def close_github_actions_artifact_scan_result(
         counts=counts,
         state_path=str(report.get("state_path", plan.dataset_state_path)),
         staging_root=str(report.get("staging_root", "")),
-        downloaded_artifacts=_mapping_tuple(report.get("downloaded_artifacts")),
-        skipped=_mapping_tuple(report.get("skipped")),
+        downloaded_artifacts=downloaded_artifacts,
+        skipped=skipped,
         errors=_mapping_tuple(report.get("errors")),
+        ready_runs=ready_runs,
+        deferred_runs=deferred_runs,
         external_call_performed=external_call_performed,
         boundaries=boundaries,
     )
@@ -404,6 +439,144 @@ def _validate_scan_command(
             "configured scan_command must pair --execute with --policy-decision-id"
         )
     return issues
+
+
+def _correlate_fetched_runs(
+    *,
+    repository: str,
+    downloaded_artifacts: tuple[Mapping[str, Any], ...],
+    skipped: tuple[Mapping[str, Any], ...],
+) -> tuple[
+    tuple[Mapping[str, Any], ...],
+    tuple[Mapping[str, Any], ...],
+]:
+    """Group locally available artifacts into strict three-member run handoffs."""
+
+    records_by_run: dict[str, list[dict[str, Any]]] = {}
+    for item in downloaded_artifacts:
+        record = _availability_record(item, availability="downloaded")
+        if record is not None:
+            records_by_run.setdefault(record["run_id"], []).append(record)
+    for item in skipped:
+        reason = str(item.get("reason", "")).strip()
+        availability = (
+            "already_synced"
+            if reason in _AVAILABLE_SKIP_REASONS
+            else f"unavailable:{reason or 'skipped'}"
+        )
+        record = _availability_record(item, availability=availability)
+        if record is not None:
+            records_by_run.setdefault(record["run_id"], []).append(record)
+
+    ready: list[Mapping[str, Any]] = []
+    deferred: list[Mapping[str, Any]] = []
+    for run_id in sorted(records_by_run, key=_run_sort_key, reverse=True):
+        records = tuple(records_by_run[run_id])
+        role_matches: dict[str, list[dict[str, Any]]] = {
+            role: [] for role, _legacy_name in _EXPECTED_CORRELATED_ARTIFACTS
+        }
+        unavailable: list[dict[str, Any]] = []
+        for record in records:
+            if str(record["availability"]).startswith("unavailable:"):
+                unavailable.append(record)
+                continue
+            for role, legacy_name in _EXPECTED_CORRELATED_ARTIFACTS:
+                if matches_actions_artifact_name(
+                    str(record["artifact_name"]),
+                    legacy_name,
+                ):
+                    role_matches[role].append(record)
+
+        missing_roles = tuple(
+            role for role, matches in role_matches.items() if not matches
+        )
+        duplicate_roles = tuple(
+            role for role, matches in role_matches.items() if len(matches) > 1
+        )
+        handoff_ref = _run_handoff_ref(repository, run_id)
+        if not missing_roles and not duplicate_roles:
+            ready.append(
+                {
+                    "repository": repository,
+                    "run_id": run_id,
+                    "handoff_ref": handoff_ref,
+                    "status": "ready",
+                    "artifact_count": len(_EXPECTED_CORRELATED_ARTIFACTS),
+                    "artifacts": {
+                        role: dict(matches[0])
+                        for role, matches in role_matches.items()
+                    },
+                    "local_execution_started": False,
+                    "remote_mutation_performed": False,
+                }
+            )
+            continue
+
+        reasons: list[str] = []
+        if missing_roles:
+            reasons.append("missing_roles")
+        if duplicate_roles:
+            reasons.append("duplicate_roles")
+        if unavailable:
+            reasons.append("unavailable_artifacts")
+        deferred.append(
+            {
+                "repository": repository,
+                "run_id": run_id,
+                "handoff_ref": handoff_ref,
+                "status": "deferred",
+                "reasons": reasons,
+                "missing_roles": list(missing_roles),
+                "duplicate_roles": list(duplicate_roles),
+                "available_role_counts": {
+                    role: len(matches)
+                    for role, matches in role_matches.items()
+                },
+                "unavailable_artifacts": [
+                    dict(record) for record in unavailable
+                ],
+                "local_execution_started": False,
+                "remote_mutation_performed": False,
+            }
+        )
+    return tuple(ready), tuple(deferred)
+
+
+def _availability_record(
+    item: Mapping[str, Any],
+    *,
+    availability: str,
+) -> dict[str, Any] | None:
+    run_id = str(item.get("run_id", "")).strip()
+    artifact_id = str(item.get("artifact_id", "")).strip()
+    artifact_name = str(item.get("artifact_name", "")).strip()
+    if not run_id or not artifact_id or not artifact_name:
+        return None
+    record: dict[str, Any] = {
+        "run_id": run_id,
+        "artifact_id": artifact_id,
+        "artifact_name": artifact_name,
+        "availability": availability,
+    }
+    staging_dir = str(item.get("staging_dir", "")).strip()
+    if staging_dir:
+        record["staging_dir"] = staging_dir
+    sync_status = str(item.get("sync_status", "")).strip()
+    if sync_status:
+        record["sync_status"] = sync_status
+    return record
+
+
+def _run_sort_key(run_id: str) -> tuple[int, str]:
+    try:
+        return int(run_id), run_id
+    except ValueError:
+        return -1, run_id
+
+
+def _run_handoff_ref(repository: str, run_id: str) -> str:
+    repository_slug = repository.replace("/", "-")
+    return f"github-actions-ready-run:{repository_slug}:{run_id}"
 
 def _counts(value: object) -> dict[str, int]:
     source = value if isinstance(value, Mapping) else {}
