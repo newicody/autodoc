@@ -179,6 +179,48 @@ class QdrantClientReferenceHit:
 
 
 @dataclass(frozen=True, slots=True)
+class QdrantClientReferencePoint:
+    """Reference-only readback for one exact named-vector point."""
+
+    collection_name: str
+    point_id: str
+    sql_ref: str
+    source_ref: str
+    payload: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        if not self.collection_name.strip():
+            raise ValueError("collection_name must not be empty")
+        for name in ("point_id", "sql_ref", "source_ref"):
+            if not _is_typed_ref(getattr(self, name)):
+                raise ValueError(f"{name} must be a typed reference")
+        compact = _reference_payload(self.payload)
+        if compact.get("point_id", self.point_id) != self.point_id:
+            raise ValueError("payload point_id differs from readback point_id")
+        if compact.get("sql_ref", self.sql_ref) != self.sql_ref:
+            raise ValueError("payload sql_ref differs from readback sql_ref")
+        if compact.get("source_ref", self.source_ref) != self.source_ref:
+            raise ValueError("payload source_ref differs from readback source_ref")
+        object.__setattr__(self, "payload", MappingProxyType(compact))
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "schema": "missipy.qdrant.reference_point_readback.v1",
+            "collection_name": self.collection_name,
+            "point_id": self.point_id,
+            "sql_ref": self.sql_ref,
+            "source_ref": self.source_ref,
+            "payload": dict(self.payload),
+            "boundaries": {
+                "reference_only": True,
+                "vectors_serialized": False,
+                "authoritative_content_serialized": False,
+                "sql_remains_authority": True,
+            },
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class QdrantNamedHybridProjectionResult:
     """Reference-only receipt for one named dense+sparse point upsert."""
 
@@ -357,6 +399,83 @@ class QdrantClientProjectionExecutor:
             dense_vector_name=dense_vector_name,
             sparse_vector_name=sparse_vector_name,
             acknowledged=True,
+        )
+
+    def read_named_reference_point(
+        self,
+        *,
+        collection_name: str,
+        point_id: str,
+    ) -> QdrantClientReferencePoint | None:
+        """Read one exact point with payload only and vectors disabled."""
+
+        operation = "read_named_reference_point"
+        self._require_allowed(operation, self._gate.allow_search)
+        if not collection_name or not collection_name.strip():
+            raise self._failure(
+                operation,
+                "invalid_collection",
+                "collection_name is required",
+            )
+        if not _is_typed_ref(point_id):
+            raise self._failure(
+                operation,
+                "invalid_point_id",
+                "point_id must be typed",
+            )
+        try:
+            response = self._client.retrieve(
+                collection_name=collection_name,
+                ids=[_qdrant_storage_id(point_id)],
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception as exc:
+            raise self._wrapped_failure(operation, exc) from exc
+        records = tuple(response or ())
+        if not records:
+            return None
+        if len(records) != 1:
+            raise self._failure(
+                operation,
+                "ambiguous_readback",
+                "Qdrant returned more than one exact point",
+            )
+        payload = _reference_payload(
+            _as_mapping(getattr(records[0], "payload", {}))
+        )
+        observed_point_id = str(
+            payload.get("point_id")
+            or payload.get("autodoc_point_ref")
+            or ""
+        )
+        if observed_point_id != point_id:
+            raise self._failure(
+                operation,
+                "point_id_mismatch",
+                "Qdrant payload point_id differs from requested point_id",
+            )
+        sql_ref = str(
+            payload.get("sql_ref")
+            or payload.get("sql_context_ref")
+            or ""
+        )
+        source_ref = str(payload.get("source_ref") or sql_ref)
+        if not _is_typed_ref(sql_ref) or not _is_typed_ref(source_ref):
+            raise self._failure(
+                operation,
+                "missing_sql_reference",
+                "Qdrant exact point must contain typed SQL references",
+            )
+        payload["point_id"] = point_id
+        payload["sql_ref"] = sql_ref
+        payload["source_ref"] = source_ref
+        return QdrantClientReferencePoint(
+            collection_name=collection_name,
+            point_id=point_id,
+            sql_ref=sql_ref,
+            source_ref=source_ref,
+            payload=payload,
         )
 
     def search_vector(
