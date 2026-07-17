@@ -14,7 +14,7 @@ from importlib import import_module
 from importlib import metadata as importlib_metadata
 from importlib.util import find_spec
 import math
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from typing import Any, Callable, Mapping, Sequence
 import uuid
 
@@ -141,6 +141,43 @@ class QdrantClientDependencyReadiness:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class QdrantClientReferenceHit:
+    """Reference-only hit returned by one named-vector SDK query."""
+
+    point_id: str
+    sql_ref: str
+    source_ref: str
+    score: float
+    payload: Mapping[str, object]
+
+    def __post_init__(self) -> None:
+        for name in ("point_id", "sql_ref", "source_ref"):
+            value = getattr(self, name)
+            if not _is_typed_ref(value):
+                raise ValueError(f"{name} must be a typed reference")
+        if not math.isfinite(float(self.score)):
+            raise ValueError("score must be finite")
+        compact = _reference_payload(self.payload)
+        if compact.get("sql_ref", self.sql_ref) != self.sql_ref:
+            raise ValueError("payload sql_ref differs from hit sql_ref")
+        if compact.get("source_ref", self.source_ref) != self.source_ref:
+            raise ValueError("payload source_ref differs from hit source_ref")
+        object.__setattr__(self, "score", float(self.score))
+        object.__setattr__(self, "payload", MappingProxyType(compact))
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "point_id": self.point_id,
+            "sql_ref": self.sql_ref,
+            "source_ref": self.source_ref,
+            "score": self.score,
+            "payload": dict(self.payload),
+            "reference_only": True,
+            "vectors_serialized": False,
+        }
+
+
 class QdrantClientProjectionExecutor:
     """Implement the existing QdrantProjectionExecutor with qdrant-client."""
 
@@ -234,6 +271,108 @@ class QdrantClientProjectionExecutor:
         raw_hits = tuple(getattr(response, "points", response) or ())
         hits = tuple(_recall_hit_from_scored_point(item, target=target) for item in raw_hits[:limit])
         return QdrantRecallResult(target=target, query=query, hits=hits, capped=len(raw_hits) > limit)
+
+    def query_named_dense(
+        self,
+        vector: Sequence[float],
+        *,
+        collection_name: str,
+        vector_name: str,
+        limit: int,
+        filter_mapping: Mapping[str, object],
+    ) -> tuple[QdrantClientReferenceHit, ...]:
+        """Query one named dense vector and return reference-only hits."""
+
+        values = tuple(float(value) for value in vector)
+        if not values or any(not math.isfinite(value) for value in values):
+            raise self._failure(
+                "search_dense",
+                "invalid_vector",
+                "dense query vector must contain finite values",
+            )
+        return self._query_named_points(
+            operation="search_dense",
+            query_value=list(values),
+            collection_name=collection_name,
+            vector_name=vector_name,
+            limit=limit,
+            filter_mapping=filter_mapping,
+        )
+
+    def query_named_sparse(
+        self,
+        indices: Sequence[int],
+        values: Sequence[float],
+        *,
+        collection_name: str,
+        vector_name: str,
+        limit: int,
+        filter_mapping: Mapping[str, object],
+    ) -> tuple[QdrantClientReferenceHit, ...]:
+        """Query one named sparse vector and return reference-only hits."""
+
+        normalized_indices = tuple(int(index) for index in indices)
+        normalized_values = tuple(float(value) for value in values)
+        if (
+            not normalized_indices
+            or len(normalized_indices) != len(normalized_values)
+            or len(set(normalized_indices)) != len(normalized_indices)
+            or any(index < 0 for index in normalized_indices)
+            or any(not math.isfinite(value) or value <= 0 for value in normalized_values)
+        ):
+            raise self._failure(
+                "search_sparse",
+                "invalid_sparse_vector",
+                "sparse query indices and values must be aligned and valid",
+            )
+        sparse_vector = self._models.SparseVector(
+            indices=list(normalized_indices),
+            values=list(normalized_values),
+        )
+        return self._query_named_points(
+            operation="search_sparse",
+            query_value=sparse_vector,
+            collection_name=collection_name,
+            vector_name=vector_name,
+            limit=limit,
+            filter_mapping=filter_mapping,
+        )
+
+    def _query_named_points(
+        self,
+        *,
+        operation: str,
+        query_value: object,
+        collection_name: str,
+        vector_name: str,
+        limit: int,
+        filter_mapping: Mapping[str, object],
+    ) -> tuple[QdrantClientReferenceHit, ...]:
+        self._require_allowed(operation, self._gate.allow_search)
+        if not collection_name or not collection_name.strip():
+            raise self._failure(operation, "invalid_collection", "collection_name is required")
+        if not vector_name or not vector_name.strip():
+            raise self._failure(operation, "invalid_vector_name", "vector_name is required")
+        if limit <= 0:
+            raise self._failure(operation, "invalid_limit", "limit must be > 0")
+        query_filter = _sdk_filter(self._models, filter_mapping)
+        try:
+            response = self._client.query_points(
+                collection_name=collection_name,
+                query=query_value,
+                using=vector_name,
+                query_filter=query_filter,
+                limit=limit,
+                with_payload=True,
+                with_vectors=False,
+            )
+        except Exception as exc:
+            raise self._wrapped_failure(operation, exc) from exc
+        raw_hits = tuple(getattr(response, "points", response) or ())
+        return tuple(
+            _reference_hit_from_scored_point(item, operation=operation)
+            for item in raw_hits[:limit]
+        )
 
     def close(self) -> None:
         """Close the injected SDK client when it exposes a close method."""
@@ -373,6 +512,85 @@ def _string_payload(payload: Mapping[str, object]) -> dict[str, str]:
             result[str(key)] = str(value)
     return result
 
+
+
+_FORBIDDEN_REFERENCE_PAYLOAD_FIELDS = frozenset(
+    {"vector", "values", "embedding", "body", "content", "local_path"}
+)
+
+
+def _sdk_filter(models_module: object, value: Mapping[str, object]) -> object:
+    payload = dict(value)
+    if not payload:
+        return None
+    filter_type = getattr(models_module, "Filter", None)
+    if filter_type is None:
+        return payload
+    validator = getattr(filter_type, "model_validate", None)
+    if callable(validator):
+        return validator(payload)
+    return filter_type(**payload)
+
+
+def _reference_hit_from_scored_point(
+    item: object,
+    *,
+    operation: str,
+) -> QdrantClientReferenceHit:
+    payload = _as_mapping(getattr(item, "payload", {}))
+    compact = _reference_payload(payload)
+    sql_ref = str(compact.get("sql_ref") or compact.get("sql_context_ref") or "")
+    if not _is_typed_ref(sql_ref):
+        raise QdrantClientProjectionExecutor._failure(
+            operation,
+            "missing_sql_ref",
+            "Qdrant hit payload must contain a typed sql_ref",
+        )
+    source_ref = str(compact.get("source_ref") or sql_ref)
+    if not _is_typed_ref(source_ref):
+        raise QdrantClientProjectionExecutor._failure(
+            operation,
+            "missing_source_ref",
+            "Qdrant hit payload must contain a typed source_ref",
+        )
+    raw_id = str(getattr(item, "id", "unknown"))
+    point_ref = str(
+        compact.get("autodoc_point_ref")
+        or compact.get("point_id")
+        or f"qdrant-point:{raw_id}"
+    )
+    compact["sql_ref"] = sql_ref
+    compact["source_ref"] = source_ref
+    return QdrantClientReferenceHit(
+        point_id=point_ref,
+        sql_ref=sql_ref,
+        source_ref=source_ref,
+        score=float(getattr(item, "score", 0.0)),
+        payload=compact,
+    )
+
+
+def _reference_payload(payload: Mapping[str, object]) -> dict[str, object]:
+    forbidden = _FORBIDDEN_REFERENCE_PAYLOAD_FIELDS.intersection(payload)
+    if forbidden:
+        raise QdrantClientProjectionExecutor._failure(
+            "search",
+            "forbidden_payload",
+            "Qdrant reference hit contains forbidden fields: "
+            + ", ".join(sorted(forbidden)),
+        )
+    result: dict[str, object] = {}
+    for key, value in payload.items():
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            result[str(key)] = value
+    return result
+
+
+def _is_typed_ref(value: object) -> bool:
+    if not isinstance(value, str) or ":" not in value:
+        return False
+    prefix, suffix = value.split(":", 1)
+    return bool(prefix) and bool(suffix) and prefix[0].islower()
 
 def _bounded_score(raw_score: float, distance: str) -> float:
     if not math.isfinite(raw_score):
