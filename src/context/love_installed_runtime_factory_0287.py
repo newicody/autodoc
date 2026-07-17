@@ -22,6 +22,7 @@ from context.love_imported_actions_runtime_contract_0287 import (
     IMPORTED_ACTIONS_REAL_BACKEND_ATTESTATION_SCHEMA,
     IMPORTED_ACTIONS_RUNTIME_PORTS_SCHEMA,
     ImportedActionsRealBackendAttestation,
+    ImportedActionsRuntimeLease,
     ImportedActionsRuntimePorts,
     validate_imported_actions_runtime_ports,
 )
@@ -229,7 +230,12 @@ def load_installed_runtime_factory_settings(
         retrieval_backend_ref=_required(parser, "qdrant", "backend_ref"),
         model_ref=_required(parser, "embedding", "model_ref"),
         model_revision=_required(parser, "embedding", "model_revision"),
-        qdrant_collection=_required(parser, "qdrant", "collection"),
+        qdrant_collection=(
+            parser.get(
+                "qdrant", "physical_collection", fallback=""
+            ).strip()
+            or _required(parser, "qdrant", "collection")
+        ),
         base_revision_ref=_required(parser, "sql", "base_revision_ref"),
         evidence_refs=_split_refs(_required(parser, "evidence", "refs")),
         embedding_dimension=embedding_dimension,
@@ -341,7 +347,7 @@ def build_runtime(
     request_payload: Mapping[str, object],
     runtime_context: Mapping[str, object],
     created_at: str,
-) -> ImportedActionsRuntimePorts:
+) -> ImportedActionsRuntimeLease | ImportedActionsRuntimePorts:
     """Build validated r14/r15 ports from the installed server composition.
 
     The configured provider owns only composition of components that already
@@ -371,6 +377,9 @@ def build_runtime(
             "installed runtime provider failed while composing existing ports"
         ) from exc
 
+    if isinstance(provided, ImportedActionsRuntimeLease):
+        _validate_configured_ports(provided.ports, settings)
+        return provided
     if isinstance(provided, ImportedActionsRuntimePorts):
         return _validate_configured_ports(provided, settings)
 
