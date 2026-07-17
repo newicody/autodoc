@@ -4,16 +4,16 @@ Version du guide : `0287-r5-r1`.
 
 Extension de contrat Copilot : `0287-r7-r2`.
 
-Ce document est le mode opératoire cumulatif simplifié pour installer et mettre à jour l’interface GitHub du projet.
+Diagnostic exact vues/Actions : `0287-r7-r15-r2-r2`.
 
-Ce guide installe uniquement l’interface GitHub du projet : formulaires
-d’Issues, workflow Actions, scripts de projection et configuration ProjectV2.
-Le moteur Autodoc, SQL, Qdrant, OpenVINO et le Scheduler restent dans
-`newicody/autodoc`.
+Correctif de compatibilité du guide : `0287-r7-r15-r2-r2-r1`.
 
-## Installation rapide
+Ce document est le mode opératoire cumulatif simplifié pour installer et mettre
+à jour l’interface GitHub du projet. Il couvre les formulaires d’Issues, le
+workflow Actions, les scripts et la configuration ProjectV2. Le moteur Autodoc,
+SQL, Qdrant, OpenVINO et le Scheduler restent dans `newicody/autodoc`.
 
-### 1. Préparer les deux dépôts
+## 1. Copier le bundle
 
 ```bash
 AUTODOC=/home/eric/projet/git/autodoc
@@ -26,18 +26,14 @@ if test -d "$PROJECTS/.git"; then
 else
   git clone git@github.com:newicody/projects.git "$PROJECTS"
 fi
-```
 
-### 2. Prévisualiser puis copier le bundle
-
-```bash
 SRC="$AUTODOC/templates/github/projects-repository"
 DST="$PROJECTS"
 
 rsync -aivn --exclude README.md "$SRC"/ "$DST"/
 ```
 
-Contrôler la liste, puis appliquer la même copie sans `n` :
+Contrôler le preview, puis copier sans `n` :
 
 ```bash
 rsync -aiv --exclude README.md "$SRC"/ "$DST"/
@@ -47,7 +43,7 @@ cp "$SRC/README.md" "$DST/AUTODOC_PROJECTS_BUNDLE.md"
 **Ne pas utiliser `--delete`** : le dépôt Projects peut contenir des fichiers
 qui ne viennent pas d’Autodoc.
 
-### 3. Contrôler, commit et push
+Contrôler et publier :
 
 ```bash
 git -C "$DST" status --short
@@ -60,10 +56,9 @@ git -C "$DST" commit -m "Install/update Autodoc Projects bundle"
 git -C "$DST" push
 ```
 
-## Réglages GitHub à faire une fois
+## 2. Régler GitHub Actions avec le défaut sûr
 
-Dans `newicody/projects → Settings → Actions → General`, autoriser les Actions
-utilisées par le workflow :
+Le workflow utilise les Actions GitHub officielles suivantes :
 
 ```text
 actions/checkout@v6
@@ -72,7 +67,16 @@ actions/cache@v4
 actions/upload-artifact@v7
 ```
 
-Créer la variable de dépôt avec le défaut sûr :
+Lorsque `allowed_actions=selected`, vérifier que
+`github_owned_allowed=true`. Si `sha_pinning_required=true`, remplacer les
+versions majeures par les SHA complets autorisés.
+
+```bash
+gh api repos/newicody/projects/actions/permissions | jq .
+gh api repos/newicody/projects/actions/permissions/selected-actions | jq .
+```
+
+Installer d’abord Copilot désactivé :
 
 ```bash
 gh variable set AUTODOC_COPILOT_ADVISORY_ENABLED \
@@ -80,20 +84,22 @@ gh variable set AUTODOC_COPILOT_ADVISORY_ENABLED \
   --repo newicody/projects
 ```
 
-Aucun secret Actions n’est requis par défaut.
+```text
+AUTODOC_COPILOT_ADVISORY_ENABLED=false
+```
 
-Cette valeur est le défaut d'installation. Ne pas créer de secret `AUTODOC_COPILOT_TOKEN` : le workflow actuel utilise uniquement le token éphémère fourni par GitHub.
+Cette valeur est le défaut d'installation. Ne pas créer de secret `AUTODOC_COPILOT_TOKEN` : le workflow actuel utilise le token éphémère GitHub.
 
-## Tokens : lequel utiliser et où le trouver ?
+## 3. Authentification locale
 
-| Nom | Où il existe | Action à faire |
-|---|---|---|
-| `GITHUB_TOKEN` dans GitHub Actions | Créé automatiquement pour chaque job | Rien à créer ni à copier |
-| `GITHUB_TOKEN` en local | Variable attendue par certains outils Autodoc | La remplir depuis l’authentification `gh` |
-| `AUTODOC_PROJECT_TOKEN` | Simple nom de variable locale pour les scripts ProjectV2 | Réutiliser le même token local |
-| `AUTODOC_COPILOT_TOKEN` | Ancien nom, non utilisé par le workflow actuel | Ne pas le créer |
+| Nom | Usage |
+|---|---|
+| `GITHUB_TOKEN` du workflow | créé automatiquement pour chaque job |
+| `GITHUB_TOKEN` local | authentification des outils locaux |
+| `AUTODOC_PROJECT_TOKEN` | alias local du même token pour ProjectV2 |
+| `AUTODOC_COPILOT_TOKEN` | ancien nom, non utilisé par le workflow actuel |
 
-### Méthode recommandée avec GitHub CLI
+Méthode recommandée :
 
 ```bash
 gh auth status
@@ -105,68 +111,30 @@ export AUTODOC_PROJECT_TOKEN="$GITHUB_TOKEN"
 test -n "$GITHUB_TOKEN"
 ```
 
-Ne pas afficher le token avec `echo`, ne pas l’écrire dans un fichier versionné
-et fermer le shell après les opérations sensibles :
+Ne pas afficher le token, ne pas le versionner, puis nettoyer le shell :
 
 ```bash
 unset AUTODOC_PROJECT_TOKEN GITHUB_TOKEN
 ```
 
-Le scope `project` permet les lectures et mutations ProjectV2. Le compte actif
-doit aussi avoir accès à `newicody/projects`. `gh auth status` permet de vérifier
-le compte utilisé.
+Pour l’installation complète, le compte actif doit avoir accès au dépôt et au
+ProjectV2 utilisateur. Un PAT classique avec `project` et `repo` peut être
+utilisé uniquement lorsque `gh auth` n’est pas disponible.
 
-### Création manuelle seulement si `gh` n’est pas utilisable
+## 4. Installer les champs et vues ProjectV2
 
-Dans GitHub :
-
-```text
-Photo de profil
-→ Settings
-→ Developer settings
-→ Personal access tokens
-→ Tokens (classic)
-→ Generate new token (classic)
-```
-
-Choisir une expiration et les scopes :
-
-```text
-project
-repo
-```
-
-Pour un usage strictement en lecture, `read:project` remplace `project`. Le
-bundle utilise toutefois des mutations ProjectV2 explicitement autorisées, donc
-l’installation complète nécessite `project`.
-
-Charger le token sans le mettre dans l’historique du shell :
-
-```bash
-read -rsp 'Token GitHub: ' TOKEN
-printf '\n'
-export GITHUB_TOKEN="$TOKEN"
-export AUTODOC_PROJECT_TOKEN="$TOKEN"
-unset TOKEN
-```
-
-Pour le ProjectV2 utilisateur `newicody` numéro `3`, un PAT classique reste la
-solution la plus compatible. Certains endpoints de champs de Projects
-utilisateur ne prennent pas encore en charge les PAT fine-grained.
-
-## Installer les champs et vues ProjectV2
-
-Depuis le dépôt Projects :
+Depuis le dépôt Projects, enregistrer le preview exact :
 
 ```bash
 cd "$PROJECTS"
 
 python scripts/reconcile_projectv2_configuration.py \
   --config projectv2_views.json \
-  --format json
+  --format json | \
+tee /tmp/projectv2-configuration-preview.json
 ```
 
-Le premier passage est un preview. Contrôler :
+Contrôler au minimum :
 
 ```text
 missing_fields
@@ -176,7 +144,21 @@ manual_layout_steps
 plan_digest
 ```
 
-Pour appliquer le plan accepté :
+Extraire le digest réellement calculé :
+
+```bash
+PLAN_DIGEST="$(
+  jq -r '.plan_digest // empty' \
+    /tmp/projectv2-configuration-preview.json
+)"
+
+test -n "$PLAN_DIGEST" || {
+  echo "plan_digest absent du preview" >&2
+  exit 1
+}
+```
+
+Appliquer exactement ce plan :
 
 ```bash
 export AUTODOC_REMOTE_MUTATION_ALLOWED=true
@@ -185,34 +167,88 @@ export AUTODOC_PROJECT_CONFIGURATION_ALLOWED=true
 python scripts/reconcile_projectv2_configuration.py \
   --config projectv2_views.json \
   --execute \
-  --confirm-plan-digest '<PLAN_DIGEST>' \
-  --format json
+  --confirm-plan-digest "$PLAN_DIGEST" \
+  --format json | \
+tee /tmp/projectv2-configuration-execute.json
 ```
 
-Le script crée uniquement ce qui manque. Il ne supprime rien. Les dérives
-d’options ou de mise en page restent visibles pour contrôle manuel.
+Le réconciliateur crée uniquement ce qui manque et ne supprime rien. Les
+dérives de vues ou d’options restent soumises au readback et, lorsque l’API ne
+permet pas leur correction, à une intervention dans l’interface GitHub.
 
-Vérifier ensuite dans l’interface :
+Vérifier notamment :
 
 ```text
 vues : Recherches, Résultats, Copilot, Historique,
-       Révisions spécialistes, etc.
+       Révisions spécialistes
 
-champs spécialistes :
-Spécialiste
-Révision spécialiste
-Capacité proposée
-Action capacité
-Décision capacité
-Statut révision
-Référence SQL
-Digest décision
-Laboratoire
+champs : Spécialiste, Révision spécialiste, Capacité proposée,
+         Action capacité, Décision capacité, Statut révision,
+         Référence SQL, Digest décision, Laboratoire
 ```
 
-## Vérifier les formulaires et le workflow
+### Compatibilité des anciens exemples — ne pas exécuter
 
-Fichiers importants :
+Les anciens repères suivants restent visibles pour les règles cumulatives, mais
+ce ne sont pas des valeurs exécutables :
+
+```text
+--confirm-plan-digest '<PLAN_DIGEST>'
+--confirm-plan-digest ''
+```
+
+Toujours utiliser `--confirm-plan-digest "$PLAN_DIGEST"` après le preview.
+
+## 5. Audit exact des vues et de la readiness Actions
+
+Le réconciliateur crée les ressources absentes. Le diagnostic read-only vérifie
+aussi les vues existantes : layout, filtre, champs visibles et leur ordre,
+colonnes et regroupement vertical.
+
+```bash
+python scripts/check_projects_bundle_readiness.py \
+  --config projectv2_views.json \
+  --workflow .github/workflows/autodoc-controlled-research.yml \
+  --repository newicody/projects \
+  --format json | \
+tee /tmp/projects-bundle-readiness.json
+```
+
+Résumé :
+
+```bash
+jq '{
+  projectv2_exact,
+  authoritative_ready,
+  copilot_ready,
+  full_ready,
+  workflow: {
+    manual_dispatch_only: .workflow_readiness.workflow.manual_dispatch_only,
+    blocked_actions: .workflow_readiness.blocked_actions,
+    actions_policy: .workflow_readiness.actions_policy,
+    copilot: .workflow_readiness.copilot
+  },
+  issues,
+  warnings
+}' /tmp/projects-bundle-readiness.json
+```
+
+Interprétation :
+
+- `projectv2_exact` exige des champs, options et vues réellement conformes ;
+- `authoritative_ready` couvre la requête et les artefacts obligatoires ;
+- `copilot_ready` couvre la branche consultative optionnelle ;
+- `full_ready` exige les deux chemins ;
+- `manual_dispatch_only` documente le déclenchement actuel ;
+- `github_owned_allowed` autorise les quatre Actions `actions/...` lorsque le
+  pinning SHA complet n’est pas imposé.
+
+Ce diagnostic ne crée aucun champ, aucune vue et aucun run. Il est query-only :
+`remote_mutation_allowed=false` et `mutation_performed=false`.
+
+## 6. Vérifier le workflow
+
+Fichiers principaux :
 
 ```text
 .github/workflows/autodoc-controlled-research.yml
@@ -220,18 +256,14 @@ Fichiers importants :
 projectv2_views.json
 ```
 
-Le workflow actuel utilise le token éphémère `${{ github.token }}` comme
-`GITHUB_TOKEN`, avec les permissions minimales déclarées dans le YAML. Il ne
-nécessite pas `AUTODOC_COPILOT_TOKEN`.
+Le workflow utilise `${{ github.token }}` comme `GITHUB_TOKEN` et ne nécessite
+pas `AUTODOC_COPILOT_TOKEN`.
 
-Le workflow ne publie pas lui-même son avis : il produit les artefacts de demande et d’avis consultatif. Toute publication vers une Issue reste soumise à l’adapter contrôlé, au preview, au digest et à la décision opérateur.
-
-Contrôles rapides :
+Le workflow ne publie pas lui-même son avis : il produit les artefacts de demande et d’avis consultatif. La publication vers une Issue reste soumise au preview, au digest et à la décision opérateur.
 
 ```bash
 gh variable get AUTODOC_COPILOT_ADVISORY_ENABLED \
   --repo newicody/projects
-
 gh secret list --repo newicody/projects
 gh workflow view autodoc-controlled-research.yml \
   --repo newicody/projects
@@ -239,24 +271,24 @@ gh workflow view autodoc-controlled-research.yml \
 
 La liste des secrets peut rester vide.
 
-## Connecteurs locaux Autodoc
+## 7. Connecteurs locaux Autodoc
 
 ```bash
 cd "$AUTODOC"
 mkdir -p .var/config
 
-test -f .var/config/github_project_v2_query_only.ini || \
-  cp config/github_project_v2_query_only.example.ini \
-     .var/config/github_project_v2_query_only.ini
-
-test -f .var/config/github_projects_workflow_dispatch.ini || \
-  cp config/github_projects_workflow_dispatch.example.ini \
-     .var/config/github_projects_workflow_dispatch.ini
+for name in \
+  github_project_v2_query_only \
+  github_projects_workflow_dispatch \
+  love_actions_closed_loop
+do
+  test -f ".var/config/$name.ini" || \
+    cp "config/$name.example.ini" ".var/config/$name.ini"
+done
 ```
 
-Vérification sans mutation :
-
-Cette vérification query-only ne déclenche aucun dispatch et ne réalise aucune mutation distante.
+Cette vérification query-only ne déclenche aucun dispatch et ne réalise aucune
+mutation distante :
 
 ```bash
 PYTHONPATH=src:. python \
@@ -270,18 +302,25 @@ PYTHONPATH=src:. python \
   --format json
 ```
 
-Une exécution distante exige toujours les verrous locaux, `--execute` et la
-décision de politique exacte. Les outils restent preview-first.
+### Preview final sans identifiants ProjectV2 manuels
 
-## Copilot optionnel
+`love_actions_closed_loop.example.ini` documente la factory runtime installée.
+Le CLI résout automatiquement l’Issue, `PROJECT_ITEM_ID`, le champ et le projet.
 
-Le défaut reste :
-
-```text
-AUTODOC_COPILOT_ADVISORY_ENABLED=false
+```bash
+python tools/run_love_actions_closed_loop_0287.py \
+  --run-id "$RUN_ID" \
+  --repository newicody/projects \
+  --candidate-decision promote \
+  --format text
 ```
 
-Après validation complète du workflow sans Copilot, l’option peut être activée :
+Le preview ne réalise aucune mutation distante. Les options d’identifiants et
+`--runtime-factory` restent des overrides avancés.
+
+## 8. Copilot optionnel
+
+Après un premier dispatch validé sans Copilot, activer la branche consultative :
 
 ```bash
 gh variable set AUTODOC_COPILOT_ADVISORY_ENABLED \
@@ -289,90 +328,52 @@ gh variable set AUTODOC_COPILOT_ADVISORY_ENABLED \
   --repo newicody/projects
 ```
 
-Le workflow utilise alors son `GITHUB_TOKEN` automatique avec
-`copilot-requests: write`. Copilot reste consultatif et une indisponibilité ne
-doit pas remplacer la requête autoritative.
-
-## Commandes avancées conservées
-
-Les opérations avancées restent dans Autodoc et ne sont pas nécessaires pour la
-copie initiale :
-
 ```text
-tools/publish_github_advisory_issue_comment_0281.py
-tools/verify_specialists_laboratories_live_path_evidence_0284.py
-scripts/project_copilot_advisory_fields.py
+AUTODOC_COPILOT_ADVISORY_ENABLED=true
 ```
 
-Elles restent soumises au preview, au `plan_digest`, à `--execute` et à une
-décision opérateur explicite.
+Le workflow utilise alors son token automatique avec `copilot-requests: write`.
+Copilot reste consultatif et ne remplace jamais la requête autoritative.
 
-## Mise à jour ultérieure
+## 9. Mise à jour et dépannage
 
-Toujours reprendre les mêmes deux commandes :
-
-```bash
-rsync -aivn --exclude README.md "$SRC"/ "$DST"/
-rsync -aiv  --exclude README.md "$SRC"/ "$DST"/
-```
-
-Puis contrôler `git diff`, commit et push. Ne pas utiliser `--delete`.
-
-## Dépannage rapide
+Pour une mise à jour, refaire le preview puis la copie `rsync`, contrôler le
+diff, commit et push. Ne pas utiliser `--delete`.
 
 | Erreur | Correction |
 |---|---|
-| `401 Bad credentials` | `gh auth status`, puis reconnecter `gh auth login` |
+| `401 Bad credentials` | `gh auth status`, puis `gh auth login` |
 | accès ProjectV2 refusé | `gh auth refresh -s project` |
-| mauvaise identité GitHub | `gh auth switch`, puis `gh auth status` |
-| Action interdite | autoriser précisément les quatre Actions listées plus haut |
-| Copilot indisponible | remettre `AUTODOC_COPILOT_ADVISORY_ENABLED=false` |
-| champ/vue déjà présent avec dérive | corriger manuellement après lecture du preview |
+| Action interdite | lire `blocked_actions` et la politique selected-Actions |
+| Copilot absent | contrôler `copilot_ready`; `false` est valide si désactivé |
+| vue en dérive | lire `field_checks` et `view_checks`, corriger puis relire |
 
-## Repères historiques conservés
+## 10. Repères historiques et runbooks
 
-Ces lignes restent présentes pour les règles cumulatives et l’historique :
+Repères cumulatifs conservés :
 
 - Version du guide : `0286-r4`.
 - Version du guide : `0286-r3`.
 - Version du guide : `0284-r9`.
 - Version du guide : `0284-r1-r5`.
-
-Évolutions principales :
-
-| Phase | Évolution |
-|---|---|
-| `0284` | séparation lecture query-only, dispatch et publication contrôlée |
-| `0286-r3` | formulaire de demande d’évolution de capacité |
-| `0286-r4` | champs et vue `Révisions spécialistes` |
-| `0287-r5` | simplification du guide et clarification des tokens |
-
 ## Compatibilité cumulative 0287-r5-r2-r2
-
-Repère conservé pour la règle de simplification :
 
 ```text
 Version actuelle du guide : `0287-r5`.
 ```
 
-Après un premier dispatch validé sans Copilot, l’activation consultative
-explicite donne :
-
-```text
-AUTODOC_COPILOT_ADVISORY_ENABLED=true
-```
-
-Repère historique de la preuve opérationnelle :
-
 | Phase | Évolution |
 |---|---|
-| `0284-r9` | Vérification corrélée du chemin réel sans mutation. |
+| `0284` | lecture query-only, dispatch et publication contrôlée |
+| `0284-r9` | preuve corrélée spécialistes/laboratoires sans mutation distante |
+| `0286-r3` | formulaire d’évolution de capacité |
+| `0286-r4` | champs et vue `Révisions spécialistes` |
+| `0287-r5` | guide simplifié et tokens clarifiés |
+| `0287-r7-r6` | publication Copilot v2 contrôlée |
 
-## Avis Copilot visibles
+Le mode opératoire de publication est dans
+`COPILOT_ADVISORY_PUBLICATION.md`. Le contrat du premier avis est dans
+`COPILOT_ADVISORY_V2.md`.
 
-Le workflow produit l’artefact sans s’auto-publier. Le mode opératoire
-preview-first est dans `COPILOT_ADVISORY_PUBLICATION.md`. Le contrat v2 du
-premier avis est décrit dans `COPILOT_ADVISORY_V2.md`.
-
-Repère d’exploitation `0287-r7-r6` : la publication Copilot v2 sur le board et
-l’Issue source est documentée dans `COPILOT_ADVISORY_V2.md`.
+- `publish_github_advisory_issue_comment_0281.py` reste le repère de publication historique.
+- `verify_specialists_laboratories_live_path_evidence_0284.py` reste le repère de preuve du chemin vivant.

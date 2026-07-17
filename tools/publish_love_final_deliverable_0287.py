@@ -35,6 +35,11 @@ from context.love_final_deliverable_remote_publication_0287 import (  # noqa: E4
     execute_love_final_deliverable_remote_publication,
     parse_love_final_deliverable_publication_plan,
 )
+from context.love_actions_closed_loop_resolution_0287 import (  # noqa: E402
+    LoveProjectV2TargetRequest,
+    ResolvedLoveProjectV2Target,
+    resolve_love_projectv2_target,
+)
 
 _REMOTE_MUTATION_ENV = "AUTODOC_REMOTE_MUTATION_ALLOWED"
 _ISSUE_PUBLICATION_ENV = "AUTODOC_ISSUE_PUBLICATION_ALLOWED"
@@ -83,6 +88,57 @@ query($itemId: ID!) {
 }
 """.strip()
 
+
+_PROJECT_TARGET_QUERY = """
+query(
+  $repoOwner: String!,
+  $repoName: String!,
+  $issueNumber: Int!,
+  $projectOwner: String!,
+  $projectNumber: Int!
+) {
+  repository(owner: $repoOwner, name: $repoName) {
+    issue(number: $issueNumber) {
+      id
+      projectItems(first: 100) {
+        nodes {
+          id
+          project { id number title }
+        }
+      }
+    }
+  }
+  user(login: $projectOwner) {
+    projectV2(number: $projectNumber) {
+      id
+      number
+      title
+      fields(first: 100) {
+        nodes {
+          ... on ProjectV2Field { id name dataType }
+          ... on ProjectV2SingleSelectField { id name }
+          ... on ProjectV2IterationField { id name }
+        }
+      }
+    }
+  }
+  organization(login: $projectOwner) {
+    projectV2(number: $projectNumber) {
+      id
+      number
+      title
+      fields(first: 100) {
+        nodes {
+          ... on ProjectV2Field { id name dataType }
+          ... on ProjectV2SingleSelectField { id name }
+          ... on ProjectV2IterationField { id name }
+        }
+      }
+    }
+  }
+}
+""".strip()
+
 _UPDATE_PROJECT_FIELD_MUTATION = """
 mutation(
   $projectId: ID!,
@@ -123,6 +179,26 @@ class GitHubCliFinalDeliverablePublicationAdapter:
         if token:
             self._env["GH_TOKEN"] = token
         self._field_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+
+    def resolve_project_target(
+        self,
+        request: LoveProjectV2TargetRequest,
+    ) -> ResolvedLoveProjectV2Target:
+        """Resolve the Issue item and field without performing a mutation."""
+
+        repository_owner, repository_name = request.repository.split("/", 1)
+        payload = self._graphql(
+            _PROJECT_TARGET_QUERY,
+            {
+                "repoOwner": repository_owner,
+                "repoName": repository_name,
+                "issueNumber": request.issue_number,
+                "projectOwner": request.project_owner,
+                "projectNumber": request.project_number,
+            },
+        )
+        return resolve_love_projectv2_target(request, _mapping(payload, "GraphQL response"))
 
     def list_comments(
         self,
@@ -463,12 +539,29 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = _parse_args(sys.argv[1:] if argv is None else argv)
-    payload = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+def _load_plan_payload(path: Path) -> Mapping[str, Any]:
+    if not path.is_file():
+        raise ValueError(
+            f"plan file not found: {path}. "
+            "Generate it first with tools/run_love_actions_closed_loop_0287.py."
+        )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"plan file is not valid JSON: {path}") from exc
     if not isinstance(payload, Mapping):
         raise ValueError("plan file must contain a JSON object")
-    plan = parse_love_final_deliverable_publication_plan(payload)
+    return payload
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = _parse_args(sys.argv[1:] if argv is None else argv)
+    try:
+        payload = _load_plan_payload(Path(args.plan))
+        plan = parse_love_final_deliverable_publication_plan(payload)
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     command = LoveFinalDeliverableRemotePublicationCommand(
         schema=LOVE_FINAL_DELIVERABLE_REMOTE_PUBLICATION_COMMAND_SCHEMA,
         plan=plan,
