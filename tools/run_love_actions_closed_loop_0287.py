@@ -50,6 +50,9 @@ from context.love_imported_actions_runtime_contract_0287 import (  # noqa: E402
     ImportedActionsRuntimeFactory,
     validate_imported_actions_runtime_ports,
 )
+from context.human_readable_artifact_identity_0287 import (  # noqa: E402
+    matches_actions_artifact_name,
+)
 from context.love_actions_closed_loop_resolution_0287 import (  # noqa: E402
     LoveActionsClosedLoopResolutionError,
     LoveProjectV2TargetRequest,
@@ -362,11 +365,12 @@ def execute_love_actions_closed_loop_preview(
         request_payload: Mapping[str, Any] | None = None
         for artifact_name, filename in _EXPECTED_ARTIFACTS.items():
             metadata = artifact_metadata[artifact_name]
+            actual_artifact_name = str(metadata.get("name", "")).strip()
             destination = root / artifact_name
             actions_adapter.download_artifact(
                 repository=command.repository,
                 run_id=command.run_id,
-                artifact_name=artifact_name,
+                artifact_name=actual_artifact_name,
                 destination=destination,
             )
             path = _find_exact_download(destination, filename)
@@ -382,7 +386,7 @@ def execute_love_actions_closed_loop_preview(
             identities.append(
                 GitHubActionsArtifactIdentity(
                     artifact_id=int(metadata["id"]),
-                    artifact_name=artifact_name,
+                    artifact_name=actual_artifact_name,
                     filename=filename,
                     archive_size_in_bytes=int(
                         metadata.get("size_in_bytes", 0)
@@ -622,11 +626,14 @@ def _select_artifacts(
         matches = tuple(
             item
             for item in artifacts
-            if str(item.get("name", "")) == expected_name
+            if matches_actions_artifact_name(
+                str(item.get("name", "")), expected_name
+            )
         )
         if len(matches) != 1:
             raise LoveActionsClosedLoopPreviewError(
-                f"expected exactly one Actions artifact named {expected_name}"
+                "expected exactly one Actions artifact for "
+                f"{expected_name} (legacy exact name or readable canonical suffix)"
             )
         item = matches[0]
         if bool(item.get("expired", False)):
