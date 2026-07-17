@@ -1,0 +1,1740 @@
+diff --git a/PHASE0271_QDRANT_CLIENT_PROJECTION_EXECUTOR_TEST_REPORT.md b/PHASE0271_QDRANT_CLIENT_PROJECTION_EXECUTOR_TEST_REPORT.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..2669d6a9267d658fee29465a84ca65d591e6187f
+--- /dev/null
++++ b/PHASE0271_QDRANT_CLIENT_PROJECTION_EXECUTOR_TEST_REPORT.md
+@@ -0,0 +1,34 @@
++# Phase 0271-r2 test report
++
++## Scope
++
++Implement one concrete `qdrant-client` IO executor for the existing
++`QdrantProjectionExecutor` protocol after the 0271-r1 audit proved that no live
++executor existed.
++
++## Construction validation
++
++- module imports without `qdrant-client` installed: passed;
++- fake-client upsert mapping: passed;
++- deterministic UUID storage ID and typed-ref payload preservation: passed;
++- fake-client recall mapping: passed;
++- missing `sql_ref` fail-closed behavior: passed;
++- separate write/search effect gates: passed;
++- typed SDK failure wrapping: passed;
++- factory option and secret non-serialization checks: passed;
++- CLI dependency readiness: passed;
++- focused tests: 12 passed;
++- DOT parse: passed;
++- compileall focused: passed.
++
++## Boundary statement
++
++No Qdrant daemon, OpenRC service, SQL write, OpenVINO inference, GitHub call or
++SHM operation is executed by the test campaign. The official SDK dependency is
++loaded only by the factory used in later live integration.
++
++## Remaining local gates
++
++The patch queue must still run the repository-wide rule and full test suites.
++A live Qdrant call is intentionally deferred to 0271-r3 after dependency
++installation and explicit operator configuration.
+diff --git a/config/requirements-qdrant-client-0271.txt b/config/requirements-qdrant-client-0271.txt
+new file mode 100644
+index 0000000000000000000000000000000000000000..67bff02c39540ef1d5f0e3d841f1f1a48ae81d3c
+--- /dev/null
++++ b/config/requirements-qdrant-client-0271.txt
+@@ -0,0 +1,2 @@
++# Official SDK selected after the 0271-r1 reuse audit.
++qdrant-client==1.18.0
+diff --git a/doc/CHANGELOG_0271_QDRANT_CLIENT_PROJECTION_EXECUTOR.md b/doc/CHANGELOG_0271_QDRANT_CLIENT_PROJECTION_EXECUTOR.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..149f7f5186f9dbade077a87523fb17b3ff6f0bc8
+--- /dev/null
++++ b/doc/CHANGELOG_0271_QDRANT_CLIENT_PROJECTION_EXECUTOR.md
+@@ -0,0 +1,9 @@
++# Changelog 0271-r2
++
++- add the concrete `QdrantClientProjectionExecutor` for the existing protocol;
++- select and pin official `qdrant-client==1.18.0` after the r1 reuse audit;
++- add deterministic Qdrant UUID mapping while preserving Autodoc point refs;
++- require explicit write/search effect gates;
++- preserve `payload.sql_ref` and fail closed on invalid recall payloads;
++- add typed SDK failure wrapping and dependency readiness checking;
++- keep Scheduler, services and SHM unchanged.
+diff --git a/doc/architecture/QDRANT_CLIENT_PROJECTION_EXECUTOR_0271.md b/doc/architecture/QDRANT_CLIENT_PROJECTION_EXECUTOR_0271.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..006f84a865e096213b360f9fc6ceebb2927a6595
+--- /dev/null
++++ b/doc/architecture/QDRANT_CLIENT_PROJECTION_EXECUTOR_0271.md
+@@ -0,0 +1,73 @@
++# 0271-r2 — qdrant-client projection executor
++
++## Decision
++
++The 0271-r1 source audit found the existing
++`QdrantProjectionExecutor` protocol but no concrete non-demo implementation.
++The operator selected the official `qdrant-client` SDK instead of maintaining a
++custom HTTP implementation.
++
++0271-r2 therefore adds one narrow IO implementation:
++
++```text
++QdrantProjectionExecutor protocol
++            |
++            v
++QdrantClientProjectionExecutor
++            |
++            v
++qdrant_client.QdrantClient
++            |
++            v
++Qdrant service started by OpenRC / OS / admin
++```
++
++## Durable authority and payload
++
++SQL remains the durable authority. Every projected point carries both
++`payload.sql_ref` and the historical `payload.sql_context_ref` alias. Recall
++returns reference-only hits that must be rehydrated through SQL.
++
++Autodoc point references such as `qdrant-point:...` are not valid native Qdrant
++point IDs. The executor derives a deterministic UUID for Qdrant storage and
++preserves the original typed reference in `payload.autodoc_point_ref`.
++
++## Gates
++
++Construction requires an immutable `QdrantClientEffectGate` with a typed
++`policy_decision_id`. Writes and searches are separately authorized. The
++executor fails before calling the SDK when the corresponding gate is false.
++
++## Dependency
++
++The official dependency is pinned in:
++
++```text
++config/requirements-qdrant-client-0271.txt
++```
++
++The SDK import is delayed until the executor factory is called. Repository tests
++use an injected fake client and do not require a running Qdrant service.
++
++## Boundaries
++
++- no Qdrant service start or stop;
++- no OpenRC or `rc-service` call;
++- no collection creation in this phase;
++- no Scheduler modification;
++- no RuntimeManager or Orchestrator;
++- no SQL write;
++- no OpenVINO execution;
++- no EventBus or PassiveSupervisor command;
++- no SHM, mmap, RouteProxy or ControlProxy modification;
++- no GitHub call.
++
++The SHM data-plane remains responsible for fast local transient coordination.
++The SDK executor is an external IO edge and must never run inside a SHM critical
++section.
++
++## Next
++
++0271-r3 may inject this executor into the existing 0262 and 0263 CLIs and add a
++separate opt-in live smoke. The 0269 composition must keep its demo gate until
++that live path is validated against the operator's Qdrant service.
+diff --git a/doc/code-rules/0271_qdrant_client_projection_executor_rule.md b/doc/code-rules/0271_qdrant_client_projection_executor_rule.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..7d0793423873e05326adb44bd0f7eea46288d151
+--- /dev/null
++++ b/doc/code-rules/0271_qdrant_client_projection_executor_rule.md
+@@ -0,0 +1,10 @@
++# Rule 0271-r2 — qdrant-client projection executor
++
++1. Reuse `inference.qdrant_projection_adapter.QdrantProjectionExecutor`.
++2. The only new runtime dependency is the official qdrant-client SDK, pinned and justified.
++3. Require a typed policy decision and separate write/search gates before SDK effects.
++4. Preserve `payload.sql_ref`; SQL remains the durable authority.
++5. Never start, stop, install or configure the Qdrant daemon.
++6. Never modify Scheduler, the SHM data-plane, RouteProxy or ControlProxy.
++7. Convert SDK failures to a typed serializable failure and fail closed on missing SQL refs.
++8. Keep tests independent from a real Qdrant service through client/model injection.
+diff --git a/doc/docs/architecture/runtime/271_qdrant_client_projection_executor.dot b/doc/docs/architecture/runtime/271_qdrant_client_projection_executor.dot
+new file mode 100644
+index 0000000000000000000000000000000000000000..73a6346a810a5bc0b247d07921208fbf2443232a
+--- /dev/null
++++ b/doc/docs/architecture/runtime/271_qdrant_client_projection_executor.dot
+@@ -0,0 +1,17 @@
++digraph qdrant_client_projection_executor_0271 {
++  rankdir=LR;
++  node [shape=box];
++  gate [label="QdrantClientEffectGate\npolicy decision"];
++  protocol [label="existing\nQdrantProjectionExecutor"];
++  executor [label="QdrantClientProjectionExecutor\nIO edge"];
++  sdk [label="official qdrant-client SDK"];
++  qdrant [label="Qdrant service\nstarted by OpenRC/admin"];
++  sql [label="SQL authority\nrehydrates sql_ref"];
++  shm [label="SHM / RouteProxy / ControlProxy\nunchanged", style=dashed];
++  gate -> executor;
++  protocol -> executor [label="implements"];
++  executor -> sdk;
++  sdk -> qdrant;
++  qdrant -> sql [label="payload.sql_ref"];
++  shm -> executor [label="outside critical section", style=dashed];
++}
+diff --git a/doc/manifests/MANIFEST_0271_QDRANT_CLIENT_PROJECTION_EXECUTOR_CHANGED_FILES.md b/doc/manifests/MANIFEST_0271_QDRANT_CLIENT_PROJECTION_EXECUTOR_CHANGED_FILES.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..22a221d4f49a97195aa4fa698978c530e8622c08
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0271_QDRANT_CLIENT_PROJECTION_EXECUTOR_CHANGED_FILES.md
+@@ -0,0 +1,18 @@
++# Manifest 0271-r2 — qdrant-client projection executor
++
++Added files:
++
++- `src/inference/qdrant_client_projection_executor.py`
++- `config/requirements-qdrant-client-0271.txt`
++- `tools/check_qdrant_client_projection_executor_0271.py`
++- `tests/inference/test_qdrant_client_projection_executor_0271.py`
++- `tests/tools/test_check_qdrant_client_projection_executor_0271.py`
++- `tests/rules/test_qdrant_client_projection_executor_0271_rule.py`
++- `doc/architecture/QDRANT_CLIENT_PROJECTION_EXECUTOR_0271.md`
++- `doc/code-rules/0271_qdrant_client_projection_executor_rule.md`
++- `doc/docs/architecture/runtime/271_qdrant_client_projection_executor.dot`
++- `doc/CHANGELOG_0271_QDRANT_CLIENT_PROJECTION_EXECUTOR.md`
++- `doc/manifests/MANIFEST_0271_QDRANT_CLIENT_PROJECTION_EXECUTOR_CHANGED_FILES.md`
++- `PHASE0271_QDRANT_CLIENT_PROJECTION_EXECUTOR_TEST_REPORT.md`
++
++No existing runtime, Scheduler, service, SHM or 0262/0263/0269 file is modified.
+diff --git a/src/inference/__pycache__/qdrant_client_projection_executor.cpython-313.pyc b/src/inference/__pycache__/qdrant_client_projection_executor.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..4d6c6716965d25186191ce2ee3a7da911938bbe6
+GIT binary patch
+literal 20219
+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
+Ef7v^9p8x;=
+
+literal 0
+HcmV?d00001
+
+diff --git a/src/inference/qdrant_client_projection_executor.py b/src/inference/qdrant_client_projection_executor.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..6f676e92f46967fd63c36649a59f632ae14adcc1
+--- /dev/null
++++ b/src/inference/qdrant_client_projection_executor.py
+@@ -0,0 +1,382 @@
++"""Concrete qdrant-client execution membrane for the existing Qdrant protocol.
++
++The module is deliberately narrow: it translates Autodoc projection points and
++recall queries to the official ``qdrant-client`` SDK.  It does not start Qdrant,
++create collections, own durable context, touch Scheduler, or participate in the
++SHM data-plane.  SQL references remain the durable authority carried by Qdrant
++payloads.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from importlib import import_module
++from importlib import metadata as importlib_metadata
++from importlib.util import find_spec
++import math
++from types import ModuleType
++from typing import Any, Callable, Mapping, Sequence
++import uuid
++
++from inference.qdrant_projection_adapter import (
++    QdrantProjectionPoint,
++    QdrantProjectionPolicy,
++    QdrantProjectionTarget,
++    QdrantProjectionWriteResult,
++    QdrantRecallHit,
++    QdrantRecallQuery,
++    QdrantRecallResult,
++)
++
++_REQUIRED_DISTRIBUTION = "qdrant-client"
++_REQUIRED_VERSION = "1.18.0"
++_QDRANT_POINT_NAMESPACE = uuid.UUID("bd4ca470-1a18-45d9-b112-dae28983cb41")
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantClientConnectionConfig:
++    """Immutable, secret-free connection settings for the SDK factory."""
++
++    url: str = "http://127.0.0.1:6333"
++    timeout_seconds: float = 10.0
++    prefer_grpc: bool = False
++    grpc_port: int = 6334
++    wait_for_write: bool = True
++    check_compatibility: bool = True
++
++    def __post_init__(self) -> None:
++        if not self.url or not self.url.strip():
++            raise ValueError("url must not be empty")
++        if not self.url.startswith(("http://", "https://")):
++            raise ValueError("url must start with http:// or https://")
++        if self.timeout_seconds <= 0:
++            raise ValueError("timeout_seconds must be > 0")
++        if not 1 <= self.grpc_port <= 65535:
++            raise ValueError("grpc_port must be between 1 and 65535")
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "url": self.url,
++            "timeout_seconds": self.timeout_seconds,
++            "prefer_grpc": self.prefer_grpc,
++            "grpc_port": self.grpc_port,
++            "wait_for_write": self.wait_for_write,
++            "check_compatibility": self.check_compatibility,
++            "api_key_serialized": False,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantClientEffectGate:
++    """Explicit operator/policy authority required before Qdrant effects."""
++
++    policy_decision_id: str
++    allow_write: bool = False
++    allow_search: bool = False
++
++    def __post_init__(self) -> None:
++        if not self.policy_decision_id.startswith("policy:"):
++            raise ValueError("policy_decision_id must start with policy:")
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "policy_decision_id": self.policy_decision_id,
++            "allow_write": self.allow_write,
++            "allow_search": self.allow_search,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantClientExecutionFailure:
++    """Serializable failure raised by the SDK execution membrane."""
++
++    operation: str
++    category: str
++    message: str
++    retryable: bool = False
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "operation": self.operation,
++            "category": self.category,
++            "message": self.message,
++            "retryable": self.retryable,
++        }
++
++
++class QdrantClientExecutionError(RuntimeError):
++    """Exception carrying an immutable, serializable execution failure."""
++
++    def __init__(self, failure: QdrantClientExecutionFailure) -> None:
++        self.failure = failure
++        super().__init__(f"{failure.operation}: {failure.category}: {failure.message}")
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantClientDependencyReadiness:
++    """Read-only dependency readiness result; no client or network is opened."""
++
++    installed: bool
++    version: str
++    required_version: str = _REQUIRED_VERSION
++    network_used: bool = False
++    qdrant_called: bool = False
++
++    @property
++    def valid(self) -> bool:
++        return self.installed and self.version == self.required_version
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": "autodoc.qdrant_client_dependency_readiness.v1",
++            "valid": self.valid,
++            "installed": self.installed,
++            "version": self.version,
++            "required_version": self.required_version,
++            "network_used": self.network_used,
++            "qdrant_called": self.qdrant_called,
++            "starts_qdrant": False,
++            "touches_shm": False,
++            "sql_remains_authority": True,
++        }
++
++
++class QdrantClientProjectionExecutor:
++    """Implement the existing QdrantProjectionExecutor with qdrant-client."""
++
++    def __init__(
++        self,
++        *,
++        client: Any,
++        models_module: Any,
++        config: QdrantClientConnectionConfig,
++        gate: QdrantClientEffectGate,
++    ) -> None:
++        self._client = client
++        self._models = models_module
++        self._config = config
++        self._gate = gate
++
++    @property
++    def config(self) -> QdrantClientConnectionConfig:
++        return self._config
++
++    @property
++    def gate(self) -> QdrantClientEffectGate:
++        return self._gate
++
++    def upsert_points(
++        self,
++        points: Sequence[QdrantProjectionPoint],
++        *,
++        target: QdrantProjectionTarget,
++        policy: QdrantProjectionPolicy,
++    ) -> QdrantProjectionWriteResult:
++        """Upsert validated points while preserving their typed Autodoc refs."""
++
++        self._require_allowed("upsert", self._gate.allow_write)
++        bounded = tuple(points)
++        if len(bounded) > policy.max_points:
++            raise self._failure("upsert", "policy_limit", "point count exceeds policy.max_points")
++        qdrant_points = []
++        for point in bounded:
++            if point.dimension != target.vector_dimension:
++                raise self._failure("upsert", "dimension_mismatch", "point dimension does not match target")
++            payload = _payload_for_point(point)
++            qdrant_points.append(
++                self._models.PointStruct(
++                    id=_qdrant_storage_id(point.point_id),
++                    vector=list(point.vector),
++                    payload=payload,
++                )
++            )
++        try:
++            response = self._client.upsert(
++                collection_name=target.collection_name,
++                points=qdrant_points,
++                wait=self._config.wait_for_write,
++            )
++        except Exception as exc:  # SDK exception families vary by transport/version.
++            raise self._wrapped_failure("upsert", exc) from exc
++        if not _write_acknowledged(response):
++            raise self._failure("upsert", "not_acknowledged", "Qdrant did not acknowledge the write")
++        return QdrantProjectionWriteResult(
++            target=target,
++            point_ids=tuple(point.point_id for point in bounded),
++            acknowledged=True,
++        )
++
++    def search_vector(
++        self,
++        vector: Sequence[float],
++        *,
++        target: QdrantProjectionTarget,
++        policy: QdrantProjectionPolicy,
++        query: QdrantRecallQuery,
++    ) -> QdrantRecallResult:
++        """Query Qdrant and return reference-only hits for SQL rehydration."""
++
++        self._require_allowed("search", self._gate.allow_search)
++        values = tuple(float(value) for value in vector)
++        if len(values) != target.vector_dimension:
++            raise self._failure("search", "dimension_mismatch", "query dimension does not match target")
++        limit = min(query.limit, policy.max_recall_hits)
++        try:
++            response = self._client.query_points(
++                collection_name=target.collection_name,
++                query=list(values),
++                limit=limit,
++                with_payload=True,
++                with_vectors=False,
++            )
++        except Exception as exc:  # SDK exception families vary by transport/version.
++            raise self._wrapped_failure("search", exc) from exc
++        raw_hits = tuple(getattr(response, "points", response) or ())
++        hits = tuple(_recall_hit_from_scored_point(item, target=target) for item in raw_hits[:limit])
++        return QdrantRecallResult(target=target, query=query, hits=hits, capped=len(raw_hits) > limit)
++
++    def close(self) -> None:
++        """Close the injected SDK client when it exposes a close method."""
++
++        close = getattr(self._client, "close", None)
++        if callable(close):
++            close()
++
++    def _require_allowed(self, operation: str, allowed: bool) -> None:
++        if not allowed:
++            raise self._failure(operation, "gate_denied", "effect gate does not allow this operation")
++
++    @staticmethod
++    def _failure(operation: str, category: str, message: str, *, retryable: bool = False) -> QdrantClientExecutionError:
++        return QdrantClientExecutionError(
++            QdrantClientExecutionFailure(
++                operation=operation,
++                category=category,
++                message=message,
++                retryable=retryable,
++            )
++        )
++
++    @classmethod
++    def _wrapped_failure(cls, operation: str, exc: Exception) -> QdrantClientExecutionError:
++        message = str(exc).strip() or type(exc).__name__
++        return cls._failure(operation, type(exc).__name__, message[:500], retryable=True)
++
++
++def build_qdrant_client_projection_executor(
++    config: QdrantClientConnectionConfig,
++    gate: QdrantClientEffectGate,
++    *,
++    api_key: str | None = None,
++    client_factory: Callable[..., Any] | None = None,
++    models_module: ModuleType | Any | None = None,
++) -> QdrantClientProjectionExecutor:
++    """Build the executor, importing qdrant-client only at this IO boundary."""
++
++    factory = client_factory
++    models = models_module
++    if factory is None:
++        package = import_module("qdrant_client")
++        factory = getattr(package, "QdrantClient")
++    if models is None:
++        models = import_module("qdrant_client.models")
++    kwargs: dict[str, object] = {
++        "url": config.url,
++        "timeout": config.timeout_seconds,
++        "prefer_grpc": config.prefer_grpc,
++        "check_compatibility": config.check_compatibility,
++    }
++    if config.prefer_grpc:
++        kwargs["grpc_port"] = config.grpc_port
++    if api_key:
++        kwargs["api_key"] = api_key
++    client = factory(**kwargs)
++    return QdrantClientProjectionExecutor(client=client, models_module=models, config=config, gate=gate)
++
++
++def inspect_qdrant_client_dependency() -> QdrantClientDependencyReadiness:
++    """Inspect package presence/version without importing it or using network."""
++
++    installed = find_spec("qdrant_client") is not None
++    version = ""
++    if installed:
++        try:
++            version = importlib_metadata.version(_REQUIRED_DISTRIBUTION)
++        except importlib_metadata.PackageNotFoundError:
++            installed = False
++    return QdrantClientDependencyReadiness(installed=installed, version=version)
++
++
++def _payload_for_point(point: QdrantProjectionPoint) -> dict[str, object]:
++    payload: dict[str, object] = dict(point.payload)
++    payload["sql_context_ref"] = point.sql_context_ref
++    payload["sql_ref"] = point.sql_context_ref
++    payload["autodoc_point_ref"] = point.point_id
++    payload["embedding_ref"] = point.embedding_ref
++    payload["source_ref"] = point.source_ref
++    return payload
++
++
++def _qdrant_storage_id(point_ref: str) -> str:
++    return str(uuid.uuid5(_QDRANT_POINT_NAMESPACE, point_ref))
++
++
++def _write_acknowledged(response: object) -> bool:
++    if response is False or response is None:
++        return False
++    status = getattr(response, "status", "")
++    if hasattr(status, "value"):
++        status = status.value
++    text = str(status).lower()
++    return not text or text in {"acknowledged", "completed"}
++
++
++def _recall_hit_from_scored_point(item: object, *, target: QdrantProjectionTarget) -> QdrantRecallHit:
++    payload = _as_mapping(getattr(item, "payload", {}))
++    sql_ref = str(payload.get("sql_ref") or payload.get("sql_context_ref") or "")
++    if not sql_ref.startswith("sql:"):
++        raise QdrantClientProjectionExecutor._failure(
++            "search",
++            "missing_sql_ref",
++            "Qdrant hit payload must contain sql_ref",
++        )
++    raw_id = str(getattr(item, "id", "unknown"))
++    point_ref = str(payload.get("autodoc_point_ref") or f"qdrant-point:{raw_id}")
++    source_ref = str(payload.get("source_ref") or "")
++    compact_payload = _string_payload(payload)
++    compact_payload["sql_ref"] = sql_ref
++    compact_payload["sql_context_ref"] = sql_ref
++    return QdrantRecallHit(
++        point_id=point_ref,
++        sql_context_ref=sql_ref,
++        score=_bounded_score(float(getattr(item, "score", 0.0)), target.distance),
++        source_ref=source_ref,
++        payload=tuple(sorted(compact_payload.items())),
++    )
++
++
++def _as_mapping(value: object) -> Mapping[str, object]:
++    if isinstance(value, Mapping):
++        return value
++    model_dump = getattr(value, "model_dump", None)
++    if callable(model_dump):
++        dumped = model_dump()
++        if isinstance(dumped, Mapping):
++            return dumped
++    return {}
++
++
++def _string_payload(payload: Mapping[str, object]) -> dict[str, str]:
++    result: dict[str, str] = {}
++    for key, value in payload.items():
++        if isinstance(value, (str, int, float, bool)):
++            result[str(key)] = str(value)
++    return result
++
++
++def _bounded_score(raw_score: float, distance: str) -> float:
++    if not math.isfinite(raw_score):
++        raise QdrantClientProjectionExecutor._failure("search", "invalid_score", "Qdrant score must be finite")
++    if distance == "Euclid":
++        return 1.0 / (1.0 + max(0.0, raw_score))
++    return max(0.0, min(1.0, (raw_score + 1.0) / 2.0))
+diff --git a/tests/inference/__pycache__/test_qdrant_client_projection_executor_0271.cpython-313-pytest-9.0.2.pyc b/tests/inference/__pycache__/test_qdrant_client_projection_executor_0271.cpython-313-pytest-9.0.2.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..20caae9f57bc7ffdf8fa2020ddbb3a6fd61ef680
+GIT binary patch
+literal 26542
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/inference/__pycache__/test_qdrant_client_projection_executor_0271.cpython-313.pyc b/tests/inference/__pycache__/test_qdrant_client_projection_executor_0271.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..163c7e3b922ec680c90c715740ff79b375856947
+GIT binary patch
+literal 10703
+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
+ITlvoTAK+X4F8}}l
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/inference/test_qdrant_client_projection_executor_0271.py b/tests/inference/test_qdrant_client_projection_executor_0271.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..539c6e749a7b8bb78cd961377df26b7d6caf8a4b
+--- /dev/null
++++ b/tests/inference/test_qdrant_client_projection_executor_0271.py
+@@ -0,0 +1,217 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from types import SimpleNamespace
++
++import pytest
++
++from inference.qdrant_client_projection_executor import (
++    QdrantClientConnectionConfig,
++    QdrantClientEffectGate,
++    QdrantClientExecutionError,
++    QdrantClientProjectionExecutor,
++    build_qdrant_client_projection_executor,
++)
++from inference.qdrant_projection_adapter import (
++    QdrantProjectionPoint,
++    QdrantProjectionPolicy,
++    QdrantProjectionTarget,
++    QdrantRecallQuery,
++)
++
++
++@dataclass
++class FakePointStruct:
++    id: object
++    vector: object
++    payload: object
++
++
++class FakeModels:
++    PointStruct = FakePointStruct
++
++
++class FakeClient:
++    def __init__(self) -> None:
++        self.upserts: list[dict[str, object]] = []
++        self.queries: list[dict[str, object]] = []
++        self.query_response = SimpleNamespace(points=[])
++        self.closed = False
++
++    def upsert(self, **kwargs):
++        self.upserts.append(kwargs)
++        return SimpleNamespace(status="completed")
++
++    def query_points(self, **kwargs):
++        self.queries.append(kwargs)
++        return self.query_response
++
++    def close(self) -> None:
++        self.closed = True
++
++
++def _target() -> QdrantProjectionTarget:
++    return QdrantProjectionTarget(collection_name="autodoc_test", vector_dimension=2)
++
++
++def _point() -> QdrantProjectionPoint:
++    return QdrantProjectionPoint(
++        point_id="qdrant-point:abc123",
++        embedding_ref="embedding:passage:abc123",
++        source_ref="ctx-fragment:sql:context:abc123",
++        sql_context_ref="sql:context:abc123",
++        vector=(1.0, 0.0),
++        payload=(("role", "passage"),),
++    )
++
++
++def _executor(*, write: bool = True, search: bool = True) -> tuple[QdrantClientProjectionExecutor, FakeClient]:
++    client = FakeClient()
++    executor = QdrantClientProjectionExecutor(
++        client=client,
++        models_module=FakeModels,
++        config=QdrantClientConnectionConfig(),
++        gate=QdrantClientEffectGate(
++            policy_decision_id="policy:0271:test",
++            allow_write=write,
++            allow_search=search,
++        ),
++    )
++    return executor, client
++
++
++def test_upsert_uses_uuid_storage_id_and_preserves_autodoc_refs() -> None:
++    executor, client = _executor()
++
++    result = executor.upsert_points((_point(),), target=_target(), policy=QdrantProjectionPolicy())
++
++    assert result.acknowledged is True
++    assert result.point_ids == ("qdrant-point:abc123",)
++    request = client.upserts[0]
++    stored = request["points"][0]
++    assert stored.id != "qdrant-point:abc123"
++    assert len(str(stored.id)) == 36
++    assert stored.payload["autodoc_point_ref"] == "qdrant-point:abc123"
++    assert stored.payload["sql_ref"] == "sql:context:abc123"
++    assert stored.payload["sql_context_ref"] == "sql:context:abc123"
++    assert request["wait"] is True
++
++
++def test_search_returns_reference_only_hits_for_sql_rehydration() -> None:
++    executor, client = _executor()
++    client.query_response = SimpleNamespace(
++        points=[
++            SimpleNamespace(
++                id="f4e1d074-67ab-4de0-8d92-358df819cad4",
++                score=0.8,
++                payload={
++                    "autodoc_point_ref": "qdrant-point:abc123",
++                    "sql_ref": "sql:context:abc123",
++                    "source_ref": "ctx-fragment:sql:context:abc123",
++                    "nested": {"not": "copied"},
++                },
++            )
++        ]
++    )
++
++    result = executor.search_vector(
++        (1.0, 0.0),
++        target=_target(),
++        policy=QdrantProjectionPolicy(max_recall_hits=4),
++        query=QdrantRecallQuery(query_ref="qdrant-query:test", limit=4),
++    )
++
++    assert result.sql_context_refs == ("sql:context:abc123",)
++    assert result.hits[0].point_id == "qdrant-point:abc123"
++    assert result.hits[0].score == pytest.approx(0.9)
++    assert "nested" not in dict(result.hits[0].payload)
++    assert client.queries[0]["with_vectors"] is False
++
++
++def test_gate_denies_effects_before_sdk_call() -> None:
++    executor, client = _executor(write=False, search=False)
++
++    with pytest.raises(QdrantClientExecutionError) as write_error:
++        executor.upsert_points((_point(),), target=_target(), policy=QdrantProjectionPolicy())
++    with pytest.raises(QdrantClientExecutionError) as search_error:
++        executor.search_vector(
++            (1.0, 0.0),
++            target=_target(),
++            policy=QdrantProjectionPolicy(),
++            query=QdrantRecallQuery(query_ref="qdrant-query:test"),
++        )
++
++    assert write_error.value.failure.category == "gate_denied"
++    assert search_error.value.failure.category == "gate_denied"
++    assert client.upserts == []
++    assert client.queries == []
++
++
++def test_missing_sql_ref_fails_closed() -> None:
++    executor, client = _executor()
++    client.query_response = SimpleNamespace(
++        points=[SimpleNamespace(id="deadbeef", score=0.5, payload={"source_ref": "ctx:test"})]
++    )
++
++    with pytest.raises(QdrantClientExecutionError) as error:
++        executor.search_vector(
++            (1.0, 0.0),
++            target=_target(),
++            policy=QdrantProjectionPolicy(),
++            query=QdrantRecallQuery(query_ref="qdrant-query:test"),
++        )
++
++    assert error.value.failure.category == "missing_sql_ref"
++
++
++def test_factory_injects_official_client_options_without_serializing_api_key() -> None:
++    captured: dict[str, object] = {}
++
++    def factory(**kwargs):
++        captured.update(kwargs)
++        return FakeClient()
++
++    config = QdrantClientConnectionConfig(prefer_grpc=True, grpc_port=7334)
++    executor = build_qdrant_client_projection_executor(
++        config,
++        QdrantClientEffectGate(policy_decision_id="policy:0271:test", allow_search=True),
++        api_key="secret-value",
++        client_factory=factory,
++        models_module=FakeModels,
++    )
++
++    assert isinstance(executor, QdrantClientProjectionExecutor)
++    assert captured["prefer_grpc"] is True
++    assert captured["grpc_port"] == 7334
++    assert captured["api_key"] == "secret-value"
++    assert config.to_mapping()["api_key_serialized"] is False
++    assert "secret-value" not in repr(config)
++
++
++def test_sdk_error_is_wrapped_as_serializable_failure() -> None:
++    class BrokenClient(FakeClient):
++        def upsert(self, **kwargs):
++            raise TimeoutError("backend timeout")
++
++    executor = QdrantClientProjectionExecutor(
++        client=BrokenClient(),
++        models_module=FakeModels,
++        config=QdrantClientConnectionConfig(),
++        gate=QdrantClientEffectGate(policy_decision_id="policy:0271:test", allow_write=True),
++    )
++
++    with pytest.raises(QdrantClientExecutionError) as error:
++        executor.upsert_points((_point(),), target=_target(), policy=QdrantProjectionPolicy())
++
++    assert error.value.failure.to_mapping() == {
++        "operation": "upsert",
++        "category": "TimeoutError",
++        "message": "backend timeout",
++        "retryable": True,
++    }
++
++
++def test_close_delegates_without_starting_or_stopping_service() -> None:
++    executor, client = _executor()
++    executor.close()
++    assert client.closed is True
+diff --git a/tests/rules/__pycache__/test_qdrant_client_projection_executor_0271_rule.cpython-313-pytest-9.0.2.pyc b/tests/rules/__pycache__/test_qdrant_client_projection_executor_0271_rule.cpython-313-pytest-9.0.2.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..4bc9170eb740434abd088a01a75868a4c2a53492
+GIT binary patch
+literal 12081
+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
+OHvZpT0roOWtoa{iJsBzh
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/rules/__pycache__/test_qdrant_client_projection_executor_0271_rule.cpython-313.pyc b/tests/rules/__pycache__/test_qdrant_client_projection_executor_0271_rule.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..25255b5ff2a4e1331e0bebc9c97479790f2318f2
+GIT binary patch
+literal 2946
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/rules/test_qdrant_client_projection_executor_0271_rule.py b/tests/rules/test_qdrant_client_projection_executor_0271_rule.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..fe14aa21f7ef213e455a82503cd7172cd6c57163
+--- /dev/null
++++ b/tests/rules/test_qdrant_client_projection_executor_0271_rule.py
+@@ -0,0 +1,52 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++EXECUTOR = ROOT / "src/inference/qdrant_client_projection_executor.py"
++REQUIREMENT = ROOT / "config/requirements-qdrant-client-0271.txt"
++RULE = ROOT / "doc/code-rules/0271_qdrant_client_projection_executor_rule.md"
++MANIFEST = ROOT / "doc/manifests/MANIFEST_0271_QDRANT_CLIENT_PROJECTION_EXECUTOR_CHANGED_FILES.md"
++
++
++def test_0271_r2_reuses_existing_protocol_and_declares_dependency() -> None:
++    source = EXECUTOR.read_text(encoding="utf-8")
++    assert "from inference.qdrant_projection_adapter import" in source
++    assert "class QdrantClientProjectionExecutor" in source
++    assert 'import_module("qdrant_client")' in source
++    assert REQUIREMENT.read_text(encoding="utf-8").strip().endswith("qdrant-client==1.18.0")
++
++
++def test_0271_r2_keeps_service_and_shm_boundaries() -> None:
++    source = EXECUTOR.read_text(encoding="utf-8")
++    forbidden = (
++        "subprocess",
++        "rc-service",
++        "openrc",
++        "Scheduler.run(",
++        "RuntimeManager",
++        "Orchestrator",
++        "shared_memory",
++        "mmap(",
++        "RouteProxy",
++        "ControlProxy",
++    )
++    for phrase in forbidden:
++        assert phrase not in source
++    assert "starts_qdrant" in source
++    assert '"touches_shm": False' in source
++
++
++def test_0271_r2_requires_effect_gate_and_sql_ref_payload() -> None:
++    source = EXECUTOR.read_text(encoding="utf-8")
++    assert "QdrantClientEffectGate" in source
++    assert 'payload["sql_ref"] = point.sql_context_ref' in source
++    assert 'payload["autodoc_point_ref"] = point.point_id' in source
++    assert '"missing_sql_ref"' in source
++
++
++def test_0271_r2_manifest_is_narrow_and_scheduler_free() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    assert "src/inference/qdrant_client_projection_executor.py" in manifest
++    assert "config/requirements-qdrant-client-0271.txt" in manifest
++    assert "src/scheduler" not in manifest.lower()
++    assert "Scheduler.run" not in manifest
++    assert "official qdrant-client SDK" in RULE.read_text(encoding="utf-8")
+diff --git a/tests/tools/__pycache__/test_check_qdrant_client_projection_executor_0271.cpython-313-pytest-9.0.2.pyc b/tests/tools/__pycache__/test_check_qdrant_client_projection_executor_0271.cpython-313-pytest-9.0.2.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..7c8217df7b2a36c0e793a371fc464c3f4a79e69a
+GIT binary patch
+literal 6890
+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
+ST>5h~Dh&R0aF6gTbMjBb++H*Q
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/tools/__pycache__/test_check_qdrant_client_projection_executor_0271.cpython-313.pyc b/tests/tools/__pycache__/test_check_qdrant_client_projection_executor_0271.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..fdb915217103d36b3203fe5af13fef17f68609d0
+GIT binary patch
+literal 2577
+zcmb7GO>7fK6rQ!m&f<xa5Pm{}0OQaKH^C;MQDOoC1WGGXB4WpFrBrM;>q+cj@4B;V
+zz>zAsr;2h22P);5o(gIY9DD4smrA=yB&XAGLOpOpO)K@-H@n%8gwTpP%)Wi|=I#6Y
+z-rJ36G=gBA7@C+n7eeT{c=1=jBczQFf%q0>QC1p5*Ci&!1RWR)u%P?I48t=x7P=m0
+zVfPG=HC>mP40Naqv3=R5Y`6=}VHTMUB;*%DZ9?Ki)pf&Ct)iiu<M57es#f8N#7|7*
+znW|e?OGT<%*Jy?6d8%u*3{~?*otma5?)wV^5kyGZ7?OmIQ?Pq$YSVgz1~z#a@Nf4T
+z*kokFyH5~!D=uUMX9z+%nv#8qj2kik&3k5|JKx1yHkd;Ln^x#jPMQXpoRn#KT~Y(7
+z4n(E@`Nsa&Z{{T5J3X+s?#zKbZUy{XF_a6OLJ2(nLKr$fU>QcqOlbwG-B!ME)1YW>
+z9+V0*=BOr;rO<m+t6BzA&h`)XB`Y=F`!*L65hjwxWks1OmZ+leCPq!8bcgb$ipn78
+zCf`>qR}5yAiqjldtzwCHm=&riGt4M^mr91_77h=W3^h*~Zz~)5Drj>>gfJ(<OvPg-
+zf*e<%x;S=^!XDRz!a=cEj4P?KZl&_7rKVJHEN^J8YYOXE?i%cN%A%%aro7k)T6r6P
+zMSvoTFjEm4SO<JmRFL^4Y<09wS|7;|MjGU#Lr$)c?gr^`NYCRd4oTX51&0*s*Vf6w
+zg^~Lp(&vyqyZ>{0dS->p)~~IRR)-v2!rznch!Y#M@t{ox*Q19QZr#7ti1s?s-p7+G
+z(f<1A8kWBv`)aI#k2?71;^->wUL*VKH#Wckq=_K-OQ66-Qvon@E3_R?K2r2xPRdFG
+z6Xj42Wwzhm)RGHk1KD5~8rVF88heu*&V}BWM30!0w@C;83#r-g`A-qb`-s`XZDtFf
+zzB35L(PStCmhN8AkL2_#<lr36?sKso`DjZs@QBN6-ocCR=4D%QfxXc0$7?UV4}(Fz
+z2eT;AIzHdR{O*>VGYy@`in^#&YZnOfTisCG?vt<yU@mPO24Z{CvXV$e+JpGye7G;!
+zH<Ub^2mruz(^5+%n&(Y-C^G@pOlWz6*b#Uzp@_>DN@{sJua5AGUe%Y1%3W3jS`p?d
+zhF+>EuS^1_0B!Pu0B6Y@0m8f93Chf7*y?DtE%no>U*zSs3HLiZ0*E)MqO#eYZM_Mk
+zU5_pUF(U2uX=<zNCb!yqHkif9fL}&&<R<{yTWFl)EAR<+9JKK!vsx~ztOj8S8&#`P
+zwRm{OU}e<;4z_9)%7doG5)yj{#7!|h>TW>T2_RVvHlfGtg6*F=dW0W-yqNj%>eKKK
+zV?U>zlQ&k|##h^JdU15SYN%?>oEd@%C&L^wV2I7~&>gi@%un)Wom!&BC{>f@M|srm
+zxo&Fa_gh94T8*igh4RHwh$&6TZvOxuC`?X^aa>l5I>&C&ghZ2p=IJKKqW3Hw5hVCX
+z8RJ2CCc>PQ4gEH)K{wP2T(-&;#chmXO|6(UlN|!5L?5mRU0whL#Gp&YVwb(L=y{7`
+zU_)>j5{b-TVS{L`M>`&T1|2DS$Ubt~iJlhCskMPS9Ne)cx2(zU{U%TR)r3Rgmk|_d
+z+jekpUB2lZG^6JBh2i_d4=yfVSs}-4e9R`t)?3;a=DwL*JlyC^IGu^7gLY@a?i^le
+zxlsRLjkG@;gig6=Et75=ciRN|U;D!mhs2lYGU>5#k4<_6>yksdm#WL8*T%gz>0Kko
+zm)>o}&pGjPEAfFwJnh8OD<o~>v_sNvf<+B6YE>EJVBFAYf<UiVW~#t}$;L#P@|LY(
+zmK3v$iC+bl5+@L6s{ljJ8;CtceTKsP(`eE!gEx*|CX(Wof*WDCuy-KWn{XrS63B@P
+mHbu$43`&yp48@<LL%$>P3?2Ccee!2GEVcjLen2|!-v1YegJ+lk
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/tools/test_check_qdrant_client_projection_executor_0271.py b/tests/tools/test_check_qdrant_client_projection_executor_0271.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..cc6ee13dcec2dca6d86cef028866b9cad30f6882
+--- /dev/null
++++ b/tests/tools/test_check_qdrant_client_projection_executor_0271.py
+@@ -0,0 +1,38 @@
++from __future__ import annotations
++
++import importlib.util
++import json
++from pathlib import Path
++
++from inference.qdrant_client_projection_executor import QdrantClientDependencyReadiness
++
++
++def _load_tool():
++    path = Path(__file__).resolve().parents[2] / "tools/check_qdrant_client_projection_executor_0271.py"
++    spec = importlib.util.spec_from_file_location("check_qdrant_client_projection_executor_0271", path)
++    assert spec is not None and spec.loader is not None
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
++    return module
++
++
++def test_cli_writes_read_only_dependency_report(monkeypatch, tmp_path, capsys) -> None:
++    module = _load_tool()
++    output = tmp_path / "readiness.json"
++    monkeypatch.setattr(
++        module,
++        "inspect_qdrant_client_dependency",
++        lambda: QdrantClientDependencyReadiness(installed=True, version="1.18.0"),
++    )
++    monkeypatch.setattr(
++        module,
++        "parse_args",
++        lambda: type("Args", (), {"output": str(output), "format": "summary"})(),
++    )
++
++    assert module.main() == 0
++    payload = json.loads(output.read_text(encoding="utf-8"))
++    assert payload["valid"] is True
++    assert payload["network_used"] is False
++    assert payload["qdrant_called"] is False
++    assert "touches_shm=False" in capsys.readouterr().out
+diff --git a/tools/__pycache__/check_qdrant_client_projection_executor_0271.cpython-313.pyc b/tools/__pycache__/check_qdrant_client_projection_executor_0271.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..b3b39148c9da1863a9ddb34ba56234d801463f3a
+GIT binary patch
+literal 2704
+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
+OT4Y)mXvD1Y-~SJ9zkH|w
+
+literal 0
+HcmV?d00001
+
+diff --git a/tools/check_qdrant_client_projection_executor_0271.py b/tools/check_qdrant_client_projection_executor_0271.py
+new file mode 100755
+index 0000000000000000000000000000000000000000..efd54dc60e128c9a106e25f1c1ecc0bc056322e3
+--- /dev/null
++++ b/tools/check_qdrant_client_projection_executor_0271.py
+@@ -0,0 +1,48 @@
++#!/usr/bin/env python3
++"""Check qdrant-client dependency readiness without opening a connection."""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import sys
++
++ROOT = Path(__file__).resolve().parents[1]
++SRC = ROOT / "src"
++for _path in (str(SRC), str(ROOT)):
++    if _path not in sys.path:
++        sys.path.insert(0, _path)
++
++from inference.qdrant_client_projection_executor import inspect_qdrant_client_dependency  # noqa: E402
++
++
++def parse_args() -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--output", default="")
++    parser.add_argument("--format", choices=("json", "summary"), default="json")
++    return parser.parse_args()
++
++
++def main() -> int:
++    args = parse_args()
++    result = inspect_qdrant_client_dependency()
++    payload = result.to_mapping()
++    if args.output:
++        output = Path(args.output)
++        output.parent.mkdir(parents=True, exist_ok=True)
++        output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    if args.format == "summary":
++        print(
++            "qdrant_client_projection_executor_ready="
++            f"{payload['valid']} installed={payload['installed']} "
++            f"version={payload['version'] or '-'} required={payload['required_version']} "
++            "network_used=False qdrant_called=False touches_shm=False"
++        )
++    else:
++        print(json.dumps(payload, indent=2, sort_keys=True))
++    return 0 if payload["valid"] else 2
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

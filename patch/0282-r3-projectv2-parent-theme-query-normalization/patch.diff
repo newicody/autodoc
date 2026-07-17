@@ -1,0 +1,1389 @@
+diff --git a/PHASE0282_R3_PROJECT_V2_PARENT_THEME_QUERY_NORMALIZATION_REPORT.md b/PHASE0282_R3_PROJECT_V2_PARENT_THEME_QUERY_NORMALIZATION_REPORT.md
+new file mode 100644
+index 0000000..afc84c2
+--- /dev/null
++++ b/PHASE0282_R3_PROJECT_V2_PARENT_THEME_QUERY_NORMALIZATION_REPORT.md
+@@ -0,0 +1,57 @@
++# Phase 0282-r3 report — ProjectV2 parent/theme query normalization
++
++## Result
++
++The existing live query-only ProjectV2 path now reads native parent/sub-issue
++relations. The new pure normalizer converts the resulting snapshot and existing
++Project fields into deterministic r2-compatible references.
++
++## Next phase
++
++```text
++0282-r4-projectv2-append-only-cycle-history-projection
++```
++
++## Validation
++
++```bash
++PYTHONPATH=src:. python -m pytest -q \
++  tests/context/test_github_project_v2_parent_theme_query_normalization_0282.py \
++  tests/rules/test_github_project_v2_parent_theme_query_normalization_0282_rule.py \
++  tests/context/test_github_project_v2_query_only_snapshot_0272.py
++
++PYTHONPATH=src:. python -m pytest -q tests/rules
++PYTHONPATH=src:. python -m pytest -q
++```
++
++## Code-rule review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: r1 justified the missing surface and r2 established the immutable references
++live_path_status: transition
++live_path_uses_real_backend: true
++context_contract_version: missipy.github.project_v2_parent_theme_normalization.v1
++context_contract_changed: true
++search_commands_bounded: n/a
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++github_api_query_extended: true
++qdrant_added: false
++llm_or_openvino_added: false
++existing_query_extended: true
++parallel_query_transport_added: false
++new_runtime_module_added: true
++new_cli_added: false
++new_adapter_added: false
++github_api_client_added: false
++graphql_mutation_added: false
++github_mutation_performed: false
++projects_repository_change_required: false
++```
++
++No new network client is added. The current live GraphQL client will use the
++extended query document, while normalization remains a pure local operation.
+diff --git a/doc/CHANGELOG_0282_R3_PROJECT_V2_PARENT_THEME_QUERY_NORMALIZATION.md b/doc/CHANGELOG_0282_R3_PROJECT_V2_PARENT_THEME_QUERY_NORMALIZATION.md
+new file mode 100644
+index 0000000..07ab4e2
+--- /dev/null
++++ b/doc/CHANGELOG_0282_R3_PROJECT_V2_PARENT_THEME_QUERY_NORMALIZATION.md
+@@ -0,0 +1,23 @@
++# Changelog 0282-r3 — ProjectV2 parent/theme query normalization
++
++- Extended the existing ProjectV2 item query with `Issue.parent`.
++- Added bounded `Issue.subIssues(first: 100)` query data.
++- Added deterministic local normalization for parent, sub-issue, theme and
++  status references.
++- Reused 0282-r2 reference builders and append-only ticket revisions.
++- Added explicit rejection of hierarchy truncation and foreign repositories.
++- Added no parallel query transport, CLI, adapter or remote mutation.
++
++```text
++existing_query_extended: true
++parallel_query_transport_added: false
++new_runtime_module_added: true
++new_cli_added: false
++new_adapter_added: false
++github_api_client_added: false
++graphql_mutation_added: false
++github_mutation_performed: false
++scheduler_modified: false
++projects_repository_change_required: false
++external_dependencies_added: false
++```
+diff --git a/doc/architecture/GITHUB_PROJECT_V2_PARENT_THEME_QUERY_NORMALIZATION_0282.md b/doc/architecture/GITHUB_PROJECT_V2_PARENT_THEME_QUERY_NORMALIZATION_0282.md
+new file mode 100644
+index 0000000..5dc4ccf
+--- /dev/null
++++ b/doc/architecture/GITHUB_PROJECT_V2_PARENT_THEME_QUERY_NORMALIZATION_0282.md
+@@ -0,0 +1,79 @@
++# ProjectV2 parent/theme query normalization — 0282-r3
++
++## Purpose
++
++Extend the existing 0272 ProjectV2 query-only snapshot with the native
++`Issue.parent` and bounded `Issue.subIssues(first: 100)` fields, then normalize
++that snapshot into the immutable references introduced by 0282-r2.
++
++GitHub added `Issue.parent` and `Issue.subIssues` to its GraphQL schema, and
++Projects exposes parent/sub-issue hierarchy as built-in fields. This phase reads
++those relationships; it does not mutate them.
++
++## Reuse
++
++```text
++existing_query_extended: true
++parallel_query_transport_added: false
++r2_lineage_reference_builders_reused: true
++append_only_ticket_revision_builder_reused: true
++```
++
++No second ProjectV2 client, fetcher, adapter or intake is introduced.
++
++## Normalized item
++
++```text
++project_item_ref
++issue_ref
++parent_issue_ref
++sub_issue_refs
++theme_refs
++theme_values
++status_name
++status_revision_ref
++hierarchy_payload_present
++```
++
++Themes are selected from configured field names or field IDs. The defaults
++recognize `Theme` and `Thème`. Status defaults recognize `Status` and
++`Étape Status`.
++
++The status revision is deterministic over:
++
++```text
++snapshot_ref
++project item id
++status field reference
++status value
++```
++
++## Safety and completeness
++
++- A strict policy requires `parent` and `subIssues` to be present in each Issue
++  payload.
++- A paginated `subIssues` connection with `hasNextPage=true` is rejected rather
++  than silently truncated.
++- Foreign-repository parent or sub-issue references are rejected.
++- Duplicate items, sub-issues, themes and multiple status values are rejected.
++- Draft issues and pull requests are ignored by default and can be forbidden by
++  policy.
++
++## Boundaries
++
++```text
++new_runtime_module_added: true
++new_cli_added: false
++new_adapter_added: false
++github_api_client_added: false
++graphql_mutation_added: false
++github_mutation_performed: false
++sql_write_added: false
++qdrant_write_added: false
++scheduler_modified: false
++projects_repository_change_required: false
++external_dependencies_added: false
++```
++
++The existing GraphQL live path uses the extended query. The normalizer itself is
++pure and performs no network call.
+diff --git a/doc/manifests/MANIFEST_0282_R3_PROJECT_V2_PARENT_THEME_QUERY_NORMALIZATION.md b/doc/manifests/MANIFEST_0282_R3_PROJECT_V2_PARENT_THEME_QUERY_NORMALIZATION.md
+new file mode 100644
+index 0000000..4f609d5
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0282_R3_PROJECT_V2_PARENT_THEME_QUERY_NORMALIZATION.md
+@@ -0,0 +1,37 @@
++# Manifest 0282-r3 — ProjectV2 parent/theme query normalization
++
++## Modified
++
++```text
++src/context/github_project_v2_query_only_snapshot_0272.py
++```
++
++## Added
++
++```text
++src/context/github_project_v2_parent_theme_query_normalization_0282.py
++tests/context/test_github_project_v2_parent_theme_query_normalization_0282.py
++tests/rules/test_github_project_v2_parent_theme_query_normalization_0282_rule.py
++doc/architecture/GITHUB_PROJECT_V2_PARENT_THEME_QUERY_NORMALIZATION_0282.md
++doc/manifests/MANIFEST_0282_R3_PROJECT_V2_PARENT_THEME_QUERY_NORMALIZATION.md
++doc/CHANGELOG_0282_R3_PROJECT_V2_PARENT_THEME_QUERY_NORMALIZATION.md
++PHASE0282_R3_PROJECT_V2_PARENT_THEME_QUERY_NORMALIZATION_REPORT.md
++```
++
++## Impact
++
++```text
++Repo autodoc: OUI
++Repo projects: NON
++existing_query_extended: true
++parallel_query_transport_added: false
++new_runtime_module_added: true
++new_cli_added: false
++new_adapter_added: false
++github_api_client_added: false
++graphql_mutation_added: false
++github_mutation_performed: false
++scheduler_modified: false
++projects_repository_change_required: false
++external_dependencies_added: false
++```
+diff --git a/src/context/github_project_v2_parent_theme_query_normalization_0282.py b/src/context/github_project_v2_parent_theme_query_normalization_0282.py
+new file mode 100644
+index 0000000..9eb4c65
+--- /dev/null
++++ b/src/context/github_project_v2_parent_theme_query_normalization_0282.py
+@@ -0,0 +1,626 @@
++"""Query-only ProjectV2 parent/theme normalization for phase 0282-r3.
++
++The module consumes an already-built 0272 query-only snapshot. It does not
++perform GraphQL transport, GitHub mutation, persistence, scheduling or
++laboratory execution.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++import hashlib
++import json
++from typing import Any, Mapping, Sequence
++
++from context.github_project_push_frame import build_ticket_revision_id
++from context.github_project_v2_cycle_lineage_0282 import (
++    build_github_project_v2_issue_ref,
++    build_github_project_v2_item_ref,
++    build_github_project_v2_theme_ref,
++)
++from context.github_project_v2_query_only_snapshot_0272 import (
++    SNAPSHOT_SCHEMA,
++)
++
++
++PARENT_THEME_NORMALIZATION_SCHEMA = (
++    "missipy.github.project_v2_parent_theme_normalization.v1"
++)
++PARENT_THEME_ITEM_SCHEMA = (
++    "missipy.github.project_v2_parent_theme_item.v1"
++)
++PARENT_THEME_RESULT_SCHEMA = (
++    "missipy.github.project_v2_parent_theme_normalization_result.v1"
++)
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubProjectV2ParentThemeNormalizationCommand:
++    snapshot: Mapping[str, Any]
++    repository: str
++    project_id: str
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubProjectV2ParentThemeNormalizationPolicy:
++    theme_field_names: tuple[str, ...] = ("Theme", "Thème")
++    theme_field_ids: tuple[str, ...] = ()
++    status_field_names: tuple[str, ...] = (
++        "Status",
++        "Étape Status",
++    )
++    status_field_ids: tuple[str, ...] = ()
++    require_hierarchy_payload: bool = True
++    require_status: bool = True
++    allow_non_issue_items: bool = True
++    max_items: int = 500
++    max_sub_issue_refs: int = 64
++    max_theme_refs: int = 16
++
++    def __post_init__(self) -> None:
++        if self.max_items <= 0:
++            raise ValueError("max_items must be > 0")
++        if self.max_sub_issue_refs < 0:
++            raise ValueError("max_sub_issue_refs must be >= 0")
++        if self.max_theme_refs < 0:
++            raise ValueError("max_theme_refs must be >= 0")
++        if not self.theme_field_names and not self.theme_field_ids:
++            raise ValueError(
++                "at least one theme field name or id is required"
++            )
++        if not self.status_field_names and not self.status_field_ids:
++            raise ValueError(
++                "at least one status field name or id is required"
++            )
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubProjectV2NormalizedParentThemeItem:
++    project_item_ref: str
++    issue_ref: str
++    parent_issue_ref: str
++    sub_issue_refs: tuple[str, ...]
++    theme_refs: tuple[str, ...]
++    theme_values: tuple[str, ...]
++    status_name: str
++    status_revision_ref: str
++    hierarchy_payload_present: bool
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "schema": PARENT_THEME_ITEM_SCHEMA,
++            "project_item_ref": self.project_item_ref,
++            "issue_ref": self.issue_ref,
++            "parent_issue_ref": self.parent_issue_ref,
++            "sub_issue_refs": list(self.sub_issue_refs),
++            "theme_refs": list(self.theme_refs),
++            "theme_values": list(self.theme_values),
++            "status_name": self.status_name,
++            "status_revision_ref": self.status_revision_ref,
++            "hierarchy_payload_present": (
++                self.hierarchy_payload_present
++            ),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubProjectV2ParentThemeNormalizationResult:
++    valid: bool
++    issues: tuple[str, ...]
++    normalization_ref: str
++    snapshot_ref: str
++    repository: str
++    project_id: str
++    items: tuple[GitHubProjectV2NormalizedParentThemeItem, ...]
++    ignored_item_count: int
++    boundaries: tuple[tuple[str, bool], ...]
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "schema": PARENT_THEME_RESULT_SCHEMA,
++            "valid": self.valid,
++            "issues": list(self.issues),
++            "normalization_ref": self.normalization_ref,
++            "snapshot_ref": self.snapshot_ref,
++            "repository": self.repository,
++            "project_id": self.project_id,
++            "items": [item.to_json_dict() for item in self.items],
++            "counts": {
++                "normalized_item_count": len(self.items),
++                "ignored_item_count": self.ignored_item_count,
++            },
++            "boundaries": dict(self.boundaries),
++        }
++
++    def to_summary(self) -> str:
++        return " ".join(
++            (
++                f"project_v2_parent_theme_valid={self.valid}",
++                f"issues={len(self.issues)}",
++                f"items={len(self.items)}",
++                f"ignored={self.ignored_item_count}",
++                f"snapshot_ref={self.snapshot_ref or '-'}",
++                "external_call_performed=False",
++                "graphql_mutation_allowed=False",
++                "remote_mutation_allowed=False",
++            )
++        )
++
++
++def normalize_github_project_v2_parent_theme_snapshot(
++    command: GitHubProjectV2ParentThemeNormalizationCommand,
++    policy: GitHubProjectV2ParentThemeNormalizationPolicy | None = None,
++) -> GitHubProjectV2ParentThemeNormalizationResult:
++    active_policy = (
++        policy or GitHubProjectV2ParentThemeNormalizationPolicy()
++    )
++    snapshot = command.snapshot
++    repository = command.repository.strip()
++    project_id = command.project_id.strip()
++    issues: list[str] = []
++
++    if str(snapshot.get("schema", "")) != SNAPSHOT_SCHEMA:
++        issues.append("snapshot schema mismatch")
++
++    project = _mapping(snapshot.get("project"))
++    if str(project.get("id", "")).strip() != project_id:
++        issues.append("snapshot project id mismatch")
++
++    boundaries = _mapping(snapshot.get("boundaries"))
++    if boundaries.get("query_only") is not True:
++        issues.append("snapshot must remain query-only")
++    if boundaries.get("graphql_mutation_allowed") is not False:
++        issues.append("snapshot must disable GraphQL mutation")
++    if boundaries.get("remote_mutation_allowed") is not False:
++        issues.append("snapshot must disable remote mutation")
++
++    snapshot_ref = str(snapshot.get("snapshot_ref", "")).strip()
++    if not snapshot_ref.startswith("github-project-v2-snapshot:"):
++        issues.append("snapshot_ref is required")
++
++    raw_items = _sequence(snapshot.get("items"))
++    if len(raw_items) > active_policy.max_items:
++        issues.append("snapshot item count exceeds policy maximum")
++
++    normalized_items: list[
++        GitHubProjectV2NormalizedParentThemeItem
++    ] = []
++    ignored_item_count = 0
++    seen_project_item_ids: set[str] = set()
++
++    for position, raw_item in enumerate(raw_items):
++        item = _mapping(raw_item)
++        item_id = str(item.get("id", "")).strip()
++        item_label = item_id or f"position:{position}"
++
++        if not item_id:
++            issues.append(f"{item_label}: project item id is required")
++            continue
++        if item_id in seen_project_item_ids:
++            issues.append(f"{item_label}: duplicate project item id")
++            continue
++        seen_project_item_ids.add(item_id)
++
++        content = _mapping(item.get("content"))
++        item_type = str(item.get("type", "")).strip()
++        content_type = str(content.get("__typename", "")).strip()
++        if item_type != "ISSUE" or content_type != "Issue":
++            if active_policy.allow_non_issue_items:
++                ignored_item_count += 1
++                continue
++            issues.append(f"{item_label}: non-Issue item is forbidden")
++            continue
++
++        item_issues: list[str] = []
++        content_repository = str(
++            _mapping(content.get("repository")).get(
++                "nameWithOwner",
++                "",
++            )
++        ).strip()
++        issue_number = _positive_int(content.get("number"))
++
++        if content_repository != repository:
++            item_issues.append(
++                "issue repository does not match normalization repository"
++            )
++        if issue_number <= 0:
++            item_issues.append("issue number must be positive")
++
++        issue_ref = ""
++        if not item_issues:
++            issue_ref = build_github_project_v2_issue_ref(
++                repository,
++                issue_number,
++            )
++
++        hierarchy_payload_present = (
++            "parent" in content and "subIssues" in content
++        )
++        if (
++            active_policy.require_hierarchy_payload
++            and not hierarchy_payload_present
++        ):
++            item_issues.append(
++                "Issue.parent and Issue.subIssues payload is required"
++            )
++
++        parent_issue_ref = _normalize_optional_issue(
++            content.get("parent"),
++            repository,
++            f"{item_label}: parent",
++            item_issues,
++        )
++        sub_issue_refs = _normalize_sub_issues(
++            content.get("subIssues"),
++            repository,
++            item_label,
++            active_policy,
++            item_issues,
++        )
++
++        if issue_ref and issue_ref in sub_issue_refs:
++            item_issues.append(
++                "issue must not appear in its own sub_issue_refs"
++            )
++        if (
++            parent_issue_ref
++            and parent_issue_ref in sub_issue_refs
++        ):
++            item_issues.append(
++                "parent_issue_ref must not be a sub_issue_ref"
++            )
++
++        field_values = _field_value_nodes(item)
++        theme_refs, theme_values = _normalize_themes(
++            field_values,
++            project_id,
++            active_policy,
++            item_label,
++            item_issues,
++        )
++        status_name, status_field_ref = _normalize_status(
++            field_values,
++            active_policy,
++            item_label,
++            item_issues,
++        )
++
++        status_revision_ref = ""
++        if issue_ref and status_name:
++            status_revision_ref = build_ticket_revision_id(
++                issue_ref,
++                "project_v2_snapshot_status",
++                "\0".join(
++                    (
++                        snapshot_ref,
++                        item_id,
++                        status_field_ref,
++                        status_name,
++                    )
++                ),
++            )
++
++        if item_issues:
++            issues.extend(
++                f"{item_label}: {message}"
++                for message in item_issues
++            )
++            continue
++
++        normalized_items.append(
++            GitHubProjectV2NormalizedParentThemeItem(
++                project_item_ref=build_github_project_v2_item_ref(
++                    item_id
++                ),
++                issue_ref=issue_ref,
++                parent_issue_ref=parent_issue_ref,
++                sub_issue_refs=sub_issue_refs,
++                theme_refs=theme_refs,
++                theme_values=theme_values,
++                status_name=status_name,
++                status_revision_ref=status_revision_ref,
++                hierarchy_payload_present=hierarchy_payload_present,
++            )
++        )
++
++    normalized_items.sort(key=lambda item: item.project_item_ref)
++    digest = _normalization_digest(
++        snapshot_ref,
++        repository,
++        project_id,
++        normalized_items,
++    )
++    normalization_ref = (
++        f"github-project-v2-parent-theme:{digest[:16]}"
++        if not issues
++        else ""
++    )
++
++    return GitHubProjectV2ParentThemeNormalizationResult(
++        valid=not issues,
++        issues=tuple(issues),
++        normalization_ref=normalization_ref,
++        snapshot_ref=snapshot_ref,
++        repository=repository,
++        project_id=project_id,
++        items=tuple(normalized_items),
++        ignored_item_count=ignored_item_count,
++        boundaries=_boundaries(),
++    )
++
++
++def _normalize_optional_issue(
++    value: Any,
++    repository: str,
++    label: str,
++    issues: list[str],
++) -> str:
++    if value is None:
++        return ""
++    issue = _mapping(value)
++    if not issue:
++        issues.append(f"{label} must be an issue mapping or null")
++        return ""
++
++    issue_repository = str(
++        _mapping(issue.get("repository")).get(
++            "nameWithOwner",
++            "",
++        )
++    ).strip()
++    issue_number = _positive_int(issue.get("number"))
++    if issue_repository != repository:
++        issues.append(f"{label} repository mismatch")
++        return ""
++    if issue_number <= 0:
++        issues.append(f"{label} number must be positive")
++        return ""
++    return build_github_project_v2_issue_ref(
++        repository,
++        issue_number,
++    )
++
++
++def _normalize_sub_issues(
++    value: Any,
++    repository: str,
++    item_label: str,
++    policy: GitHubProjectV2ParentThemeNormalizationPolicy,
++    issues: list[str],
++) -> tuple[str, ...]:
++    if value is None:
++        return ()
++
++    connection = _mapping(value)
++    page_info = _mapping(connection.get("pageInfo"))
++    if page_info.get("hasNextPage") is True:
++        issues.append(
++            f"{item_label}: subIssues payload is truncated"
++        )
++
++    refs: list[str] = []
++    for raw_node in _sequence(connection.get("nodes")):
++        node = _mapping(raw_node)
++        node_repository = str(
++            _mapping(node.get("repository")).get(
++                "nameWithOwner",
++                "",
++            )
++        ).strip()
++        node_number = _positive_int(node.get("number"))
++        if node_repository != repository:
++            issues.append(
++                f"{item_label}: sub-issue repository mismatch"
++            )
++            continue
++        if node_number <= 0:
++            issues.append(
++                f"{item_label}: sub-issue number must be positive"
++            )
++            continue
++        refs.append(
++            build_github_project_v2_issue_ref(
++                repository,
++                node_number,
++            )
++        )
++
++    if len(refs) != len(set(refs)):
++        issues.append(f"{item_label}: duplicate sub-issue")
++    if len(refs) > policy.max_sub_issue_refs:
++        issues.append(
++            f"{item_label}: sub-issues exceed policy maximum"
++        )
++    return tuple(sorted(set(refs)))
++
++
++def _normalize_themes(
++    nodes: Sequence[Any],
++    project_id: str,
++    policy: GitHubProjectV2ParentThemeNormalizationPolicy,
++    item_label: str,
++    issues: list[str],
++) -> tuple[tuple[str, ...], tuple[str, ...]]:
++    refs: list[str] = []
++    values: list[str] = []
++
++    for node_value in nodes:
++        node = _mapping(node_value)
++        field = _mapping(node.get("field"))
++        field_id = str(field.get("id", "")).strip()
++        field_name = str(field.get("name", "")).strip()
++        if not _matches_field(
++            field_id,
++            field_name,
++            policy.theme_field_ids,
++            policy.theme_field_names,
++        ):
++            continue
++
++        value_ref, display_value = _field_value(node)
++        if not field_id:
++            issues.append(
++                f"{item_label}: theme field id is required"
++            )
++            continue
++        if not value_ref:
++            continue
++
++        refs.append(
++            build_github_project_v2_theme_ref(
++                project_id,
++                field_id,
++                value_ref,
++            )
++        )
++        values.append(display_value or value_ref)
++
++    if len(refs) != len(set(refs)):
++        issues.append(f"{item_label}: duplicate theme value")
++    if len(refs) > policy.max_theme_refs:
++        issues.append(
++            f"{item_label}: theme refs exceed policy maximum"
++        )
++
++    paired = sorted(set(zip(refs, values)))
++    return (
++        tuple(ref for ref, _ in paired),
++        tuple(value for _, value in paired),
++    )
++
++
++def _normalize_status(
++    nodes: Sequence[Any],
++    policy: GitHubProjectV2ParentThemeNormalizationPolicy,
++    item_label: str,
++    issues: list[str],
++) -> tuple[str, str]:
++    matches: list[tuple[str, str]] = []
++
++    for node_value in nodes:
++        node = _mapping(node_value)
++        field = _mapping(node.get("field"))
++        field_id = str(field.get("id", "")).strip()
++        field_name = str(field.get("name", "")).strip()
++        if not _matches_field(
++            field_id,
++            field_name,
++            policy.status_field_ids,
++            policy.status_field_names,
++        ):
++            continue
++
++        value_ref, display_value = _field_value(node)
++        if value_ref:
++            matches.append(
++                (field_id or field_name, display_value or value_ref)
++            )
++
++    if len(matches) > 1:
++        issues.append(f"{item_label}: multiple status values")
++        return "", ""
++    if not matches:
++        if policy.require_status:
++            issues.append(f"{item_label}: status value is required")
++        return "", ""
++    return matches[0][1], matches[0][0]
++
++
++def _field_value_nodes(item: Mapping[str, Any]) -> Sequence[Any]:
++    field_values = _mapping(item.get("fieldValues"))
++    return _sequence(field_values.get("nodes"))
++
++
++def _field_value(node: Mapping[str, Any]) -> tuple[str, str]:
++    for key in ("optionId", "name", "text", "date", "number"):
++        value = node.get(key)
++        if value is None:
++            continue
++        text = str(value).strip()
++        if text:
++            if key == "optionId":
++                display = str(node.get("name", "")).strip()
++                return text, display
++            return text, text
++    return "", ""
++
++
++def _matches_field(
++    field_id: str,
++    field_name: str,
++    configured_ids: Sequence[str],
++    configured_names: Sequence[str],
++) -> bool:
++    if field_id and field_id in {
++        value.strip()
++        for value in configured_ids
++        if value.strip()
++    }:
++        return True
++    normalized_name = field_name.casefold()
++    return normalized_name in {
++        value.strip().casefold()
++        for value in configured_names
++        if value.strip()
++    }
++
++
++def _normalization_digest(
++    snapshot_ref: str,
++    repository: str,
++    project_id: str,
++    items: Sequence[
++        GitHubProjectV2NormalizedParentThemeItem
++    ],
++) -> str:
++    payload = {
++        "schema": PARENT_THEME_NORMALIZATION_SCHEMA,
++        "snapshot_ref": snapshot_ref,
++        "repository": repository,
++        "project_id": project_id,
++        "items": [item.to_json_dict() for item in items],
++    }
++    return hashlib.sha256(
++        json.dumps(
++            payload,
++            ensure_ascii=False,
++            separators=(",", ":"),
++            sort_keys=True,
++        ).encode("utf-8")
++    ).hexdigest()
++
++
++def _mapping(value: Any) -> Mapping[str, Any]:
++    return value if isinstance(value, Mapping) else {}
++
++
++def _sequence(value: Any) -> Sequence[Any]:
++    if isinstance(value, Sequence) and not isinstance(
++        value,
++        (str, bytes, bytearray),
++    ):
++        return value
++    return ()
++
++
++def _positive_int(value: Any) -> int:
++    try:
++        parsed = int(value)
++    except (TypeError, ValueError):
++        return 0
++    return parsed if parsed > 0 else 0
++
++
++def _boundaries() -> tuple[tuple[str, bool], ...]:
++    return (
++        ("query_only_snapshot_consumed", True),
++        ("external_call_performed", False),
++        ("graphql_query_performed", False),
++        ("graphql_mutation_allowed", False),
++        ("remote_mutation_allowed", False),
++        ("sql_write_allowed", False),
++        ("qdrant_write_allowed", False),
++        ("scheduler_modified", False),
++        ("projects_repository_change_required", False),
++    )
+diff --git a/src/context/github_project_v2_query_only_snapshot_0272.py b/src/context/github_project_v2_query_only_snapshot_0272.py
+index fcb0d9b..07e81ec 100644
+--- a/src/context/github_project_v2_query_only_snapshot_0272.py
++++ b/src/context/github_project_v2_query_only_snapshot_0272.py
+@@ -86,6 +86,24 @@ query AutodocProjectV2Items(
+               updatedAt
+               closedAt
+               repository { nameWithOwner }
++              parent {
++                id
++                number
++                title
++                url
++                repository { nameWithOwner }
++              }
++              subIssues(first: 100) {
++                totalCount
++                pageInfo { hasNextPage endCursor }
++                nodes {
++                  id
++                  number
++                  title
++                  url
++                  repository { nameWithOwner }
++                }
++              }
+             }
+             ... on PullRequest {
+               id
+diff --git a/tests/context/test_github_project_v2_parent_theme_query_normalization_0282.py b/tests/context/test_github_project_v2_parent_theme_query_normalization_0282.py
+new file mode 100644
+index 0000000..baa702f
+--- /dev/null
++++ b/tests/context/test_github_project_v2_parent_theme_query_normalization_0282.py
+@@ -0,0 +1,363 @@
++from __future__ import annotations
++
++from dataclasses import FrozenInstanceError
++
++import pytest
++
++from context.github_project_v2_parent_theme_query_normalization_0282 import (
++    GitHubProjectV2ParentThemeNormalizationCommand,
++    GitHubProjectV2ParentThemeNormalizationPolicy,
++    normalize_github_project_v2_parent_theme_snapshot,
++)
++from context.github_project_v2_query_only_snapshot_0272 import (
++    ITEMS_QUERY,
++    SNAPSHOT_SCHEMA,
++    validate_query_only_document,
++)
++
++
++PROJECT_ID = "PVT_kwHOA3ouXM4Ba3Ar"
++REPOSITORY = "newicody/projects"
++
++
++def _field_value(
++    *,
++    field_id: str,
++    field_name: str,
++    name: str,
++    option_id: str,
++) -> dict[str, object]:
++    return {
++        "__typename": "ProjectV2ItemFieldSingleSelectValue",
++        "name": name,
++        "optionId": option_id,
++        "field": {
++            "id": field_id,
++            "name": field_name,
++            "dataType": "SINGLE_SELECT",
++        },
++    }
++
++
++def _issue_item(
++    *,
++    item_id: str = "PVTI_item_15",
++    number: int = 15,
++    parent: dict[str, object] | None = None,
++    sub_issues: list[dict[str, object]] | None = None,
++    include_hierarchy: bool = True,
++    repository: str = REPOSITORY,
++) -> dict[str, object]:
++    content: dict[str, object] = {
++        "__typename": "Issue",
++        "id": f"I_{number}",
++        "number": number,
++        "title": f"Issue {number}",
++        "url": f"https://github.com/{repository}/issues/{number}",
++        "repository": {"nameWithOwner": repository},
++    }
++    if include_hierarchy:
++        content["parent"] = parent
++        content["subIssues"] = {
++            "totalCount": len(sub_issues or []),
++            "pageInfo": {
++                "hasNextPage": False,
++                "endCursor": None,
++            },
++            "nodes": sub_issues or [],
++        }
++
++    return {
++        "id": item_id,
++        "type": "ISSUE",
++        "content": content,
++        "fieldValues": {
++            "nodes": [
++                _field_value(
++                    field_id="PVTSSF_theme",
++                    field_name="Thème",
++                    name="Général",
++                    option_id="theme-general",
++                ),
++                _field_value(
++                    field_id="PVTSSF_status",
++                    field_name="Étape Status",
++                    name="En cours",
++                    option_id="status-en-cours",
++                ),
++            ]
++        },
++    }
++
++
++def _issue_node(number: int, repository: str = REPOSITORY):
++    return {
++        "id": f"I_{number}",
++        "number": number,
++        "title": f"Issue {number}",
++        "url": f"https://github.com/{repository}/issues/{number}",
++        "repository": {"nameWithOwner": repository},
++    }
++
++
++def _snapshot(items: list[dict[str, object]]):
++    return {
++        "schema": SNAPSHOT_SCHEMA,
++        "kind": "github_project_v2_query_only_snapshot",
++        "snapshot_ref": "github-project-v2-snapshot:fixture",
++        "project": {
++            "id": PROJECT_ID,
++            "number": 3,
++            "title": "Autodoc",
++            "url": "https://github.com/users/newicody/projects/3",
++        },
++        "items": items,
++        "boundaries": {
++            "query_only": True,
++            "graphql_mutation_allowed": False,
++            "remote_mutation_allowed": False,
++        },
++    }
++
++
++def _normalize(
++    snapshot,
++    policy=None,
++):
++    return normalize_github_project_v2_parent_theme_snapshot(
++        GitHubProjectV2ParentThemeNormalizationCommand(
++            snapshot=snapshot,
++            repository=REPOSITORY,
++            project_id=PROJECT_ID,
++        ),
++        policy,
++    )
++
++
++def test_existing_items_query_reads_parent_and_bounded_sub_issues() -> None:
++    assert validate_query_only_document(ITEMS_QUERY) == ""
++    assert "parent {" in ITEMS_QUERY
++    assert "subIssues(first: 100)" in ITEMS_QUERY
++    assert "mutation" not in ITEMS_QUERY.casefold()
++
++
++def test_parent_sub_issues_theme_and_status_are_normalized() -> None:
++    result = _normalize(
++        _snapshot(
++            [
++                _issue_item(
++                    parent=_issue_node(10),
++                    sub_issues=[
++                        _issue_node(16),
++                        _issue_node(17),
++                    ],
++                )
++            ]
++        )
++    )
++
++    assert result.valid is True
++    assert result.normalization_ref.startswith(
++        "github-project-v2-parent-theme:"
++    )
++    item = result.items[0]
++    assert item.project_item_ref == (
++        "github-project-v2-item:PVTI_item_15"
++    )
++    assert item.issue_ref == (
++        "github-frame:newicody/projects/issues/15"
++    )
++    assert item.parent_issue_ref == (
++        "github-frame:newicody/projects/issues/10"
++    )
++    assert item.sub_issue_refs == (
++        "github-frame:newicody/projects/issues/16",
++        "github-frame:newicody/projects/issues/17",
++    )
++    assert item.theme_values == ("Général",)
++    assert item.theme_refs[0].startswith(
++        "github-project-v2-theme:"
++    )
++    assert item.status_name == "En cours"
++    assert item.status_revision_ref.startswith(
++        "github-ticket-revision:"
++    )
++    assert item.hierarchy_payload_present is True
++
++
++def test_root_issue_without_parent_is_valid() -> None:
++    result = _normalize(_snapshot([_issue_item(parent=None)]))
++
++    assert result.valid is True
++    assert result.items[0].parent_issue_ref == ""
++
++
++def test_missing_hierarchy_payload_is_strict_by_default() -> None:
++    result = _normalize(
++        _snapshot([_issue_item(include_hierarchy=False)])
++    )
++
++    assert result.valid is False
++    assert any(
++        "Issue.parent and Issue.subIssues payload is required"
++        in issue
++        for issue in result.issues
++    )
++
++
++def test_missing_hierarchy_payload_can_be_allowed_explicitly() -> None:
++    result = _normalize(
++        _snapshot([_issue_item(include_hierarchy=False)]),
++        GitHubProjectV2ParentThemeNormalizationPolicy(
++            require_hierarchy_payload=False,
++        ),
++    )
++
++    assert result.valid is True
++    assert result.items[0].hierarchy_payload_present is False
++
++
++def test_truncated_sub_issue_connection_is_rejected() -> None:
++    item = _issue_item(sub_issues=[_issue_node(16)])
++    item["content"]["subIssues"]["pageInfo"]["hasNextPage"] = True
++
++    result = _normalize(_snapshot([item]))
++
++    assert result.valid is False
++    assert any(
++        "subIssues payload is truncated" in issue
++        for issue in result.issues
++    )
++
++
++def test_foreign_parent_and_sub_issue_are_rejected() -> None:
++    result = _normalize(
++        _snapshot(
++            [
++                _issue_item(
++                    parent=_issue_node(10, "other/repository"),
++                    sub_issues=[
++                        _issue_node(16, "other/repository")
++                    ],
++                )
++            ]
++        )
++    )
++
++    assert result.valid is False
++    assert any("parent repository mismatch" in x for x in result.issues)
++    assert any(
++        "sub-issue repository mismatch" in x
++        for x in result.issues
++    )
++
++
++def test_duplicate_project_item_id_is_rejected() -> None:
++    result = _normalize(
++        _snapshot(
++            [
++                _issue_item(item_id="PVTI_duplicate"),
++                _issue_item(
++                    item_id="PVTI_duplicate",
++                    number=16,
++                ),
++            ]
++        )
++    )
++
++    assert result.valid is False
++    assert any(
++        "duplicate project item id" in issue
++        for issue in result.issues
++    )
++
++
++def test_non_issue_items_are_ignored_by_default() -> None:
++    draft = {
++        "id": "PVTI_draft",
++        "type": "DRAFT_ISSUE",
++        "content": {
++            "__typename": "DraftIssue",
++            "id": "DI_1",
++            "title": "Draft",
++        },
++        "fieldValues": {"nodes": []},
++    }
++
++    result = _normalize(
++        _snapshot([draft, _issue_item()])
++    )
++
++    assert result.valid is True
++    assert result.ignored_item_count == 1
++    assert len(result.items) == 1
++
++
++def test_non_issue_items_can_be_forbidden() -> None:
++    draft = {
++        "id": "PVTI_draft",
++        "type": "DRAFT_ISSUE",
++        "content": {"__typename": "DraftIssue"},
++    }
++
++    result = _normalize(
++        _snapshot([draft]),
++        GitHubProjectV2ParentThemeNormalizationPolicy(
++            allow_non_issue_items=False,
++        ),
++    )
++
++    assert result.valid is False
++    assert any(
++        "non-Issue item is forbidden" in issue
++        for issue in result.issues
++    )
++
++
++def test_replay_and_input_order_are_deterministic() -> None:
++    snapshot_a = _snapshot(
++        [
++            _issue_item(item_id="PVTI_b", number=16),
++            _issue_item(item_id="PVTI_a", number=15),
++        ]
++    )
++    snapshot_b = _snapshot(
++        [
++            _issue_item(item_id="PVTI_a", number=15),
++            _issue_item(item_id="PVTI_b", number=16),
++        ]
++    )
++
++    first = _normalize(snapshot_a)
++    second = _normalize(snapshot_b)
++
++    assert first.valid is True
++    assert second.valid is True
++    assert first.items == second.items
++    assert first.normalization_ref == second.normalization_ref
++
++
++def test_boundaries_remain_query_only_and_local() -> None:
++    result = _normalize(_snapshot([_issue_item()]))
++    assert dict(result.boundaries) == {
++        "query_only_snapshot_consumed": True,
++        "external_call_performed": False,
++        "graphql_query_performed": False,
++        "graphql_mutation_allowed": False,
++        "remote_mutation_allowed": False,
++        "sql_write_allowed": False,
++        "qdrant_write_allowed": False,
++        "scheduler_modified": False,
++        "projects_repository_change_required": False,
++    }
++
++
++def test_contracts_are_frozen_and_policy_is_bounded() -> None:
++    policy = GitHubProjectV2ParentThemeNormalizationPolicy()
++
++    with pytest.raises(FrozenInstanceError):
++        policy.max_items = 1  # type: ignore[misc]
++    with pytest.raises(ValueError, match="max_items must be > 0"):
++        GitHubProjectV2ParentThemeNormalizationPolicy(
++            max_items=0
++        )
+diff --git a/tests/rules/test_github_project_v2_parent_theme_query_normalization_0282_rule.py b/tests/rules/test_github_project_v2_parent_theme_query_normalization_0282_rule.py
+new file mode 100644
+index 0000000..19abfa5
+--- /dev/null
++++ b/tests/rules/test_github_project_v2_parent_theme_query_normalization_0282_rule.py
+@@ -0,0 +1,133 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++SNAPSHOT = (
++    ROOT
++    / "src/context/github_project_v2_query_only_snapshot_0272.py"
++)
++MODULE = (
++    ROOT
++    / "src/context/"
++    "github_project_v2_parent_theme_query_normalization_0282.py"
++)
++ARCHITECTURE = (
++    ROOT
++    / "doc/architecture/"
++    "GITHUB_PROJECT_V2_PARENT_THEME_QUERY_NORMALIZATION_0282.md"
++)
++MANIFEST = (
++    ROOT
++    / "doc/manifests/"
++    "MANIFEST_0282_R3_PROJECT_V2_PARENT_THEME_QUERY_NORMALIZATION.md"
++)
++CHANGELOG = (
++    ROOT
++    / "doc/"
++    "CHANGELOG_0282_R3_PROJECT_V2_PARENT_THEME_QUERY_NORMALIZATION.md"
++)
++REPORT = (
++    ROOT
++    / "PHASE0282_R3_PROJECT_V2_PARENT_THEME_QUERY_NORMALIZATION_REPORT.md"
++)
++
++
++def test_existing_query_is_extended_not_replaced() -> None:
++    source = SNAPSHOT.read_text(encoding="utf-8")
++
++    assert source.count("ITEMS_QUERY =") == 1
++    assert "parent {" in source
++    assert "subIssues(first: 100)" in source
++    assert "pageInfo { hasNextPage endCursor }" in source
++    assert "mutation AutodocProjectV2Items" not in source
++
++
++def test_normalizer_reuses_r2_reference_builders() -> None:
++    source = MODULE.read_text(encoding="utf-8")
++
++    for required in (
++        "build_github_project_v2_issue_ref",
++        "build_github_project_v2_item_ref",
++        "build_github_project_v2_theme_ref",
++        "build_ticket_revision_id",
++        "SNAPSHOT_SCHEMA",
++    ):
++        assert required in source
++
++    assert source.count("@dataclass(frozen=True, slots=True)") == 4
++
++
++def test_normalizer_adds_no_transport_mutation_or_persistence() -> None:
++    source = MODULE.read_text(encoding="utf-8")
++
++    for forbidden in (
++        "argparse",
++        "subprocess",
++        "urllib.request",
++        "requests",
++        "httpx",
++        "urlopen(",
++        "sqlite3",
++        "psycopg",
++        "qdrant_client",
++        "Scheduler(",
++        "EventBus(",
++    ):
++        assert forbidden not in source
++
++    for required in (
++        '("external_call_performed", False)',
++        '("graphql_query_performed", False)',
++        '("graphql_mutation_allowed", False)',
++        '("remote_mutation_allowed", False)',
++        '("sql_write_allowed", False)',
++        '("qdrant_write_allowed", False)',
++        '("scheduler_modified", False)',
++    ):
++        assert required in source
++
++
++def test_phase_documents_live_query_extension_and_boundaries() -> None:
++    combined = "\n".join(
++        path.read_text(encoding="utf-8")
++        for path in (ARCHITECTURE, MANIFEST, CHANGELOG, REPORT)
++    )
++
++    for required in (
++        "existing_query_extended: true",
++        "parallel_query_transport_added: false",
++        "new_runtime_module_added: true",
++        "new_cli_added: false",
++        "new_adapter_added: false",
++        "github_api_client_added: false",
++        "graphql_mutation_added: false",
++        "github_mutation_performed: false",
++        "scheduler_modified: false",
++        "projects_repository_change_required: false",
++        "external_dependencies_added: false",
++    ):
++        assert required in combined
++
++
++def test_phase_report_versions_contract_and_next_projection() -> None:
++    report = REPORT.read_text(encoding="utf-8")
++
++    for required in (
++        "code_rule_review: done",
++        "code_rule_update_required: false",
++        "live_path_status: transition",
++        "live_path_uses_real_backend: true",
++        (
++            "context_contract_version: "
++            "missipy.github.project_v2_parent_theme_normalization.v1"
++        ),
++        "context_contract_changed: true",
++        "search_commands_bounded: n/a",
++        "network_added: false",
++        "github_api_added: false",
++        "github_api_query_extended: true",
++        "qdrant_added: false",
++        "llm_or_openvino_added: false",
++        "0282-r4-projectv2-append-only-cycle-history-projection",
++    ):
++        assert required in report

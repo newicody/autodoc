@@ -1,0 +1,79 @@
+diff --git a/doc/architecture/SCHEDULER_MANAGED_DB_API_SQL_CONTEXT_STORE_RECORD_ADAPTER_0260.md b/doc/architecture/SCHEDULER_MANAGED_DB_API_SQL_CONTEXT_STORE_RECORD_ADAPTER_0260.md
+index a200fb1..78db691 100644
+--- a/doc/architecture/SCHEDULER_MANAGED_DB_API_SQL_CONTEXT_STORE_RECORD_ADAPTER_0260.md
++++ b/doc/architecture/SCHEDULER_MANAGED_DB_API_SQL_CONTEXT_STORE_RECORD_ADAPTER_0260.md
+@@ -14,3 +14,9 @@ does not create a new SQL store
+ uses existing DbApiSqlContextStore
+ does not modify Scheduler.run
+ ```
++
++## r9
++
++The real `DbApiSqlContextStore` validates `context_ref` as a typed SQL
++reference.  The adapter now normalises generated context references so they
++start with `sql:` while preserving already-typed `sql:` references.
+diff --git a/src/context/scheduler_managed_db_api_sql_context_store_record_adapter_0260.py b/src/context/scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
+index be799dd..f016b3e 100644
+--- a/src/context/scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
++++ b/src/context/scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
+@@ -18,9 +18,18 @@ from typing import Any, Mapping
+ import uuid
+ 
+ 
++def _sql_typed_context_ref(value: object) -> str:
++    """Return a SQL-typed context_ref required by DbApiSqlContextStore."""
++
++    text = str(value or uuid.uuid4().hex)
++    if text.startswith("sql:"):
++        return text
++    return "sql:" + text
++
++
+ def _record_values_from_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+     metadata = dict(payload.get("metadata", {}))
+-    context_ref = str(
++    context_ref = _sql_typed_context_ref(
+         metadata.get("context_ref")
+         or payload.get("context_ref")
+         or payload.get("intent_id")
+diff --git a/tests/context/test_scheduler_managed_db_api_sql_context_store_record_adapter_0260.py b/tests/context/test_scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
+index e4d3db4..4c320a0 100644
+--- a/tests/context/test_scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
++++ b/tests/context/test_scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
+@@ -5,7 +5,7 @@ from context.scheduler_managed_db_api_sql_context_store_record_adapter_0260 impo
+ 
+ class UpsertOnlyStore:
+     def upsert_record(self, record):
+-        assert record.context_ref == "intent:0260:test"
++        assert record.context_ref.startswith("sql:")
+         assert record.content == "payload text"
+         return record
+ 
+@@ -26,8 +26,8 @@ def test_record_adapter_builds_record_for_upsert_only_store() -> None:
+         }
+     )
+ 
+-    assert result["sql_ref"] == "intent:0260:test"
+-    assert result["record"]["context_ref"] == "intent:0260:test"
++    assert result["sql_ref"] == "sql:intent:0260:test"
++    assert result["record"]["context_ref"] == "sql:intent:0260:test"
+ 
+ 
+ def test_record_adapter_delegates_controlled_write_store() -> None:
+@@ -35,3 +35,16 @@ def test_record_adapter_delegates_controlled_write_store() -> None:
+     result = adapter.controlled_write({"intent_id": "intent:0260:test", "text": "payload text"})
+ 
+     assert result["sql_ref"] == "sql:controlled/intent:0260:test"
++
++
++def test_record_adapter_keeps_existing_sql_typed_context_ref() -> None:
++    adapter = adapt_db_api_sql_context_store_for_scheduler_usage_0260(UpsertOnlyStore())
++    result = adapter.controlled_write(
++        {
++            "intent_id": "intent:ignored",
++            "text": "payload text",
++            "metadata": {"context_ref": "sql:already-typed"},
++        }
++    )
++
++    assert result["sql_ref"] == "sql:already-typed"

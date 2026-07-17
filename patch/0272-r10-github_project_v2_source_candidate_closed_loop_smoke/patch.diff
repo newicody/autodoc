@@ -1,0 +1,1451 @@
+diff --git a/src/context/scheduler_managed_sql_ref_openvino_embedding_usage_0261.py b/src/context/scheduler_managed_sql_ref_openvino_embedding_usage_0261.py
+--- a/src/context/scheduler_managed_sql_ref_openvino_embedding_usage_0261.py
++++ b/src/context/scheduler_managed_sql_ref_openvino_embedding_usage_0261.py
+@@ -105,11 +105,23 @@
+-def build_openvino_passage_text_from_sql_record(record: Mapping[str, Any]) -> str:
+-    """Build the explicit E5 passage text from a hydrated SQL record."""
++def build_openvino_text_from_sql_record(
++    record: Mapping[str, Any],
++    *,
++    role: str,
++) -> str:
++    """Build explicit E5 text from a hydrated SQL record for one role."""
+ 
++    if role not in ("passage", "query"):
++        raise ValueError("role must be passage or query")
+     title = str(record.get("title") or record.get("context_ref") or "SQL context record").strip()
+     body = str(record.get("body") or record.get("content") or record.get("text") or "").strip()
+     if not body:
+         raise ValueError("SQL record body must not be empty")
+-    return f"passage: {title}\n{body}"
++    return f"{role}: {title}\n{body}"
++
++
++def build_openvino_passage_text_from_sql_record(record: Mapping[str, Any]) -> str:
++    """Build the compatibility E5 passage text from a hydrated SQL record."""
++
++    return build_openvino_text_from_sql_record(record, role="passage")
+ 
+ 
+ def build_embedding_ref(sql_ref: str, role: str, text: str) -> str:
+@@ -217,7 +229,8 @@
+     bundle = build_multilingual_e5_small_pipeline(config)
+     e5_text = ensure_e5_text(text, default_role=role)
++    effective_role = "query" if e5_text.prefixed.startswith("query:") else "passage"
+     result = asyncio.run(bundle.pipeline.embed_text(e5_text.prefixed))
+     return build_embedding_mapping(
+         sql_ref=sql_ref,
+-        role=role,
++        role=effective_role,
+         text=e5_text.prefixed,
+@@ -266,7 +279,10 @@
+         else:
+             record_mapping = record_to_public_mapping(record_obj)
+             try:
+-                embedding_text = build_openvino_passage_text_from_sql_record(record_mapping)
++                embedding_text = build_openvino_text_from_sql_record(
++                    record_mapping,
++                    role=request.role,
++                )
+             except ValueError as exc:
+                 issues.append(str(exc))
+ 
+@@ -292,7 +308,20 @@
+             embedding_text=embedding_text,
+         )
+ 
+-    effective_embedder = embedder or embed_with_existing_openvino_e5_pipeline
+-    embedding = effective_embedder(embedding_text, request.sql_ref, request.model_dir, request.device)
++    if embedder is None:
++        embedding = embed_with_existing_openvino_e5_pipeline(
++            embedding_text,
++            request.sql_ref,
++            request.model_dir,
++            request.device,
++            role=request.role,
++        )
++    else:
++        embedding = embedder(
++            embedding_text,
++            request.sql_ref,
++            request.model_dir,
++            request.device,
++        )
+     return SchedulerManagedSqlRefOpenVinoEmbeddingResult(
+         valid=True,
+diff --git a/PHASE0272_R10_GITHUB_PROJECT_V2_CLOSED_LOOP_SMOKE_TEST_REPORT.md b/PHASE0272_R10_GITHUB_PROJECT_V2_CLOSED_LOOP_SMOKE_TEST_REPORT.md
+new file mode 100644
+index 0000000..e5d71f6
+--- /dev/null
++++ b/PHASE0272_R10_GITHUB_PROJECT_V2_CLOSED_LOOP_SMOKE_TEST_REPORT.md
+@@ -0,0 +1,37 @@
++# Phase 0272-r10 test report — ProjectV2 closed-loop smoke
++
++## Scope
++
++- r7 gate validation ;
++- r8 SQL durable consumption and idempotent replay ;
++- query/passsage E5 family compatibility ;
++- r9 controlled Qdrant projection ;
++- 0263 refs-only recall and SQL rehydrate ;
++- dry-run closure ;
++- real qdrant-client confinement to CLI ;
++- laboratory boundary remains closed.
++
++## Validation commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. python -m pytest -q tests/rules
++PYTHONPATH=src:. python -m pytest -q \
++  tests/context/test_github_project_v2_source_candidate_closed_loop_smoke_0272.py \
++  tests/tools/test_run_github_project_v2_source_candidate_closed_loop_smoke_0272.py
++PYTHONPATH=src:. python -m pytest -q
++```
++
++## Construction validation
++
++```text
++compileall added Python files: required
++focused deterministic tests: required
++full repository suite: required on target checkout 0b338de
++git diff --check: required
++DOT syntax: checked when graphviz dot is available
++network calls in focused tests: none
++non_stdlib_dependency_added: false
++```
++
++- Added regression coverage for 0261 `query:` prefix and role propagation.
+diff --git a/doc/CHANGELOG_0272_R10_GITHUB_PROJECT_V2_CLOSED_LOOP_SMOKE.md b/doc/CHANGELOG_0272_R10_GITHUB_PROJECT_V2_CLOSED_LOOP_SMOKE.md
+new file mode 100644
+index 0000000..cb5bca4
+--- /dev/null
++++ b/doc/CHANGELOG_0272_R10_GITHUB_PROJECT_V2_CLOSED_LOOP_SMOKE.md
+@@ -0,0 +1,25 @@
++# Changelog — 0272-r10 ProjectV2 closed-loop smoke
++
++## Added
++
++- composition r7 gate -> r8 SQL -> E5 -> r9 projection -> 0263 recall/rehydrate ;
++- replay durable r8 obligatoire et idempotent ;
++- `embedding_space_family_ref` partagé par les profils passage/query ;
++- validation query avant toute écriture Qdrant ;
++- vérification que Qdrant rend le `sql_ref` durable ;
++- vérification de la réhydratation SQL ;
++- CLI réelle utilisant la membrane Qdrant 0271 avec write+search explicitement autorisés ;
++- tests contexte, CLI et règles ;
++- architecture, graphe, release, manifest et rapport de tests.
++
++## Boundaries
++
++- SQL reste l'autorité durable ;
++- Qdrant reste refs-only pour le recall ;
++- aucun embedding externe n'est accepté ;
++- aucune mutation GitHub ;
++- aucun laboratoire sélectionné ;
++- aucune modification de `Scheduler.run()` ou SHM ;
++- aucune dépendance non-stdlib ajoutée.
++
++- Correct the existing 0261 query-role propagation required by the closed-loop recall smoke.
+diff --git a/doc/architecture/GITHUB_PROJECT_V2_SOURCE_CANDIDATE_CLOSED_LOOP_SMOKE_0272.md b/doc/architecture/GITHUB_PROJECT_V2_SOURCE_CANDIDATE_CLOSED_LOOP_SMOKE_0272.md
+new file mode 100644
+index 0000000..280e811
+--- /dev/null
++++ b/doc/architecture/GITHUB_PROJECT_V2_SOURCE_CANDIDATE_CLOSED_LOOP_SMOKE_0272.md
+@@ -0,0 +1,88 @@
++# 0272-r10 — ProjectV2 SourceCandidate closed-loop smoke
++
++## Objectif
++
++Fermer le parcours local après la décision opérateur :
++
++```text
++r6 handoff
++-> r7 gate promote/merge
++-> r8 SQL durable + readback
++-> query E5 compatibility
++-> r9 passage projection
++-> 0263 Qdrant recall refs-only
++-> SQL rehydrate
++-> replay r8 idempotent
++-> rapport fermé r10
++```
++
++Le module r10 reçoit un **gate record r7 déjà produit**. Il ne reconstruit ni le
++handoff r6 ni la décision r7, afin d'éviter une seconde surface de workflow.
++
++## Composition réutilisée
++
++- `github_project_v2_source_candidate_durable_consumer_0272` pour r8 ;
++- `scheduler_managed_sql_ref_openvino_embedding_usage_0261` pour E5 ;
++- `github_project_v2_source_candidate_vector_projection_0272` pour r9 ;
++- `scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263` pour le recall ;
++- `scheduler_managed_db_api_sql_context_store_binding_0260` pour la CLI ;
++- `qdrant_client_projection_executor` 0271 à la frontière CLI seulement.
++
++Aucun nouveau manager, orchestrateur, registre, bus ou runtime n'est créé.
++
++## Verrou de l'espace E5
++
++Le profil passage et le profil query possèdent des `profile_ref` distincts car
++leur rôle E5 diffère, mais ils doivent partager un même
++`embedding_space_family_ref`. Celui-ci exclut seulement le rôle de l'identité
++et verrouille le reste : modèle, révision, tokenizer, pooling, dimension,
++normalisation, distance, prétraitement et collection.
++
++L'embedding query est produit et validé **avant toute écriture Qdrant**. Si le
++modèle, le tokenizer, la dimension ou une autre propriété diverge, le smoke
++s'arrête avant la projection.
++
++## Autorités
++
++```text
++SQL     = autorité durable et réhydratation
++E5      = représentation vectorielle locale contrôlée
++Qdrant  = projection et recall de références SQL
++GitHub  = source/workflow, aucune mutation dans r10
++```
++
++SQL reste l'autorité durable. Un résultat Qdrant n'est accepté que s'il rend le
++`sql_ref` de la candidate puis si ce `sql_ref` est réhydraté depuis SQL.
++
++## Replay
++
++Après la première consommation r8, r10 rejoue immédiatement le même gate record.
++Le deuxième passage doit être reconnu comme idempotent et ne doit pas produire
++une seconde écriture SQL.
++
++## Frontières fermées
++
++- pas de mutation GitHub ;
++- pas de laboratoire sélectionné ;
++- pas de `LaboratoryManager` ;
++- pas de modification de `Scheduler.run()` ;
++- pas de ControlProxy/RouteProxy/SHM ;
++- pas d'embedding externe accepté ;
++- pas de nouvelle dépendance non-stdlib.
++
++## Suite
++
++La chaîne durable et vectorielle étant fermée, la suite est :
++
++```text
++0273-r1 audit de réutilisation laboratoire
++-> 0273-r2 identité/visite minimale
++-> 0273-r3 laboratoire fictif
++```
++
++Le laboratoire fictif devra exploiter cette chaîne sans devenir une autorité
++SQL/Qdrant et sans créer un orchestrateur parallèle.
++
++## Query-role correction
++
++The 0261 request contract already accepts `role=query`, but its text builder was passage-only. r10 extends that existing surface so query requests produce `query:` text and the default OpenVINO/E5 path reports the effective query role. No parallel query embedding adapter is introduced.
+diff --git a/doc/docs/architecture/runtime/272_r10_github_project_v2_closed_loop_smoke.dot b/doc/docs/architecture/runtime/272_r10_github_project_v2_closed_loop_smoke.dot
+new file mode 100644
+index 0000000..d399baa
+--- /dev/null
++++ b/doc/docs/architecture/runtime/272_r10_github_project_v2_closed_loop_smoke.dot
+@@ -0,0 +1,29 @@
++digraph GitHubProjectV2ClosedLoopSmoke0272R10 {
++  rankdir=LR;
++  node [shape=box];
++
++  HandoffR6 [label="r6 immutable SourceCandidate handoff"];
++  GateR7 [label="r7 explicit operator gate"];
++  DurableR8 [label="r8 SQL durable write/readback"];
++  ReplayR8 [label="r8 idempotent replay"];
++  QueryE5R10 [label="0261 query E5 embedding"];
++  QueryCompatibility [label="r10 query-space compatibility gate"];
++  ProfileR9 [label="r9 passage profile + projection"];
++  QdrantWrite [label="Qdrant projection sql_ref"];
++  QdrantRecall0263 [label="0263 Qdrant refs-only recall"];
++  SqlRehydrate [label="SQL authority rehydrate"];
++  ClosedR10 [label="r10 closed immutable report"];
++  LaboratoryAudit0273 [label="0273-r1 laboratory reuse audit", style=dashed];
++
++  HandoffR6 -> GateR7;
++  GateR7 -> DurableR8;
++  DurableR8 -> ReplayR8;
++  ReplayR8 -> QueryE5R10;
++  QueryE5R10 -> QueryCompatibility;
++  QueryCompatibility -> ProfileR9;
++  ProfileR9 -> QdrantWrite;
++  QdrantWrite -> QdrantRecall0263;
++  QdrantRecall0263 -> SqlRehydrate;
++  SqlRehydrate -> ClosedR10;
++  ClosedR10 -> LaboratoryAudit0273 [style=dashed];
++}
+diff --git a/doc/manifests/MANIFEST_0272_R10_GITHUB_PROJECT_V2_CLOSED_LOOP_SMOKE_CHANGED_FILES.md b/doc/manifests/MANIFEST_0272_R10_GITHUB_PROJECT_V2_CLOSED_LOOP_SMOKE_CHANGED_FILES.md
+new file mode 100644
+index 0000000..52313d5
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0272_R10_GITHUB_PROJECT_V2_CLOSED_LOOP_SMOKE_CHANGED_FILES.md
+@@ -0,0 +1,49 @@
++# Manifest — 0272-r10 ProjectV2 closed-loop smoke
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++context_contract_changed: true
++non_stdlib_dependency_added: false
++scheduler_run_modified: false
++shm_surface_modified: false
++sql_remains_authority: true
++```
++
++## Added files
++
++```text
++PHASE0272_R10_GITHUB_PROJECT_V2_CLOSED_LOOP_SMOKE_TEST_REPORT.md
++doc/CHANGELOG_0272_R10_GITHUB_PROJECT_V2_CLOSED_LOOP_SMOKE.md
++doc/architecture/GITHUB_PROJECT_V2_SOURCE_CANDIDATE_CLOSED_LOOP_SMOKE_0272.md
++doc/docs/architecture/runtime/272_r10_github_project_v2_closed_loop_smoke.dot
++doc/manifests/MANIFEST_0272_R10_GITHUB_PROJECT_V2_CLOSED_LOOP_SMOKE_CHANGED_FILES.md
++doc/releases/0272-r10-github-project-v2-closed-loop-smoke.md
++src/context/github_project_v2_source_candidate_closed_loop_smoke_0272.py
++tests/context/test_github_project_v2_source_candidate_closed_loop_smoke_0272.py
++tests/context/test_scheduler_managed_sql_ref_openvino_embedding_query_role_0272.py
++tests/rules/test_github_project_v2_source_candidate_closed_loop_smoke_0272_rule.py
++tests/tools/test_run_github_project_v2_source_candidate_closed_loop_smoke_0272.py
++tools/run_github_project_v2_source_candidate_closed_loop_smoke_0272.py
++```
++
++## Modified files
++
++```text
++src/context/scheduler_managed_sql_ref_openvino_embedding_usage_0261.py
++```
++
++The existing 0261 surface is made role-aware for its already-declared `query` role; no second embedding adapter is added.
++
++## Existing surfaces reused
++
++```text
++context.github_project_v2_source_candidate_gate_0272
++context.github_project_v2_source_candidate_durable_consumer_0272
++context.github_project_v2_source_candidate_vector_projection_0272
++context.scheduler_managed_sql_ref_openvino_embedding_usage_0261
++context.scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263
++context.scheduler_managed_db_api_sql_context_store_binding_0260
++inference.qdrant_client_projection_executor
++inference.qdrant_projection_adapter
++```
+diff --git a/doc/releases/0272-r10-github-project-v2-closed-loop-smoke.md b/doc/releases/0272-r10-github-project-v2-closed-loop-smoke.md
+new file mode 100644
+index 0000000..05849e9
+--- /dev/null
++++ b/doc/releases/0272-r10-github-project-v2-closed-loop-smoke.md
+@@ -0,0 +1,11 @@
++# Release 0272-r10 — ProjectV2 closed-loop smoke
++
++Cette release ferme la chaîne locale depuis un gate record r7 approuvé jusqu'à
++la réhydratation SQL après recall Qdrant. Elle réutilise r8, 0261, r9, 0263 et
++la membrane qdrant-client 0271. Le query embedding est validé avant la
++projection, le replay SQL est idempotent et SQL reste l'autorité durable.
++
++La release n'ouvre ni mutation GitHub, ni laboratoire, ni nouveau manager ou
++orchestrateur. Elle prépare directement l'audit laboratoire 0273-r1.
++
++The phase also makes the existing 0261 embedding surface role-aware for query embeddings; it does not add another embedding runtime.
+diff --git a/src/context/github_project_v2_source_candidate_closed_loop_smoke_0272.py b/src/context/github_project_v2_source_candidate_closed_loop_smoke_0272.py
+new file mode 100644
+index 0000000..13bb90e
+--- /dev/null
++++ b/src/context/github_project_v2_source_candidate_closed_loop_smoke_0272.py
+@@ -0,0 +1,420 @@
++"""Close the approved ProjectV2 candidate SQL/vector/recall loop.
++
++0272-r10 composes the existing r8 durable SQL consumer, the existing 0261
++OpenVINO/E5 embedding surface, the r9 vector-space compatibility gate and
++projection, then the existing 0263 Qdrant recall -> SQL rehydrate surface.
++
++The module starts from one immutable r7 gate record. r6 handoff construction
++and r7 operator decision remain upstream contracts and are not duplicated.
++SQL remains the durable authority. Qdrant carries references only. No GitHub
++mutation, laboratory selection, Scheduler.run modification or SHM change is
++opened here.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field, replace
++import hashlib
++import json
++from typing import Any, Callable, Mapping
++
++from context.github_project_v2_source_candidate_durable_consumer_0272 import (
++    GitHubProjectV2DurableConsumerCommand,
++    consume_approved_gate_record,
++    validate_approved_gate_record,
++)
++from context.github_project_v2_source_candidate_vector_projection_0272 import (
++    EmbeddingSpaceProfile,
++    GitHubProjectV2VectorProjectionCommand,
++    run_project_v2_source_candidate_vector_projection,
++    validate_embedding_against_profile,
++)
++from context.scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263 import (
++    SchedulerManagedQdrantRecallSqlRehydrateRequest,
++    default_query_ref_from_embedding_report,
++    run_scheduler_managed_qdrant_recall_sql_rehydrate_usage,
++)
++from context.scheduler_managed_sql_ref_openvino_embedding_usage_0261 import (
++    SchedulerManagedSqlRefOpenVinoEmbeddingRequest,
++    run_scheduler_managed_sql_ref_openvino_embedding_usage,
++)
++
++CLOSED_LOOP_REPORT_SCHEMA = (
++    "missipy.github.project_v2_source_candidate_closed_loop_smoke_report.v1"
++)
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubProjectV2ClosedLoopSmokeCommand:
++    """Controlled r10 smoke command."""
++
++    execute: bool = False
++    policy_decision_id: str = ""
++    model_dir: str | None = None
++    device: str = "CPU"
++    recall_limit: int = 8
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubProjectV2ClosedLoopSmokeResult:
++    """Serializable closed-loop result with all authority boundaries visible."""
++
++    valid: bool
++    issues: tuple[str, ...]
++    execute: bool
++    policy_decision_id: str
++    sql_ref: str
++    embedding_space_family_ref: str
++    passage_profile_ref: str
++    query_profile_ref: str
++    durable: Mapping[str, Any] = field(default_factory=dict)
++    durable_replay: Mapping[str, Any] = field(default_factory=dict)
++    query_embedding: Mapping[str, Any] = field(default_factory=dict)
++    query_compatibility: Mapping[str, Any] = field(default_factory=dict)
++    projection: Mapping[str, Any] = field(default_factory=dict)
++    recall: Mapping[str, Any] = field(default_factory=dict)
++    recalled_sql_ref: bool = False
++    hydrated_count: int = 0
++    missing_count: int = 0
++    boundaries: Mapping[str, bool] = field(default_factory=dict)
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "schema": CLOSED_LOOP_REPORT_SCHEMA,
++            "valid": self.valid,
++            "issues": list(self.issues),
++            "execute": self.execute,
++            "policy_decision_id": self.policy_decision_id,
++            "sql_ref": self.sql_ref,
++            "embedding_space_family_ref": self.embedding_space_family_ref,
++            "passage_profile_ref": self.passage_profile_ref,
++            "query_profile_ref": self.query_profile_ref,
++            "durable": dict(self.durable),
++            "durable_replay": dict(self.durable_replay),
++            "query_embedding": dict(self.query_embedding),
++            "query_compatibility": dict(self.query_compatibility),
++            "projection": dict(self.projection),
++            "recall": dict(self.recall),
++            "recalled_sql_ref": self.recalled_sql_ref,
++            "hydrated_count": self.hydrated_count,
++            "missing_count": self.missing_count,
++            "boundaries": dict(self.boundaries),
++        }
++
++    def to_summary(self) -> str:
++        return " ".join(
++            (
++                f"projectv2_closed_loop_valid={self.valid}",
++                f"issues={len(self.issues)}",
++                f"execute={self.execute}",
++                f"sql_ref={self.sql_ref or '-'}",
++                f"family_ref={self.embedding_space_family_ref or '-'}",
++                f"recalled_sql_ref={self.recalled_sql_ref}",
++                f"hydrated_count={self.hydrated_count}",
++                f"missing_count={self.missing_count}",
++                "sql_remains_authority=True",
++                "laboratory_selected=False",
++            )
++        )
++
++
++def embedding_space_family_ref(profile: EmbeddingSpaceProfile) -> str:
++    """Return one stable space identity shared by passage and query roles."""
++
++    identity = dict(profile.to_mapping())
++    for key in ("schema", "profile_ref", "role"):
++        identity.pop(key, None)
++    digest = hashlib.sha256(_canonical_json(identity).encode("utf-8")).hexdigest()
++    return f"embedding-space-family:{digest[:24]}"
++
++
++def query_profile_from_passage(
++    profile: EmbeddingSpaceProfile,
++) -> EmbeddingSpaceProfile:
++    """Build the query-role profile without changing the underlying space."""
++
++    if profile.role != "passage":
++        raise ValueError("r10 passage profile must declare role=passage")
++    query_profile = replace(profile, role="query")
++    if embedding_space_family_ref(query_profile) != embedding_space_family_ref(profile):
++        raise ValueError("query and passage profiles must share one vector-space family")
++    return query_profile
++
++
++def run_project_v2_source_candidate_closed_loop_smoke(
++    gate_record: Mapping[str, Any],
++    store: Any | None,
++    command: GitHubProjectV2ClosedLoopSmokeCommand,
++    *,
++    profile: EmbeddingSpaceProfile | None = None,
++    embedder: Callable[..., Mapping[str, Any]] | None = None,
++    qdrant_executor: Any | None = None,
++) -> GitHubProjectV2ClosedLoopSmokeResult:
++    """Run r7 gate -> r8 SQL -> E5/Qdrant -> 0263 SQL rehydrate."""
++
++    passage_profile = profile or EmbeddingSpaceProfile()
++    issues = list(validate_approved_gate_record(gate_record))
++    if passage_profile.role != "passage":
++        issues.append("r10 requires a passage-role projection profile")
++    if command.recall_limit <= 0:
++        issues.append("recall_limit must be > 0")
++    if command.execute and not command.policy_decision_id.startswith("policy:"):
++        issues.append("execute policy_decision_id must start with policy:")
++    if command.execute and store is None:
++        issues.append("execute mode requires an existing SQLContextStore object")
++    if command.execute and qdrant_executor is None:
++        issues.append("execute mode requires an injected Qdrant executor")
++
++    try:
++        query_profile = query_profile_from_passage(passage_profile)
++    except ValueError as exc:
++        issues.append(str(exc))
++        query_profile = replace(passage_profile, role="query")
++
++    family_ref = embedding_space_family_ref(passage_profile)
++    if issues or not command.execute:
++        return _result(
++            issues=issues,
++            command=command,
++            family_ref=family_ref,
++            passage_profile=passage_profile,
++            query_profile=query_profile,
++        )
++
++    assert store is not None
++    durable_result = consume_approved_gate_record(
++        gate_record,
++        GitHubProjectV2DurableConsumerCommand(
++            execute=True,
++            policy_decision_id=command.policy_decision_id,
++        ),
++        store=store,
++    )
++    durable_report = durable_result.to_json_dict()
++    if not durable_result.valid:
++        return _result(
++            issues=durable_result.issues,
++            command=command,
++            family_ref=family_ref,
++            passage_profile=passage_profile,
++            query_profile=query_profile,
++            sql_ref=durable_result.sql_ref,
++            durable=durable_report,
++        )
++
++    replay_result = consume_approved_gate_record(
++        gate_record,
++        GitHubProjectV2DurableConsumerCommand(
++            execute=True,
++            policy_decision_id=command.policy_decision_id,
++        ),
++        store=store,
++    )
++    replay_report = replay_result.to_json_dict()
++    if not replay_result.valid:
++        issues.extend(replay_result.issues)
++    if replay_result.idempotent_replay is not True:
++        issues.append("second durable consumption must be an idempotent replay")
++
++    sql_ref = durable_result.sql_ref
++    query_request = SchedulerManagedSqlRefOpenVinoEmbeddingRequest(
++        sql_ref=sql_ref,
++        role="query",
++        policy_decision_id=command.policy_decision_id,
++        model_dir=command.model_dir,
++        device=command.device,
++    )
++    query_result = run_scheduler_managed_sql_ref_openvino_embedding_usage(
++        store,
++        query_request,
++        execute=True,
++        embedder=embedder,
++    )
++    query_report = query_result.to_mapping()
++    if not query_result.valid:
++        issues.extend(query_result.issues)
++        return _result(
++            issues=issues,
++            command=command,
++            family_ref=family_ref,
++            passage_profile=passage_profile,
++            query_profile=query_profile,
++            sql_ref=sql_ref,
++            durable=durable_report,
++            durable_replay=replay_report,
++            query_embedding=query_report,
++        )
++
++    query_embedding = _mapping(query_report.get("embedding"))
++    query_compatibility = validate_embedding_against_profile(
++        query_embedding,
++        query_profile,
++        expected_sql_ref=sql_ref,
++    )
++    if not query_compatibility.compatible:
++        issues.extend(query_compatibility.issues)
++        return _result(
++            issues=issues,
++            command=command,
++            family_ref=family_ref,
++            passage_profile=passage_profile,
++            query_profile=query_profile,
++            sql_ref=sql_ref,
++            durable=durable_report,
++            durable_replay=replay_report,
++            query_embedding=query_report,
++            query_compatibility=query_compatibility.to_mapping(),
++        )
++
++    projection_result = run_project_v2_source_candidate_vector_projection(
++        durable_report,
++        store,
++        GitHubProjectV2VectorProjectionCommand(
++            execute=True,
++            policy_decision_id=command.policy_decision_id,
++            model_dir=command.model_dir,
++            device=command.device,
++        ),
++        profile=passage_profile,
++        embedder=embedder,
++        qdrant_executor=qdrant_executor,
++    )
++    projection_report = projection_result.to_json_dict()
++    if not projection_result.valid:
++        issues.extend(projection_result.issues)
++        return _result(
++            issues=issues,
++            command=command,
++            family_ref=family_ref,
++            passage_profile=passage_profile,
++            query_profile=query_profile,
++            sql_ref=sql_ref,
++            durable=durable_report,
++            durable_replay=replay_report,
++            query_embedding=query_report,
++            query_compatibility=query_compatibility.to_mapping(),
++            projection=projection_report,
++        )
++
++    recall_request = SchedulerManagedQdrantRecallSqlRehydrateRequest(
++        query_ref=default_query_ref_from_embedding_report(query_report),
++        policy_decision_id=command.policy_decision_id,
++        collection_name=passage_profile.collection_name,
++        vector_dimension=passage_profile.dimension,
++        limit=command.recall_limit,
++    )
++    recall_result = run_scheduler_managed_qdrant_recall_sql_rehydrate_usage(
++        query_report,
++        store,
++        recall_request,
++        execute=True,
++        executor=qdrant_executor,
++    )
++    recall_report = recall_result.to_mapping()
++    if not recall_result.valid:
++        issues.extend(recall_result.issues)
++
++    recalled_sql_ref = sql_ref in recall_result.sql_refs
++    if not recalled_sql_ref:
++        issues.append("Qdrant recall did not return the durable sql_ref")
++    if recall_result.missing_sql_refs:
++        issues.append("Qdrant recall returned SQL refs missing from durable authority")
++    hydrated_refs = {
++        str(_mapping(record).get("context_ref", ""))
++        for record in recall_result.hydrated_records
++    }
++    if sql_ref not in hydrated_refs:
++        issues.append("SQL rehydration did not return the durable candidate record")
++
++    return _result(
++        issues=issues,
++        command=command,
++        family_ref=family_ref,
++        passage_profile=passage_profile,
++        query_profile=query_profile,
++        sql_ref=sql_ref,
++        durable=durable_report,
++        durable_replay=replay_report,
++        query_embedding=query_report,
++        query_compatibility=query_compatibility.to_mapping(),
++        projection=projection_report,
++        recall=recall_report,
++        recalled_sql_ref=recalled_sql_ref,
++        hydrated_count=len(recall_result.hydrated_records),
++        missing_count=len(recall_result.missing_sql_refs),
++    )
++
++
++def _result(
++    *,
++    issues: Any,
++    command: GitHubProjectV2ClosedLoopSmokeCommand,
++    family_ref: str,
++    passage_profile: EmbeddingSpaceProfile,
++    query_profile: EmbeddingSpaceProfile,
++    sql_ref: str = "",
++    durable: Mapping[str, Any] | None = None,
++    durable_replay: Mapping[str, Any] | None = None,
++    query_embedding: Mapping[str, Any] | None = None,
++    query_compatibility: Mapping[str, Any] | None = None,
++    projection: Mapping[str, Any] | None = None,
++    recall: Mapping[str, Any] | None = None,
++    recalled_sql_ref: bool = False,
++    hydrated_count: int = 0,
++    missing_count: int = 0,
++) -> GitHubProjectV2ClosedLoopSmokeResult:
++    normalized_issues = tuple(dict.fromkeys(str(item) for item in issues if str(item)))
++    projection_map = dict(projection or {})
++    recall_map = dict(recall or {})
++    durable_map = dict(durable or {})
++    replay_map = dict(durable_replay or {})
++    query_map = dict(query_embedding or {})
++    return GitHubProjectV2ClosedLoopSmokeResult(
++        valid=not normalized_issues,
++        issues=normalized_issues,
++        execute=command.execute,
++        policy_decision_id=command.policy_decision_id,
++        sql_ref=sql_ref,
++        embedding_space_family_ref=family_ref,
++        passage_profile_ref=passage_profile.profile_ref,
++        query_profile_ref=query_profile.profile_ref,
++        durable=durable_map,
++        durable_replay=replay_map,
++        query_embedding=query_map,
++        query_compatibility=dict(query_compatibility or {}),
++        projection=projection_map,
++        recall=recall_map,
++        recalled_sql_ref=recalled_sql_ref,
++        hydrated_count=hydrated_count,
++        missing_count=missing_count,
++        boundaries={
++            "r7_gate_record_required": True,
++            "r8_sql_consumer_reused": True,
++            "r8_replay_checked": bool(replay_map),
++            "query_embedding_checked_before_qdrant_write": bool(query_map),
++            "r9_projection_reused": bool(projection_map),
++            "recall_0263_reused": bool(recall_map),
++            "sql_write_performed": bool(durable_map.get("sql_write_performed", False)),
++            "idempotent_replay": bool(replay_map.get("idempotent_replay", False)),
++            "openvino_call_performed": bool(query_map),
++            "qdrant_write_performed": bool(
++                projection_map.get("qdrant_write_performed", False)
++            ),
++            "qdrant_search_performed": bool(recall_map.get("execute", False)),
++            "sql_rehydrate_performed": hydrated_count > 0,
++            "sql_remains_authority": True,
++            "external_embedding_accepted": False,
++            "remote_mutation_allowed": False,
++            "laboratory_selection_allowed": False,
++            "scheduler_run_modified": False,
++            "shm_touched": False,
++        },
++    )
++
++
++def _mapping(value: object) -> Mapping[str, Any]:
++    return value if isinstance(value, Mapping) else {}
++
++
++def _canonical_json(value: Mapping[str, Any]) -> str:
++    return json.dumps(dict(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+diff --git a/tests/context/test_github_project_v2_source_candidate_closed_loop_smoke_0272.py b/tests/context/test_github_project_v2_source_candidate_closed_loop_smoke_0272.py
+new file mode 100644
+index 0000000..a013481
+--- /dev/null
++++ b/tests/context/test_github_project_v2_source_candidate_closed_loop_smoke_0272.py
+@@ -0,0 +1,303 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from typing import Any, Mapping, Sequence
++
++from context.github_project_v2_source_candidate_closed_loop_smoke_0272 import (
++    GitHubProjectV2ClosedLoopSmokeCommand,
++    embedding_space_family_ref,
++    query_profile_from_passage,
++    run_project_v2_source_candidate_closed_loop_smoke,
++)
++from context.github_project_v2_source_candidate_vector_projection_0272 import (
++    EmbeddingSpaceProfile,
++)
++from context.github_project_v2_change_handoff_0272 import (
++    GitHubProjectV2ChangeHandoffPolicy,
++    build_change_handoff_batch,
++)
++from context.github_project_v2_snapshot_change_detection_0272 import CHANGE_SET_SCHEMA
++from context.github_project_v2_source_candidate_gate_0272 import (
++    GitHubProjectV2SourceCandidateGateCommand,
++    build_gate_record,
++)
++from inference.qdrant_projection_adapter import (
++    QdrantProjectionWriteResult,
++    QdrantRecallHit,
++    QdrantRecallResult,
++)
++
++
++@dataclass
++class Record:
++    context_ref: str
++    kind: str
++    title: str
++    body: str
++    parent_ref: str | None
++    metadata: tuple[tuple[str, str], ...]
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "context_ref": self.context_ref,
++            "kind": self.kind,
++            "title": self.title,
++            "body": self.body,
++            "parent_ref": self.parent_ref,
++            "metadata": dict(self.metadata),
++        }
++
++
++class Store:
++    def __init__(self) -> None:
++        self.records: dict[str, Any] = {}
++        self.initialize_calls = 0
++        self.upsert_calls = 0
++
++    def initialize_schema(self) -> None:
++        self.initialize_calls += 1
++
++    def upsert_record(self, record: Any) -> None:
++        self.upsert_calls += 1
++        self.records[record.context_ref] = record
++
++    def get_record(self, context_ref: str) -> Any | None:
++        return self.records.get(context_ref)
++
++
++class Executor:
++    def __init__(self) -> None:
++        self.points: tuple[Any, ...] = ()
++        self.write_calls = 0
++        self.search_calls = 0
++
++    def upsert_points(self, points: Sequence[Any], *, target, policy):
++        self.write_calls += 1
++        self.points = tuple(points)
++        return QdrantProjectionWriteResult(
++            target=target,
++            point_ids=tuple(point.point_id for point in points),
++            acknowledged=True,
++        )
++
++    def search_vector(self, vector, *, target, policy, query):
++        self.search_calls += 1
++        point = self.points[0]
++        payload = dict(point.payload)
++        sql_ref = str(payload.get("sql_ref") or payload.get("sql_context_ref"))
++        hit = QdrantRecallHit(
++            point_id=point.point_id,
++            sql_context_ref=sql_ref,
++            score=1.0,
++            source_ref=point.source_ref,
++            payload=point.payload,
++        )
++        return QdrantRecallResult(
++            target=target,
++            query=query,
++            hits=(hit,),
++            capped=False,
++        )
++
++
++def _change_set() -> dict[str, object]:
++    return {
++        "schema": CHANGE_SET_SCHEMA,
++        "kind": "github_project_v2_snapshot_change_set",
++        "baseline": False,
++        "change_set_ref": "github-project-v2-change-set:r10",
++        "previous_snapshot_ref": "github-project-v2-snapshot:r10-previous",
++        "current_snapshot_ref": "github-project-v2-snapshot:r10-current",
++        "project": {
++            "id": "PVT_r10",
++            "owner": "newicody",
++            "number": 2,
++            "title": "idea",
++            "url": "https://github.com/users/newicody/projects/2",
++        },
++        "items": {
++            "added": [
++                {
++                    "item_id": "PVTI_r10",
++                    "item_type": "DRAFT_ISSUE",
++                    "content_id": "DI_r10",
++                    "title": "R10 closed-loop candidate",
++                    "body": "Validate SQL, E5, Qdrant recall and SQL rehydrate.",
++                    "status": "Todo",
++                    "repository": "",
++                    "number": 0,
++                    "url": "",
++                }
++            ],
++            "changed": [],
++            "removed": [],
++            "unchanged_ids": [],
++        },
++        "counts": {
++            "added_count": 1,
++            "changed_count": 0,
++            "removed_count": 0,
++            "unchanged_count": 0,
++        },
++        "boundaries": {
++            "external_call_performed": False,
++            "remote_mutation_allowed": False,
++            "sql_write_allowed": False,
++            "qdrant_write_allowed": False,
++        },
++    }
++
++
++def gate_record() -> dict[str, Any]:
++    batch = build_change_handoff_batch(
++        change_set=_change_set(),
++        policy=GitHubProjectV2ChangeHandoffPolicy(),
++    )
++    handoff = batch["handoffs"][0]
++    return build_gate_record(
++        handoff_batch=batch,
++        command=GitHubProjectV2SourceCandidateGateCommand(
++            candidate_id=str(handoff["candidate"]["candidate_id"]),
++            action="promote",
++            reason="r10 closed-loop smoke",
++            execute=True,
++            policy_decision_id="policy:0272:r7:r10",
++        ),
++    )
++
++
++def profile() -> EmbeddingSpaceProfile:
++    return EmbeddingSpaceProfile(
++        model_ref="test.e5",
++        tokenizer_ref="test.tokenizer",
++        model_revision="test-r10",
++        collection_name="test_collection",
++    )
++
++
++def embedder(
++    text: str,
++    sql_ref: str,
++    model_dir: str | None,
++    device: str,
++) -> Mapping[str, Any]:
++    role = "query" if text.startswith("query:") else "passage"
++    vector = [0.0] * 384
++    vector[0] = 1.0
++    return {
++        "schema": "missipy.scheduler_managed_sql_ref_openvino_embedding.v1",
++        "embedding_ref": f"embedding:{role}:r10",
++        "source_ref": f"ctx-fragment:{sql_ref}",
++        "sql_ref": sql_ref,
++        "backend_ref": "openvino:model:multilingual-e5-small",
++        "role": role,
++        "dimension": 384,
++        "normalized": True,
++        "l2_norm": 1.0,
++        "metadata": {
++            "context_ref": sql_ref,
++            "model": "test.e5",
++            "tokenizer": "test.tokenizer",
++            "device": device,
++        },
++        "vector": vector,
++    }
++
++
++def test_query_and_passage_profiles_share_one_family() -> None:
++    passage = profile()
++    query = query_profile_from_passage(passage)
++    assert passage.profile_ref != query.profile_ref
++    assert embedding_space_family_ref(passage) == embedding_space_family_ref(query)
++
++
++def test_execute_closes_sql_vector_recall_and_rehydrate_loop() -> None:
++    store = Store()
++    executor = Executor()
++    result = run_project_v2_source_candidate_closed_loop_smoke(
++        gate_record(),
++        store,
++        GitHubProjectV2ClosedLoopSmokeCommand(
++            execute=True,
++            policy_decision_id="policy:0272:r10:test",
++            recall_limit=4,
++        ),
++        profile=profile(),
++        embedder=embedder,
++        qdrant_executor=executor,
++    )
++    assert result.valid is True
++    assert result.sql_ref.startswith("sql:github_artifact:")
++    assert result.durable["rehydrated"] is True
++    assert result.durable_replay["idempotent_replay"] is True
++    assert result.query_compatibility["compatible"] is True
++    assert result.projection["qdrant_write_performed"] is True
++    assert result.recalled_sql_ref is True
++    assert result.hydrated_count == 1
++    assert result.missing_count == 0
++    assert executor.write_calls == 1
++    assert executor.search_calls == 1
++    assert store.upsert_calls == 1
++    assert result.boundaries["sql_remains_authority"] is True
++    assert result.boundaries["laboratory_selection_allowed"] is False
++
++
++def test_dry_run_is_pure_and_does_not_require_runtime_dependencies() -> None:
++    result = run_project_v2_source_candidate_closed_loop_smoke(
++        gate_record(),
++        None,
++        GitHubProjectV2ClosedLoopSmokeCommand(execute=False),
++        profile=profile(),
++    )
++    assert result.valid is True
++    assert result.execute is False
++    assert result.sql_ref == ""
++    assert result.boundaries["qdrant_write_performed"] is False
++    assert result.boundaries["qdrant_search_performed"] is False
++    assert result.boundaries["remote_mutation_allowed"] is False
++
++
++def test_incompatible_query_embedding_blocks_qdrant_before_write() -> None:
++    store = Store()
++    executor = Executor()
++
++    def incompatible(
++        text: str,
++        sql_ref: str,
++        model_dir: str | None,
++        device: str,
++    ) -> Mapping[str, Any]:
++        payload = dict(embedder(text, sql_ref, model_dir, device))
++        if text.startswith("query:"):
++            payload["metadata"] = dict(payload["metadata"])
++            payload["metadata"]["tokenizer"] = "other.tokenizer"
++        return payload
++
++    result = run_project_v2_source_candidate_closed_loop_smoke(
++        gate_record(),
++        store,
++        GitHubProjectV2ClosedLoopSmokeCommand(
++            execute=True,
++            policy_decision_id="policy:0272:r10:blocked",
++        ),
++        profile=profile(),
++        embedder=incompatible,
++        qdrant_executor=executor,
++    )
++    assert result.valid is False
++    assert "embedding tokenizer is incompatible with profile" in result.issues
++    assert executor.write_calls == 0
++    assert executor.search_calls == 0
++
++
++def test_execute_requires_typed_policy_and_injected_effect_surfaces() -> None:
++    result = run_project_v2_source_candidate_closed_loop_smoke(
++        gate_record(),
++        None,
++        GitHubProjectV2ClosedLoopSmokeCommand(execute=True),
++        profile=profile(),
++    )
++    assert result.valid is False
++    assert "execute policy_decision_id must start with policy:" in result.issues
++    assert "execute mode requires an existing SQLContextStore object" in result.issues
++    assert "execute mode requires an injected Qdrant executor" in result.issues
+diff --git a/tests/context/test_scheduler_managed_sql_ref_openvino_embedding_query_role_0272.py b/tests/context/test_scheduler_managed_sql_ref_openvino_embedding_query_role_0272.py
+new file mode 100644
+index 0000000..88f0666
+--- /dev/null
++++ b/tests/context/test_scheduler_managed_sql_ref_openvino_embedding_query_role_0272.py
+@@ -0,0 +1,87 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++from typing import Any, Mapping
++
++from context.scheduler_managed_sql_ref_openvino_embedding_usage_0261 import (
++    SchedulerManagedSqlRefOpenVinoEmbeddingRequest,
++    build_openvino_text_from_sql_record,
++    run_scheduler_managed_sql_ref_openvino_embedding_usage,
++)
++
++
++@dataclass(frozen=True)
++class Record:
++    context_ref: str = "sql:github_artifact:query-role"
++    kind: str = "github_artifact"
++    title: str = "Query role propagation"
++    body: str = "The query prefix and role must stay explicit through 0261."
++    parent_ref: str | None = None
++    metadata: tuple[tuple[str, str], ...] = ()
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "context_ref": self.context_ref,
++            "kind": self.kind,
++            "title": self.title,
++            "body": self.body,
++            "parent_ref": self.parent_ref,
++            "metadata": dict(self.metadata),
++        }
++
++
++class Store:
++    def get_record(self, context_ref: str) -> Record | None:
++        return Record() if context_ref == Record().context_ref else None
++
++
++def test_role_aware_sql_text_builder_keeps_e5_query_prefix() -> None:
++    text = build_openvino_text_from_sql_record(Record().to_mapping(), role="query")
++    assert text.startswith("query: Query role propagation\n")
++
++
++def test_0261_propagates_query_role_to_injected_embedding_surface() -> None:
++    observed: dict[str, str] = {}
++
++    def embedder(
++        text: str,
++        sql_ref: str,
++        model_dir: str | None,
++        device: str,
++    ) -> Mapping[str, Any]:
++        observed["text"] = text
++        observed["sql_ref"] = sql_ref
++        return {
++            "schema": "missipy.scheduler_managed_sql_ref_openvino_embedding.v1",
++            "embedding_ref": "embedding:query:role-propagation",
++            "source_ref": f"ctx-fragment:{sql_ref}",
++            "sql_ref": sql_ref,
++            "backend_ref": "openvino:model:multilingual-e5-small",
++            "role": "query",
++            "dimension": 384,
++            "normalized": True,
++            "l2_norm": 1.0,
++            "metadata": {
++                "context_ref": sql_ref,
++                "model": "test.e5",
++                "tokenizer": "test.tokenizer",
++                "device": device,
++            },
++            "vector": [1.0] + [0.0] * 383,
++        }
++
++    result = run_scheduler_managed_sql_ref_openvino_embedding_usage(
++        Store(),
++        SchedulerManagedSqlRefOpenVinoEmbeddingRequest(
++            sql_ref=Record().context_ref,
++            role="query",
++            policy_decision_id="policy:0272:r10:query-role",
++        ),
++        execute=True,
++        embedder=embedder,
++    )
++
++    assert result.valid is True
++    assert result.embedding_text.startswith("query:")
++    assert observed["text"].startswith("query:")
++    assert result.embedding["role"] == "query"
+diff --git a/tests/rules/test_github_project_v2_source_candidate_closed_loop_smoke_0272_rule.py b/tests/rules/test_github_project_v2_source_candidate_closed_loop_smoke_0272_rule.py
+new file mode 100644
+index 0000000..6116688
+--- /dev/null
++++ b/tests/rules/test_github_project_v2_source_candidate_closed_loop_smoke_0272_rule.py
+@@ -0,0 +1,59 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++SOURCE = ROOT / "src/context/github_project_v2_source_candidate_closed_loop_smoke_0272.py"
++TOOL = ROOT / "tools/run_github_project_v2_source_candidate_closed_loop_smoke_0272.py"
++ARCH = ROOT / "doc/architecture/GITHUB_PROJECT_V2_SOURCE_CANDIDATE_CLOSED_LOOP_SMOKE_0272.md"
++GRAPH = ROOT / "doc/docs/architecture/runtime/272_r10_github_project_v2_closed_loop_smoke.dot"
++MANIFEST = ROOT / "doc/manifests/MANIFEST_0272_R10_GITHUB_PROJECT_V2_CLOSED_LOOP_SMOKE_CHANGED_FILES.md"
++EMBEDDING_0261 = ROOT / "src/context/scheduler_managed_sql_ref_openvino_embedding_usage_0261.py"
++
++
++def test_r10_composes_existing_surfaces_without_parallel_runtime() -> None:
++    source = SOURCE.read_text(encoding="utf-8")
++    assert "github_project_v2_source_candidate_durable_consumer_0272" in source
++    assert "github_project_v2_source_candidate_vector_projection_0272" in source
++    assert "scheduler_managed_sql_ref_openvino_embedding_usage_0261" in source
++    assert "scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263" in source
++    assert "LaboratoryManager" not in source
++    assert "RuntimeManager" not in source
++    assert "Scheduler.run" in source
++
++
++def test_r10_keeps_real_clients_at_cli_boundary() -> None:
++    source = SOURCE.read_text(encoding="utf-8")
++    tool = TOOL.read_text(encoding="utf-8")
++    assert "qdrant_client" not in source
++    assert "QdrantClientConnectionConfig" in tool
++    assert '"remote_mutation_allowed": False' in source
++    assert '"laboratory_selection_allowed": False' in source
++    assert '"sql_remains_authority": True' in source
++
++
++def test_r10_documents_upstream_and_laboratory_sequence() -> None:
++    architecture = ARCH.read_text(encoding="utf-8")
++    graph = GRAPH.read_text(encoding="utf-8")
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    assert "r6" in architecture
++    assert "r7" in architecture
++    assert "0273-r1" in architecture
++    assert "laboratoire fictif" in architecture
++    assert "HandoffR6 -> GateR7" in graph
++    assert "GateR7 -> DurableR8" in graph
++    assert "QdrantRecall0263 -> SqlRehydrate" in graph
++    assert "ClosedR10 -> LaboratoryAudit0273" in graph
++    assert "non_stdlib_dependency_added: false" in manifest
++
++
++def test_patch_contains_no_generated_python_artifacts() -> None:
++    for path in (SOURCE, TOOL, ARCH, GRAPH, MANIFEST):
++        assert "__pycache__" not in path.read_text(encoding="utf-8")
++        assert ".pyc" not in path.read_text(encoding="utf-8")
++
++
++def test_r10_repairs_0261_query_role_propagation_without_parallel_embedder() -> None:
++    source = EMBEDDING_0261.read_text(encoding="utf-8")
++    assert "def build_openvino_text_from_sql_record" in source
++    assert "role=request.role" in source
++    assert "role=effective_role" in source
++    assert "QueryEmbeddingManager" not in source
+diff --git a/tests/tools/test_run_github_project_v2_source_candidate_closed_loop_smoke_0272.py b/tests/tools/test_run_github_project_v2_source_candidate_closed_loop_smoke_0272.py
+new file mode 100644
+index 0000000..91589d9
+--- /dev/null
++++ b/tests/tools/test_run_github_project_v2_source_candidate_closed_loop_smoke_0272.py
+@@ -0,0 +1,51 @@
++from __future__ import annotations
++
++import importlib.util
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools/run_github_project_v2_source_candidate_closed_loop_smoke_0272.py"
++
++
++def _load_tool():
++    spec = importlib.util.spec_from_file_location("projectv2_closed_loop_tool_0272", TOOL)
++    assert spec is not None and spec.loader is not None
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
++    return module
++
++
++def test_parse_args_keeps_real_effects_explicit() -> None:
++    tool = _load_tool()
++    args = tool.parse_args(
++        (
++            "--gate-record",
++            "gate.json",
++            "--db-path",
++            "state.sqlite3",
++            "--collection",
++            "candidate_vectors",
++            "--qdrant-url",
++            "http://127.0.0.1:6333",
++            "--recall-limit",
++            "5",
++            "--execute",
++            "--policy-decision-id",
++            "policy:0272:r10:cli",
++        )
++    )
++    assert args.gate_record == Path("gate.json")
++    assert args.db_path == Path("state.sqlite3")
++    assert args.collection == "candidate_vectors"
++    assert args.recall_limit == 5
++    assert args.execute is True
++    assert args.policy_decision_id == "policy:0272:r10:cli"
++
++
++def test_cli_binds_one_qdrant_executor_with_write_and_search() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    assert "build_db_api_sql_context_store_binding_report" in source
++    assert "build_qdrant_client_projection_executor" in source
++    assert "allow_write=True" in source
++    assert "allow_search=True" in source
++    assert "wait_for_write=True" in source
+diff --git a/tools/run_github_project_v2_source_candidate_closed_loop_smoke_0272.py b/tools/run_github_project_v2_source_candidate_closed_loop_smoke_0272.py
+new file mode 100755
+index 0000000..650290e
+--- /dev/null
++++ b/tools/run_github_project_v2_source_candidate_closed_loop_smoke_0272.py
+@@ -0,0 +1,145 @@
++#!/usr/bin/env python3
++"""Run the r7 -> SQL -> E5/Qdrant -> SQL ProjectV2 closed-loop smoke."""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import sys
++from typing import Any, Mapping, Sequence
++
++_REPO_ROOT = Path(__file__).resolve().parents[1]
++_SRC_ROOT = _REPO_ROOT / "src"
++if str(_SRC_ROOT) not in sys.path:
++    sys.path.insert(0, str(_SRC_ROOT))
++
++from context.github_project_v2_source_candidate_closed_loop_smoke_0272 import (  # noqa: E402
++    GitHubProjectV2ClosedLoopSmokeCommand,
++    run_project_v2_source_candidate_closed_loop_smoke,
++)
++from context.github_project_v2_source_candidate_vector_projection_0272 import (  # noqa: E402
++    EmbeddingSpaceProfile,
++)
++from context.scheduler_managed_db_api_sql_context_store_binding_0260 import (  # noqa: E402
++    build_db_api_sql_context_store_binding_report,
++)
++from inference.qdrant_client_projection_executor import (  # noqa: E402
++    QdrantClientConnectionConfig,
++    QdrantClientEffectGate,
++    build_qdrant_client_projection_executor,
++)
++
++_DEFAULT_DB_PATH = Path(".var/local/sql_context_store.sqlite3")
++_DEFAULT_OUTPUT = Path(
++    ".var/reports/github_project_v2_source_candidate_closed_loop_smoke_0272.json"
++)
++
++
++def parse_args(argv: Sequence[str]) -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--gate-record", type=Path, required=True)
++    parser.add_argument("--db-path", type=Path, default=_DEFAULT_DB_PATH)
++    parser.add_argument("--model-dir", default=None)
++    parser.add_argument("--device", default="CPU")
++    parser.add_argument("--collection", default="autodoc_context_embeddings")
++    parser.add_argument("--qdrant-url", default="http://127.0.0.1:6333")
++    parser.add_argument("--prefer-grpc", action="store_true")
++    parser.add_argument("--grpc-port", type=int, default=6334)
++    parser.add_argument("--recall-limit", type=int, default=8)
++    parser.add_argument("--execute", action="store_true")
++    parser.add_argument("--policy-decision-id", default="")
++    parser.add_argument("--output", type=Path, default=_DEFAULT_OUTPUT)
++    parser.add_argument("--format", choices=("summary", "json"), default="summary")
++    return parser.parse_args(argv)
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = parse_args(tuple(sys.argv[1:] if argv is None else argv))
++    gate_record = _read_json(_repo_path(args.gate_record))
++    binding, store = build_db_api_sql_context_store_binding_report(
++        _REPO_ROOT,
++        db_path=_repo_path(args.db_path),
++        construct=True,
++    )
++    issues = list(binding.issues)
++    executor = None
++    try:
++        if args.execute and not issues:
++            executor = build_qdrant_client_projection_executor(
++                QdrantClientConnectionConfig(
++                    url=args.qdrant_url,
++                    prefer_grpc=args.prefer_grpc,
++                    grpc_port=args.grpc_port,
++                    wait_for_write=True,
++                ),
++                QdrantClientEffectGate(
++                    policy_decision_id=args.policy_decision_id,
++                    allow_write=True,
++                    allow_search=True,
++                ),
++            )
++        result = run_project_v2_source_candidate_closed_loop_smoke(
++            gate_record,
++            store,
++            GitHubProjectV2ClosedLoopSmokeCommand(
++                execute=args.execute,
++                policy_decision_id=args.policy_decision_id,
++                model_dir=args.model_dir,
++                device=args.device,
++                recall_limit=args.recall_limit,
++            ),
++            profile=EmbeddingSpaceProfile(collection_name=args.collection),
++            qdrant_executor=executor,
++        )
++        payload = result.to_json_dict()
++        payload["binding"] = binding.to_dict()
++        if issues:
++            payload["valid"] = False
++            payload["issues"] = list(dict.fromkeys([*payload["issues"], *issues]))
++        _write_json_atomic(_repo_path(args.output), payload)
++        print(
++            json.dumps(payload, indent=2, sort_keys=True)
++            if args.format == "json"
++            else result.to_summary()
++        )
++        return 0 if payload["valid"] else 2
++    except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
++        payload = {
++            "valid": False,
++            "issues": [f"{type(exc).__name__}:{exc}"],
++            "binding": binding.to_dict(),
++        }
++        _write_json_atomic(_repo_path(args.output), payload)
++        print(json.dumps(payload, indent=2, sort_keys=True))
++        return 2
++    finally:
++        close = getattr(executor, "close", None)
++        if callable(close):
++            close()
++
++
++def _read_json(path: Path) -> Mapping[str, Any]:
++    payload = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(payload, Mapping):
++        raise ValueError(f"gate record must be a JSON object: {path}")
++    return payload
++
++
++def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    temporary = path.with_suffix(path.suffix + ".tmp")
++    temporary.write_text(
++        json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
++        encoding="utf-8",
++    )
++    temporary.replace(path)
++
++
++def _repo_path(value: Path) -> Path:
++    path = value.expanduser()
++    return path if path.is_absolute() else _REPO_ROOT / path
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())

@@ -1,0 +1,964 @@
+diff --git a/PHASE0268_OPENRC_LAUNCHER_MINIMAL_READINESS_TEST_REPORT.md b/PHASE0268_OPENRC_LAUNCHER_MINIMAL_READINESS_TEST_REPORT.md
+index 7d587a6..b9f82f8 100644
+--- a/PHASE0268_OPENRC_LAUNCHER_MINIMAL_READINESS_TEST_REPORT.md
++++ b/PHASE0268_OPENRC_LAUNCHER_MINIMAL_READINESS_TEST_REPORT.md
+@@ -11,12 +11,41 @@ python -m pytest -q tests/rules
+ python -m pytest -q
+ ```
+ 
+-## Smoke
++## Construction validation
+ 
+ ```text
+-PYTHONPATH=src:. python tools/build_openrc_launcher_minimal_readiness_0268.py --closed-frame-report .var/reports/scheduler_managed_closed_result_frame_0264.json --github-handoff .var/reports/github_scan_once_handoff_0267.json --output .var/reports/openrc_launcher_minimal_readiness_0268.json --script-output .var/reports/autodoc-local-runtime.openrc --format summary
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. python -m pytest -q \
++  tests/context/test_openrc_launcher_minimal_readiness_0268.py \
++  tests/tools/test_build_openrc_launcher_minimal_readiness_0268.py \
++  tests/rules/test_openrc_launcher_minimal_readiness_0268_rule.py
++
++9 passed
++```
++
++The complete repository suites remain patch-queue gates on the target checkout.
++
++## r2 smoke
++
++```text
++PYTHONPATH=src:. python tools/build_openrc_launcher_minimal_readiness_0268.py \
++  --closed-frame-report .var/reports/scheduler_managed_closed_result_frame_0264.json \
++  --eventbus-observation .var/reports/closed_result_frame_eventbus_observation_0265.json \
++  --passive-supervisor-observation .var/reports/passive_supervisor_closed_result_frame_observation_0266.json \
++  --github-handoff .var/reports/github_scan_once_handoff_0267.json \
++  --sqlite-database .var/local/scheduler_managed_db_api_sql_context_store_0260.sqlite3 \
++  --output .var/reports/openrc_launcher_minimal_readiness_0268.json \
++  --script-output .var/reports/autodoc-local-runtime.openrc \
++  --format summary
++```
++
++Expected summary shape:
++
++```text
++openrc_launcher_minimal_readiness_valid=True issues=0 readiness_ref=... service=autodoc-local-runtime reports=4/4 sqlite_present=True readiness_only=True starts_postgresql=False starts_openvino=False starts_qdrant=False calls_rc_service=False
+ ```
+ 
+ ## Boundary
+ 
+-Readiness/rendering only. No service is installed, enabled, or started.
++Readiness/rendering only. The four reports are read, SQLite is inspected by
++metadata only, and no service is installed, enabled or started.
+diff --git a/doc/CHANGELOG_0268_OPENRC_LAUNCHER_MINIMAL_READINESS.md b/doc/CHANGELOG_0268_OPENRC_LAUNCHER_MINIMAL_READINESS.md
+index 59a2bbb..e009ca7 100644
+--- a/doc/CHANGELOG_0268_OPENRC_LAUNCHER_MINIMAL_READINESS.md
++++ b/doc/CHANGELOG_0268_OPENRC_LAUNCHER_MINIMAL_READINESS.md
+@@ -1,5 +1,12 @@
+ # Changelog 0268 - OpenRC launcher minimal readiness
+ 
++## r2
++
++Extends the existing 0268 implementation without adding another launcher or
++runtime authority. Readiness now requires the 0264, 0265, 0266 and 0267 reports
++and metadata-only presence of the phase-0260 SQLite file. Existing OpenRC script
++rendering and CLI options remain available; no service or runtime is started.
++
+ ## r1
+ 
+ Adds a readiness-only OpenRC launcher envelope. The patch renders service text
+diff --git a/doc/architecture/OPENRC_LAUNCHER_MINIMAL_READINESS_0268.md b/doc/architecture/OPENRC_LAUNCHER_MINIMAL_READINESS_0268.md
+index 1b312a4..0925dbf 100644
+--- a/doc/architecture/OPENRC_LAUNCHER_MINIMAL_READINESS_0268.md
++++ b/doc/architecture/OPENRC_LAUNCHER_MINIMAL_READINESS_0268.md
+@@ -2,23 +2,42 @@
+ 
+ ## Intent
+ 
+-0268 prepares a local OpenRC/launcher readiness envelope after the closed loop
+-and GitHub scan-once handoff:
++0268 prepares a local OpenRC/launcher readiness envelope after the closed loop,
++observation surfaces and GitHub scan-once handoff:
+ 
+ ```text
+-0264 closed ResultFrame + 0267 GitHub handoff -> OpenRC launcher readiness
++0264 closed ResultFrame
+++ 0265 EventBus observation-only report
+++ 0266 PassiveSupervisor observation-only report
+++ 0267 GitHub scan-once handoff
+++ phase-0260 local SQLite file metadata
++-> OpenRC launcher readiness
+ ```
+ 
+ OpenRC/system/admin starts external services. Scheduler owns Autodoc runtime objects that use those services.
+ 
++## r2 readiness inputs
++
++0268-r2 verifies the local presence and validity of outputs 0264, 0265, 0266 and
++0267. It also verifies, by filesystem metadata only, that the expected SQLite
++file exists and is non-empty:
++
++```text
++.var/local/scheduler_managed_db_api_sql_context_store_0260.sqlite3
++```
++
++The SQLite file is not opened, queried or written. PostgreSQL, Qdrant and
++OpenVINO are described as expected external capabilities whose process authority
++belongs to OpenRC/OS/admin.
++
+ ## Boundary
+ 
+ 0268 does not install, enable, or start services. It renders an OpenRC service
+ file as text and emits a readiness report.
+ 
+-It does not call `rc-service`, `rc-update`, PostgreSQL, OpenVINO, Qdrant, or any
+-runtime executor. It does not modify Scheduler.run and it does not introduce a
+-RuntimeManager.
++It does not call `rc-service`, `rc-update`, PostgreSQL, OpenVINO, Qdrant, GitHub,
++or any runtime executor. It does not write SQL, modify Scheduler.run, or
++introduce a RuntimeManager.
+ 
+ ## Output
+ 
+@@ -30,8 +49,13 @@ service_spec
+ rendered_openrc_script
+ source_reports
+ closed_frame_summary
++eventbus_observation_summary
++passive_supervisor_summary
+ github_handoff_summary
++sqlite_database_summary
+ checks
++external_services_expected
++external_process_authority
+ ```
+ 
+ ## Next step
+diff --git a/doc/code-rules/0268_openrc_launcher_minimal_readiness_rule.md b/doc/code-rules/0268_openrc_launcher_minimal_readiness_rule.md
+index 733468a..e3f062b 100644
+--- a/doc/code-rules/0268_openrc_launcher_minimal_readiness_rule.md
++++ b/doc/code-rules/0268_openrc_launcher_minimal_readiness_rule.md
+@@ -7,6 +7,9 @@ OpenRC launcher minimal readiness
+ OpenRC/system/admin starts external services
+ Scheduler owns Autodoc runtime objects
+ readiness/rendering only
++validate outputs 0264, 0265, 0266 and 0267
++validate phase-0260 SQLite presence by metadata only
++SQLite is not opened, queried or written
+ does not install, enable, or start services
+ ```
+ 
+@@ -21,6 +24,10 @@ service enable
+ PostgreSQL daemon start
+ OpenVINO service start
+ Qdrant daemon start
++OpenVINO execution
++SQL write
++Qdrant call
++GitHub call
+ runtime execution
+ new RuntimeManager
+ Scheduler.run modification
+diff --git a/doc/docs/architecture/runtime/268_openrc_launcher_minimal_readiness.dot b/doc/docs/architecture/runtime/268_openrc_launcher_minimal_readiness.dot
+index c9506c1..9b41b3c 100644
+--- a/doc/docs/architecture/runtime/268_openrc_launcher_minimal_readiness.dot
++++ b/doc/docs/architecture/runtime/268_openrc_launcher_minimal_readiness.dot
+@@ -2,16 +2,25 @@ digraph openrc_launcher_minimal_readiness_0268 {
+   rankdir=LR;
+ 
+   frame [label="0264 closed ResultFrame"];
+-  handoff [label="0267 GitHub handoff"];
++  eventbus [label="0265 EventBus observation\nfacts only"];
++  passive [label="0266 PassiveSupervisor\nread model only"];
++  handoff [label="0267 GitHub handoff\nlocal/no mutation"];
++  sqlite [label="0260 SQLite file\nmetadata only"];
+   readiness [label="0268 OpenRC readiness
+ render only"];
+   script [label="OpenRC service text
+ not installed"];
++  services [label="PostgreSQL / Qdrant / OpenVINO
++started by OpenRC/OS/admin"];
+   admin [label="future admin/OpenRC action
+ manual/gated"];
+ 
+   frame -> readiness;
++  eventbus -> readiness;
++  passive -> readiness;
+   handoff -> readiness;
++  sqlite -> readiness;
+   readiness -> script;
++  services -> readiness [style=dashed, label="expected capabilities"];
+   script -> admin [style=dashed];
+ }
+diff --git a/doc/manifests/MANIFEST_0268_OPENRC_LAUNCHER_MINIMAL_READINESS_CHANGED_FILES.md b/doc/manifests/MANIFEST_0268_OPENRC_LAUNCHER_MINIMAL_READINESS_CHANGED_FILES.md
+index dbd3944..9a63a2f 100644
+--- a/doc/manifests/MANIFEST_0268_OPENRC_LAUNCHER_MINIMAL_READINESS_CHANGED_FILES.md
++++ b/doc/manifests/MANIFEST_0268_OPENRC_LAUNCHER_MINIMAL_READINESS_CHANGED_FILES.md
+@@ -1,5 +1,7 @@
+ # Manifest 0268 - OpenRC launcher minimal readiness
+ 
++## r2 changed files
++
+ - `src/context/openrc_launcher_minimal_readiness_0268.py`
+ - `tools/build_openrc_launcher_minimal_readiness_0268.py`
+ - `tests/context/test_openrc_launcher_minimal_readiness_0268.py`
+@@ -11,3 +13,5 @@
+ - `doc/CHANGELOG_0268_OPENRC_LAUNCHER_MINIMAL_READINESS.md`
+ - `doc/manifests/MANIFEST_0268_OPENRC_LAUNCHER_MINIMAL_READINESS_CHANGED_FILES.md`
+ - `PHASE0268_OPENRC_LAUNCHER_MINIMAL_READINESS_TEST_REPORT.md`
++
++No new runtime, launcher, manager, handler or adapter module is introduced.
+diff --git a/src/context/openrc_launcher_minimal_readiness_0268.py b/src/context/openrc_launcher_minimal_readiness_0268.py
+index 1c82dde..8955533 100644
+--- a/src/context/openrc_launcher_minimal_readiness_0268.py
++++ b/src/context/openrc_launcher_minimal_readiness_0268.py
+@@ -23,8 +23,13 @@ from typing import Any, Mapping, Sequence
+ 
+ 
+ OPENRC_READINESS_SCHEMA = "missipy.openrc_launcher_minimal_readiness.v1"
++EVENTBUS_OBSERVATION_SCHEMA = "missipy.closed_result_frame_eventbus_observation.v1"
++PASSIVE_SUPERVISOR_SCHEMA = (
++    "missipy.passive_supervisor_closed_result_frame_observation.v1"
++)
+ DEFAULT_SERVICE_NAME = "autodoc-local-runtime"
+ DEFAULT_COMMAND = "python tools/compose_scheduler_managed_closed_result_frame_0264.py --format summary"
++EXPECTED_EXTERNAL_SERVICES = ("postgresql", "qdrant", "openvino")
+ 
+ 
+ @dataclass(frozen=True)
+@@ -87,13 +92,20 @@ class OpenRcLauncherMinimalReadinessReport:
+     rendered_openrc_script: str = ""
+     source_reports: Mapping[str, str] = field(default_factory=dict)
+     closed_frame_summary: Mapping[str, Any] = field(default_factory=dict)
++    eventbus_observation_summary: Mapping[str, Any] = field(default_factory=dict)
++    passive_supervisor_summary: Mapping[str, Any] = field(default_factory=dict)
+     github_handoff_summary: Mapping[str, Any] = field(default_factory=dict)
++    sqlite_database_summary: Mapping[str, Any] = field(default_factory=dict)
+     checks: Mapping[str, bool] = field(default_factory=dict)
+     local_authority: bool = True
+     readiness_only: bool = True
+     openrc_admin_action_required: bool = True
+     scheduler_owns_runtime_objects: bool = True
+     external_services_started_by_openrc: bool = True
++    external_services_described_only: bool = True
++    external_services_expected: tuple[str, ...] = EXPECTED_EXTERNAL_SERVICES
++    external_process_authority: str = "openrc_os_admin"
++    scheduler_starts_external_services: bool = False
+     installs_service: bool = False
+     starts_service: bool = False
+     enables_service: bool = False
+@@ -101,8 +113,13 @@ class OpenRcLauncherMinimalReadinessReport:
+     starts_postgresql: bool = False
+     starts_openvino: bool = False
+     starts_qdrant: bool = False
++    executes_openvino: bool = False
++    writes_sql: bool = False
++    calls_qdrant: bool = False
++    calls_github: bool = False
+     calls_rc_service: bool = False
+     calls_rc_update: bool = False
++    uses_subprocess: bool = False
+     modifies_scheduler_run: bool = False
+     creates_runtime_manager: bool = False
+ 
+@@ -118,13 +135,31 @@ class OpenRcLauncherMinimalReadinessReport:
+             "rendered_openrc_script": self.rendered_openrc_script,
+             "source_reports": dict(self.source_reports),
+             "closed_frame_summary": dict(self.closed_frame_summary),
++            "eventbus_observation_summary": dict(self.eventbus_observation_summary),
++            "passive_supervisor_summary": dict(self.passive_supervisor_summary),
+             "github_handoff_summary": dict(self.github_handoff_summary),
++            "sqlite_database_summary": dict(self.sqlite_database_summary),
+             "checks": dict(self.checks),
++            "required_report_count": 4,
++            "ready_report_count": sum(
++                1
++                for key in (
++                    "closed_frame_valid",
++                    "eventbus_observation_valid",
++                    "passive_supervisor_valid",
++                    "github_handoff_valid",
++                )
++                if self.checks.get(key) is True
++            ),
+             "local_authority": self.local_authority,
+             "readiness_only": self.readiness_only,
+             "openrc_admin_action_required": self.openrc_admin_action_required,
+             "scheduler_owns_runtime_objects": self.scheduler_owns_runtime_objects,
+             "external_services_started_by_openrc": self.external_services_started_by_openrc,
++            "external_services_described_only": self.external_services_described_only,
++            "external_services_expected": list(self.external_services_expected),
++            "external_process_authority": self.external_process_authority,
++            "scheduler_starts_external_services": self.scheduler_starts_external_services,
+             "installs_service": self.installs_service,
+             "starts_service": self.starts_service,
+             "enables_service": self.enables_service,
+@@ -132,8 +167,13 @@ class OpenRcLauncherMinimalReadinessReport:
+             "starts_postgresql": self.starts_postgresql,
+             "starts_openvino": self.starts_openvino,
+             "starts_qdrant": self.starts_qdrant,
++            "executes_openvino": self.executes_openvino,
++            "writes_sql": self.writes_sql,
++            "calls_qdrant": self.calls_qdrant,
++            "calls_github": self.calls_github,
+             "calls_rc_service": self.calls_rc_service,
+             "calls_rc_update": self.calls_rc_update,
++            "uses_subprocess": self.uses_subprocess,
+             "modifies_scheduler_run": self.modifies_scheduler_run,
+             "creates_runtime_manager": self.creates_runtime_manager,
+         }
+@@ -142,7 +182,10 @@ class OpenRcLauncherMinimalReadinessReport:
+ def validate_openrc_readiness_inputs(
+     *,
+     closed_frame: Mapping[str, Any],
++    eventbus_observation: Mapping[str, Any],
++    passive_supervisor_observation: Mapping[str, Any],
+     github_handoff: Mapping[str, Any],
++    sqlite_database: Mapping[str, Any],
+     request: OpenRcLauncherMinimalReadinessRequest,
+ ) -> tuple[str, ...]:
+     """Validate readiness inputs without executing anything."""
+@@ -156,12 +199,54 @@ def validate_openrc_readiness_inputs(
+         issues.append("closed ResultFrame must have zero missing refs")
+     if closed_frame.get("executes_runtime") is not False:
+         issues.append("OpenRC readiness input must be non-runtime")
++
++    if eventbus_observation.get("schema") != EVENTBUS_OBSERVATION_SCHEMA:
++        issues.append("0265 EventBus observation schema must match")
++    if eventbus_observation.get("valid") is not True:
++        issues.append("0265 EventBus observation must be valid")
++    if eventbus_observation.get("eventbus_observation_only") is not True:
++        issues.append("0265 EventBus must remain observation-only")
++    if eventbus_observation.get("events_are_facts_not_commands") is not True:
++        issues.append("0265 events must remain facts, not commands")
++    if eventbus_observation.get("executes_runtime") is not False:
++        issues.append("0265 EventBus observation must be non-runtime")
++
++    if passive_supervisor_observation.get("schema") != PASSIVE_SUPERVISOR_SCHEMA:
++        issues.append("0266 PassiveSupervisor schema must match")
++    if passive_supervisor_observation.get("valid") is not True:
++        issues.append("0266 PassiveSupervisor observation must be valid")
++    if (
++        passive_supervisor_observation.get("passive_supervisor_observation_only")
++        is not True
++    ):
++        issues.append("0266 PassiveSupervisor must remain observation-only")
++    if passive_supervisor_observation.get("rejected_fact_count", -1) != 0:
++        issues.append("0266 PassiveSupervisor must reject zero facts")
++    if passive_supervisor_observation.get("runtime_violation_count", -1) != 0:
++        issues.append("0266 PassiveSupervisor must report zero runtime violations")
++    if passive_supervisor_observation.get("executes_runtime") is not False:
++        issues.append("0266 PassiveSupervisor observation must be non-runtime")
++
+     if github_handoff.get("valid") is not True:
+         issues.append("GitHub scan-once handoff must be valid")
+     if github_handoff.get("scan_once") is not True:
+         issues.append("GitHub handoff must be scan-once")
+     if github_handoff.get("remote_mutation_allowed") is not False:
+         issues.append("GitHub handoff must not allow remote mutation")
++
++    if sqlite_database.get("exists") is not True:
++        issues.append("phase-0260 SQLite database must exist")
++    if sqlite_database.get("is_file") is not True:
++        issues.append("phase-0260 SQLite database must be a file")
++    if int(sqlite_database.get("size_bytes") or 0) <= 0:
++        issues.append("phase-0260 SQLite database must be non-empty")
++    if sqlite_database.get("opened") is not False:
++        issues.append("0268 must not open the SQLite database")
++    if sqlite_database.get("queried") is not False:
++        issues.append("0268 must not query the SQLite database")
++    if sqlite_database.get("written") is not False:
++        issues.append("0268 must not write the SQLite database")
++
+     if not request.service_name or "/" in request.service_name or " " in request.service_name:
+         issues.append("service_name must be a simple OpenRC service name")
+     if request.install_service:
+@@ -200,21 +285,33 @@ def render_openrc_script(spec: OpenRcLauncherServiceSpec) -> str:
+ def _readiness_ref(
+     request: OpenRcLauncherMinimalReadinessRequest,
+     closed_frame: Mapping[str, Any],
++    eventbus_observation: Mapping[str, Any],
++    passive_supervisor_observation: Mapping[str, Any],
+     github_handoff: Mapping[str, Any],
++    sqlite_database: Mapping[str, Any],
+ ) -> str:
+     digest = hashlib.sha256()
+-    digest.update(request.service_name.encode("utf-8"))
+-    digest.update(b"\0")
+-    digest.update(str(closed_frame.get("sql_ref") or "").encode("utf-8"))
+-    digest.update(b"\0")
+-    digest.update(str(github_handoff.get("handoff_ref") or "").encode("utf-8"))
++    for value in (
++        request.service_name,
++        closed_frame.get("sql_ref") or "",
++        eventbus_observation.get("frame_ref") or "",
++        passive_supervisor_observation.get("source_observation_ref") or "",
++        github_handoff.get("handoff_ref") or "",
++        sqlite_database.get("path") or "",
++        sqlite_database.get("size_bytes") or 0,
++    ):
++        digest.update(str(value).encode("utf-8"))
++        digest.update(b"\0")
+     return "openrc-launcher-readiness:" + digest.hexdigest()[:16]
+ 
+ 
+ def build_openrc_launcher_minimal_readiness(
+     *,
+     closed_frame: Mapping[str, Any],
++    eventbus_observation: Mapping[str, Any],
++    passive_supervisor_observation: Mapping[str, Any],
+     github_handoff: Mapping[str, Any],
++    sqlite_database: Mapping[str, Any],
+     request: OpenRcLauncherMinimalReadinessRequest,
+     source_reports: Mapping[str, str],
+ ) -> OpenRcLauncherMinimalReadinessReport:
+@@ -222,13 +319,27 @@ def build_openrc_launcher_minimal_readiness(
+ 
+     issues = validate_openrc_readiness_inputs(
+         closed_frame=closed_frame,
++        eventbus_observation=eventbus_observation,
++        passive_supervisor_observation=passive_supervisor_observation,
+         github_handoff=github_handoff,
++        sqlite_database=sqlite_database,
+         request=request,
+     )
+     spec = OpenRcLauncherServiceSpec(service_name=request.service_name)
+     checks = {
+         "closed_frame_valid": closed_frame.get("valid") is True,
++        "eventbus_observation_valid": (
++            eventbus_observation.get("valid") is True
++            and eventbus_observation.get("schema") == EVENTBUS_OBSERVATION_SCHEMA
++        ),
++        "passive_supervisor_valid": (
++            passive_supervisor_observation.get("valid") is True
++            and passive_supervisor_observation.get("schema")
++            == PASSIVE_SUPERVISOR_SCHEMA
++        ),
+         "github_handoff_valid": github_handoff.get("valid") is True,
++        "sqlite_database_present": sqlite_database.get("exists") is True,
++        "sqlite_database_non_empty": int(sqlite_database.get("size_bytes") or 0) > 0,
+         "github_scan_once": github_handoff.get("scan_once") is True,
+         "remote_mutation_disabled": github_handoff.get("remote_mutation_allowed") is False,
+         "scheduler_run_unchanged": True,
+@@ -240,7 +351,16 @@ def build_openrc_launcher_minimal_readiness(
+         valid=not issues,
+         issues=issues,
+         request=request,
+-        readiness_ref="" if issues else _readiness_ref(request, closed_frame, github_handoff),
++        readiness_ref=""
++        if issues
++        else _readiness_ref(
++            request,
++            closed_frame,
++            eventbus_observation,
++            passive_supervisor_observation,
++            github_handoff,
++            sqlite_database,
++        ),
+         service_spec=spec,
+         rendered_openrc_script=render_openrc_script(spec),
+         source_reports=source_reports,
+@@ -250,6 +370,32 @@ def build_openrc_launcher_minimal_readiness(
+             "hydrated_count": closed_frame.get("hydrated_count", 0),
+             "missing_count": closed_frame.get("missing_count", 0),
+         },
++        eventbus_observation_summary={
++            "schema": eventbus_observation.get("schema", ""),
++            "frame_ref": eventbus_observation.get("frame_ref", ""),
++            "fact_count": eventbus_observation.get("fact_count", 0),
++            "published_count": eventbus_observation.get("published_count", 0),
++            "observed_count": eventbus_observation.get("observed_count", 0),
++            "eventbus_observation_only": eventbus_observation.get(
++                "eventbus_observation_only", False
++            ),
++        },
++        passive_supervisor_summary={
++            "schema": passive_supervisor_observation.get("schema", ""),
++            "source_observation_ref": passive_supervisor_observation.get(
++                "source_observation_ref", ""
++            ),
++            "fact_count": passive_supervisor_observation.get("fact_count", 0),
++            "accepted_fact_count": passive_supervisor_observation.get(
++                "accepted_fact_count", 0
++            ),
++            "rejected_fact_count": passive_supervisor_observation.get(
++                "rejected_fact_count", 0
++            ),
++            "runtime_violation_count": passive_supervisor_observation.get(
++                "runtime_violation_count", 0
++            ),
++        },
+         github_handoff_summary={
+             "handoff_ref": github_handoff.get("handoff_ref", ""),
+             "repository": github_handoff.get("request", {}).get("repository", "")
+@@ -258,6 +404,7 @@ def build_openrc_launcher_minimal_readiness(
+             "scan_once": github_handoff.get("scan_once", False),
+             "remote_mutation_allowed": github_handoff.get("remote_mutation_allowed", True),
+         },
++        sqlite_database_summary=dict(sqlite_database),
+         checks=checks,
+     )
+ 
+diff --git a/tests/context/test_openrc_launcher_minimal_readiness_0268.py b/tests/context/test_openrc_launcher_minimal_readiness_0268.py
+index 7eb58c8..f072838 100644
+--- a/tests/context/test_openrc_launcher_minimal_readiness_0268.py
++++ b/tests/context/test_openrc_launcher_minimal_readiness_0268.py
+@@ -1,4 +1,6 @@
+ from context.openrc_launcher_minimal_readiness_0268 import (
++    EVENTBUS_OBSERVATION_SCHEMA,
++    PASSIVE_SUPERVISOR_SCHEMA,
+     OpenRcLauncherMinimalReadinessRequest,
+     OpenRcLauncherServiceSpec,
+     build_openrc_launcher_minimal_readiness,
+@@ -15,6 +17,30 @@ CLOSED_FRAME = {
+     "executes_runtime": False,
+ }
+ 
++EVENTBUS_OBSERVATION = {
++    "schema": EVENTBUS_OBSERVATION_SCHEMA,
++    "valid": True,
++    "frame_ref": "closed-result-frame:test",
++    "fact_count": 3,
++    "published_count": 3,
++    "observed_count": 3,
++    "eventbus_observation_only": True,
++    "events_are_facts_not_commands": True,
++    "executes_runtime": False,
++}
++
++PASSIVE_SUPERVISOR_OBSERVATION = {
++    "schema": PASSIVE_SUPERVISOR_SCHEMA,
++    "valid": True,
++    "source_observation_ref": "eventbus-observation:test",
++    "fact_count": 3,
++    "accepted_fact_count": 3,
++    "rejected_fact_count": 0,
++    "runtime_violation_count": 0,
++    "passive_supervisor_observation_only": True,
++    "executes_runtime": False,
++}
++
+ GITHUB_HANDOFF = {
+     "valid": True,
+     "handoff_ref": "github-scan-once-handoff:test",
+@@ -23,38 +49,85 @@ GITHUB_HANDOFF = {
+     "request": {"repository": "newicody/autodoc"},
+ }
+ 
++SQLITE_DATABASE = {
++    "path": "/repo/.var/local/scheduler_managed_db_api_sql_context_store_0260.sqlite3",
++    "exists": True,
++    "is_file": True,
++    "size_bytes": 4096,
++    "opened": False,
++    "queried": False,
++    "written": False,
++}
++
++
++def _build(**overrides):
++    values = {
++        "closed_frame": CLOSED_FRAME,
++        "eventbus_observation": EVENTBUS_OBSERVATION,
++        "passive_supervisor_observation": PASSIVE_SUPERVISOR_OBSERVATION,
++        "github_handoff": GITHUB_HANDOFF,
++        "sqlite_database": SQLITE_DATABASE,
++        "request": OpenRcLauncherMinimalReadinessRequest(
++            service_name="autodoc-local-runtime"
++        ),
++        "source_reports": {
++            "closed": "0264.json",
++            "eventbus": "0265.json",
++            "passive": "0266.json",
++            "handoff": "0267.json",
++            "sqlite": "0260.sqlite3",
++        },
++    }
++    values.update(overrides)
++    return build_openrc_launcher_minimal_readiness(**values)
++
+ 
+ def test_openrc_script_is_rendered_but_not_installed_or_started() -> None:
+-    report = build_openrc_launcher_minimal_readiness(
+-        closed_frame=CLOSED_FRAME,
+-        github_handoff=GITHUB_HANDOFF,
+-        request=OpenRcLauncherMinimalReadinessRequest(service_name="autodoc-local-runtime"),
+-        source_reports={"closed": "0264.json", "handoff": "0267.json"},
+-    )
+-    payload = report.to_mapping()
++    payload = _build().to_mapping()
+ 
+     assert payload["valid"] is True
++    assert payload["ready_report_count"] == 4
++    assert payload["checks"]["sqlite_database_present"] is True
++    assert payload["sqlite_database_summary"]["opened"] is False
+     assert payload["readiness_only"] is True
+     assert payload["openrc_admin_action_required"] is True
++    assert payload["scheduler_starts_external_services"] is False
+     assert payload["starts_postgresql"] is False
+     assert payload["starts_openvino"] is False
+     assert payload["starts_qdrant"] is False
++    assert payload["executes_openvino"] is False
++    assert payload["writes_sql"] is False
++    assert payload["calls_qdrant"] is False
++    assert payload["calls_github"] is False
+     assert payload["calls_rc_service"] is False
+     assert "#!/sbin/openrc-run" in payload["rendered_openrc_script"]
+ 
+ 
+ def test_openrc_readiness_rejects_service_start_request() -> None:
+-    report = build_openrc_launcher_minimal_readiness(
+-        closed_frame=CLOSED_FRAME,
+-        github_handoff=GITHUB_HANDOFF,
+-        request=OpenRcLauncherMinimalReadinessRequest(start_service=True),
+-        source_reports={},
++    report = _build(
++        request=OpenRcLauncherMinimalReadinessRequest(start_service=True)
+     )
+ 
+     assert report.valid is False
+     assert "start_service is forbidden in 0268" in report.issues
+ 
+ 
++def test_openrc_readiness_rejects_missing_sqlite_and_passive_drift() -> None:
++    sqlite_database = dict(SQLITE_DATABASE)
++    sqlite_database.update(exists=False, is_file=False, size_bytes=0)
++    passive = dict(PASSIVE_SUPERVISOR_OBSERVATION)
++    passive["rejected_fact_count"] = 1
++
++    report = _build(
++        sqlite_database=sqlite_database,
++        passive_supervisor_observation=passive,
++    )
++
++    assert report.valid is False
++    assert "phase-0260 SQLite database must exist" in report.issues
++    assert "0266 PassiveSupervisor must reject zero facts" in report.issues
++
++
+ def test_rendered_openrc_script_contains_dependencies_only() -> None:
+     script = render_openrc_script(
+         OpenRcLauncherServiceSpec(
+diff --git a/tests/rules/test_openrc_launcher_minimal_readiness_0268_rule.py b/tests/rules/test_openrc_launcher_minimal_readiness_0268_rule.py
+index 214cbee..0e51648 100644
+--- a/tests/rules/test_openrc_launcher_minimal_readiness_0268_rule.py
++++ b/tests/rules/test_openrc_launcher_minimal_readiness_0268_rule.py
+@@ -14,6 +14,9 @@ def test_0268_source_locks_openrc_readiness_boundary() -> None:
+     assert "does not start PostgreSQL" in source
+     assert "does not call rc-service/rc-update" in source
+     assert "render_openrc_script" in source
++    assert "eventbus_observation" in source
++    assert "passive_supervisor_observation" in source
++    assert "sqlite_database" in source
+     assert "subprocess.run" not in source
+     assert "rc-service" not in source.replace("does not call rc-service/rc-update", "")
+     assert "rc-update" not in source.replace("does not call rc-service/rc-update", "")
+@@ -21,6 +24,21 @@ def test_0268_source_locks_openrc_readiness_boundary() -> None:
+     assert "Scheduler.run(" not in source
+ 
+ 
++def test_0268_tool_is_metadata_only_for_sqlite_and_services() -> None:
++    tool = (ROOT / "tools/build_openrc_launcher_minimal_readiness_0268.py").read_text(
++        encoding="utf-8"
++    )
++
++    assert "path.stat()" in tool
++    assert "import sqlite3" not in tool
++    assert "sqlite3.connect" not in tool
++    assert "subprocess" not in tool
++    assert "os.system" not in tool
++    assert "Popen(" not in tool
++    assert "rc-service" not in tool
++    assert "rc-update" not in tool
++
++
+ def test_0268_docs_lock_axis() -> None:
+     doc = (ROOT / "doc/architecture/OPENRC_LAUNCHER_MINIMAL_READINESS_0268.md").read_text(
+         encoding="utf-8"
+@@ -29,5 +47,8 @@ def test_0268_docs_lock_axis() -> None:
+     assert "OpenRC launcher minimal readiness" in doc
+     assert "OpenRC/system/admin starts external services" in doc
+     assert "Scheduler owns Autodoc runtime objects" in doc
++    normalized = " ".join(doc.split())
++    assert "0264, 0265, 0266 and 0267" in normalized
++    assert "SQLite" in doc
+     assert "does not install, enable, or start services" in doc
+     assert "0269 can run the prototype production smoke" in doc
+diff --git a/tests/tools/test_build_openrc_launcher_minimal_readiness_0268.py b/tests/tools/test_build_openrc_launcher_minimal_readiness_0268.py
+index a23c413..9c95e2d 100644
+--- a/tests/tools/test_build_openrc_launcher_minimal_readiness_0268.py
++++ b/tests/tools/test_build_openrc_launcher_minimal_readiness_0268.py
+@@ -3,41 +3,78 @@ import subprocess
+ import sys
+ from pathlib import Path
+ 
++from context.openrc_launcher_minimal_readiness_0268 import (
++    EVENTBUS_OBSERVATION_SCHEMA,
++    PASSIVE_SUPERVISOR_SCHEMA,
++)
++
+ 
+ ROOT = Path(__file__).resolve().parents[2]
+ 
+ 
++def _write_json(path: Path, payload: dict) -> None:
++    path.write_text(json.dumps(payload), encoding="utf-8")
++
++
+ def test_0268_tool_builds_readiness_report_and_script(tmp_path: Path) -> None:
+     closed = tmp_path / "closed.json"
++    eventbus = tmp_path / "eventbus.json"
++    passive = tmp_path / "passive.json"
+     handoff = tmp_path / "handoff.json"
++    sqlite_database = tmp_path / "scheduler.sqlite3"
+     output = tmp_path / "readiness.json"
+     script = tmp_path / "autodoc-local-runtime.openrc"
+ 
+-    closed.write_text(
+-        json.dumps(
+-            {
+-                "valid": True,
+-                "sql_ref": "sql:inference_context:tool",
+-                "embedding_ref": "embedding:passage:tool",
+-                "hydrated_count": 1,
+-                "missing_count": 0,
+-                "executes_runtime": False,
+-            }
+-        ),
+-        encoding="utf-8",
++    _write_json(
++        closed,
++        {
++            "valid": True,
++            "sql_ref": "sql:inference_context:tool",
++            "embedding_ref": "embedding:passage:tool",
++            "hydrated_count": 1,
++            "missing_count": 0,
++            "executes_runtime": False,
++        },
++    )
++    _write_json(
++        eventbus,
++        {
++            "schema": EVENTBUS_OBSERVATION_SCHEMA,
++            "valid": True,
++            "frame_ref": "closed-result-frame:tool",
++            "fact_count": 3,
++            "published_count": 3,
++            "observed_count": 3,
++            "eventbus_observation_only": True,
++            "events_are_facts_not_commands": True,
++            "executes_runtime": False,
++        },
++    )
++    _write_json(
++        passive,
++        {
++            "schema": PASSIVE_SUPERVISOR_SCHEMA,
++            "valid": True,
++            "source_observation_ref": "eventbus-observation:tool",
++            "fact_count": 3,
++            "accepted_fact_count": 3,
++            "rejected_fact_count": 0,
++            "runtime_violation_count": 0,
++            "passive_supervisor_observation_only": True,
++            "executes_runtime": False,
++        },
+     )
+-    handoff.write_text(
+-        json.dumps(
+-            {
+-                "valid": True,
+-                "handoff_ref": "github-scan-once-handoff:tool",
+-                "scan_once": True,
+-                "remote_mutation_allowed": False,
+-                "request": {"repository": "newicody/autodoc"},
+-            }
+-        ),
+-        encoding="utf-8",
++    _write_json(
++        handoff,
++        {
++            "valid": True,
++            "handoff_ref": "github-scan-once-handoff:tool",
++            "scan_once": True,
++            "remote_mutation_allowed": False,
++            "request": {"repository": "newicody/autodoc"},
++        },
+     )
++    sqlite_database.write_bytes(b"SQLite format 3\x00phase-0260")
+ 
+     result = subprocess.run(
+         [
+@@ -45,8 +82,14 @@ def test_0268_tool_builds_readiness_report_and_script(tmp_path: Path) -> None:
+             "tools/build_openrc_launcher_minimal_readiness_0268.py",
+             "--closed-frame-report",
+             str(closed),
++            "--eventbus-observation",
++            str(eventbus),
++            "--passive-supervisor-observation",
++            str(passive),
+             "--github-handoff",
+             str(handoff),
++            "--sqlite-database",
++            str(sqlite_database),
+             "--output",
+             str(output),
+             "--script-output",
+@@ -61,8 +104,49 @@ def test_0268_tool_builds_readiness_report_and_script(tmp_path: Path) -> None:
+     )
+ 
+     assert "openrc_launcher_minimal_readiness_valid=True" in result.stdout
++    assert "reports=4/4" in result.stdout
++    assert "sqlite_present=True" in result.stdout
+     payload = json.loads(output.read_text(encoding="utf-8"))
+     assert payload["schema"] == "missipy.openrc_launcher_minimal_readiness.v1"
+     assert payload["readiness_only"] is True
++    assert payload["ready_report_count"] == 4
++    assert payload["sqlite_database_summary"]["opened"] is False
++    assert payload["sqlite_database_summary"]["written"] is False
++    assert payload["uses_subprocess"] is False
+     assert payload["calls_rc_service"] is False
+     assert script.read_text(encoding="utf-8").startswith("#!/sbin/openrc-run")
++
++
++def test_0268_tool_reports_missing_artifacts_without_starting_services(
++    tmp_path: Path,
++) -> None:
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/build_openrc_launcher_minimal_readiness_0268.py",
++            "--closed-frame-report",
++            str(tmp_path / "0264.json"),
++            "--eventbus-observation",
++            str(tmp_path / "0265.json"),
++            "--passive-supervisor-observation",
++            str(tmp_path / "0266.json"),
++            "--github-handoff",
++            str(tmp_path / "0267.json"),
++            "--sqlite-database",
++            str(tmp_path / "0260.sqlite3"),
++            "--format",
++            "json",
++        ],
++        cwd=ROOT,
++        text=True,
++        capture_output=True,
++        check=False,
++    )
++
++    assert result.returncode == 2
++    payload = json.loads(result.stdout)
++    assert payload["valid"] is False
++    assert payload["ready_report_count"] == 0
++    assert payload["starts_postgresql"] is False
++    assert payload["starts_qdrant"] is False
++    assert payload["starts_openvino"] is False
+diff --git a/tools/build_openrc_launcher_minimal_readiness_0268.py b/tools/build_openrc_launcher_minimal_readiness_0268.py
+index 13d25cd..1f47656 100755
+--- a/tools/build_openrc_launcher_minimal_readiness_0268.py
++++ b/tools/build_openrc_launcher_minimal_readiness_0268.py
+@@ -7,6 +7,7 @@ import argparse
+ import json
+ import sys
+ from pathlib import Path
++from typing import Any
+ 
+ ROOT = Path(__file__).resolve().parents[1]
+ SRC_ROOT = ROOT / "src"
+@@ -23,13 +24,56 @@ from context.openrc_launcher_minimal_readiness_0268 import (  # noqa: E402
+ 
+ 
+ DEFAULT_CLOSED_FRAME_REPORT = ROOT / ".var/reports/scheduler_managed_closed_result_frame_0264.json"
++DEFAULT_EVENTBUS_OBSERVATION = ROOT / ".var/reports/closed_result_frame_eventbus_observation_0265.json"
++DEFAULT_PASSIVE_SUPERVISOR_OBSERVATION = ROOT / ".var/reports/passive_supervisor_closed_result_frame_observation_0266.json"
+ DEFAULT_GITHUB_HANDOFF = ROOT / ".var/reports/github_scan_once_handoff_0267.json"
++DEFAULT_SQLITE_DATABASE = ROOT / ".var/local/scheduler_managed_db_api_sql_context_store_0260.sqlite3"
++
++
++def _load_json_artifact(path: Path) -> dict[str, Any]:
++    try:
++        payload = load_json(path)
++    except (OSError, json.JSONDecodeError) as exc:
++        return {"_read_error": f"{type(exc).__name__}: {exc}"}
++    return payload if isinstance(payload, dict) else {"_read_error": "JSON root is not an object"}
++
++
++def _sqlite_metadata(path: Path) -> dict[str, Any]:
++    try:
++        stat_result = path.stat()
++    except OSError as exc:
++        return {
++            "path": str(path),
++            "exists": False,
++            "is_file": False,
++            "size_bytes": 0,
++            "stat_error": f"{type(exc).__name__}: {exc}",
++            "opened": False,
++            "queried": False,
++            "written": False,
++        }
++    return {
++        "path": str(path),
++        "exists": path.exists(),
++        "is_file": path.is_file(),
++        "size_bytes": stat_result.st_size,
++        "stat_error": "",
++        "opened": False,
++        "queried": False,
++        "written": False,
++    }
+ 
+ 
+ def parse_args() -> argparse.Namespace:
+     parser = argparse.ArgumentParser(description=__doc__)
+     parser.add_argument("--closed-frame-report", default=str(DEFAULT_CLOSED_FRAME_REPORT))
++    parser.add_argument("--eventbus-observation", default=str(DEFAULT_EVENTBUS_OBSERVATION))
++    parser.add_argument(
++        "--passive-supervisor-observation",
++        default=str(DEFAULT_PASSIVE_SUPERVISOR_OBSERVATION),
++    )
+     parser.add_argument("--github-handoff", default=str(DEFAULT_GITHUB_HANDOFF))
++    parser.add_argument("--sqlite-database", default=str(DEFAULT_SQLITE_DATABASE))
+     parser.add_argument("--service-name", default="autodoc-local-runtime")
+     parser.add_argument("--repository", default="newicody/autodoc")
+     parser.add_argument("--policy-decision-id", default="")
+@@ -45,7 +89,10 @@ def parse_args() -> argparse.Namespace:
+ def main() -> int:
+     args = parse_args()
+     closed_path = Path(args.closed_frame_report)
++    eventbus_path = Path(args.eventbus_observation)
++    passive_path = Path(args.passive_supervisor_observation)
+     handoff_path = Path(args.github_handoff)
++    sqlite_path = Path(args.sqlite_database)
+     request = OpenRcLauncherMinimalReadinessRequest(
+         service_name=args.service_name,
+         repository=args.repository,
+@@ -55,12 +102,18 @@ def main() -> int:
+         enable_service=args.enable_service,
+     )
+     report = build_openrc_launcher_minimal_readiness(
+-        closed_frame=load_json(closed_path),
+-        github_handoff=load_json(handoff_path),
++        closed_frame=_load_json_artifact(closed_path),
++        eventbus_observation=_load_json_artifact(eventbus_path),
++        passive_supervisor_observation=_load_json_artifact(passive_path),
++        github_handoff=_load_json_artifact(handoff_path),
++        sqlite_database=_sqlite_metadata(sqlite_path),
+         request=request,
+         source_reports={
+             "closed_frame_report": str(closed_path),
++            "eventbus_observation": str(eventbus_path),
++            "passive_supervisor_observation": str(passive_path),
+             "github_scan_once_handoff": str(handoff_path),
++            "sqlite_database": str(sqlite_path),
+         },
+     )
+     payload = report.to_mapping()
+@@ -78,6 +131,8 @@ def main() -> int:
+             f"{payload['valid']} issues={len(payload['issues'])} "
+             f"readiness_ref={payload.get('readiness_ref') or '-'} "
+             f"service={payload['service_spec']['service_name']} "
++            f"reports={payload['ready_report_count']}/{payload['required_report_count']} "
++            f"sqlite_present={payload['checks']['sqlite_database_present']} "
+             f"readiness_only={payload['readiness_only']} "
+             f"starts_postgresql={payload['starts_postgresql']} "
+             f"starts_openvino={payload['starts_openvino']} "

@@ -1,0 +1,79 @@
+diff --git a/PHASE0272_R9_GITHUB_PROJECT_V2_VECTOR_PROJECTION_TEST_REPORT.md b/PHASE0272_R9_GITHUB_PROJECT_V2_VECTOR_PROJECTION_TEST_REPORT.md
+index 3bdc574..734bb5b 100644
+--- a/PHASE0272_R9_GITHUB_PROJECT_V2_VECTOR_PROJECTION_TEST_REPORT.md
++++ b/PHASE0272_R9_GITHUB_PROJECT_V2_VECTOR_PROJECTION_TEST_REPORT.md
+@@ -30,3 +30,12 @@ network calls in focused tests: none
+ full repository suite: required on target checkout 54a1ff8
+ non_stdlib_dependency_added: false
+ ```
++
++## r9-r2 regression closure
++
++The first target full-suite run reached `2553 passed, 1 skipped` before one
++failure exposed an empty optional `model_path` metadata value from the injected
++embedding producer.  The 0262 path correctly rejected it via
++`OpenVINOEmbeddingVector`.  r9-r2 removes empty optional producer metadata before
++projection and adds a focused regression test; the strict adapter contract is
++unchanged.  The complete suite must be rerun on the target checkout.
+diff --git a/doc/CHANGELOG_0272_R9_GITHUB_PROJECT_V2_VECTOR_PROJECTION.md b/doc/CHANGELOG_0272_R9_GITHUB_PROJECT_V2_VECTOR_PROJECTION.md
+index c5fa747..8dd21e3 100644
+--- a/doc/CHANGELOG_0272_R9_GITHUB_PROJECT_V2_VECTOR_PROJECTION.md
++++ b/doc/CHANGELOG_0272_R9_GITHUB_PROJECT_V2_VECTOR_PROJECTION.md
+@@ -19,3 +19,9 @@
+ - no laboratory selection;
+ - no Scheduler.run or SHM modification;
+ - no new non-stdlib dependency.
++
++## Fixed in r9-r2
++
++- discard empty optional embedding metadata before the existing 0262 builder;
++- preserve the strict non-empty metadata contract of `OpenVINOEmbeddingVector`;
++- add a regression test for an omitted local `model_path`.
+diff --git a/src/context/github_project_v2_source_candidate_vector_projection_0272.py b/src/context/github_project_v2_source_candidate_vector_projection_0272.py
+index 1590ea5..22e777d 100644
+--- a/src/context/github_project_v2_source_candidate_vector_projection_0272.py
++++ b/src/context/github_project_v2_source_candidate_vector_projection_0272.py
+@@ -326,7 +326,18 @@ def attach_profile_to_embedding(
+     metadata = payload.get("metadata")
+     if not isinstance(metadata, dict):
+         metadata = {}
+-        payload["metadata"] = metadata
++    else:
++        # The existing OpenVINO adapter requires every metadata value to be
++        # non-empty.  Optional producer metadata such as ``model_path`` may be
++        # represented by an empty string when no local path was supplied.  It
++        # is not part of the vector-space identity, so remove it rather than
++        # weakening the adapter contract or inventing a sentinel value.
++        metadata = {
++            key: value
++            for key, value in metadata.items()
++            if not (isinstance(value, str) and not value.strip())
++        }
++    payload["metadata"] = metadata
+     additions = {
+         "embedding_profile_ref": profile.profile_ref,
+         "embedding_model_revision": profile.model_revision,
+diff --git a/tests/context/test_github_project_v2_source_candidate_vector_projection_0272.py b/tests/context/test_github_project_v2_source_candidate_vector_projection_0272.py
+index 62afc65..040514d 100644
+--- a/tests/context/test_github_project_v2_source_candidate_vector_projection_0272.py
++++ b/tests/context/test_github_project_v2_source_candidate_vector_projection_0272.py
+@@ -176,6 +176,19 @@ def test_dry_run_reads_sql_but_does_not_call_openvino_or_qdrant() -> None:
+     assert result.boundaries["sql_read_allowed"] is True
+ 
+ 
++def test_profile_attachment_drops_empty_optional_metadata_values() -> None:
++    sql_ref = "sql:github_artifact:metadata-normalization"
++    embedding = embedder("passage: x", sql_ref, None, "CPU")
++    assert embedding["metadata"]["model_path"] == ""
++
++    profiled = attach_profile_to_embedding(embedding, profile())
++    metadata = profiled["metadata"]
++
++    assert "model_path" not in metadata
++    assert metadata["device"] == "CPU"
++    assert metadata["embedding_profile_ref"] == profile().profile_ref
++
++
+ def test_profile_metadata_collision_is_refused() -> None:
+     sql_ref = "sql:github_artifact:collision"
+     embedding = embedder("passage: x", sql_ref, None, "CPU")

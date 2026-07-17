@@ -1,0 +1,1928 @@
+diff --git a/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml b/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml
+index 13b9115..a3ac88c 100644
+--- a/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml
++++ b/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml
+@@ -32,6 +32,7 @@
+   contents: read
+   issues: read
+   actions: read
++  copilot-requests: write
+ 
+ jobs:
+   build-dual-artifacts:
+@@ -87,7 +88,7 @@
+       - name: Build optional Copilot advisory
+         if: ${{ vars.AUTODOC_COPILOT_ADVISORY_ENABLED == 'true' }}
+         env:
+-          COPILOT_GITHUB_TOKEN: ${{ secrets.AUTODOC_COPILOT_TOKEN }}
++          GITHUB_TOKEN: ${{ github.token }}
+           AUTODOC_REQUEST: out/authoritative_request.json
+           AUTODOC_ADVISORY: out/copilot_advisory.json
+         run: >
+diff --git a/templates/github/projects-repository/PROJECT_BOARD_TEMPLATE.md b/templates/github/projects-repository/PROJECT_BOARD_TEMPLATE.md
+index 4bf97c8..2f813c8 100644
+--- a/templates/github/projects-repository/PROJECT_BOARD_TEMPLATE.md
++++ b/templates/github/projects-repository/PROJECT_BOARD_TEMPLATE.md
+@@ -15,6 +15,20 @@
+ Drop
+ ```
+ 
++La colonne `En cours` est la commande opérateur. Le passage depuis une colonne
++d'intention lance une seule exécution :
++
++```text
++Recherche      → En cours → requested_status = Recherche
++Développement → En cours → requested_status = Développement
++Production     → En cours → requested_status = Production
++sans valeur    → En cours → requested_status = Recherche
++```
++
++Une carte qui reste dans `En cours` ne relance rien. Pour relancer un ticket
++terminé, le replacer d'abord dans `Recherche`, `Développement` ou `Production`,
++puis le glisser dans `En cours`.
++
+ ### `Thème`
+ 
+ Champ facultatif utilisé pour les groupes horizontaux :
+@@ -28,6 +42,19 @@
+ 
+ Ajouter les valeurs au fil des recherches. Ne pas créer de taxonomie serveur.
+ 
++### Champs natifs de hiérarchie
++
++Activer aussi dans les champs visibles du Project :
++
++```text
++Parent issue
++Sub-issue progress
++```
++
++Le ticket `[Thème]` devient la boîte englobante. Les recherches du thème sont
++ajoutées comme sous-issues de ce ticket. La parenté est humaine et visuelle :
++elle ne choisit aucun laboratoire, backend ou route serveur.
++
+ ## Vue `Recherches`
+ 
+ ```text
+@@ -36,9 +63,31 @@
+ Group by     : Thème
+ ```
+ 
+-Le groupe horizontal est la boîte visuelle. Un ticket créé avec
+-`Nouveau thème de recherche` peut servir de boîte durable contenant les
+-références de plusieurs tickets du même thème.
++Chaque valeur `Thème` forme une bande horizontale visible contenant ses cartes.
++Cette vue reste pratique pour les recherches sans parent ou liées à plusieurs
++thèmes.
++
++## Vue `Boîtes de thèmes`
++
++```text
++Layout       : Board
++Column field : Status
++Group by     : Parent issue
++Fields       : Parent issue, Sub-issue progress, Thème
++```
++
++Cette vue affiche les vraies boîtes hiérarchiques :
++
++```text
++[Thème] Chalouf
++├── Recherche #12
++├── Recherche #18
++└── Événement lié #24
++```
++
++Un ticket ne possède qu'un parent principal. Les thèmes supplémentaires restent
++inscrits dans le champ `Thème`, le corps du ticket ou les références de
++l'événement transversal.
+ 
+ ## Vue `Thèmes`
+ 
+@@ -46,8 +95,9 @@
+ Layout : Table
+ ```
+ 
+-Afficher les tickets dont le titre commence par `[Thème]`. Cette vue permet de
+-maintenir les boîtes thématiques et leurs listes de recherches.
++Afficher les tickets dont le titre commence par `[Thème]` et le champ
++`Sub-issue progress`. Cette vue permet de maintenir les boîtes et de suivre leur
++progression.
+ 
+ ## Vue `Événements liés`
+ 
+@@ -56,17 +106,26 @@
+ ```
+ 
+ Afficher les tickets dont le titre commence par `[Événement lié]`. Chaque
+-événement est indépendant, tout en conservant ses références de provenance.
++événement est indépendant, tout en conservant ses références de provenance et
++son éventuel `Parent issue`.
+ 
+ ## Recherches sans thème
+ 
+-Les tickets sans thème gardent le champ `Thème` vide. Ils restent visibles dans
+-le groupe sans valeur ou dans une vue non groupée.
++Les tickets sans thème gardent le champ `Thème` et `Parent issue` vides. Ils
++restent visibles dans le groupe sans valeur ou dans une vue non groupée.
+ 
+ ## Déclenchement
+ 
+-Cette phase n'observe pas encore automatiquement les changements du Project.
+-Le workflow contrôlé est lancé manuellement ou par API avec :
++Le serveur local exécute une passe bornée :
++
++```text
++snapshot ProjectV2 query-only 0272
++→ diff local de snapshots 0272
++→ sélection des transitions vers En cours
++→ workflow_dispatch dans newicody/projects
++```
++
++Le workflow reçoit :
+ 
+ ```text
+ issue_number
+@@ -75,4 +134,5 @@
+ parent_event_ref
+ ```
+ 
+-Le détecteur idempotent de transitions `Status` est réservé à 0275-r10.
++Le Project et l'issue ne sont pas mutés par le détecteur. Seul le lancement
++explicite du workflow Actions est autorisé.
+diff --git a/templates/github/projects-repository/README.md b/templates/github/projects-repository/README.md
+index 836cd3a..97487d5 100644
+--- a/templates/github/projects-repository/README.md
++++ b/templates/github/projects-repository/README.md
+@@ -13,5 +13,22 @@
+ PROJECT_BOARD_TEMPLATE.md
+ ```
+ 
+-Le workflow est query/read-only. Il ne modifie ni les issues, ni le Project,
+-ni les champs `Status` ou `Thème`.
++Le workflow ne modifie ni les issues, ni le Project, ni les champs `Status` ou
++`Thème`. Il produit la demande autoritative, l'avis Copilot facultatif et leur
++manifeste.
++
++Le déclencheur automatique reste côté serveur local :
++
++```text
++ProjectV2 query-only → diff local → transition vers En cours
++→ workflow_dispatch explicite
++```
++
++Pour activer Copilot dans `newicody/projects`, définir la variable Actions :
++
++```text
++AUTODOC_COPILOT_ADVISORY_ENABLED = true
++```
++
++Le workflow utilise le `GITHUB_TOKEN` éphémère avec la permission
++`copilot-requests: write`; aucun secret Copilot durable n'est attendu.
+diff --git a/tests/rules/test_github_projects_research_theme_event_templates_0275_r7_rule.py b/tests/rules/test_github_projects_research_theme_event_templates_0275_r7_rule.py
+index f6c777b..e58f7cd 100644
+--- a/tests/rules/test_github_projects_research_theme_event_templates_0275_r7_rule.py
++++ b/tests/rules/test_github_projects_research_theme_event_templates_0275_r7_rule.py
+@@ -64,6 +64,11 @@
+     assert "parent_event_ref:" in text
+     assert "issues: read" in text
+     assert "contents: read" in text
+-    assert "write" not in text
++    assert "copilot-requests: write" in text
++    assert "contents: write" not in text
++    assert "issues: write" not in text
++    assert "actions: write" not in text
+     assert "AUTODOC_GITHUB_TOKEN" not in text
+     assert "AUTODOC_PROJECT_TOKEN" not in text
++    assert "AUTODOC_COPILOT_TOKEN" not in text
++    assert "GITHUB_TOKEN: ${{ github.token }}" in text
+diff --git a/config/github_project_v2_query_only.example.ini b/config/github_project_v2_query_only.example.ini
+index 53e48a4..21fd98b 100644
+--- a/config/github_project_v2_query_only.example.ini
++++ b/config/github_project_v2_query_only.example.ini
+@@ -17,17 +17,17 @@
+ # Optional repository-Issue/Actions bridge only. The ProjectV2-native path does
+ # not contact this repository. Replace it only when intentionally enabling and
+ # checking the secondary bridge; keep the three repository values identical.
+-repositories = newicody/autodoc-ideas
+-workflow_name = autodoc-ticket-artifact.yml
+-artifact_name_prefix = autodoc-ticket-artifact-
+-trigger_source = github_action_on_ticket_event
++repositories = newicody/projects
++workflow_name = autodoc-controlled-research.yml
++artifact_name_prefix = autodoc-
++trigger_source = github_action_workflow_dispatch
+ 
+ [scan]
+ mode = fcron
+-interval_minutes = 10
++interval_minutes = 1
+ working_directory = /home/eric/projet/git/autodoc
+ python_executable = /home/eric/python/bin/python
+-scan_command = tools/run_github_project_v2_query_only_snapshot_0272.py --execute --policy-decision-id policy:0272:fcron-project-v2-query-only
++scan_command = tools/run_github_project_v2_en_cours_dispatch_once_0275_r8.py --config config/github_project_v2_query_only.example.ini --execute --policy-decision-id policy:0275-r8:fcron-en-cours-dispatch
+ state_path = .var/github/project_v2/state/index.json
+ inbox_dir = .var/github/project_v2/snapshots
+ fcron_table_path = .var/fcron/autodoc-github-project-v2-snapshot.fcrontab
+@@ -41,7 +41,7 @@
+ 
+ [safety]
+ development_repository = newicody/autodoc
+-allowed_repositories = newicody/autodoc-ideas
++allowed_repositories = newicody/projects
+ read_only_scan = true
+ query_only = true
+ graphql_mutation_allowed = false
+@@ -59,9 +59,9 @@
+ [deployment_readiness]
+ # Query-only readiness. ProjectV2 is mandatory; the repository-Issue Actions
+ # bridge is optional and checked only with --check-actions-bridge.
+-workflow_repository = newicody/autodoc-ideas
+-workflow_name = autodoc-ticket-artifact.yml
+-workflow_path = .github/workflows/autodoc-ticket-artifact.yml
++workflow_repository = newicody/projects
++workflow_name = autodoc-controlled-research.yml
++workflow_path = .github/workflows/autodoc-controlled-research.yml
+ workflow_template_path = templates/github/autodoc-ticket-artifact.yml
+ builder_path = scripts/build_autodoc_ticket_artifact.py
+ builder_template_path = templates/github/scripts/build_autodoc_ticket_artifact.py
+@@ -83,3 +83,16 @@
+ # immutable local decision records.  SQL/Qdrant remain closed until r8.
+ handoff_dir = .var/github/project_v2/handoffs
+ decision_dir = .var/github/project_v2/decisions
++[workflow_dispatch]
++repository = newicody/projects
++workflow_name = autodoc-controlled-research.yml
++ref = master
++token_env = GITHUB_TOKEN
++api_url = https://api.github.com
++target_status = En cours
++change_set_dir = .var/github/project_v2/changes
++state_path = .var/github/project_v2/state/en_cours_dispatch_0275_r8.json
++report_path = .var/reports/github_project_v2_en_cours_dispatch_0275_r8.json
++max_dispatches = 10
++allow_workflow_dispatch = true
++allow_remote_mutation = true
+diff --git a/src/context/github_project_v2_en_cours_dispatch_0275_r8.py b/src/context/github_project_v2_en_cours_dispatch_0275_r8.py
+new file mode 100644
+index 0000000..d873913
+--- /dev/null
++++ b/src/context/github_project_v2_en_cours_dispatch_0275_r8.py
+@@ -0,0 +1,378 @@
++"""Pure dispatch selection for ProjectV2 transitions into ``En cours``.
++
++The module consumes immutable 0272 change sets and produces typed,
++serializable workflow-dispatch candidates. It performs no IO or network
++access and never mutates GitHub, SQL, Qdrant or the Scheduler.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++import hashlib
++import json
++from typing import Any, Mapping, Sequence
++
++
++CHANGE_SET_SCHEMA = "missipy.github.project_v2_snapshot_change_set.v1"
++STATE_SCHEMA = "missipy.github.project_v2_en_cours_dispatch_state.v1"
++REPORT_SCHEMA = "missipy.github.project_v2_en_cours_dispatch_report.v1"
++
++_INTENT_BY_PREVIOUS_STATUS = {
++    "": "Recherche",
++    "Recherche": "Recherche",
++    "Développement": "Développement",
++    "Production": "Production",
++}
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubProjectV2EnCoursDispatchConfig:
++    repository: str
++    workflow_name: str
++    ref: str
++    target_status: str = "En cours"
++    max_dispatches: int = 10
++    allow_workflow_dispatch: bool = False
++    allow_remote_mutation: bool = False
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubProjectV2EnCoursDispatchCommand:
++    execute: bool = False
++    policy_decision_id: str = ""
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubProjectV2EnCoursDispatchCandidate:
++    decision_id: str
++    change_set_ref: str
++    project_item_id: str
++    repository: str
++    issue_number: int
++    issue_title: str
++    issue_url: str
++    previous_status: str
++    current_status: str
++    requested_status: str
++    request_mode: str
++    parent_event_ref: str = ""
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "decision_id": self.decision_id,
++            "change_set_ref": self.change_set_ref,
++            "project_item_id": self.project_item_id,
++            "repository": self.repository,
++            "issue_number": self.issue_number,
++            "issue_title": self.issue_title,
++            "issue_url": self.issue_url,
++            "previous_status": self.previous_status,
++            "current_status": self.current_status,
++            "workflow_dispatch": {
++                "ref": "",
++                "inputs": {
++                    "issue_number": str(self.issue_number),
++                    "requested_status": self.requested_status,
++                    "request_mode": self.request_mode,
++                    "parent_event_ref": self.parent_event_ref,
++                },
++            },
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubProjectV2EnCoursDispatchPlan:
++    valid: bool
++    issues: tuple[str, ...]
++    execute: bool
++    policy_decision_id: str
++    repository: str
++    workflow_name: str
++    ref: str
++    change_set_ref: str
++    candidates: tuple[GitHubProjectV2EnCoursDispatchCandidate, ...]
++    skipped_already_processed: int
++    skipped_non_triggering: int
++    boundaries: Mapping[str, bool] = field(default_factory=dict)
++
++    def to_json_dict(self) -> dict[str, Any]:
++        candidates = []
++        for candidate in self.candidates:
++            payload = candidate.to_json_dict()
++            payload["workflow_dispatch"]["ref"] = self.ref
++            candidates.append(payload)
++        return {
++            "schema": REPORT_SCHEMA,
++            "kind": "plan",
++            "valid": self.valid,
++            "issues": list(self.issues),
++            "execute": self.execute,
++            "policy_decision_id": self.policy_decision_id,
++            "repository": self.repository,
++            "workflow_name": self.workflow_name,
++            "ref": self.ref,
++            "change_set_ref": self.change_set_ref,
++            "candidates": candidates,
++            "counts": {
++                "candidate_count": len(candidates),
++                "skipped_already_processed": self.skipped_already_processed,
++                "skipped_non_triggering": self.skipped_non_triggering,
++            },
++            "boundaries": dict(self.boundaries),
++        }
++
++
++def empty_dispatch_state() -> dict[str, Any]:
++    return {
++        "schema": STATE_SCHEMA,
++        "processed_decision_ids": [],
++        "issue_dispatch_counts": {},
++    }
++
++
++def validate_dispatch_state(state: Mapping[str, Any]) -> tuple[str, ...]:
++    issues: list[str] = []
++    if str(state.get("schema", "")) != STATE_SCHEMA:
++        issues.append("dispatch state schema mismatch")
++    processed = state.get("processed_decision_ids")
++    if not isinstance(processed, list) or not all(
++        isinstance(value, str) and value for value in processed
++    ):
++        issues.append("processed_decision_ids must be a list of strings")
++    counts = state.get("issue_dispatch_counts")
++    if not isinstance(counts, Mapping):
++        issues.append("issue_dispatch_counts must be an object")
++    elif any(
++        not isinstance(key, str)
++        or not key
++        or not isinstance(value, int)
++        or value < 0
++        for key, value in counts.items()
++    ):
++        issues.append("issue_dispatch_counts contains an invalid entry")
++    return tuple(issues)
++
++
++def build_en_cours_dispatch_plan(
++    config: GitHubProjectV2EnCoursDispatchConfig,
++    command: GitHubProjectV2EnCoursDispatchCommand,
++    *,
++    change_set: Mapping[str, Any],
++    state: Mapping[str, Any],
++) -> GitHubProjectV2EnCoursDispatchPlan:
++    issues: list[str] = []
++    repository = config.repository.strip()
++    workflow_name = config.workflow_name.strip()
++    ref = config.ref.strip()
++    target_status = config.target_status.strip()
++
++    if not repository or "/" not in repository:
++        issues.append("repository must be owner/name")
++    if not workflow_name:
++        issues.append("workflow_name is required")
++    if not ref:
++        issues.append("ref is required")
++    if target_status != "En cours":
++        issues.append("target_status must be En cours")
++    if config.max_dispatches <= 0:
++        issues.append("max_dispatches must be positive")
++    if command.execute and not command.policy_decision_id.strip():
++        issues.append("policy_decision_id is required for execute mode")
++    if command.execute and not config.allow_workflow_dispatch:
++        issues.append("workflow dispatch is not allowed")
++    if command.execute and not config.allow_remote_mutation:
++        issues.append("scoped remote mutation is not allowed")
++    if str(change_set.get("schema", "")) != CHANGE_SET_SCHEMA:
++        issues.append("change set schema mismatch")
++    issues.extend(validate_dispatch_state(state))
++
++    change_set_ref = str(change_set.get("change_set_ref", "")).strip()
++    if not change_set_ref:
++        issues.append("change_set_ref is required")
++
++    if issues:
++        return GitHubProjectV2EnCoursDispatchPlan(
++            valid=False,
++            issues=tuple(issues),
++            execute=command.execute,
++            policy_decision_id=command.policy_decision_id,
++            repository=repository,
++            workflow_name=workflow_name,
++            ref=ref,
++            change_set_ref=change_set_ref,
++            candidates=(),
++            skipped_already_processed=0,
++            skipped_non_triggering=0,
++            boundaries=_boundaries(command.execute),
++        )
++
++    processed = set(str(value) for value in state["processed_decision_ids"])
++    issue_counts = {
++        str(key): int(value)
++        for key, value in dict(state["issue_dispatch_counts"]).items()
++    }
++    changed = _mapping(_mapping(change_set.get("items")).get("changed"))
++    changed_items: Sequence[object]
++    if isinstance(_mapping(change_set.get("items")).get("changed"), list):
++        changed_items = _mapping(change_set.get("items")).get("changed")  # type: ignore[assignment]
++    else:
++        changed_items = ()
++
++    candidates: list[GitHubProjectV2EnCoursDispatchCandidate] = []
++    skipped_processed = 0
++    skipped_non_triggering = 0
++
++    for raw in changed_items:
++        change = _mapping(raw)
++        status = _mapping(change.get("status"))
++        previous_status = str(status.get("before", "")).strip()
++        current_status = str(status.get("after", "")).strip()
++        if current_status != target_status:
++            skipped_non_triggering += 1
++            continue
++        requested_status = _INTENT_BY_PREVIOUS_STATUS.get(previous_status)
++        if requested_status is None:
++            skipped_non_triggering += 1
++            continue
++
++        item_type = str(_mapping(change.get("item_type")).get("after", "")).upper()
++        after = _mapping(change.get("after"))
++        content = _mapping(after.get("content"))
++        candidate_repository = str(
++            _mapping(content.get("repository")).get("nameWithOwner", "")
++        ).strip()
++        issue_number = int(content.get("number", 0) or 0)
++        item_id = str(change.get("item_id", "")).strip()
++        if (
++            item_type != "ISSUE"
++            or candidate_repository != repository
++            or issue_number <= 0
++            or not item_id
++        ):
++            skipped_non_triggering += 1
++            continue
++
++        decision_id = _decision_id(
++            change_set_ref=change_set_ref,
++            item_id=item_id,
++            previous_status=previous_status,
++            current_status=current_status,
++        )
++        if decision_id in processed:
++            skipped_processed += 1
++            continue
++
++        issue_key = f"{candidate_repository}#{issue_number}"
++        title = str(content.get("title", ""))
++        if title.startswith("[Événement lié]"):
++            request_mode = "transversal"
++        elif issue_counts.get(issue_key, 0) > 0:
++            request_mode = "continuation"
++        else:
++            request_mode = "initial"
++
++        candidates.append(
++            GitHubProjectV2EnCoursDispatchCandidate(
++                decision_id=decision_id,
++                change_set_ref=change_set_ref,
++                project_item_id=item_id,
++                repository=candidate_repository,
++                issue_number=issue_number,
++                issue_title=title,
++                issue_url=str(content.get("url", "")),
++                previous_status=previous_status,
++                current_status=current_status,
++                requested_status=requested_status,
++                request_mode=request_mode,
++            )
++        )
++
++    if len(candidates) > config.max_dispatches:
++        issues.append(
++            f"candidate count {len(candidates)} exceeds max_dispatches "
++            f"{config.max_dispatches}"
++        )
++        candidates = []
++
++    return GitHubProjectV2EnCoursDispatchPlan(
++        valid=not issues,
++        issues=tuple(issues),
++        execute=command.execute,
++        policy_decision_id=command.policy_decision_id,
++        repository=repository,
++        workflow_name=workflow_name,
++        ref=ref,
++        change_set_ref=change_set_ref,
++        candidates=tuple(candidates),
++        skipped_already_processed=skipped_processed,
++        skipped_non_triggering=skipped_non_triggering,
++        boundaries=_boundaries(command.execute),
++    )
++
++
++def apply_successful_dispatch(
++    state: Mapping[str, Any],
++    candidate: GitHubProjectV2EnCoursDispatchCandidate,
++) -> dict[str, Any]:
++    issues = validate_dispatch_state(state)
++    if issues:
++        raise ValueError("; ".join(issues))
++    processed = list(str(value) for value in state["processed_decision_ids"])
++    if candidate.decision_id not in processed:
++        processed.append(candidate.decision_id)
++    counts = {
++        str(key): int(value)
++        for key, value in dict(state["issue_dispatch_counts"]).items()
++    }
++    issue_key = f"{candidate.repository}#{candidate.issue_number}"
++    counts[issue_key] = counts.get(issue_key, 0) + 1
++    return {
++        "schema": STATE_SCHEMA,
++        "processed_decision_ids": sorted(set(processed)),
++        "issue_dispatch_counts": dict(sorted(counts.items())),
++    }
++
++
++def _decision_id(
++    *,
++    change_set_ref: str,
++    item_id: str,
++    previous_status: str,
++    current_status: str,
++) -> str:
++    payload = {
++        "change_set_ref": change_set_ref,
++        "item_id": item_id,
++        "previous_status": previous_status,
++        "current_status": current_status,
++    }
++    digest = hashlib.sha256(
++        json.dumps(
++            payload,
++            ensure_ascii=False,
++            separators=(",", ":"),
++            sort_keys=True,
++        ).encode("utf-8")
++    ).hexdigest()[:24]
++    return f"github-project-v2-en-cours-dispatch:{digest}"
++
++
++def _boundaries(execute: bool) -> dict[str, bool]:
++    return {
++        "plan_only": not execute,
++        "consumes_existing_0272_change_set": True,
++        "project_query_performed": False,
++        "project_mutation_allowed": False,
++        "issue_mutation_allowed": False,
++        "workflow_dispatch_allowed": execute,
++        "scoped_remote_mutation_only": execute,
++        "sql_write_allowed": False,
++        "qdrant_write_allowed": False,
++        "scheduler_modified": False,
++        "scheduler_run_modified": False,
++        "token_value_serialized": False,
++    }
++
++
++def _mapping(value: object) -> Mapping[str, Any]:
++    return value if isinstance(value, Mapping) else {}
+diff --git a/tools/dispatch_github_project_v2_en_cours_transitions_0275_r8.py b/tools/dispatch_github_project_v2_en_cours_transitions_0275_r8.py
+new file mode 100755
+index 0000000..c293baa
+--- /dev/null
++++ b/tools/dispatch_github_project_v2_en_cours_transitions_0275_r8.py
+@@ -0,0 +1,277 @@
++#!/usr/bin/env python3
++"""Dispatch controlled Actions runs for ProjectV2 transitions into En cours."""
++
++from __future__ import annotations
++
++import argparse
++import configparser
++import json
++import os
++from pathlib import Path
++import sys
++from typing import Any, Mapping, Sequence
++from urllib.error import HTTPError, URLError
++from urllib.request import Request, urlopen
++
++
++_REPO_ROOT = Path(__file__).resolve().parents[1]
++_SRC_ROOT = _REPO_ROOT / "src"
++if str(_SRC_ROOT) not in sys.path:
++    sys.path.insert(0, str(_SRC_ROOT))
++
++from context.github_project_v2_en_cours_dispatch_0275_r8 import (  # noqa: E402
++    GitHubProjectV2EnCoursDispatchCommand,
++    GitHubProjectV2EnCoursDispatchConfig,
++    apply_successful_dispatch,
++    build_en_cours_dispatch_plan,
++    empty_dispatch_state,
++)
++
++
++_DEFAULT_CONFIG = Path("config/github_project_v2_query_only.example.ini")
++
++
++class GitHubWorkflowDispatchError(RuntimeError):
++    """Typed IO-boundary failure for the GitHub workflow dispatch endpoint."""
++
++
++def parse_args(argv: Sequence[str]) -> argparse.Namespace:
++    parser = argparse.ArgumentParser(
++        description=(
++            "Select idempotent ProjectV2 transitions into En cours and "
++            "dispatch the controlled projects workflow."
++        )
++    )
++    parser.add_argument("--config", type=Path, default=_DEFAULT_CONFIG)
++    parser.add_argument("--change-set", type=Path, default=None)
++    parser.add_argument("--execute", action="store_true")
++    parser.add_argument("--policy-decision-id", default="")
++    parser.add_argument("--format", choices=("json", "summary"), default="summary")
++    return parser.parse_args(argv)
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = parse_args(tuple(sys.argv[1:] if argv is None else argv))
++    loaded = _load_config(args.config)
++    change_set_path = args.change_set or _latest_change_set(loaded["change_set_dir"])
++    change_set = _read_json(change_set_path)
++    state_path = loaded["state_path"]
++    state = _read_json(state_path) if state_path.exists() else empty_dispatch_state()
++
++    command = GitHubProjectV2EnCoursDispatchCommand(
++        execute=args.execute,
++        policy_decision_id=args.policy_decision_id,
++    )
++    plan = build_en_cours_dispatch_plan(
++        loaded["config"],
++        command,
++        change_set=change_set,
++        state=state,
++    )
++
++    errors: list[str] = []
++    dispatched: list[str] = []
++    external_call_performed = False
++    current_state = dict(state)
++
++    if args.execute and plan.valid:
++        token = os.environ.get(loaded["token_env"], "")
++        if not token:
++            errors.append(
++                f"missing token environment variable: {loaded['token_env']}"
++            )
++        else:
++            for candidate in plan.candidates:
++                try:
++                    external_call_performed = True
++                    _post_workflow_dispatch(
++                        api_url=loaded["api_url"],
++                        token=token,
++                        repository=plan.repository,
++                        workflow_name=plan.workflow_name,
++                        ref=plan.ref,
++                        inputs={
++                            "issue_number": str(candidate.issue_number),
++                            "requested_status": candidate.requested_status,
++                            "request_mode": candidate.request_mode,
++                            "parent_event_ref": candidate.parent_event_ref,
++                        },
++                    )
++                    current_state = apply_successful_dispatch(
++                        current_state,
++                        candidate,
++                    )
++                    _write_json_atomic(state_path, current_state)
++                    dispatched.append(candidate.decision_id)
++                except (GitHubWorkflowDispatchError, OSError, ValueError) as exc:
++                    errors.append(f"{type(exc).__name__}:{exc}")
++                    break
++
++    valid = plan.valid and not errors
++    payload = {
++        "schema": "missipy.github.project_v2_en_cours_dispatch_execution.v1",
++        "valid": valid,
++        "issues": [*plan.issues, *errors],
++        "execute": args.execute,
++        "policy_decision_id": args.policy_decision_id,
++        "change_set_path": str(change_set_path),
++        "plan": plan.to_json_dict(),
++        "dispatched_decision_ids": dispatched,
++        "external_call_performed": external_call_performed,
++        "boundaries": {
++            "project_mutation_allowed": False,
++            "issue_mutation_allowed": False,
++            "workflow_dispatch_performed": bool(dispatched),
++            "sql_write_allowed": False,
++            "qdrant_write_allowed": False,
++            "token_value_serialized": False,
++        },
++    }
++    _write_json_atomic(loaded["report_path"], payload)
++
++    if args.format == "json":
++        print(json.dumps(payload, indent=2, sort_keys=True))
++    else:
++        print(
++            " ".join(
++                (
++                    f"github_project_v2_en_cours_dispatch_valid={valid}",
++                    f"execute={args.execute}",
++                    f"candidates={len(plan.candidates)}",
++                    f"dispatched={len(dispatched)}",
++                    f"skipped_processed={plan.skipped_already_processed}",
++                    f"skipped_non_triggering={plan.skipped_non_triggering}",
++                    f"external_call_performed={external_call_performed}",
++                )
++            )
++        )
++    return 0 if valid else 2
++
++
++def _load_config(path: Path) -> dict[str, Any]:
++    parser = configparser.ConfigParser(interpolation=None)
++    if not parser.read(path, encoding="utf-8"):
++        raise ValueError(f"config not found: {path}")
++    section = parser["workflow_dispatch"]
++    config = GitHubProjectV2EnCoursDispatchConfig(
++        repository=section.get("repository", "").strip(),
++        workflow_name=section.get("workflow_name", "").strip(),
++        ref=section.get("ref", "").strip(),
++        target_status=section.get("target_status", "En cours").strip(),
++        max_dispatches=section.getint("max_dispatches", fallback=10),
++        allow_workflow_dispatch=section.getboolean(
++            "allow_workflow_dispatch",
++            fallback=False,
++        ),
++        allow_remote_mutation=section.getboolean(
++            "allow_remote_mutation",
++            fallback=False,
++        ),
++    )
++    return {
++        "config": config,
++        "token_env": section.get("token_env", "GITHUB_TOKEN").strip(),
++        "api_url": section.get("api_url", "https://api.github.com").strip(),
++        "change_set_dir": Path(
++            section.get(
++                "change_set_dir",
++                ".var/github/project_v2/changes",
++            ).strip()
++        ),
++        "state_path": Path(
++            section.get(
++                "state_path",
++                ".var/github/project_v2/state/en_cours_dispatch_0275_r8.json",
++            ).strip()
++        ),
++        "report_path": Path(
++            section.get(
++                "report_path",
++                ".var/reports/github_project_v2_en_cours_dispatch_0275_r8.json",
++            ).strip()
++        ),
++    }
++
++
++def _latest_change_set(directory: Path) -> Path:
++    if not directory.exists():
++        raise ValueError(f"change-set directory not found: {directory}")
++    candidates = [
++        path
++        for path in directory.glob("project-v2-change-set-*.json")
++        if path.is_file()
++    ]
++    candidates.sort(key=lambda path: (path.stat().st_mtime_ns, path.name))
++    if not candidates:
++        raise ValueError(f"no ProjectV2 change set found in {directory}")
++    return candidates[-1]
++
++
++def _post_workflow_dispatch(
++    *,
++    api_url: str,
++    token: str,
++    repository: str,
++    workflow_name: str,
++    ref: str,
++    inputs: Mapping[str, str],
++) -> None:
++    url = (
++        f"{api_url.rstrip('/')}/repos/{repository}/actions/workflows/"
++        f"{workflow_name}/dispatches"
++    )
++    body = json.dumps(
++        {"ref": ref, "inputs": dict(inputs)},
++        ensure_ascii=False,
++        separators=(",", ":"),
++        sort_keys=True,
++    ).encode("utf-8")
++    request = Request(
++        url,
++        data=body,
++        method="POST",
++        headers={
++            "Accept": "application/vnd.github+json",
++            "Authorization": f"Bearer {token}",
++            "Content-Type": "application/json",
++            "User-Agent": "autodoc-project-v2-en-cours-dispatch-0275-r8",
++            "X-GitHub-Api-Version": "2022-11-28",
++        },
++    )
++    try:
++        with urlopen(request, timeout=30) as response:  # noqa: S310
++            status = int(getattr(response, "status", 0) or 0)
++    except HTTPError as exc:
++        detail = exc.read().decode("utf-8", errors="replace")[-1000:]
++        raise GitHubWorkflowDispatchError(
++            f"GitHub workflow dispatch HTTP {exc.code}: {detail}"
++        ) from exc
++    except URLError as exc:
++        raise GitHubWorkflowDispatchError(
++            f"GitHub workflow dispatch transport: {exc.reason}"
++        ) from exc
++    if status not in {200, 204}:
++        raise GitHubWorkflowDispatchError(
++            f"unexpected GitHub workflow dispatch status: {status}"
++        )
++
++
++def _read_json(path: Path) -> Mapping[str, Any]:
++    payload = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(payload, Mapping):
++        raise ValueError(f"JSON payload must be an object: {path}")
++    return payload
++
++
++def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    temporary = path.with_suffix(path.suffix + ".tmp")
++    temporary.write_text(
++        json.dumps(payload, indent=2, sort_keys=True) + "\n",
++        encoding="utf-8",
++    )
++    temporary.replace(path)
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())
+diff --git a/tools/run_github_project_v2_en_cours_dispatch_once_0275_r8.py b/tools/run_github_project_v2_en_cours_dispatch_once_0275_r8.py
+new file mode 100755
+index 0000000..0bebc44
+--- /dev/null
++++ b/tools/run_github_project_v2_en_cours_dispatch_once_0275_r8.py
+@@ -0,0 +1,160 @@
++#!/usr/bin/env python3
++"""Run one bounded ProjectV2 snapshot, diff and En cours dispatch pass."""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import subprocess
++import sys
++from typing import Any, Mapping, Sequence
++
++
++_REPO_ROOT = Path(__file__).resolve().parents[1]
++_DEFAULT_CONFIG = Path("config/github_project_v2_query_only.example.ini")
++_DEFAULT_REPORT = Path(
++    ".var/reports/github_project_v2_en_cours_dispatch_once_0275_r8.json"
++)
++
++
++def parse_args(argv: Sequence[str]) -> argparse.Namespace:
++    parser = argparse.ArgumentParser(
++        description=(
++            "Compose the existing 0272 query-only snapshot and local diff "
++            "with the governed 0275-r8 workflow dispatcher."
++        )
++    )
++    parser.add_argument("--config", type=Path, default=_DEFAULT_CONFIG)
++    parser.add_argument("--execute", action="store_true")
++    parser.add_argument("--policy-decision-id", default="")
++    parser.add_argument("--output", type=Path, default=_DEFAULT_REPORT)
++    parser.add_argument("--format", choices=("json", "summary"), default="summary")
++    return parser.parse_args(argv)
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = parse_args(tuple(sys.argv[1:] if argv is None else argv))
++    issues: list[str] = []
++    steps: list[dict[str, Any]] = []
++
++    if args.execute and not args.policy_decision_id.strip():
++        issues.append("policy_decision_id is required for execute mode")
++
++    commands = _commands(args)
++    if args.execute and not issues:
++        for name, command in commands:
++            completed = subprocess.run(
++                command,
++                cwd=_REPO_ROOT,
++                text=True,
++                capture_output=True,
++                check=False,
++            )
++            steps.append(
++                {
++                    "name": name,
++                    "command": command,
++                    "returncode": completed.returncode,
++                    "stdout": completed.stdout[-4000:],
++                    "stderr": completed.stderr[-4000:],
++                }
++            )
++            if completed.returncode != 0:
++                issues.append(f"{name} failed with {completed.returncode}")
++                break
++
++    payload: Mapping[str, Any] = {
++        "schema": "missipy.github.project_v2_en_cours_dispatch_once.v1",
++        "valid": not issues,
++        "execute": args.execute,
++        "policy_decision_id": args.policy_decision_id,
++        "issues": issues,
++        "steps": steps,
++        "planned_commands": [
++            {"name": name, "command": command}
++            for name, command in commands
++        ],
++        "boundaries": {
++            "bounded_single_pass": True,
++            "loop_added": False,
++            "daemon_added": False,
++            "openrc_service_added": False,
++            "scheduler_modified": False,
++            "scheduler_run_modified": False,
++            "project_mutation_allowed": False,
++            "issue_mutation_allowed": False,
++            "workflow_dispatch_is_only_remote_mutation": True,
++        },
++    }
++    _write_json_atomic(args.output, payload)
++    if args.format == "json":
++        print(json.dumps(payload, indent=2, sort_keys=True))
++    else:
++        print(
++            " ".join(
++                (
++                    f"github_project_v2_en_cours_dispatch_once_valid={not issues}",
++                    f"execute={args.execute}",
++                    f"steps={len(steps)}",
++                    f"issues={len(issues)}",
++                    "bounded_single_pass=True",
++                )
++            )
++        )
++    return 0 if not issues else 2
++
++
++def _commands(args: argparse.Namespace) -> list[tuple[str, list[str]]]:
++    python = sys.executable
++    policy = args.policy_decision_id
++    return [
++        (
++            "project_v2_query_only_snapshot_0272",
++            [
++                python,
++                "tools/run_github_project_v2_query_only_snapshot_0272.py",
++                "--config",
++                str(args.config),
++                "--execute",
++                "--policy-decision-id",
++                f"{policy}:snapshot",
++            ],
++        ),
++        (
++            "project_v2_snapshot_change_detection_0272",
++            [
++                python,
++                "tools/detect_github_project_v2_snapshot_changes_0272.py",
++                "--execute",
++                "--policy-decision-id",
++                f"{policy}:diff",
++            ],
++        ),
++        (
++            "project_v2_en_cours_dispatch_0275_r8",
++            [
++                python,
++                "tools/dispatch_github_project_v2_en_cours_transitions_0275_r8.py",
++                "--config",
++                str(args.config),
++                "--execute",
++                "--policy-decision-id",
++                f"{policy}:dispatch",
++            ],
++        ),
++    ]
++
++
++def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    temporary = path.with_suffix(path.suffix + ".tmp")
++    temporary.write_text(
++        json.dumps(payload, indent=2, sort_keys=True) + "\n",
++        encoding="utf-8",
++    )
++    temporary.replace(path)
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())
+diff --git a/tests/context/test_github_project_v2_en_cours_dispatch_0275_r8.py b/tests/context/test_github_project_v2_en_cours_dispatch_0275_r8.py
+new file mode 100644
+index 0000000..def2bfc
+--- /dev/null
++++ b/tests/context/test_github_project_v2_en_cours_dispatch_0275_r8.py
+@@ -0,0 +1,181 @@
++from context.github_project_v2_en_cours_dispatch_0275_r8 import (
++    GitHubProjectV2EnCoursDispatchCommand,
++    GitHubProjectV2EnCoursDispatchConfig,
++    apply_successful_dispatch,
++    build_en_cours_dispatch_plan,
++    empty_dispatch_state,
++)
++
++
++def _change(
++    *,
++    item_id: str,
++    number: int,
++    title: str,
++    before: str,
++    after: str = "En cours",
++    repository: str = "newicody/projects",
++) -> dict:
++    return {
++        "item_id": item_id,
++        "item_type": {"before": "ISSUE", "after": "ISSUE"},
++        "status": {"before": before, "after": after},
++        "after": {
++            "id": item_id,
++            "type": "ISSUE",
++            "content": {
++                "number": number,
++                "title": title,
++                "url": f"https://github.com/{repository}/issues/{number}",
++                "repository": {"nameWithOwner": repository},
++            },
++        },
++    }
++
++
++def _change_set(*changes: dict) -> dict:
++    return {
++        "schema": "missipy.github.project_v2_snapshot_change_set.v1",
++        "change_set_ref": "github-project-v2-change-set:test",
++        "items": {"changed": list(changes)},
++    }
++
++
++def _config() -> GitHubProjectV2EnCoursDispatchConfig:
++    return GitHubProjectV2EnCoursDispatchConfig(
++        repository="newicody/projects",
++        workflow_name="autodoc-controlled-research.yml",
++        ref="master",
++        allow_workflow_dispatch=True,
++        allow_remote_mutation=True,
++    )
++
++
++def test_0275_r8_maps_intention_columns_to_en_cours_dispatch() -> None:
++    plan = build_en_cours_dispatch_plan(
++        _config(),
++        GitHubProjectV2EnCoursDispatchCommand(),
++        change_set=_change_set(
++            _change(item_id="PVTI_1", number=1, title="R", before="Recherche"),
++            _change(
++                item_id="PVTI_2",
++                number=2,
++                title="D",
++                before="Développement",
++            ),
++            _change(
++                item_id="PVTI_3",
++                number=3,
++                title="P",
++                before="Production",
++            ),
++            _change(item_id="PVTI_4", number=4, title="Blank", before=""),
++        ),
++        state=empty_dispatch_state(),
++    )
++
++    assert plan.valid is True
++    assert [candidate.requested_status for candidate in plan.candidates] == [
++        "Recherche",
++        "Développement",
++        "Production",
++        "Recherche",
++    ]
++    assert all(candidate.current_status == "En cours" for candidate in plan.candidates)
++
++
++def test_0275_r8_ignores_non_triggering_and_invalid_relaunch_transitions() -> None:
++    plan = build_en_cours_dispatch_plan(
++        _config(),
++        GitHubProjectV2EnCoursDispatchCommand(),
++        change_set=_change_set(
++            _change(item_id="PVTI_1", number=1, title="Done", before="Terminé"),
++            _change(item_id="PVTI_2", number=2, title="Drop", before="Drop"),
++            _change(
++                item_id="PVTI_3",
++                number=3,
++                title="Elsewhere",
++                before="Recherche",
++                after="Terminé",
++            ),
++        ),
++        state=empty_dispatch_state(),
++    )
++
++    assert plan.valid is True
++    assert plan.candidates == ()
++    assert plan.skipped_non_triggering == 3
++
++
++def test_0275_r8_is_idempotent_and_tracks_continuations() -> None:
++    change_set = _change_set(
++        _change(item_id="PVTI_1", number=12, title="Recherche", before="Recherche")
++    )
++    state = empty_dispatch_state()
++    first = build_en_cours_dispatch_plan(
++        _config(),
++        GitHubProjectV2EnCoursDispatchCommand(),
++        change_set=change_set,
++        state=state,
++    )
++    assert first.candidates[0].request_mode == "initial"
++
++    state = apply_successful_dispatch(state, first.candidates[0])
++    duplicate = build_en_cours_dispatch_plan(
++        _config(),
++        GitHubProjectV2EnCoursDispatchCommand(),
++        change_set=change_set,
++        state=state,
++    )
++    assert duplicate.candidates == ()
++    assert duplicate.skipped_already_processed == 1
++
++    next_change_set = {
++        **change_set,
++        "change_set_ref": "github-project-v2-change-set:next",
++    }
++    continuation = build_en_cours_dispatch_plan(
++        _config(),
++        GitHubProjectV2EnCoursDispatchCommand(),
++        change_set=next_change_set,
++        state=state,
++    )
++    assert continuation.candidates[0].request_mode == "continuation"
++
++
++def test_0275_r8_preserves_transversal_event_mode() -> None:
++    plan = build_en_cours_dispatch_plan(
++        _config(),
++        GitHubProjectV2EnCoursDispatchCommand(),
++        change_set=_change_set(
++            _change(
++                item_id="PVTI_EVENT",
++                number=24,
++                title="[Événement lié] Réseau et modèles",
++                before="Recherche",
++            )
++        ),
++        state=empty_dispatch_state(),
++    )
++
++    assert plan.valid is True
++    assert plan.candidates[0].request_mode == "transversal"
++
++
++def test_0275_r8_execute_requires_explicit_policy_and_scoped_permissions() -> None:
++    config = GitHubProjectV2EnCoursDispatchConfig(
++        repository="newicody/projects",
++        workflow_name="autodoc-controlled-research.yml",
++        ref="master",
++    )
++    plan = build_en_cours_dispatch_plan(
++        config,
++        GitHubProjectV2EnCoursDispatchCommand(execute=True),
++        change_set=_change_set(),
++        state=empty_dispatch_state(),
++    )
++
++    assert plan.valid is False
++    assert "policy_decision_id is required for execute mode" in plan.issues
++    assert "workflow dispatch is not allowed" in plan.issues
++    assert "scoped remote mutation is not allowed" in plan.issues
+diff --git a/tests/tools/test_github_project_v2_en_cours_dispatch_tools_0275_r8.py b/tests/tools/test_github_project_v2_en_cours_dispatch_tools_0275_r8.py
+new file mode 100644
+index 0000000..8c72280
+--- /dev/null
++++ b/tests/tools/test_github_project_v2_en_cours_dispatch_tools_0275_r8.py
+@@ -0,0 +1,149 @@
++from importlib.util import module_from_spec, spec_from_file_location
++import json
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = (
++    ROOT
++    / "tools/dispatch_github_project_v2_en_cours_transitions_0275_r8.py"
++)
++RUN_ONCE = (
++    ROOT
++    / "tools/run_github_project_v2_en_cours_dispatch_once_0275_r8.py"
++)
++
++
++def _load(path: Path, name: str):
++    spec = spec_from_file_location(name, path)
++    assert spec is not None
++    assert spec.loader is not None
++    module = module_from_spec(spec)
++    spec.loader.exec_module(module)
++    return module
++
++
++def test_0275_r8_dispatch_tool_executes_once_and_persists_state(
++    tmp_path,
++    monkeypatch,
++) -> None:
++    module = _load(TOOL, "dispatch_tool_0275_r8")
++    config = tmp_path / "config.ini"
++    changes = tmp_path / "changes"
++    state = tmp_path / "state.json"
++    report = tmp_path / "report.json"
++    changes.mkdir()
++    change_set = changes / "project-v2-change-set-test.json"
++    change_set.write_text(
++        json.dumps(
++            {
++                "schema": "missipy.github.project_v2_snapshot_change_set.v1",
++                "change_set_ref": "github-project-v2-change-set:test",
++                "items": {
++                    "changed": [
++                        {
++                            "item_id": "PVTI_1",
++                            "item_type": {
++                                "before": "ISSUE",
++                                "after": "ISSUE",
++                            },
++                            "status": {
++                                "before": "Recherche",
++                                "after": "En cours",
++                            },
++                            "after": {
++                                "type": "ISSUE",
++                                "content": {
++                                    "number": 1,
++                                    "title": "Recherche",
++                                    "url": "https://github.com/newicody/projects/issues/1",
++                                    "repository": {
++                                        "nameWithOwner": "newicody/projects"
++                                    },
++                                },
++                            },
++                        }
++                    ]
++                },
++            }
++        ),
++        encoding="utf-8",
++    )
++    config.write_text(
++        "\n".join(
++            (
++                "[workflow_dispatch]",
++                "repository = newicody/projects",
++                "workflow_name = autodoc-controlled-research.yml",
++                "ref = master",
++                "token_env = TEST_GITHUB_TOKEN",
++                "api_url = https://api.github.invalid",
++                "target_status = En cours",
++                f"change_set_dir = {changes}",
++                f"state_path = {state}",
++                f"report_path = {report}",
++                "max_dispatches = 10",
++                "allow_workflow_dispatch = true",
++                "allow_remote_mutation = true",
++                "",
++            )
++        ),
++        encoding="utf-8",
++    )
++
++    calls = []
++
++    def fake_dispatch(**kwargs):
++        calls.append(kwargs)
++
++    monkeypatch.setattr(module, "_post_workflow_dispatch", fake_dispatch)
++    monkeypatch.setenv("TEST_GITHUB_TOKEN", "not-serialized")
++
++    rc = module.main(
++        (
++            "--config",
++            str(config),
++            "--execute",
++            "--policy-decision-id",
++            "policy:test",
++            "--format",
++            "json",
++        )
++    )
++    assert rc == 0
++    assert len(calls) == 1
++    assert calls[0]["inputs"]["requested_status"] == "Recherche"
++    assert "not-serialized" not in report.read_text(encoding="utf-8")
++
++    rc = module.main(
++        (
++            "--config",
++            str(config),
++            "--execute",
++            "--policy-decision-id",
++            "policy:test-repeat",
++        )
++    )
++    assert rc == 0
++    assert len(calls) == 1
++
++
++def test_0275_r8_run_once_reuses_0272_tools_without_loop() -> None:
++    module = _load(RUN_ONCE, "run_once_0275_r8")
++    args = module.parse_args(
++        (
++            "--config",
++            "config/example.ini",
++            "--policy-decision-id",
++            "policy:test",
++        )
++    )
++    commands = module._commands(args)
++    flattened = "\n".join(" ".join(command) for _, command in commands)
++
++    assert "run_github_project_v2_query_only_snapshot_0272.py" in flattened
++    assert "detect_github_project_v2_snapshot_changes_0272.py" in flattened
++    assert "dispatch_github_project_v2_en_cours_transitions_0275_r8.py" in flattened
++    source = RUN_ONCE.read_text(encoding="utf-8")
++    assert "while " not in source
++    assert "Scheduler" not in source
+diff --git a/tests/rules/test_github_project_v2_en_cours_dispatch_copilot_groups_0275_r8_rule.py b/tests/rules/test_github_project_v2_en_cours_dispatch_copilot_groups_0275_r8_rule.py
+new file mode 100644
+index 0000000..0eab9df
+--- /dev/null
++++ b/tests/rules/test_github_project_v2_en_cours_dispatch_copilot_groups_0275_r8_rule.py
+@@ -0,0 +1,83 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++WORKFLOW = (
++    ROOT
++    / "templates/github/projects-repository/.github/workflows/"
++    "autodoc-controlled-research.yml"
++)
++BOARD = (
++    ROOT
++    / "templates/github/projects-repository/PROJECT_BOARD_TEMPLATE.md"
++)
++README = ROOT / "templates/github/projects-repository/README.md"
++CONFIG = ROOT / "config/github_project_v2_query_only.example.ini"
++CONTRACT = (
++    ROOT
++    / "src/context/github_project_v2_en_cours_dispatch_0275_r8.py"
++)
++DISPATCH = (
++    ROOT
++    / "tools/dispatch_github_project_v2_en_cours_transitions_0275_r8.py"
++)
++RUN_ONCE = (
++    ROOT
++    / "tools/run_github_project_v2_en_cours_dispatch_once_0275_r8.py"
++)
++
++
++def test_0275_r8_workflow_activates_copilot_without_durable_secret() -> None:
++    text = WORKFLOW.read_text(encoding="utf-8")
++
++    assert "copilot-requests: write" in text
++    assert "GITHUB_TOKEN: ${{ github.token }}" in text
++    assert "AUTODOC_COPILOT_TOKEN" not in text
++    assert "COPILOT_GITHUB_TOKEN" not in text
++    assert "contents: write" not in text
++    assert "issues: write" not in text
++    assert "actions: write" not in text
++
++
++def test_0275_r8_board_exposes_theme_rows_and_parent_boxes() -> None:
++    text = BOARD.read_text(encoding="utf-8")
++
++    assert "Group by     : Thème" in text
++    assert "Vue `Boîtes de thèmes`" in text
++    assert "Group by     : Parent issue" in text
++    assert "Sub-issue progress" in text
++    assert "Recherche      → En cours" in text
++    assert "Développement → En cours" in text
++    assert "Production     → En cours" in text
++
++
++def test_0275_r8_scopes_dispatch_without_relaxing_query_only_snapshot() -> None:
++    text = CONFIG.read_text(encoding="utf-8")
++
++    assert "[safety]" in text
++    assert "query_only = true" in text
++    assert "graphql_mutation_allowed = false" in text
++    assert "allow_workflow_dispatch = false" in text
++    assert "allow_remote_mutation = false" in text
++    assert "[workflow_dispatch]" in text
++    assert "repository = newicody/projects" in text
++    assert "workflow_name = autodoc-controlled-research.yml" in text
++    assert "target_status = En cours" in text
++    assert "allow_workflow_dispatch = true" in text
++    assert "allow_remote_mutation = true" in text
++
++
++def test_0275_r8_reuses_0272_and_keeps_scheduler_untouched() -> None:
++    contract = CONTRACT.read_text(encoding="utf-8")
++    dispatch = DISPATCH.read_text(encoding="utf-8")
++    run_once = RUN_ONCE.read_text(encoding="utf-8")
++    readme = README.read_text(encoding="utf-8")
++
++    assert "consumes_existing_0272_change_set" in contract
++    assert "scheduler_modified" in contract
++    assert "scheduler_run_modified" in contract
++    assert "run_github_project_v2_query_only_snapshot_0272.py" in run_once
++    assert "detect_github_project_v2_snapshot_changes_0272.py" in run_once
++    assert "while " not in run_once
++    assert "urlopen" in dispatch
++    assert "ProjectV2 query-only → diff local" in readme
+diff --git a/doc/architecture/GITHUB_PROJECT_V2_EN_COURS_DISPATCH_COPILOT_GROUPS_0275_R8.md b/doc/architecture/GITHUB_PROJECT_V2_EN_COURS_DISPATCH_COPILOT_GROUPS_0275_R8.md
+new file mode 100644
+index 0000000..683a497
+--- /dev/null
++++ b/doc/architecture/GITHUB_PROJECT_V2_EN_COURS_DISPATCH_COPILOT_GROUPS_0275_R8.md
+@@ -0,0 +1,60 @@
++# ProjectV2 `En cours` dispatch, Copilot and theme boxes — 0275-r8
++
++## Décision
++
++Le déplacement d'une carte dans `En cours` est l'acte opérateur qui démarre
++une exécution. Les colonnes `Recherche`, `Développement` et `Production`
++définissent l'intention immédiatement précédente.
++
++## Composition réutilisée
++
++```text
++run_github_project_v2_query_only_snapshot_0272.py
++→ detect_github_project_v2_snapshot_changes_0272.py
++→ github_project_v2_en_cours_dispatch_0275_r8.py
++→ dispatch_github_project_v2_en_cours_transitions_0275_r8.py
++```
++
++Le nouveau contrat consomme directement `items.changed[].status.before/after`
++et `items.changed[].after.content` du change set 0272. Aucun second lecteur
++GraphQL ou modèle ProjectV2 n'est ajouté.
++
++## Idempotence
++
++Chaque transition reçoit un identifiant déterministe dérivé de :
++
++```text
++change_set_ref
++project_item_id
++previous_status
++current_status
++```
++
++L'identifiant n'est enregistré qu'après succès du `workflow_dispatch`.
++Le compteur durable par issue choisit `initial` au premier cycle et
++`continuation` aux cycles suivants. Les issues `[Événement lié]` utilisent
++`transversal`.
++
++## Frontières
++
++La section globale `[safety]` reste query-only et interdit toute mutation.
++Une section distincte `[workflow_dispatch]` autorise uniquement l'appel borné
++du workflow de `newicody/projects`.
++
++```text
++Project mutation = interdite
++Issue mutation   = interdite
++Workflow dispatch = autorisé et borné
++SQL/Qdrant       = interdits
++Scheduler        = inchangé
++```
++
++## Groupes
++
++Deux représentations complémentaires sont conservées :
++
++- `Group by Thème` : plusieurs bandes visuelles libres ;
++- `Group by Parent issue` : une boîte hiérarchique réelle par ticket `[Thème]`.
++
++Le parent principal n'empêche pas de citer plusieurs thèmes dans l'événement
++transversal.
+diff --git a/doc/runbooks/INSTALL_GITHUB_PROJECT_V2_EN_COURS_DISPATCH_0275_R8.md b/doc/runbooks/INSTALL_GITHUB_PROJECT_V2_EN_COURS_DISPATCH_0275_R8.md
+new file mode 100644
+index 0000000..6ae6809
+--- /dev/null
++++ b/doc/runbooks/INSTALL_GITHUB_PROJECT_V2_EN_COURS_DISPATCH_0275_R8.md
+@@ -0,0 +1,191 @@
++# Activer le drag `En cours`, Copilot et les boîtes de thèmes — 0275-r8
++
++## Portée
++
++Cette phase compose les surfaces ProjectV2 0272 déjà validées :
++
++```text
++snapshot query-only
++→ diff local immutable
++→ transition Status
++→ workflow_dispatch gouverné
++```
++
++Elle n'ajoute ni Scheduler, ni daemon, ni boucle permanente, ni mutation du
++Project ou des issues.
++
++## 1. Mettre à jour `newicody/projects`
++
++Après validation du patch Autodoc :
++
++```bash
++cd /home/eric/projet/git/projects
++
++cp \
++  /home/eric/projet/git/autodoc/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml \
++  .github/workflows/
++
++cp \
++  /home/eric/projet/git/autodoc/templates/github/projects-repository/PROJECT_BOARD_TEMPLATE.md \
++  .
++
++git diff --check
++git diff -- .github/workflows PROJECT_BOARD_TEMPLATE.md
++git add .github/workflows PROJECT_BOARD_TEMPLATE.md
++git commit -m "enable copilot and en cours project workflow"
++git push origin master
++```
++
++## 2. Activer Copilot
++
++Dans `newicody/projects` :
++
++```text
++Settings
++→ Secrets and variables
++→ Actions
++→ Variables
++```
++
++Définir :
++
++```text
++AUTODOC_COPILOT_ADVISORY_ENABLED = true
++```
++
++Ne pas créer `AUTODOC_COPILOT_TOKEN`. Le workflow utilise le `GITHUB_TOKEN`
++éphémère et la permission bornée `copilot-requests: write`.
++
++## 3. Afficher les groupes comme boîtes
++
++Dans le Project personnel, conserver la vue principale :
++
++```text
++Recherches
++Layout       : Board
++Column field : Status
++Group by     : Thème
++```
++
++Elle affiche une bande horizontale par thème.
++
++Activer les champs natifs :
++
++```text
++View
++→ Fields
++→ Parent issue
++→ Sub-issue progress
++```
++
++Créer la vue :
++
++```text
++Boîtes de thèmes
++Layout       : Board
++Column field : Status
++Group by     : Parent issue
++Fields       : Parent issue, Sub-issue progress, Thème
++```
++
++Pour chaque boîte :
++
++1. ouvrir ou créer une issue `[Thème] ...` ;
++2. ouvrir son panneau `Sub-issues` ;
++3. ajouter les issues de recherche existantes ;
++4. conserver les thèmes secondaires dans le champ `Thème` ou dans le corps.
++
++Une recherche sans thème peut rester sans parent.
++
++## 4. Préparer le token local
++
++Le processus local doit disposer d'un token lisant le Project personnel et
++pouvant lancer le workflow du dépôt privé `newicody/projects`.
++
++Le token reste uniquement dans l'environnement local :
++
++```bash
++export GITHUB_TOKEN='...'
++```
++
++Ne jamais l'écrire dans Git, l'INI ou un rapport.
++
++## 5. Test manuel d'une passe
++
++Premier passage de référence :
++
++```bash
++cd /home/eric/projet/git/autodoc
++
++python tools/run_github_project_v2_en_cours_dispatch_once_0275_r8.py \
++  --config config/github_project_v2_query_only.example.ini \
++  --execute \
++  --policy-decision-id policy:0275-r8:manual-baseline
++```
++
++Déplacer ensuite une carte :
++
++```text
++Recherche → En cours
++```
++
++puis relancer :
++
++```bash
++python tools/run_github_project_v2_en_cours_dispatch_once_0275_r8.py \
++  --config config/github_project_v2_query_only.example.ini \
++  --execute \
++  --policy-decision-id policy:0275-r8:manual-drag-1
++```
++
++Résultat attendu :
++
++```text
++snapshot 0272 = vert
++diff 0272 = transition Recherche → En cours
++dispatch 0275-r8 = 1
++workflow projects = vert
++autodoc-authoritative-request = présent
++autodoc-copilot-advisory = présent
++autodoc-dual-artifact-manifest = présent
++```
++
++Relancer immédiatement la même commande avec un autre `policy_decision_id` ne
++doit pas créer un second run pour la même transition.
++
++## 6. Fréquence fcron
++
++Après le test manuel, installer une passe bornée chaque minute :
++
++```text
++* * * * * cd /home/eric/projet/git/autodoc && \
++  /home/eric/python/bin/python \
++  tools/run_github_project_v2_en_cours_dispatch_once_0275_r8.py \
++  --config config/github_project_v2_query_only.example.ini \
++  --execute \
++  --policy-decision-id policy:0275-r8:fcron-en-cours-dispatch
++```
++
++Le programme ne boucle pas. Chaque invocation effectue une seule passe et
++l'état local empêche un double dispatch.
++
++## 7. Règles de relance
++
++```text
++Recherche      → En cours = recherche
++Développement → En cours = développement
++Production     → En cours = production
++```
++
++`Terminé → En cours` et `Drop → En cours` sont ignorés. Replacer d'abord le
++ticket dans une colonne d'intention.
++
++## 8. Limites
++
++0275-r8 ne :
++
++- modifie pas automatiquement `Status` après le run ;
++- ne publie pas encore le résultat dans l'issue ;
++- n'installe pas de service OpenRC ;
++- n'écrit ni SQL ni Qdrant ;
++- ne modifie pas `Scheduler.run()`.
+diff --git a/doc/CHANGELOG_0275_R8_PROJECT_STATUS_EN_COURS_DISPATCH_COPILOT_GROUPS.md b/doc/CHANGELOG_0275_R8_PROJECT_STATUS_EN_COURS_DISPATCH_COPILOT_GROUPS.md
+new file mode 100644
+index 0000000..ca0bd35
+--- /dev/null
++++ b/doc/CHANGELOG_0275_R8_PROJECT_STATUS_EN_COURS_DISPATCH_COPILOT_GROUPS.md
+@@ -0,0 +1,28 @@
++# Changelog — 0275-r8 Project Status En cours dispatch, Copilot and groups
++
++## Added
++
++- pure ProjectV2 `En cours` dispatch-selection contract;
++- idempotent local dispatch state;
++- controlled GitHub workflow-dispatch CLI;
++- bounded snapshot/diff/dispatch once-runner reusing 0272;
++- theme-row and parent-issue box Board guidance;
++- installation and validation runbook;
++- focused unit, tool and rule tests.
++
++## Changed
++
++- projects workflow uses the ephemeral `GITHUB_TOKEN` for Copilot;
++- projects workflow grants only `copilot-requests: write` in addition to read
++  permissions;
++- local ProjectV2 example config points at `newicody/projects`;
++- one-minute bounded scan command composes snapshot, diff and dispatch;
++- existing r7 workflow rule accepts the scoped Copilot permission.
++
++## Boundaries
++
++- no Project or issue mutation;
++- no Scheduler or `Scheduler.run()` modification;
++- no daemon or OpenRC service;
++- no SQL or Qdrant write;
++- no non-stdlib runtime dependency.
+diff --git a/doc/manifests/MANIFEST_0275_R8_PROJECT_STATUS_EN_COURS_DISPATCH_COPILOT_GROUPS_CHANGED_FILES.md b/doc/manifests/MANIFEST_0275_R8_PROJECT_STATUS_EN_COURS_DISPATCH_COPILOT_GROUPS_CHANGED_FILES.md
+new file mode 100644
+index 0000000..8b2252d
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0275_R8_PROJECT_STATUS_EN_COURS_DISPATCH_COPILOT_GROUPS_CHANGED_FILES.md
+@@ -0,0 +1,24 @@
++# Manifest — 0275-r8 Project Status En cours dispatch, Copilot and groups
++
++Modified:
++
++- `config/github_project_v2_query_only.example.ini`
++- `templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml`
++- `templates/github/projects-repository/PROJECT_BOARD_TEMPLATE.md`
++- `templates/github/projects-repository/README.md`
++- `tests/rules/test_github_projects_research_theme_event_templates_0275_r7_rule.py`
++
++Added:
++
++- `src/context/github_project_v2_en_cours_dispatch_0275_r8.py`
++- `tools/dispatch_github_project_v2_en_cours_transitions_0275_r8.py`
++- `tools/run_github_project_v2_en_cours_dispatch_once_0275_r8.py`
++- `tests/context/test_github_project_v2_en_cours_dispatch_0275_r8.py`
++- `tests/tools/test_github_project_v2_en_cours_dispatch_tools_0275_r8.py`
++- `tests/rules/test_github_project_v2_en_cours_dispatch_copilot_groups_0275_r8_rule.py`
++- `doc/architecture/GITHUB_PROJECT_V2_EN_COURS_DISPATCH_COPILOT_GROUPS_0275_R8.md`
++- `doc/runbooks/INSTALL_GITHUB_PROJECT_V2_EN_COURS_DISPATCH_0275_R8.md`
++- `doc/CHANGELOG_0275_R8_PROJECT_STATUS_EN_COURS_DISPATCH_COPILOT_GROUPS.md`
++- `doc/manifests/MANIFEST_0275_R8_PROJECT_STATUS_EN_COURS_DISPATCH_COPILOT_GROUPS_CHANGED_FILES.md`
++- `doc/releases/0275-r8-project-status-en-cours-dispatch-copilot-groups.md`
++- `PHASE0275_R8_PROJECT_STATUS_EN_COURS_DISPATCH_COPILOT_GROUPS_TEST_REPORT.md`
+diff --git a/doc/releases/0275-r8-project-status-en-cours-dispatch-copilot-groups.md b/doc/releases/0275-r8-project-status-en-cours-dispatch-copilot-groups.md
+new file mode 100644
+index 0000000..544e34e
+--- /dev/null
++++ b/doc/releases/0275-r8-project-status-en-cours-dispatch-copilot-groups.md
+@@ -0,0 +1,10 @@
++# 0275-r8 — Project Status `En cours` dispatch, Copilot and groups
++
++This phase turns the operator drag into `En cours` into an idempotent,
++locally detected `workflow_dispatch` request.
++
++It reuses the 0272 query-only snapshot and local diff, activates the optional
++Copilot advisory through the ephemeral Actions token, and documents both
++free theme rows and native parent-issue hierarchy boxes.
++
++No Project item, issue, Scheduler, SQL row or Qdrant point is mutated.
+diff --git a/PHASE0275_R8_PROJECT_STATUS_EN_COURS_DISPATCH_COPILOT_GROUPS_TEST_REPORT.md b/PHASE0275_R8_PROJECT_STATUS_EN_COURS_DISPATCH_COPILOT_GROUPS_TEST_REPORT.md
+new file mode 100644
+index 0000000..145b9d2
+--- /dev/null
++++ b/PHASE0275_R8_PROJECT_STATUS_EN_COURS_DISPATCH_COPILOT_GROUPS_TEST_REPORT.md
+@@ -0,0 +1,50 @@
++# Phase 0275-r8 test report — En cours dispatch, Copilot and groups
++
++## Validated predecessor
++
++```text
++2698 passed, 1 skipped
++patch queue green
++manual controlled workflow and artifacts confirmed
++```
++
++## Generation checks
++
++- all added Python sources compile;
++- focused unit tests pass in a synthetic source tree;
++- generated patch passes `git apply --check` against complete expected files;
++- no binary, `.pyc`, `.pyo`, cache or font artifact is included.
++
++## Repository validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++
++PYTHONPATH=src:. python -m pytest -q \
++  tests/context/test_github_project_v2_en_cours_dispatch_0275_r8.py \
++  tests/tools/test_github_project_v2_en_cours_dispatch_tools_0275_r8.py \
++  tests/rules/test_github_project_v2_en_cours_dispatch_copilot_groups_0275_r8_rule.py \
++  tests/rules/test_github_projects_research_theme_event_templates_0275_r7_rule.py
++
++PYTHONPATH=src:. python -m pytest -q tests/rules
++PYTHONPATH=src:. python -m pytest -q
++```
++
++## Code-rule review
++
++```text
++reuse_audit: 0272 query-only snapshot and change detection reused
++new_project_reader_added: false
++new_scheduler_added: false
++scheduler_modified: false
++scheduler_run_modified: false
++daemon_added: false
++openrc_service_added: false
++project_mutation_added: false
++issue_mutation_added: false
++scoped_workflow_dispatch_added: true
++token_serialized: false
++sql_write_added: false
++qdrant_write_added: false
++non_stdlib_dependencies_added: false
++```

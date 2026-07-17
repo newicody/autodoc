@@ -1,0 +1,1601 @@
+diff --git a/PHASE0287_R7_R15_R3_R11_R1_LIVE_QDRANT_PROJECTION_PROBE_REPORT.md b/PHASE0287_R7_R15_R3_R11_R1_LIVE_QDRANT_PROJECTION_PROBE_REPORT.md
+new file mode 100644
+index 0000000..992e7e6
+--- /dev/null
++++ b/PHASE0287_R7_R15_R3_R11_R1_LIVE_QDRANT_PROJECTION_PROBE_REPORT.md
+@@ -0,0 +1,41 @@
++# Phase 0287-r7-r15-r3-r11-r1 — Live Qdrant projection probe
++
++## Result
++
++A controlled command can now select one SQL-authoritative object and one active
++context revision, preview the operation without constructing OpenVINO or Qdrant,
++and execute the confirmed plan through the existing live ports.
++
++The execution path:
++
++1. reads the object and revision from PostgreSQL authority;
++2. requires an exact plan digest, operator approval and environment gate;
++3. invokes the r11 `LoveQdrantLiveAnalysisProjection` once;
++4. persists reconstructible `VectorProjectionMetadata` in SQL;
++5. reads the exact Qdrant point back with `with_vectors=False`;
++6. verifies the reference-only payload and source digest;
++7. rehydrates the original object and projection metadata from SQL.
++
++## Reuse audit
++
++- PostgreSQL: existing `open_love_postgresql_authority` and
++  `DbApiContextRevisionAuthorityStore`.
++- OpenVINO: existing `build_multilingual_e5_small_pipeline`.
++- Projection: existing r11 `LoveQdrantLiveAnalysisProjection`.
++- Qdrant write: existing `QdrantClientProjectionExecutor`.
++- Qdrant readback: additive exact-point method on the same executor membrane.
++
++No Scheduler, laboratory manager or alternate orchestrator is introduced.
++
++## Boundaries
++
++- exactly one object and one point per execution;
++- no collection creation, deletion or alias mutation;
++- Qdrant readback disables vectors;
++- Qdrant payload remains references and scalar scope metadata only;
++- SQL remains durable authority;
++- no source body, vectors or secret values are serialized in the receipt.
++
++## Validation
++
++Isolated service, executor and architecture tests: **8 passed**.
+diff --git a/doc/CHANGELOG_0287_R7_R15_R3_R11_R1_LIVE_QDRANT_PROJECTION_PROBE.md b/doc/CHANGELOG_0287_R7_R15_R3_R11_R1_LIVE_QDRANT_PROJECTION_PROBE.md
+new file mode 100644
+index 0000000..0f7ee60
+--- /dev/null
++++ b/doc/CHANGELOG_0287_R7_R15_R3_R11_R1_LIVE_QDRANT_PROJECTION_PROBE.md
+@@ -0,0 +1,9 @@
++# Changelog 0287-r7-r15-r3-r11-r1
++
++- Added a preview-first single-object live projection plan and digest gate.
++- Added exact Qdrant point readback through the existing executor membrane.
++- Forced `with_vectors=False` during readback.
++- Persisted reconstructible projection metadata in SQL after acknowledged upsert.
++- Verified Qdrant references by rehydrating the source from SQL authority.
++- Added a live CLI using the installed PostgreSQL, OpenVINO E5 and Qdrant ports.
++- Added no Scheduler, collection mutation, deletion or alias switch.
+diff --git a/doc/architecture/LIVE_QDRANT_PROJECTION_PROBE_0287_R7_R15_R3_R11_R1.dot b/doc/architecture/LIVE_QDRANT_PROJECTION_PROBE_0287_R7_R15_R3_R11_R1.dot
+new file mode 100644
+index 0000000..f38e735
+--- /dev/null
++++ b/doc/architecture/LIVE_QDRANT_PROJECTION_PROBE_0287_R7_R15_R3_R11_R1.dot
+@@ -0,0 +1,19 @@
++digraph live_qdrant_projection_probe_0287_r7_r15_r3_r11_r1 {
++  rankdir=LR;
++  sql [label="PostgreSQL authority"];
++  plan [label="Digest-confirmed plan"];
++  e5 [label="Existing OpenVINO E5\npassage:"];
++  projection [label="r11 live projection"];
++  qdrant [label="Qdrant named point"];
++  readback [label="retrieve\nwith_vectors=False"];
++  hydrate [label="SQL rehydration"];
++
++  sql -> plan;
++  plan -> e5 [label="approve + env + digest"];
++  e5 -> projection;
++  projection -> qdrant;
++  projection -> sql [label="projection metadata"];
++  qdrant -> readback;
++  readback -> hydrate;
++  sql -> hydrate;
++}
+diff --git a/doc/architecture/LIVE_QDRANT_PROJECTION_PROBE_0287_R7_R15_R3_R11_R1.md b/doc/architecture/LIVE_QDRANT_PROJECTION_PROBE_0287_R7_R15_R3_R11_R1.md
+new file mode 100644
+index 0000000..5e1b010
+--- /dev/null
++++ b/doc/architecture/LIVE_QDRANT_PROJECTION_PROBE_0287_R7_R15_R3_R11_R1.md
+@@ -0,0 +1,39 @@
++# Live Qdrant projection probe
++
++```text
++preview
++  installed INI
++      |
++      v
++  PostgreSQL authority
++      |
++      +-- object exists
++      +-- revision exists
++      +-- active membership
++      |
++      v
++  plan_digest
++
++execute (approval + environment + digest)
++  PostgreSQL object/revision
++      |
++      v
++  existing OpenVINO E5 pipeline (`passage:`)
++      |
++      v
++  existing r11 live projection
++      |
++      v
++  existing Qdrant executor upsert (one point)
++      |
++      +--> SQL `VectorProjectionMetadata`
++      |
++      v
++  exact Qdrant retrieve (`with_vectors=False`)
++      |
++      v
++  SQL source/projection rehydration
++```
++
++The probe is not an orchestrator. It is a bounded operator tool that composes
++already-existing ports and closes the PostgreSQL/Qdrant resources it opens.
+diff --git a/doc/manifests/MANIFEST_0287_R7_R15_R3_R11_R1_LIVE_QDRANT_PROJECTION_PROBE.md b/doc/manifests/MANIFEST_0287_R7_R15_R3_R11_R1_LIVE_QDRANT_PROJECTION_PROBE.md
+new file mode 100644
+index 0000000..58763dc
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0287_R7_R15_R3_R11_R1_LIVE_QDRANT_PROJECTION_PROBE.md
+@@ -0,0 +1,28 @@
++# Manifest 0287-r7-r15-r3-r11-r1
++
++## Modified
++
++- `src/inference/qdrant_client_projection_executor.py`
++
++## Added
++
++- `src/context/love_live_qdrant_projection_probe_0287.py`
++- `tools/probe_love_live_qdrant_projection_0287.py`
++- `tests/context/test_love_live_qdrant_projection_probe_0287_r7_r15_r3_r11_r1.py`
++- `tests/context/test_qdrant_client_reference_point_readback_0287_r7_r15_r3_r11_r1.py`
++- `tests/rules/test_love_live_qdrant_projection_probe_0287_r7_r15_r3_r11_r1_rule.py`
++- `PHASE0287_R7_R15_R3_R11_R1_LIVE_QDRANT_PROJECTION_PROBE_REPORT.md`
++- `doc/CHANGELOG_0287_R7_R15_R3_R11_R1_LIVE_QDRANT_PROJECTION_PROBE.md`
++- `doc/architecture/LIVE_QDRANT_PROJECTION_PROBE_0287_R7_R15_R3_R11_R1.md`
++- `doc/architecture/LIVE_QDRANT_PROJECTION_PROBE_0287_R7_R15_R3_R11_R1.dot`
++- `doc/manifests/MANIFEST_0287_R7_R15_R3_R11_R1_LIVE_QDRANT_PROJECTION_PROBE.md`
++
++## Locked boundaries
++
++- preview performs SQL reads only;
++- execution requires environment, operator approval and exact plan digest;
++- one object and one Qdrant point only;
++- readback uses `with_vectors=False`;
++- no collection, alias or delete operation;
++- SQL remains durable authority;
++- no Scheduler or parallel orchestrator.
+diff --git a/src/context/love_live_qdrant_projection_probe_0287.py b/src/context/love_live_qdrant_projection_probe_0287.py
+new file mode 100644
+index 0000000..144fbbf
+--- /dev/null
++++ b/src/context/love_live_qdrant_projection_probe_0287.py
+@@ -0,0 +1,658 @@
++"""Controlled one-object SQL -> OpenVINO -> Qdrant projection probe.
++
++The module contains no resource construction.  It coordinates already-opened
++ports, persists only reconstructible projection metadata in SQL, reads the
++Qdrant point back without vectors and proves that SQL can rehydrate the source.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Mapping
++from dataclasses import dataclass, field
++import hashlib
++import json
++from types import MappingProxyType
++from typing import Any, Protocol, runtime_checkable
++
++from context.context_revision_sql_authority_0287 import (
++    ContextAuthorityObject,
++    ContextRevision,
++    ContextSqlWriteResult,
++    VectorProjectionMetadata,
++)
++
++LOVE_LIVE_QDRANT_PROJECTION_PROBE_SCHEMA = (
++    "missipy.love.live_qdrant_projection_probe.v1"
++)
++LOVE_LIVE_QDRANT_PROJECTION_PLAN_SCHEMA = (
++    "missipy.love.live_qdrant_projection_plan.v1"
++)
++LOVE_LIVE_QDRANT_PROJECTION_READINESS_SCHEMA = (
++    "missipy.love.live_qdrant_projection_readiness.v1"
++)
++LOVE_LIVE_QDRANT_PROJECTION_RECEIPT_SCHEMA = (
++    "missipy.love.live_qdrant_projection_receipt.v1"
++)
++
++
++class LoveLiveQdrantProjectionProbeError(RuntimeError):
++    """Raised when the controlled live projection probe cannot fail closed."""
++
++
++@runtime_checkable
++class ProjectionAuthorityStore(Protocol):
++    """Narrow subset of the existing SQL authority store used by the probe."""
++
++    def get_object(self, object_ref: str) -> ContextAuthorityObject | None: ...
++
++    def get_revision(self, revision_ref: str) -> ContextRevision | None: ...
++
++    def put_projection(
++        self,
++        item: VectorProjectionMetadata,
++    ) -> ContextSqlWriteResult: ...
++
++    def get_projection(
++        self,
++        projection_ref: str,
++    ) -> VectorProjectionMetadata | None: ...
++
++
++@runtime_checkable
++class LiveAnalysisProjectionPort(Protocol):
++    """Existing asynchronous projection operation supplied by r11."""
++
++    async def project(
++        self,
++        authority_object: ContextAuthorityObject,
++        *,
++        revision: ContextRevision,
++        branch_ref: str,
++        project_ref: str,
++        conversation_ref: str,
++        specialist_ref: str,
++        laboratory_ref: str,
++        security_scope: str,
++        projected_at: str | None = None,
++    ) -> Any: ...
++
++
++@runtime_checkable
++class ReferencePointReader(Protocol):
++    """Qdrant readback port returning references only and no vectors."""
++
++    def read_named_reference_point(
++        self,
++        *,
++        collection_name: str,
++        point_id: str,
++    ) -> object | None: ...
++
++
++@dataclass(frozen=True, slots=True)
++class LoveLiveProjectionProbeRequest:
++    """Stable identities for one operator-selected authority object."""
++
++    object_ref: str
++    revision_ref: str
++    branch_ref: str
++    project_ref: str
++    conversation_ref: str
++    specialist_ref: str
++    laboratory_ref: str
++    security_scope: str
++    projected_at: str = ""
++
++    def __post_init__(self) -> None:
++        for name in (
++            "object_ref",
++            "revision_ref",
++            "branch_ref",
++            "project_ref",
++            "conversation_ref",
++            "specialist_ref",
++            "laboratory_ref",
++            "security_scope",
++        ):
++            _require_typed_ref(name, getattr(self, name))
++        if not self.revision_ref.startswith("context-revision:"):
++            raise LoveLiveQdrantProjectionProbeError(
++                "revision_ref must start with context-revision:"
++            )
++        if self.projected_at and not self.projected_at.strip():
++            raise LoveLiveQdrantProjectionProbeError(
++                "projected_at must be empty or non-blank"
++            )
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "object_ref": self.object_ref,
++            "revision_ref": self.revision_ref,
++            "branch_ref": self.branch_ref,
++            "project_ref": self.project_ref,
++            "conversation_ref": self.conversation_ref,
++            "specialist_ref": self.specialist_ref,
++            "laboratory_ref": self.laboratory_ref,
++            "security_scope": self.security_scope,
++            "projected_at": self.projected_at,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class LoveLiveProjectionProbePlan:
++    """Digest-confirmed plan for one live named-vector projection."""
++
++    schema: str
++    request: LoveLiveProjectionProbeRequest
++    collection_name: str
++    dense_vector_name: str
++    sparse_vector_name: str
++    model_ref: str
++    model_revision: str
++    dimension: int = 384
++
++    def __post_init__(self) -> None:
++        if self.schema != LOVE_LIVE_QDRANT_PROJECTION_PLAN_SCHEMA:
++            raise LoveLiveQdrantProjectionProbeError(
++                "unsupported live projection plan schema"
++            )
++        for name in (
++            "collection_name",
++            "dense_vector_name",
++            "sparse_vector_name",
++            "model_ref",
++            "model_revision",
++        ):
++            if not str(getattr(self, name)).strip():
++                raise LoveLiveQdrantProjectionProbeError(
++                    f"{name} must be non-empty"
++                )
++        if self.dense_vector_name == self.sparse_vector_name:
++            raise LoveLiveQdrantProjectionProbeError(
++                "dense and sparse vector names must differ"
++            )
++        if self.dimension != 384:
++            raise LoveLiveQdrantProjectionProbeError(
++                "multilingual-e5-small dimension must be 384"
++            )
++
++    @property
++    def plan_digest(self) -> str:
++        encoded = json.dumps(
++            self._unsigned_mapping(),
++            ensure_ascii=False,
++            sort_keys=True,
++            separators=(",", ":"),
++        ).encode("utf-8")
++        return "sha256:" + hashlib.sha256(encoded).hexdigest()
++
++    def _unsigned_mapping(self) -> dict[str, object]:
++        return {
++            "schema": self.schema,
++            "request": self.request.to_mapping(),
++            "collection_name": self.collection_name,
++            "dense_vector_name": self.dense_vector_name,
++            "sparse_vector_name": self.sparse_vector_name,
++            "model_ref": self.model_ref,
++            "model_revision": self.model_revision,
++            "dimension": self.dimension,
++            "boundaries": {
++                "one_object_only": True,
++                "reference_only_qdrant_payload": True,
++                "qdrant_vectors_omitted_from_readback": True,
++                "sql_remains_authority": True,
++                "delete_allowed": False,
++                "alias_mutation_allowed": False,
++            },
++        }
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            **self._unsigned_mapping(),
++            "plan_digest": self.plan_digest,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class LoveLiveProjectionProbeGate:
++    """Three-part operator gate for a single Qdrant point mutation."""
++
++    policy_decision_id: str
++    operator_decision: str
++    allow_write: bool
++    confirm_plan_digest: str
++
++    def __post_init__(self) -> None:
++        if not self.policy_decision_id.startswith("policy:"):
++            raise LoveLiveQdrantProjectionProbeError(
++                "policy_decision_id must start with policy:"
++            )
++        if self.operator_decision not in {"approve", "reject"}:
++            raise LoveLiveQdrantProjectionProbeError(
++                "operator_decision must be approve or reject"
++            )
++
++    def require_allows(self, plan: LoveLiveProjectionProbePlan) -> None:
++        if not self.allow_write:
++            raise LoveLiveQdrantProjectionProbeError(
++                "live Qdrant point write is not enabled"
++            )
++        if self.operator_decision != "approve":
++            raise LoveLiveQdrantProjectionProbeError(
++                "operator did not approve live projection"
++            )
++        if self.confirm_plan_digest != plan.plan_digest:
++            raise LoveLiveQdrantProjectionProbeError(
++                "confirmed plan digest differs from live projection plan"
++            )
++
++
++@dataclass(frozen=True, slots=True)
++class LoveLiveProjectionProbeReadiness:
++    """Read-only SQL validation performed before OpenVINO/Qdrant construction."""
++
++    schema: str
++    plan_digest: str
++    ready: bool
++    issues: tuple[str, ...]
++    object_ref: str
++    revision_ref: str
++    object_content_digest: str
++    boundaries: Mapping[str, bool] = field(default_factory=dict)
++
++    def __post_init__(self) -> None:
++        if self.schema != LOVE_LIVE_QDRANT_PROJECTION_READINESS_SCHEMA:
++            raise LoveLiveQdrantProjectionProbeError(
++                "unsupported live projection readiness schema"
++            )
++        object.__setattr__(self, "issues", tuple(self.issues))
++        object.__setattr__(
++            self,
++            "boundaries",
++            MappingProxyType(dict(self.boundaries)),
++        )
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": self.schema,
++            "plan_digest": self.plan_digest,
++            "ready": self.ready,
++            "issues": list(self.issues),
++            "object_ref": self.object_ref,
++            "revision_ref": self.revision_ref,
++            "object_content_digest": self.object_content_digest,
++            "boundaries": dict(self.boundaries),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class LoveLiveProjectionProbeReceipt:
++    """Secret-free evidence for one complete live projection/readback cycle."""
++
++    schema: str
++    plan_digest: str
++    projection_ref: str
++    point_id: str
++    object_ref: str
++    revision_ref: str
++    source_content_digest: str
++    sql_projection_inserted: bool
++    sql_projection_idempotent_replay: bool
++    qdrant_payload: Mapping[str, object]
++    checks: Mapping[str, bool]
++    boundaries: Mapping[str, bool]
++
++    def __post_init__(self) -> None:
++        if self.schema != LOVE_LIVE_QDRANT_PROJECTION_RECEIPT_SCHEMA:
++            raise LoveLiveQdrantProjectionProbeError(
++                "unsupported live projection receipt schema"
++            )
++        for name in (
++            "projection_ref",
++            "point_id",
++            "object_ref",
++            "revision_ref",
++        ):
++            _require_typed_ref(name, getattr(self, name))
++        _require_sha256("source_content_digest", self.source_content_digest)
++        compact = _reference_only_mapping(self.qdrant_payload)
++        object.__setattr__(self, "qdrant_payload", MappingProxyType(compact))
++        object.__setattr__(self, "checks", MappingProxyType(dict(self.checks)))
++        object.__setattr__(
++            self,
++            "boundaries",
++            MappingProxyType(dict(self.boundaries)),
++        )
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": self.schema,
++            "plan_digest": self.plan_digest,
++            "projection_ref": self.projection_ref,
++            "point_id": self.point_id,
++            "object_ref": self.object_ref,
++            "revision_ref": self.revision_ref,
++            "source_content_digest": self.source_content_digest,
++            "sql_projection": {
++                "inserted": self.sql_projection_inserted,
++                "idempotent_replay": self.sql_projection_idempotent_replay,
++            },
++            "qdrant_payload": dict(self.qdrant_payload),
++            "checks": dict(self.checks),
++            "boundaries": dict(self.boundaries),
++        }
++
++
++def build_love_live_projection_probe_plan(
++    request: LoveLiveProjectionProbeRequest,
++    *,
++    collection_name: str,
++    dense_vector_name: str,
++    sparse_vector_name: str,
++    model_ref: str,
++    model_revision: str,
++    dimension: int = 384,
++) -> LoveLiveProjectionProbePlan:
++    """Build the immutable operator-confirmed projection plan."""
++
++    return LoveLiveProjectionProbePlan(
++        schema=LOVE_LIVE_QDRANT_PROJECTION_PLAN_SCHEMA,
++        request=request,
++        collection_name=collection_name,
++        dense_vector_name=dense_vector_name,
++        sparse_vector_name=sparse_vector_name,
++        model_ref=model_ref,
++        model_revision=model_revision,
++        dimension=dimension,
++    )
++
++
++def inspect_love_live_projection_probe(
++    authority_store: ProjectionAuthorityStore,
++    plan: LoveLiveProjectionProbePlan,
++) -> LoveLiveProjectionProbeReadiness:
++    """Validate the selected SQL object and revision without external effects."""
++
++    if not isinstance(authority_store, ProjectionAuthorityStore):
++        raise LoveLiveQdrantProjectionProbeError(
++            "authority_store does not expose the required SQL authority methods"
++        )
++    authority_object = authority_store.get_object(plan.request.object_ref)
++    revision = authority_store.get_revision(plan.request.revision_ref)
++    issues: list[str] = []
++    if authority_object is None:
++        issues.append("SQL authority object does not exist")
++    elif not authority_object.body.strip():
++        issues.append("SQL authority object has no inline body to project")
++    if revision is None:
++        issues.append("SQL context revision does not exist")
++    elif authority_object is not None and not _is_active_member(
++        authority_object,
++        revision,
++    ):
++        issues.append("SQL authority object is not an active revision member")
++    return LoveLiveProjectionProbeReadiness(
++        schema=LOVE_LIVE_QDRANT_PROJECTION_READINESS_SCHEMA,
++        plan_digest=plan.plan_digest,
++        ready=not issues,
++        issues=tuple(issues),
++        object_ref=plan.request.object_ref,
++        revision_ref=plan.request.revision_ref,
++        object_content_digest=(
++            authority_object.content_digest if authority_object is not None else ""
++        ),
++        boundaries={
++            "read_only": True,
++            "openvino_constructed": False,
++            "openvino_inference_performed": False,
++            "qdrant_client_constructed": False,
++            "qdrant_write_performed": False,
++            "qdrant_read_performed": False,
++            "sql_write_performed": False,
++        },
++    )
++
++
++async def execute_love_live_projection_probe(
++    authority_store: ProjectionAuthorityStore,
++    projector: LiveAnalysisProjectionPort,
++    reader: ReferencePointReader,
++    plan: LoveLiveProjectionProbePlan,
++    gate: LoveLiveProjectionProbeGate,
++) -> LoveLiveProjectionProbeReceipt:
++    """Execute one projection, persist metadata, read back and rehydrate SQL."""
++
++    gate.require_allows(plan)
++    readiness = inspect_love_live_projection_probe(authority_store, plan)
++    if not readiness.ready:
++        raise LoveLiveQdrantProjectionProbeError(
++            "live projection readiness failed: " + "; ".join(readiness.issues)
++        )
++    if not isinstance(projector, LiveAnalysisProjectionPort):
++        raise LoveLiveQdrantProjectionProbeError(
++            "projector does not expose async project()"
++        )
++    if not isinstance(reader, ReferencePointReader):
++        raise LoveLiveQdrantProjectionProbeError(
++            "reader does not expose reference-only point readback"
++        )
++
++    authority_object = authority_store.get_object(plan.request.object_ref)
++    revision = authority_store.get_revision(plan.request.revision_ref)
++    if authority_object is None or revision is None:
++        raise LoveLiveQdrantProjectionProbeError(
++            "SQL authority changed after readiness inspection"
++        )
++
++    projection_receipt = await projector.project(
++        authority_object,
++        revision=revision,
++        branch_ref=plan.request.branch_ref,
++        project_ref=plan.request.project_ref,
++        conversation_ref=plan.request.conversation_ref,
++        specialist_ref=plan.request.specialist_ref,
++        laboratory_ref=plan.request.laboratory_ref,
++        security_scope=plan.request.security_scope,
++        projected_at=plan.request.projected_at or None,
++    )
++    projection = getattr(projection_receipt, "projection", None)
++    if not isinstance(projection, VectorProjectionMetadata):
++        raise LoveLiveQdrantProjectionProbeError(
++            "projection port did not return VectorProjectionMetadata"
++        )
++    _require_projection_matches_plan(projection, plan, authority_object)
++
++    sql_write = authority_store.put_projection(projection)
++    readback = reader.read_named_reference_point(
++        collection_name=plan.collection_name,
++        point_id=projection.point_id,
++    )
++    if readback is None:
++        raise LoveLiveQdrantProjectionProbeError(
++            "Qdrant point was not found after acknowledged projection"
++        )
++    payload = _reference_only_mapping(getattr(readback, "payload", {}))
++    _require_readback_matches_projection(readback, payload, projection, plan)
++
++    rehydrated = authority_store.get_object(str(payload["sql_ref"]))
++    if rehydrated is None:
++        raise LoveLiveQdrantProjectionProbeError(
++            "Qdrant sql_ref cannot be rehydrated from SQL authority"
++        )
++    if rehydrated.content_digest != projection.source_content_digest:
++        raise LoveLiveQdrantProjectionProbeError(
++            "rehydrated SQL content digest differs from Qdrant reference"
++        )
++    persisted_projection = authority_store.get_projection(
++        projection.projection_ref
++    )
++    if persisted_projection is None:
++        raise LoveLiveQdrantProjectionProbeError(
++            "projection metadata was not rehydrated from SQL authority"
++        )
++    if persisted_projection.to_mapping() != projection.to_mapping():
++        raise LoveLiveQdrantProjectionProbeError(
++            "rehydrated SQL projection metadata differs from receipt"
++        )
++
++    return LoveLiveProjectionProbeReceipt(
++        schema=LOVE_LIVE_QDRANT_PROJECTION_RECEIPT_SCHEMA,
++        plan_digest=plan.plan_digest,
++        projection_ref=projection.projection_ref,
++        point_id=projection.point_id,
++        object_ref=authority_object.object_ref,
++        revision_ref=revision.revision_ref,
++        source_content_digest=authority_object.content_digest,
++        sql_projection_inserted=sql_write.inserted,
++        sql_projection_idempotent_replay=sql_write.idempotent_replay,
++        qdrant_payload=payload,
++        checks={
++            "qdrant_point_read_back": True,
++            "qdrant_payload_reference_only": True,
++            "sql_source_rehydrated": True,
++            "sql_source_digest_matches": True,
++            "sql_projection_metadata_rehydrated": True,
++        },
++        boundaries={
++            "one_object_projected": True,
++            "openvino_e5_used": True,
++            "qdrant_write_performed": True,
++            "qdrant_read_performed": True,
++            "qdrant_vectors_serialized": False,
++            "authoritative_body_serialized": False,
++            "secret_value_serialized": False,
++            "delete_performed": False,
++            "alias_mutated": False,
++            "sql_remains_authority": True,
++        },
++    )
++
++
++def _require_projection_matches_plan(
++    projection: VectorProjectionMetadata,
++    plan: LoveLiveProjectionProbePlan,
++    authority_object: ContextAuthorityObject,
++) -> None:
++    expected = {
++        "source_ref": authority_object.object_ref,
++        "source_content_digest": authority_object.content_digest,
++        "collection_name": plan.collection_name,
++        "vector_name": plan.dense_vector_name,
++        "model_ref": plan.model_ref,
++        "model_revision": plan.model_revision,
++        "dimension": plan.dimension,
++    }
++    for name, value in expected.items():
++        if getattr(projection, name) != value:
++            raise LoveLiveQdrantProjectionProbeError(
++                f"projection {name} differs from confirmed plan"
++            )
++    if projection.normalized is not True or projection.projection_state != "active":
++        raise LoveLiveQdrantProjectionProbeError(
++            "projection must be active and normalized"
++        )
++
++
++def _require_readback_matches_projection(
++    readback: object,
++    payload: Mapping[str, object],
++    projection: VectorProjectionMetadata,
++    plan: LoveLiveProjectionProbePlan,
++) -> None:
++    if getattr(readback, "point_id", "") != projection.point_id:
++        raise LoveLiveQdrantProjectionProbeError(
++            "Qdrant readback point_id differs from projection"
++        )
++    expected = {
++        "point_id": projection.point_id,
++        "sql_ref": projection.source_ref,
++        "source_ref": projection.source_ref,
++        "source_content_digest": projection.source_content_digest,
++        "context_revision_ref": plan.request.revision_ref,
++    }
++    for name, value in expected.items():
++        if payload.get(name) != value:
++            raise LoveLiveQdrantProjectionProbeError(
++                f"Qdrant readback {name} differs from projection"
++            )
++
++
++def _is_active_member(
++    authority_object: ContextAuthorityObject,
++    revision: ContextRevision,
++) -> bool:
++    return any(
++        membership.object_ref == authority_object.object_ref
++        and membership.state == "active"
++        for membership in revision.memberships
++    )
++
++
++def _reference_only_mapping(value: object) -> dict[str, object]:
++    if not isinstance(value, Mapping):
++        raise LoveLiveQdrantProjectionProbeError(
++            "Qdrant readback payload must be a mapping"
++        )
++    forbidden = {
++        "body",
++        "content",
++        "vector",
++        "vectors",
++        "values",
++        "embedding",
++        "local_path",
++    }.intersection(value)
++    if forbidden:
++        raise LoveLiveQdrantProjectionProbeError(
++            "Qdrant readback contains forbidden authoritative/vector fields"
++        )
++    result: dict[str, object] = {}
++    for key, item in value.items():
++        if isinstance(item, (str, int, float, bool)) or item is None:
++            result[str(key)] = item
++    return result
++
++
++def _require_typed_ref(name: str, value: object) -> None:
++    if not isinstance(value, str) or ":" not in value:
++        raise LoveLiveQdrantProjectionProbeError(
++            f"{name} must be a typed reference"
++        )
++    prefix, suffix = value.split(":", 1)
++    if not prefix or not suffix or not prefix[0].islower():
++        raise LoveLiveQdrantProjectionProbeError(
++            f"{name} must be a typed reference"
++        )
++
++
++def _require_sha256(name: str, value: object) -> None:
++    if not isinstance(value, str) or len(value) != 71 or not value.startswith(
++        "sha256:"
++    ):
++        raise LoveLiveQdrantProjectionProbeError(f"{name} must be sha256:*")
++    try:
++        int(value[7:], 16)
++    except ValueError as exc:
++        raise LoveLiveQdrantProjectionProbeError(
++            f"{name} must be hexadecimal"
++        ) from exc
++
++
++__all__ = (
++    "LOVE_LIVE_QDRANT_PROJECTION_PLAN_SCHEMA",
++    "LOVE_LIVE_QDRANT_PROJECTION_PROBE_SCHEMA",
++    "LOVE_LIVE_QDRANT_PROJECTION_READINESS_SCHEMA",
++    "LOVE_LIVE_QDRANT_PROJECTION_RECEIPT_SCHEMA",
++    "LiveAnalysisProjectionPort",
++    "LoveLiveProjectionProbeGate",
++    "LoveLiveProjectionProbePlan",
++    "LoveLiveProjectionProbeReadiness",
++    "LoveLiveProjectionProbeReceipt",
++    "LoveLiveProjectionProbeRequest",
++    "LoveLiveQdrantProjectionProbeError",
++    "ProjectionAuthorityStore",
++    "ReferencePointReader",
++    "build_love_live_projection_probe_plan",
++    "execute_love_live_projection_probe",
++    "inspect_love_live_projection_probe",
++)
+diff --git a/src/inference/qdrant_client_projection_executor.py b/src/inference/qdrant_client_projection_executor.py
+index bd8bf78..ebcf9bc 100644
+--- a/src/inference/qdrant_client_projection_executor.py
++++ b/src/inference/qdrant_client_projection_executor.py
+@@ -178,6 +178,48 @@ class QdrantClientReferenceHit:
+         }
+ 
+ 
++@dataclass(frozen=True, slots=True)
++class QdrantClientReferencePoint:
++    """Reference-only readback for one exact named-vector point."""
++
++    collection_name: str
++    point_id: str
++    sql_ref: str
++    source_ref: str
++    payload: Mapping[str, object]
++
++    def __post_init__(self) -> None:
++        if not self.collection_name.strip():
++            raise ValueError("collection_name must not be empty")
++        for name in ("point_id", "sql_ref", "source_ref"):
++            if not _is_typed_ref(getattr(self, name)):
++                raise ValueError(f"{name} must be a typed reference")
++        compact = _reference_payload(self.payload)
++        if compact.get("point_id", self.point_id) != self.point_id:
++            raise ValueError("payload point_id differs from readback point_id")
++        if compact.get("sql_ref", self.sql_ref) != self.sql_ref:
++            raise ValueError("payload sql_ref differs from readback sql_ref")
++        if compact.get("source_ref", self.source_ref) != self.source_ref:
++            raise ValueError("payload source_ref differs from readback source_ref")
++        object.__setattr__(self, "payload", MappingProxyType(compact))
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": "missipy.qdrant.reference_point_readback.v1",
++            "collection_name": self.collection_name,
++            "point_id": self.point_id,
++            "sql_ref": self.sql_ref,
++            "source_ref": self.source_ref,
++            "payload": dict(self.payload),
++            "boundaries": {
++                "reference_only": True,
++                "vectors_serialized": False,
++                "authoritative_content_serialized": False,
++                "sql_remains_authority": True,
++            },
++        }
++
++
+ @dataclass(frozen=True, slots=True)
+ class QdrantNamedHybridProjectionResult:
+     """Reference-only receipt for one named dense+sparse point upsert."""
+@@ -359,6 +401,83 @@ class QdrantClientProjectionExecutor:
+             acknowledged=True,
+         )
+ 
++    def read_named_reference_point(
++        self,
++        *,
++        collection_name: str,
++        point_id: str,
++    ) -> QdrantClientReferencePoint | None:
++        """Read one exact point with payload only and vectors disabled."""
++
++        operation = "read_named_reference_point"
++        self._require_allowed(operation, self._gate.allow_search)
++        if not collection_name or not collection_name.strip():
++            raise self._failure(
++                operation,
++                "invalid_collection",
++                "collection_name is required",
++            )
++        if not _is_typed_ref(point_id):
++            raise self._failure(
++                operation,
++                "invalid_point_id",
++                "point_id must be typed",
++            )
++        try:
++            response = self._client.retrieve(
++                collection_name=collection_name,
++                ids=[_qdrant_storage_id(point_id)],
++                with_payload=True,
++                with_vectors=False,
++            )
++        except Exception as exc:
++            raise self._wrapped_failure(operation, exc) from exc
++        records = tuple(response or ())
++        if not records:
++            return None
++        if len(records) != 1:
++            raise self._failure(
++                operation,
++                "ambiguous_readback",
++                "Qdrant returned more than one exact point",
++            )
++        payload = _reference_payload(
++            _as_mapping(getattr(records[0], "payload", {}))
++        )
++        observed_point_id = str(
++            payload.get("point_id")
++            or payload.get("autodoc_point_ref")
++            or ""
++        )
++        if observed_point_id != point_id:
++            raise self._failure(
++                operation,
++                "point_id_mismatch",
++                "Qdrant payload point_id differs from requested point_id",
++            )
++        sql_ref = str(
++            payload.get("sql_ref")
++            or payload.get("sql_context_ref")
++            or ""
++        )
++        source_ref = str(payload.get("source_ref") or sql_ref)
++        if not _is_typed_ref(sql_ref) or not _is_typed_ref(source_ref):
++            raise self._failure(
++                operation,
++                "missing_sql_reference",
++                "Qdrant exact point must contain typed SQL references",
++            )
++        payload["point_id"] = point_id
++        payload["sql_ref"] = sql_ref
++        payload["source_ref"] = source_ref
++        return QdrantClientReferencePoint(
++            collection_name=collection_name,
++            point_id=point_id,
++            sql_ref=sql_ref,
++            source_ref=source_ref,
++            payload=payload,
++        )
++
+     def search_vector(
+         self,
+         vector: Sequence[float],
+diff --git a/tests/context/test_love_live_qdrant_projection_probe_0287_r7_r15_r3_r11_r1.py b/tests/context/test_love_live_qdrant_projection_probe_0287_r7_r15_r3_r11_r1.py
+new file mode 100644
+index 0000000..6239869
+--- /dev/null
++++ b/tests/context/test_love_live_qdrant_projection_probe_0287_r7_r15_r3_r11_r1.py
+@@ -0,0 +1,245 @@
++import asyncio
++from types import SimpleNamespace
++
++import pytest
++
++from context.context_revision_sql_authority_0287 import (
++    CONTEXT_AUTHORITY_OBJECT_SCHEMA,
++    CONTEXT_REVISION_MEMBERSHIP_SCHEMA,
++    CONTEXT_REVISION_SCHEMA,
++    CONTEXT_SQL_WRITE_RESULT_SCHEMA,
++    VECTOR_PROJECTION_METADATA_SCHEMA,
++    ContextAuthorityObject,
++    ContextRevision,
++    ContextRevisionMembership,
++    ContextSqlWriteResult,
++    VectorProjectionMetadata,
++)
++from context.love_live_qdrant_projection_probe_0287 import (
++    LOVE_LIVE_QDRANT_PROJECTION_RECEIPT_SCHEMA,
++    LoveLiveProjectionProbeGate,
++    LoveLiveProjectionProbeRequest,
++    LoveLiveQdrantProjectionProbeError,
++    build_love_live_projection_probe_plan,
++    execute_love_live_projection_probe,
++    inspect_love_live_projection_probe,
++)
++
++
++class _Store:
++    def __init__(self) -> None:
++        self.authority_object = _object()
++        self.revision = _revision()
++        self.projections: dict[str, VectorProjectionMetadata] = {}
++
++    def get_object(self, object_ref: str) -> ContextAuthorityObject | None:
++        return self.authority_object if object_ref == self.authority_object.object_ref else None
++
++    def get_revision(self, revision_ref: str) -> ContextRevision | None:
++        return self.revision if revision_ref == self.revision.revision_ref else None
++
++    def put_projection(self, item: VectorProjectionMetadata) -> ContextSqlWriteResult:
++        existing = self.projections.get(item.projection_ref)
++        if existing is not None and existing.to_mapping() != item.to_mapping():
++            raise AssertionError("immutable collision")
++        self.projections[item.projection_ref] = item
++        return ContextSqlWriteResult(
++            entity_kind="vector_projection_metadata",
++            entity_ref=item.projection_ref,
++            inserted=existing is None,
++            idempotent_replay=existing is not None,
++        )
++
++    def get_projection(self, projection_ref: str) -> VectorProjectionMetadata | None:
++        return self.projections.get(projection_ref)
++
++
++class _Projector:
++    def __init__(self) -> None:
++        self.calls = 0
++
++    async def project(self, authority_object: ContextAuthorityObject, **kwargs: object) -> object:
++        self.calls += 1
++        revision = kwargs["revision"]
++        projection = VectorProjectionMetadata(
++            schema=VECTOR_PROJECTION_METADATA_SCHEMA,
++            projection_ref="vector-projection:test",
++            source_ref=authority_object.object_ref,
++            source_content_digest=authority_object.content_digest,
++            embedding_profile_ref="embedding-profile:multilingual-e5-small-passage",
++            model_ref="model:multilingual-e5-small",
++            model_revision="installed",
++            dimension=384,
++            normalized=True,
++            vector_name="dense_e5_v1",
++            collection_name="autodoc_context_e5_384_hybrid_v1",
++            point_id="qdrant-point:test",
++            projection_state="active",
++            projected_at="2026-07-17T20:00:00+02:00",
++            metadata={"sparse_vector_name": "sparse_lexical_v1"},
++        )
++        return SimpleNamespace(projection=projection, revision=revision)
++
++
++class _Reader:
++    def __init__(self, *, digest: str | None = None) -> None:
++        self.digest = digest
++        self.calls: list[dict[str, str]] = []
++
++    def read_named_reference_point(self, *, collection_name: str, point_id: str) -> object:
++        self.calls.append({"collection_name": collection_name, "point_id": point_id})
++        return SimpleNamespace(
++            point_id=point_id,
++            sql_ref="sql:love-analysis:probe",
++            source_ref="sql:love-analysis:probe",
++            payload={
++                "point_id": point_id,
++                "sql_ref": "sql:love-analysis:probe",
++                "source_ref": "sql:love-analysis:probe",
++                "source_content_digest": self.digest or ("sha256:" + "a" * 64),
++                "context_revision_ref": "context-revision:love-probe",
++                "project_ref": "project:autodoc",
++                "valid": True,
++            },
++        )
++
++
++def _object() -> ContextAuthorityObject:
++    body = '{"analysis":"projection live"}'
++    return ContextAuthorityObject(
++        schema=CONTEXT_AUTHORITY_OBJECT_SCHEMA,
++        object_ref="sql:love-analysis:probe",
++        object_kind="specialist_analysis",
++        content_schema_ref="missipy.love.analysis.v1",
++        content_digest="sha256:" + "a" * 64,
++        title="Analyse live",
++        body=body,
++        media_type="application/json",
++        byte_count=len(body.encode()),
++        metadata={"contribution_kind": "concept_affect_analysis"},
++    )
++
++
++def _revision() -> ContextRevision:
++    return ContextRevision(
++        schema=CONTEXT_REVISION_SCHEMA,
++        revision_ref="context-revision:love-probe",
++        context_ref="context:love-probe",
++        parent_revision_refs=(),
++        memberships=(
++            ContextRevisionMembership(
++                schema=CONTEXT_REVISION_MEMBERSHIP_SCHEMA,
++                object_ref="sql:love-analysis:probe",
++                state="active",
++            ),
++        ),
++        validation_status="accepted",
++        significance="material",
++        created_at="2026-07-17T20:00:00+02:00",
++    )
++
++
++def _plan():
++    request = LoveLiveProjectionProbeRequest(
++        object_ref="sql:love-analysis:probe",
++        revision_ref="context-revision:love-probe",
++        branch_ref="branch:main",
++        project_ref="project:autodoc",
++        conversation_ref="conversation:love-probe",
++        specialist_ref="specialist:love-concept-affect",
++        laboratory_ref="laboratory:love-studies",
++        security_scope="security-scope:project",
++        projected_at="2026-07-17T20:00:00+02:00",
++    )
++    return build_love_live_projection_probe_plan(
++        request,
++        collection_name="autodoc_context_e5_384_hybrid_v1",
++        dense_vector_name="dense_e5_v1",
++        sparse_vector_name="sparse_lexical_v1",
++        model_ref="model:multilingual-e5-small",
++        model_revision="installed",
++    )
++
++
++def _gate(plan):
++    return LoveLiveProjectionProbeGate(
++        policy_decision_id="policy:love-probe",
++        operator_decision="approve",
++        allow_write=True,
++        confirm_plan_digest=plan.plan_digest,
++    )
++
++
++def test_preview_reads_sql_only_and_exposes_stable_plan_digest() -> None:
++    store = _Store()
++    plan = _plan()
++    readiness = inspect_love_live_projection_probe(store, plan)
++    assert readiness.ready is True
++    assert readiness.issues == ()
++    assert readiness.boundaries["openvino_constructed"] is False
++    assert readiness.boundaries["qdrant_client_constructed"] is False
++    assert plan.plan_digest.startswith("sha256:")
++    assert plan.to_mapping()["plan_digest"] == plan.plan_digest
++
++
++def test_execute_projects_one_point_persists_metadata_and_rehydrates_sql() -> None:
++    store = _Store()
++    projector = _Projector()
++    reader = _Reader()
++    plan = _plan()
++    receipt = asyncio.run(
++        execute_love_live_projection_probe(
++            store,
++            projector,
++            reader,
++            plan,
++            _gate(plan),
++        )
++    )
++    mapping = receipt.to_mapping()
++    assert mapping["schema"] == LOVE_LIVE_QDRANT_PROJECTION_RECEIPT_SCHEMA
++    assert projector.calls == 1
++    assert len(reader.calls) == 1
++    assert mapping["checks"]["sql_source_rehydrated"] is True
++    assert mapping["checks"]["sql_projection_metadata_rehydrated"] is True
++    assert mapping["boundaries"]["qdrant_vectors_serialized"] is False
++    assert mapping["boundaries"]["authoritative_body_serialized"] is False
++    assert "body" not in mapping["qdrant_payload"]
++    assert "vector" not in mapping["qdrant_payload"]
++
++
++def test_gate_rejects_before_projector_or_reader() -> None:
++    store = _Store()
++    projector = _Projector()
++    reader = _Reader()
++    plan = _plan()
++    gate = LoveLiveProjectionProbeGate(
++        policy_decision_id="policy:love-probe",
++        operator_decision="reject",
++        allow_write=True,
++        confirm_plan_digest=plan.plan_digest,
++    )
++    with pytest.raises(LoveLiveQdrantProjectionProbeError, match="did not approve"):
++        asyncio.run(
++            execute_love_live_projection_probe(store, projector, reader, plan, gate)
++        )
++    assert projector.calls == 0
++    assert reader.calls == []
++
++
++def test_readback_digest_mismatch_fails_closed() -> None:
++    store = _Store()
++    plan = _plan()
++    with pytest.raises(
++        LoveLiveQdrantProjectionProbeError,
++        match="source_content_digest differs",
++    ):
++        asyncio.run(
++            execute_love_live_projection_probe(
++                store,
++                _Projector(),
++                _Reader(digest="sha256:" + "b" * 64),
++                plan,
++                _gate(plan),
++            )
++        )
+diff --git a/tests/context/test_qdrant_client_reference_point_readback_0287_r7_r15_r3_r11_r1.py b/tests/context/test_qdrant_client_reference_point_readback_0287_r7_r15_r3_r11_r1.py
+new file mode 100644
+index 0000000..73b450c
+--- /dev/null
++++ b/tests/context/test_qdrant_client_reference_point_readback_0287_r7_r15_r3_r11_r1.py
+@@ -0,0 +1,82 @@
++from types import SimpleNamespace
++
++import pytest
++
++from inference.qdrant_client_projection_executor import (
++    QdrantClientConnectionConfig,
++    QdrantClientEffectGate,
++    QdrantClientExecutionError,
++    QdrantClientProjectionExecutor,
++)
++
++
++class _Client:
++    def __init__(self, records: list[object]) -> None:
++        self.records = records
++        self.calls: list[dict[str, object]] = []
++
++    def retrieve(self, **kwargs: object) -> list[object]:
++        self.calls.append(dict(kwargs))
++        return self.records
++
++
++class _Models:
++    pass
++
++
++def _record() -> object:
++    return SimpleNamespace(
++        id="uuid",
++        payload={
++            "point_id": "qdrant-point:test",
++            "sql_ref": "sql:love-analysis:test",
++            "source_ref": "sql:love-analysis:test",
++            "source_content_digest": "sha256:" + "a" * 64,
++            "context_revision_ref": "context-revision:test",
++            "valid": True,
++        },
++    )
++
++
++def _executor(client: _Client, *, allow_search: bool = True):
++    return QdrantClientProjectionExecutor(
++        client=client,
++        models_module=_Models,
++        config=QdrantClientConnectionConfig(),
++        gate=QdrantClientEffectGate(
++            policy_decision_id="policy:readback",
++            allow_write=False,
++            allow_search=allow_search,
++        ),
++    )
++
++
++def test_exact_readback_uses_payload_only_and_disables_vectors() -> None:
++    client = _Client([_record()])
++    result = _executor(client).read_named_reference_point(
++        collection_name="autodoc_context_e5_384_hybrid_v1",
++        point_id="qdrant-point:test",
++    )
++    assert result is not None
++    assert result.sql_ref == "sql:love-analysis:test"
++    assert result.payload["source_content_digest"] == "sha256:" + "a" * 64
++    assert client.calls[0]["with_payload"] is True
++    assert client.calls[0]["with_vectors"] is False
++    assert result.to_mapping()["boundaries"]["vectors_serialized"] is False
++
++
++def test_missing_exact_point_returns_none() -> None:
++    result = _executor(_Client([])).read_named_reference_point(
++        collection_name="autodoc_context_e5_384_hybrid_v1",
++        point_id="qdrant-point:missing",
++    )
++    assert result is None
++
++
++def test_readback_gate_is_required() -> None:
++    with pytest.raises(QdrantClientExecutionError) as captured:
++        _executor(_Client([_record()]), allow_search=False).read_named_reference_point(
++            collection_name="autodoc_context_e5_384_hybrid_v1",
++            point_id="qdrant-point:test",
++        )
++    assert captured.value.failure.category == "gate_denied"
+diff --git a/tests/rules/test_love_live_qdrant_projection_probe_0287_r7_r15_r3_r11_r1_rule.py b/tests/rules/test_love_live_qdrant_projection_probe_0287_r7_r15_r3_r11_r1_rule.py
+new file mode 100644
+index 0000000..a172d48
+--- /dev/null
++++ b/tests/rules/test_love_live_qdrant_projection_probe_0287_r7_r15_r3_r11_r1_rule.py
+@@ -0,0 +1,51 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++SERVICE = ROOT / "src/context/love_live_qdrant_projection_probe_0287.py"
++EXECUTOR = ROOT / "src/inference/qdrant_client_projection_executor.py"
++TOOL = ROOT / "tools/probe_love_live_qdrant_projection_0287.py"
++
++
++def test_r11_r1_reuses_existing_live_ports_and_keeps_sql_authority() -> None:
++    service = SERVICE.read_text(encoding="utf-8")
++    executor = EXECUTOR.read_text(encoding="utf-8")
++    tool = TOOL.read_text(encoding="utf-8")
++    for required in (
++        "inspect_love_live_projection_probe",
++        "execute_love_live_projection_probe",
++        "await projector.project",
++        "authority_store.put_projection",
++        "authority_store.get_object",
++        "authority_store.get_projection",
++        "qdrant_vectors_serialized",
++        "authoritative_body_serialized",
++        "confirm_plan_digest",
++    ):
++        assert required in service
++    for required in (
++        "def read_named_reference_point",
++        "self._client.retrieve",
++        "with_payload=True",
++        "with_vectors=False",
++        "self._gate.allow_search",
++        "QdrantClientReferencePoint",
++    ):
++        assert required in executor
++    for required in (
++        "open_love_postgresql_authority",
++        "build_multilingual_e5_small_pipeline",
++        "build_qdrant_client_projection_executor",
++        "LoveQdrantLiveAnalysisProjection",
++        "AUTODOC_QDRANT_POINT_WRITE_ALLOWED",
++    ):
++        assert required in tool
++    combined = service + executor + tool
++    for forbidden in (
++        "Scheduler(",
++        "LaboratoryManager",
++        "create_collection(",
++        "delete_collection(",
++        "update_collection_aliases(",
++        "with_vectors=True",
++    ):
++        assert forbidden not in combined
+diff --git a/tools/probe_love_live_qdrant_projection_0287.py b/tools/probe_love_live_qdrant_projection_0287.py
+new file mode 100755
+index 0000000..b187670
+--- /dev/null
++++ b/tools/probe_love_live_qdrant_projection_0287.py
+@@ -0,0 +1,232 @@
++#!/usr/bin/env python3
++"""Preview or execute one controlled SQL -> E5 -> Qdrant projection probe."""
++
++from __future__ import annotations
++
++import argparse
++import asyncio
++import json
++import os
++from pathlib import Path
++import sys
++from typing import Sequence
++
++ROOT = Path(__file__).resolve().parents[1]
++SRC = ROOT / "src"
++if str(SRC) not in sys.path:
++    sys.path.insert(0, str(SRC))
++
++from context.love_live_qdrant_projection_probe_0287 import (  # noqa: E402
++    LoveLiveProjectionProbeGate,
++    LoveLiveProjectionProbeRequest,
++    build_love_live_projection_probe_plan,
++    execute_love_live_projection_probe,
++    inspect_love_live_projection_probe,
++)
++from context.love_manual_runtime_configuration_0287 import (  # noqa: E402
++    load_manual_installed_runtime_settings,
++)
++from context.love_postgresql_authority_binding_0287 import (  # noqa: E402
++    open_love_postgresql_authority,
++)
++from context.love_qdrant_live_analysis_projection_0287 import (  # noqa: E402
++    LoveQdrantLiveAnalysisProjection,
++    LoveQdrantLiveAnalysisProjectionSettings,
++)
++from inference.e5_pipeline import (  # noqa: E402
++    MultilingualE5SmallPipelineConfig,
++    build_multilingual_e5_small_pipeline,
++)
++from inference.e5_profile import MultilingualE5SmallLocalConfig  # noqa: E402
++from inference.qdrant_client_projection_executor import (  # noqa: E402
++    QdrantClientConnectionConfig,
++    QdrantClientEffectGate,
++    build_qdrant_client_projection_executor,
++)
++
++POINT_WRITE_ENV = "AUTODOC_QDRANT_POINT_WRITE_ALLOWED"
++
++
++def build_parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser(
++        description=(
++            "Preview or execute one real SQL-authoritative analysis projection "
++            "through OpenVINO E5 and the canonical named Qdrant collection."
++        )
++    )
++    parser.add_argument(
++        "--config",
++        default=".var/config/love_installed_runtime.ini",
++    )
++    parser.add_argument("--object-ref", required=True)
++    parser.add_argument("--revision-ref", required=True)
++    parser.add_argument("--branch-ref", required=True)
++    parser.add_argument("--project-ref", required=True)
++    parser.add_argument("--conversation-ref", required=True)
++    parser.add_argument("--specialist-ref", required=True)
++    parser.add_argument("--laboratory-ref", required=True)
++    parser.add_argument("--security-scope", required=True)
++    parser.add_argument("--projected-at", default="")
++    parser.add_argument(
++        "--policy-decision-id",
++        default="policy:love-live-projection-preview",
++    )
++    parser.add_argument(
++        "--operator-decision",
++        choices=("approve", "reject"),
++        default="reject",
++    )
++    parser.add_argument("--execute", action="store_true")
++    parser.add_argument("--confirm-plan-digest", default="")
++    parser.add_argument("--format", choices=("json", "summary"), default="json")
++    return parser
++
++
++def _truthy(value: str) -> bool:
++    return value.strip().casefold() in {"1", "true", "yes", "on"}
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = build_parser().parse_args(argv)
++    settings = load_manual_installed_runtime_settings(args.config)
++    qdrant = settings.qdrant
++    request = LoveLiveProjectionProbeRequest(
++        object_ref=args.object_ref,
++        revision_ref=args.revision_ref,
++        branch_ref=args.branch_ref,
++        project_ref=args.project_ref,
++        conversation_ref=args.conversation_ref,
++        specialist_ref=args.specialist_ref,
++        laboratory_ref=args.laboratory_ref,
++        security_scope=args.security_scope,
++        projected_at=args.projected_at,
++    )
++    plan = build_love_live_projection_probe_plan(
++        request,
++        collection_name=qdrant.physical_collection,
++        dense_vector_name=qdrant.dense_vector_name,
++        sparse_vector_name=qdrant.sparse_vector_name,
++        model_ref=settings.model_ref,
++        model_revision=settings.model_revision,
++        dimension=settings.openvino.dimension,
++    )
++    write_allowed = _truthy(os.environ.get(POINT_WRITE_ENV, ""))
++    authority_binding = open_love_postgresql_authority(settings)
++    executor = None
++    try:
++        readiness = inspect_love_live_projection_probe(
++            authority_binding.authority_store,
++            plan,
++        )
++        execution = None
++        if args.execute:
++            gate = LoveLiveProjectionProbeGate(
++                policy_decision_id=args.policy_decision_id,
++                operator_decision=args.operator_decision,
++                allow_write=write_allowed,
++                confirm_plan_digest=args.confirm_plan_digest,
++            )
++            gate.require_allows(plan)
++            if not readiness.ready:
++                raise RuntimeError(
++                    "live projection readiness failed: "
++                    + "; ".join(readiness.issues)
++                )
++
++            local = MultilingualE5SmallLocalConfig(
++                model_dir=settings.openvino.model_dir,
++                device=settings.openvino.device,
++            )
++            e5_bundle = build_multilingual_e5_small_pipeline(
++                MultilingualE5SmallPipelineConfig(
++                    local=local,
++                    require_model_exists=True,
++                )
++            )
++            connection = QdrantClientConnectionConfig(
++                url=qdrant.url,
++                timeout_seconds=qdrant.timeout_seconds,
++                grpc_port=qdrant.grpc_port,
++                prefer_grpc=False,
++                wait_for_write=True,
++                check_compatibility=True,
++            )
++            effect_gate = QdrantClientEffectGate(
++                policy_decision_id=args.policy_decision_id,
++                allow_write=True,
++                allow_search=True,
++            )
++            api_key = (
++                os.environ.get(qdrant.api_key_env, "")
++                if qdrant.api_key_env
++                else ""
++            )
++            executor = build_qdrant_client_projection_executor(
++                connection,
++                effect_gate,
++                api_key=api_key or None,
++            )
++            projector = LoveQdrantLiveAnalysisProjection(
++                pipeline=e5_bundle.pipeline,
++                writer=executor,
++                settings=LoveQdrantLiveAnalysisProjectionSettings(
++                    collection_name=qdrant.physical_collection,
++                    dense_vector_name=qdrant.dense_vector_name,
++                    sparse_vector_name=qdrant.sparse_vector_name,
++                    model_ref=settings.model_ref,
++                    model_revision=settings.model_revision,
++                    passage_prefix=settings.openvino.passage_prefix,
++                    dimension=settings.openvino.dimension,
++                ),
++            )
++            execution = asyncio.run(
++                execute_love_live_projection_probe(
++                    authority_binding.authority_store,
++                    projector,
++                    executor,
++                    plan,
++                    gate,
++                )
++            )
++
++        payload = {
++            "plan": plan.to_mapping(),
++            "readiness": readiness.to_mapping(),
++            "execution": execution.to_mapping() if execution else None,
++            "boundaries": {
++                "execute_requested": bool(args.execute),
++                "point_write_environment_allowed": write_allowed,
++                "preview_constructed_openvino": False,
++                "preview_constructed_qdrant_client": False,
++                "secret_value_serialized": False,
++                "vectors_serialized": False,
++                "authoritative_body_serialized": False,
++                "delete_performed": False,
++                "alias_mutated": False,
++            },
++        }
++    finally:
++        if executor is not None:
++            executor.close()
++        authority_binding.close()
++
++    if args.format == "json":
++        print(json.dumps(payload, indent=2, sort_keys=True))
++    else:
++        print(
++            " ".join(
++                (
++                    f"plan_digest={plan.plan_digest}",
++                    f"ready={readiness.ready}",
++                    f"execute={bool(args.execute)}",
++                    f"projected={execution is not None}",
++                    "vectors_serialized=False",
++                    "sql_remains_authority=True",
++                )
++            )
++        )
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

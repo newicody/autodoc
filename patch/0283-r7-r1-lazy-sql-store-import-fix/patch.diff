@@ -1,0 +1,252 @@
+diff --git a/PHASE0283_R7_R1_LAZY_SQL_STORE_IMPORT_FIX_REPORT.md b/PHASE0283_R7_R1_LAZY_SQL_STORE_IMPORT_FIX_REPORT.md
+new file mode 100644
+index 0000000..3f80d2a
+--- /dev/null
++++ b/PHASE0283_R7_R1_LAZY_SQL_STORE_IMPORT_FIX_REPORT.md
+@@ -0,0 +1,38 @@
++# Phase 0283-r7-r1 report — lazy SQL store import fix
++
++## Diagnosis
++
++The full suite had already registered a lightweight
++`context.sql_context_store` module in `sys.modules`. The r7 CLI imported
++`DbApiSqlContextStore` at module load time, so every readiness and projection
++test failed before CLI gate evaluation.
++
++The canonical repository module does expose `DbApiSqlContextStore` and
++`SqlContextStorePolicy`. The failure was caused by eager loading in a process
++whose test state already contained a stub, not by an absent production class.
++
++## Correction
++
++The CLI now imports the existing SQL store inside
++`_open_read_only_sql_store()` only. That function is reached exclusively for an
++authorized recall execute path after live readiness succeeds.
++
++```text
++sql_store_import_lazy: true
++readiness_imports_sql_store: false
++projection_imports_sql_store: false
++recall_preview_imports_sql_store: false
++recall_execute_imports_sql_store: true
++```
++
++## Boundaries
++
++```text
++runtime_behavior_changed: import timing only
++scheduler_modified: false
++new_runtime_module_added: false
++new_transport_added: false
++qdrant_effect_added: false
++sql_write_added: false
++projects_repository_change_required: false
++```
+diff --git a/doc/CHANGELOG_0283_R7_R1_LAZY_SQL_STORE_IMPORT_FIX.md b/doc/CHANGELOG_0283_R7_R1_LAZY_SQL_STORE_IMPORT_FIX.md
+new file mode 100644
+index 0000000..163d61b
+--- /dev/null
++++ b/doc/CHANGELOG_0283_R7_R1_LAZY_SQL_STORE_IMPORT_FIX.md
+@@ -0,0 +1,21 @@
++# Changelog 0283-r7-r1 — lazy SQL store import fix
++
++- Removed the SQL store import from CLI module initialization.
++- Imported the existing SQL store only when opening the read-only recall store.
++- Added a regression test with a pre-existing `sys.modules` stub.
++- Preserved all preview, readiness and authorization behavior.
++- Added no runtime component, transport or data effect.
++
++```text
++sql_store_import_lazy: true
++readiness_imports_sql_store: false
++projection_imports_sql_store: false
++recall_preview_imports_sql_store: false
++recall_execute_imports_sql_store: true
++scheduler_modified: false
++new_runtime_module_added: false
++new_transport_added: false
++qdrant_effect_added: false
++sql_write_added: false
++projects_repository_change_required: false
++```
+diff --git a/doc/manifests/MANIFEST_0283_R7_R1_LAZY_SQL_STORE_IMPORT_FIX.md b/doc/manifests/MANIFEST_0283_R7_R1_LAZY_SQL_STORE_IMPORT_FIX.md
+new file mode 100644
+index 0000000..780681c
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0283_R7_R1_LAZY_SQL_STORE_IMPORT_FIX.md
+@@ -0,0 +1,35 @@
++# Manifest 0283-r7-r1 — lazy SQL store import fix
++
++## Modified
++
++```text
++tools/run_qdrant_real_binding_0283.py
++tests/tools/test_run_qdrant_real_binding_0283.py
++```
++
++## Added
++
++```text
++tests/rules/test_qdrant_real_binding_cli_lazy_sql_store_import_0283_rule.py
++doc/manifests/MANIFEST_0283_R7_R1_LAZY_SQL_STORE_IMPORT_FIX.md
++doc/CHANGELOG_0283_R7_R1_LAZY_SQL_STORE_IMPORT_FIX.md
++PHASE0283_R7_R1_LAZY_SQL_STORE_IMPORT_FIX_REPORT.md
++```
++
++## Impact
++
++```text
++Repo autodoc: OUI
++Repo projects: NON
++sql_store_import_lazy: true
++readiness_imports_sql_store: false
++projection_imports_sql_store: false
++recall_preview_imports_sql_store: false
++recall_execute_imports_sql_store: true
++scheduler_modified: false
++new_runtime_module_added: false
++new_transport_added: false
++qdrant_effect_added: false
++sql_write_added: false
++projects_repository_change_required: false
++```
+diff --git a/tests/rules/test_qdrant_real_binding_cli_lazy_sql_store_import_0283_rule.py b/tests/rules/test_qdrant_real_binding_cli_lazy_sql_store_import_0283_rule.py
+new file mode 100644
+index 0000000..0a3b1cc
+--- /dev/null
++++ b/tests/rules/test_qdrant_real_binding_cli_lazy_sql_store_import_0283_rule.py
+@@ -0,0 +1,70 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools/run_qdrant_real_binding_0283.py"
++TEST = (
++    ROOT
++    / "tests/tools/"
++    "test_run_qdrant_real_binding_0283.py"
++)
++REPORT = (
++    ROOT
++    / "PHASE0283_R7_R1_LAZY_SQL_STORE_IMPORT_FIX_REPORT.md"
++)
++MANIFEST = (
++    ROOT
++    / "doc/manifests/"
++    "MANIFEST_0283_R7_R1_LAZY_SQL_STORE_IMPORT_FIX.md"
++)
++CHANGELOG = (
++    ROOT
++    / "doc/"
++    "CHANGELOG_0283_R7_R1_LAZY_SQL_STORE_IMPORT_FIX.md"
++)
++
++
++def test_sql_store_import_is_lazy() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++
++    function_pos = source.index("def _open_read_only_sql_store(")
++    import_pos = source.index(
++        "from context.sql_context_store import ("
++    )
++
++    assert import_pos > function_pos
++    assert source[:function_pos].count(
++        "from context.sql_context_store import ("
++    ) == 0
++
++
++def test_regression_covers_preexisting_stub_module() -> None:
++    source = TEST.read_text(encoding="utf-8")
++
++    assert (
++        "test_tool_import_ignores_preexisting_sql_store_stub"
++        in source
++    )
++    assert 'ModuleType("context.sql_context_store")' in source
++
++
++def test_fix_preserves_runtime_boundaries() -> None:
++    combined = "\n".join(
++        path.read_text(encoding="utf-8")
++        for path in (REPORT, MANIFEST, CHANGELOG)
++    )
++
++    for required in (
++        "sql_store_import_lazy: true",
++        "readiness_imports_sql_store: false",
++        "projection_imports_sql_store: false",
++        "recall_preview_imports_sql_store: false",
++        "recall_execute_imports_sql_store: true",
++        "scheduler_modified: false",
++        "new_runtime_module_added: false",
++        "new_transport_added: false",
++        "qdrant_effect_added: false",
++        "sql_write_added: false",
++        "projects_repository_change_required: false",
++    ):
++        assert required in combined
+diff --git a/tests/tools/test_run_qdrant_real_binding_0283.py b/tests/tools/test_run_qdrant_real_binding_0283.py
+index b632039..15ce92c 100644
+--- a/tests/tools/test_run_qdrant_real_binding_0283.py
++++ b/tests/tools/test_run_qdrant_real_binding_0283.py
+@@ -2,6 +2,8 @@ from __future__ import annotations
+ 
+ import importlib.util
+ import json
++import sys
++from types import ModuleType
+ from pathlib import Path
+ from types import SimpleNamespace
+ 
+@@ -106,6 +108,21 @@ def _embedding_file(tmp_path):
+     return path
+ 
+ 
++def test_tool_import_ignores_preexisting_sql_store_stub(monkeypatch):
++    stub = ModuleType("context.sql_context_store")
++    monkeypatch.setitem(
++        sys.modules,
++        "context.sql_context_store",
++        stub,
++    )
++
++    tool = _load_tool()
++
++    assert tool.CLI_REPORT_SCHEMA == (
++        "missipy.qdrant.real_binding_preview_first_cli.v1"
++    )
++
++
+ def test_default_is_local_readiness_only():
+     tool = _load_tool()
+     calls = []
+diff --git a/tools/run_qdrant_real_binding_0283.py b/tools/run_qdrant_real_binding_0283.py
+index 58d0d8f..661ba87 100755
+--- a/tools/run_qdrant_real_binding_0283.py
++++ b/tools/run_qdrant_real_binding_0283.py
+@@ -33,10 +33,6 @@ from context.scheduler_managed_qdrant_recall_binding_0283 import (  # noqa: E402
+     QdrantControlledSchedulerRecallCommand,
+     run_qdrant_controlled_scheduler_recall_binding,
+ )
+-from context.sql_context_store import (  # noqa: E402
+-    DbApiSqlContextStore,
+-    SqlContextStorePolicy,
+-)
+ from inference.qdrant_client_projection_executor import (  # noqa: E402
+     QdrantClientConnectionConfig,
+     QdrantClientEffectGate,
+@@ -474,7 +470,12 @@ def _validate_cli_gate(
+ 
+ def _open_read_only_sql_store(
+     path: Path,
+-) -> DbApiSqlContextStore:
++) -> Any:
++    from context.sql_context_store import (
++        DbApiSqlContextStore,
++        SqlContextStorePolicy,
++    )
++
+     resolved = path.expanduser().resolve()
+     if not resolved.is_file():
+         raise ValueError(

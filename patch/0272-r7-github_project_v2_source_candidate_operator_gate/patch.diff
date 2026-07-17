@@ -1,0 +1,2035 @@
+diff --git a/PHASE0272_GITHUB_PROJECT_V2_SOURCE_CANDIDATE_GATE_TEST_REPORT.md b/PHASE0272_GITHUB_PROJECT_V2_SOURCE_CANDIDATE_GATE_TEST_REPORT.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..4d16170a1ffa0734602b373149d2127e527d4faa
+--- /dev/null
++++ b/PHASE0272_GITHUB_PROJECT_V2_SOURCE_CANDIDATE_GATE_TEST_REPORT.md
+@@ -0,0 +1,46 @@
++# Phase 0272-r7 test report — ProjectV2 SourceCandidate operator gate
++
++## Scope
++
++- correction du readiness Project-native ;
++- pont repository-Issue GitHub Actions rendu explicitement optionnel ;
++- réutilisation de `SourceCandidateDecision` ;
++- gate locale par candidate ;
++- gate record immuable ;
++- refus des promotions/fusions pour retraits advisory ;
++- aucune écriture SQL/Qdrant et aucune mutation GitHub.
++
++## Review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: existing typed decision, immutable result, gate and IO boundary rules are sufficient
++live_path_status: transition
++live_path_uses_real_backend: n/a
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++non_stdlib_dependency_added: false
++```
++
++## Validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. python -m pytest -q tests/rules
++PYTHONPATH=src:. python -m pytest -q
++```
++
++Construction and fresh-application counts are recorded in the patch README.
++
++## Construction validation
++
++```text
++git diff --check: OK
++compileall synthetic r4/r5/r6/r7 workspace: OK
++complete synthetic r4/r5/r6/r7 suite: 38 passed
++runtime DOT syntax: OK
++canonical DOT syntax: OK
++network calls during gate tests: none
++```
+diff --git a/README.md b/README.md
+index 40752f77b60d6fa334ee6e20f8496e1d44893eba..004344d8357dd3784203c3e52317b5404423c268 100644
+--- a/README.md
++++ b/README.md
+@@ -200,18 +200,29 @@ The project grows by small, auditable patches and explicit gates.
+ 
+ ## GitHub ProjectV2 operator path
+ 
+-The current GitHub intake starts from the user ProjectV2 configured in
+-`config/github_project_v2_query_only.example.ini`.  It is operated with Python
+-commands and that configuration file only; there is no installation script and
+-no Scheduler-owned service lifecycle.
++The current intake is **Project-native**. It reads the user ProjectV2 configured
++in `config/github_project_v2_query_only.example.ini` directly through GraphQL
++query-only calls. A separate repository and GitHub Actions workflow are not
++required for ProjectV2 `DRAFT_ISSUE` items.
+ 
+-First export the token named by `github.token_env` in the configuration:
++```text
++GitHub ProjectV2 newicody/2
++-> query-only snapshot
++-> local snapshot diff
++-> SourceCandidate handoff batch
++-> explicit local operator gate
++```
++
++There is no installation script, deployment script or Scheduler-owned service
++lifecycle. Export the token named by `github.token_env`:
+ 
+ ```bash
+ export GITHUB_TOKEN='...'
+ ```
+ 
+-Test the local files and safety boundaries without contacting GitHub:
++### 1. Test the Project-native system
++
++Local safety/readiness check without network access:
+ 
+ ```bash
+ PYTHONPATH=src:. python \
+@@ -220,39 +231,22 @@ PYTHONPATH=src:. python \
+   --format summary
+ ```
+ 
+-Test the already-deployed ProjectV2 and GitHub Actions workflow through
+-query-only API calls:
++Live query-only ProjectV2 check:
+ 
+ ```bash
+ PYTHONPATH=src:. python \
+   tools/run_github_project_system_deployment_readiness_0272.py \
+   --config config/github_project_v2_query_only.example.ini \
+   --execute \
+-  --policy-decision-id policy:0272:deployment-readiness \
++  --policy-decision-id policy:0272:project-native-readiness \
+   --format summary
+ ```
+ 
+-The readiness command does not install files, deploy a workflow, dispatch an
+-Action, write a secret, or mutate GitHub. The complete manual configuration,
+-including repository settings, token scope, Actions permissions and the
+-important distinction between ProjectV2 drafts and repository Issues, is in:
+-
+-```text
+-doc/operator/GITHUB_PROJECT_ACTIONS_CONFIGURATION_0272.md
+-```
+-
+-Before the live check can be green, the operator must have copied the existing
+-templates into the configured external repository:
+-
+-```text
+-templates/github/autodoc-ticket-artifact.yml
+-  -> .github/workflows/autodoc-ticket-artifact.yml
+-
+-templates/github/scripts/build_autodoc_ticket_artifact.py
+-  -> scripts/build_autodoc_ticket_artifact.py
+-```
++With the default configuration, `system_ready=True` requires the local Python
++surfaces and the expected ProjectV2 identity. It does **not** require an external
++Issues repository or an Actions workflow.
+ 
+-The normal incoming flow is then launched explicitly:
++### 2. Run the inbound ProjectV2 chain
+ 
+ ```bash
+ PYTHONPATH=src:. python \
+@@ -276,9 +270,56 @@ PYTHONPATH=src:. python \
+   --format summary
+ ```
+ 
+-ProjectV2 is the canonical GitHub read source. The Actions artifact workflow
+-is a separately verified secondary exchange path for real repository Issue
+-events; a ProjectV2 `DRAFT_ISSUE` is handled by the direct GraphQL snapshot and
+-does not trigger that workflow. Local snapshots, change sets and SourceCandidate
+-handoffs remain under local authority. R6 does not write SQL or Qdrant; every
+-handoff is held for the future operator gate.
++The first r4 run may be a baseline. After a Project item changes, rerun snapshot,
++diff and handoff creation. The r6 summary gives a candidate count; the immutable
++handoff batch is written under `.var/github/project_v2/handoffs/`.
++
++### 3. Apply one explicit candidate decision
++
++Inspect a handoff batch JSON to obtain a `candidate_id`, then apply one existing
++`SourceCandidate` decision:
++
++```bash
++PYTHONPATH=src:. python \
++  tools/gate_github_project_v2_source_candidate_0272.py \
++  --config config/github_project_v2_query_only.example.ini \
++  --candidate-id ghpv2-... \
++  --action promote \
++  --reason "accepted for durable local ingestion" \
++  --execute \
++  --policy-decision-id policy:0272:source-candidate-gate \
++  --format summary
++```
++
++Allowed decisions are `inspect`, `relaunch`, `reject`, `archive`, `promote` and
++`merge`. `merge` also requires `--target-context-id`. Only `promote` and `merge`
++open a future durable-ingestion authorization; r7 itself still performs no SQL
++write or Qdrant projection. Removed Project items remain advisory and cannot be
++promoted or merged.
++
++### Optional repository-Issue Actions bridge
++
++The existing Actions template is a secondary path for real `issues` events in
++an external repository. It is not part of the required Project-native setup and
++it does not run for a ProjectV2-only draft.
++
++To verify an already deployed optional bridge, add:
++
++```bash
++PYTHONPATH=src:. python \
++  tools/run_github_project_system_deployment_readiness_0272.py \
++  --config config/github_project_v2_query_only.example.ini \
++  --execute \
++  --check-actions-bridge \
++  --policy-decision-id policy:0272:actions-bridge-readiness \
++  --format summary
++```
++
++This command only reads GitHub state. It does not copy a workflow, dispatch an
++Action, create a repository, install a service, commit, push or mutate GitHub.
++The optional bridge procedure and the Project-native distinction are documented
++in `doc/operator/GITHUB_PROJECT_ACTIONS_CONFIGURATION_0272.md`.
++
++Local snapshots, change sets, handoffs and decision records remain under local
++authority. GitHub is the workflow/review surface; SQL and Qdrant remain closed
++until the next accepted-ingestion phase.
+diff --git a/config/github_project_v2_query_only.example.ini b/config/github_project_v2_query_only.example.ini
+index 2692c558447162a4a82af0d70d79039608dcb8d1..53e48a48cc36dd10b28649aeeecaf24757845533 100644
+--- a/config/github_project_v2_query_only.example.ini
++++ b/config/github_project_v2_query_only.example.ini
+@@ -14,9 +14,9 @@ source_mode = project_v2_query_only_snapshot
+ # Kept only so the existing 0165 ConfigObj-style loader remains reusable.
+ # The Actions artifact path is secondary and is not contacted by the snapshot CLI.
+ [artifact_source]
+-# Manual operator configuration: replace this example with the real external
+-# idea repository, then keep artifact_source, safety and deployment_readiness
+-# repository values identical. See doc/operator/GITHUB_PROJECT_ACTIONS_CONFIGURATION_0272.md.
++# Optional repository-Issue/Actions bridge only. The ProjectV2-native path does
++# not contact this repository. Replace it only when intentionally enabling and
++# checking the secondary bridge; keep the three repository values identical.
+ repositories = newicody/autodoc-ideas
+ workflow_name = autodoc-ticket-artifact.yml
+ artifact_name_prefix = autodoc-ticket-artifact-
+@@ -57,7 +57,8 @@ copilot_opinion_policy = advisory_only
+ history_mode = append_only
+ 
+ [deployment_readiness]
+-# Query-only test of an already-installed/deployed system. This section never installs or deploys.
++# Query-only readiness. ProjectV2 is mandatory; the repository-Issue Actions
++# bridge is optional and checked only with --check-actions-bridge.
+ workflow_repository = newicody/autodoc-ideas
+ workflow_name = autodoc-ticket-artifact.yml
+ workflow_path = .github/workflows/autodoc-ticket-artifact.yml
+@@ -67,7 +68,7 @@ builder_template_path = templates/github/scripts/build_autodoc_ticket_artifact.p
+ snapshot_tool_path = tools/run_github_project_v2_query_only_snapshot_0272.py
+ change_detection_tool_path = tools/detect_github_project_v2_snapshot_changes_0272.py
+ report_dir = .var/reports
+-require_actions_deployment = true
++require_actions_deployment = false
+ 
+ [change_handoff]
+ # Local-only conversion of immutable change sets into SourceCandidate handoffs.
+@@ -76,3 +77,9 @@ handoff_dir = .var/github/project_v2/handoffs
+ max_handoffs = 100
+ include_removed = true
+ include_baseline = false
++
++[candidate_gate]
++# Project-native operator gate.  It reads r6 handoff batches and writes only
++# immutable local decision records.  SQL/Qdrant remain closed until r8.
++handoff_dir = .var/github/project_v2/handoffs
++decision_dir = .var/github/project_v2/decisions
+diff --git a/doc/CHANGELOG_0272_GITHUB_PROJECT_V2_SOURCE_CANDIDATE_GATE.md b/doc/CHANGELOG_0272_GITHUB_PROJECT_V2_SOURCE_CANDIDATE_GATE.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..6583e8d38603fa8f1c40e43fc3cee85a9ade0da1
+--- /dev/null
++++ b/doc/CHANGELOG_0272_GITHUB_PROJECT_V2_SOURCE_CANDIDATE_GATE.md
+@@ -0,0 +1,26 @@
++# Changelog — 0272-r7 ProjectV2 SourceCandidate operator gate
++
++## Added
++
++- gate locale d'une `SourceCandidate` issue d'un handoff r6 ;
++- réutilisation des décisions existantes inspect/relaunch/reject/archive/promote/merge ;
++- gate record immuable et adressé par contenu ;
++- refus de promouvoir ou fusionner un retrait advisory ;
++- CLI opérateur `gate_github_project_v2_source_candidate_0272.py` ;
++- tests de contrats, CLI et règles ;
++- graphe runtime et documentation d'architecture.
++
++## Changed
++
++- le mode ProjectV2 direct devient explicitement le mode principal ;
++- le readiness n'exige plus le pont GitHub Actions par défaut ;
++- `--check-actions-bridge` contrôle volontairement le pont secondaire ;
++- README et guide opérateur séparent ProjectV2 DraftIssues et repository Issues.
++
++## Boundaries
++
++- aucune mutation GitHub ;
++- aucun réseau dans r7 ;
++- aucune écriture SQL/Qdrant ;
++- aucune modification Scheduler/SHM ;
++- aucune dépendance non-stdlib.
+diff --git a/doc/architecture/GITHUB_PROJECT_V2_SOURCE_CANDIDATE_GATE_0272.md b/doc/architecture/GITHUB_PROJECT_V2_SOURCE_CANDIDATE_GATE_0272.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..30aaf88a868594f20698eafb7c9bb3e0d657a499
+--- /dev/null
++++ b/doc/architecture/GITHUB_PROJECT_V2_SOURCE_CANDIDATE_GATE_0272.md
+@@ -0,0 +1,62 @@
++# Gate opérateur des SourceCandidate ProjectV2 — 0272-r7
++
++## Décision
++
++0272-r7 réutilise le contrat de décision `SourceCandidate` existant pour appliquer
++une décision locale explicite à une candidate issue d'un lot r6.
++
++```text
++handoff batch r6
++-> candidate_id
++-> SourceCandidateDecision existante
++-> immutable local gate record
++-> future durable consumer r8
++```
++
++Aucun nouveau manager ou orchestrateur n'est ajouté.
++
++## Actions supportées
++
++```text
++inspect   -> analyzed, durable ingestion closed
++relaunch  -> analyzed, durable ingestion closed
++reject    -> rejected, durable ingestion closed
++archive   -> archived, durable ingestion closed
++promote   -> promoted, future durable ingestion allowed
++merge     -> merged, future durable ingestion allowed + target_context_id required
++```
++
++L'autorisation produite par `promote` ou `merge` n'est pas une écriture. R7
++conserve `sql_write_allowed=False`, `qdrant_write_allowed=False` et
++`durable_ingestion_performed=False`. R8 devra consommer explicitement le record.
++
++Un item ProjectV2 retiré est advisory et ne peut pas être promu ou fusionné.
++
++## Mode Project-native
++
++La correction r7 sépare le chemin principal du pont Actions :
++
++- ProjectV2 direct est obligatoire et query-only ;
++- le dépôt externe d'Issues et GitHub Actions sont optionnels ;
++- `require_actions_deployment=false` permet un readiness vert sans Actions ;
++- `--check-actions-bridge` vérifie explicitement le pont secondaire.
++
++## Effets
++
++Le cœur est pur. La CLI lit un lot r6 et écrit :
++
++- un gate record immuable adressé par contenu ;
++- un rapport opérateur atomique.
++
++Elle n'effectue aucun appel réseau, aucune écriture SQL/Qdrant, aucune mutation
++GitHub et aucune modification Scheduler/SHM.
++
++## État d'intégration
++
++```text
++live_path_status: transition
++live_path_uses_real_backend: n/a
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++```
+diff --git a/doc/code-rules/0272_github_project_v2_source_candidate_gate_rule.md b/doc/code-rules/0272_github_project_v2_source_candidate_gate_rule.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..3ed97930c0227b892d1aa95a8dd8b60351518d25
+--- /dev/null
++++ b/doc/code-rules/0272_github_project_v2_source_candidate_gate_rule.md
+@@ -0,0 +1,31 @@
++# Règle 0272-r7 — gate locale des SourceCandidate ProjectV2
++
++## Invariants
++
++1. La gate réutilise `SourceCandidateDecision` et
++   `apply_source_candidate_decision`.
++2. Une décision porte sur une candidate explicitement identifiée dans un lot r6.
++3. Le mode execute exige un `policy_decision_id` non vide.
++4. `merge` exige un `target_context_id`.
++5. Un retrait ProjectV2 est advisory et ne peut être promu ou fusionné.
++6. Seuls `promote` et `merge` autorisent un futur consommateur durable.
++7. R7 n'effectue pourtant aucune écriture SQL ou Qdrant.
++8. Le gate record est immuable et adressé par son contenu.
++9. La gate n'effectue aucun appel GitHub et aucune mutation distante.
++10. Le mode ProjectV2 natif ne dépend pas du pont Actions optionnel.
++11. `Scheduler.run()`, SHM, RouteProxy et ControlProxy restent inchangés.
++12. Aucune bibliothèque hors bibliothèque standard n'est ajoutée.
++
++## Revue code_rule
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: existing typed decision, immutable result, gate and IO boundary rules are sufficient
++live_path_status: transition
++live_path_uses_real_backend: n/a
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++non_stdlib_dependency_added: false
++```
+diff --git a/doc/docs/architecture/00_global.dot b/doc/docs/architecture/00_global.dot
+index ff6de2455a6fd646d1cb0456d4545a35d14b7c78..d13617d71c4b4fbe783a71777da1b359a23e2c00 100644
+--- a/doc/docs/architecture/00_global.dot
++++ b/doc/docs/architecture/00_global.dot
+@@ -23,10 +23,11 @@ digraph Global {
+     // explicit; EventBus and PassiveSupervisor are observation only; GitHub has
+     // no implicit remote mutation; OpenRC/OS/admin owns external processes.
+ 
+-    // ROADMAP_NOTE[phase0272_r6]:
+-    // Immutable ProjectV2 change sets are converted locally into bounded
+-    // SourceCandidate handoff batches. Every candidate remains behind a future
+-    // operator gate; no GitHub mutation, SQL write or Qdrant projection occurs.
++    // ROADMAP_NOTE[phase0272_r7]:
++    // ProjectV2 is the project-native query-only source. Repository-Issue
++    // GitHub Actions remain an optional bridge. Immutable r6 handoffs now pass
++    // through an explicit local SourceCandidateDecision gate; r7 still performs
++    // no GitHub mutation, SQL write or Qdrant projection.
+ 
+     compound=true;
+     splines=ortho;
+@@ -693,21 +694,21 @@ JSON artifacts", URL="inference/74_e5_phase4_closure.svg"];
+ 
+ 
+    subgraph cluster_0272_GITHUB_PROJECT_INBOUND_READINESS {
+-       label="0272 — GitHub ProjectV2 inbound + deployment readiness";
++       label="0272 — Project-native GitHub inbound + optional Actions bridge";
+        color="#455a64";
+        bgcolor="#eceff1";
+        node [fillcolor="#eceff1", color="#455a64"];
+ 
+        ProjectV2Snapshot0272 [label="0272-r3\nProjectV2 query-only\nimmutable snapshot"];
+        ProjectV2Changes0272 [label="0272-r4\nlocal snapshot diff\nno network"];
+-       DeploymentReadiness0272 [label="0272-r5\ninstallation/deployment test\nquery-only; no install"];
+-       ActionsTemplate0272 [label="GitHub Actions template\nsecondary exchange path"];
+-       ExternalWorkflow0272 [label="already-deployed workflow\nread-only verification"];
++       DeploymentReadiness0272 [label="0272-r5/r7\nProject-native readiness\nActions optional"];
++       ActionsTemplate0272 [label="optional GitHub Actions template\nrepository-Issue bridge"];
++       ExternalWorkflow0272 [label="optional deployed workflow\nread-only verification"];
+ 
+        ProjectV2Snapshot0272 -> ProjectV2Changes0272 [label="snapshots"];
+-       ProjectV2Changes0272 -> DeploymentReadiness0272 [style=dashed, label="operator gate"];
+-       ActionsTemplate0272 -> DeploymentReadiness0272 [label="local expected digest"];
+-       ExternalWorkflow0272 -> DeploymentReadiness0272 [label="REST GET only"];
++       ProjectV2Snapshot0272 -> DeploymentReadiness0272 [style=dashed, label="mandatory identity check"];
++       ActionsTemplate0272 -> DeploymentReadiness0272 [style=dotted, label="optional expected digest"];
++       ExternalWorkflow0272 -> DeploymentReadiness0272 [style=dotted, label="--check-actions-bridge"];
+    }
+ 
+    PrototypeDocs0270 -> ProjectV2Snapshot0272 [style=dashed, label="GitHub read path"];
+@@ -721,13 +722,15 @@ JSON artifacts", URL="inference/74_e5_phase4_closure.svg"];
+        ProjectChangeSet0272R6 [label="immutable local change set\nadded / changed / removed"];
+        SourceCandidateReuse0272R6 [label="reuse SourceCandidate\nbounded max_handoffs"];
+        HandoffBatch0272R6 [label="immutable handoff batch\nrequires operator gate"];
+-       FutureAcceptance0272R6 [label="0272-r7 future\naccept / reject / merge", style="rounded,dashed"];
++       SourceCandidateGate0272R7 [label="0272-r7\nexplicit local decision\ninspect / reject / promote / merge"];
++       GateRecord0272R7 [label="immutable gate record\ndurable permission only"];
+        FutureDurable0272R6 [label="0272-r8 future\nSQL authority -> Qdrant sql_ref", style="rounded,dashed"];
+ 
+        ProjectChangeSet0272R6 -> SourceCandidateReuse0272R6 [label="local only"];
+        SourceCandidateReuse0272R6 -> HandoffBatch0272R6 [label="deterministic candidates"];
+-       HandoffBatch0272R6 -> FutureAcceptance0272R6 [style=dashed, label="explicit decision"];
+-       FutureAcceptance0272R6 -> FutureDurable0272R6 [style=dashed, label="accepted only"];
++       HandoffBatch0272R6 -> SourceCandidateGate0272R7 [label="candidate_id + decision_id"];
++       SourceCandidateGate0272R7 -> GateRecord0272R7 [label="content-addressed"];
++       GateRecord0272R7 -> FutureDurable0272R6 [style=dashed, label="promote / merge only"];
+    }
+ 
+    ProjectV2Changes0272 -> ProjectChangeSet0272R6 [label="change_set_ref"];
+diff --git a/doc/docs/architecture/runtime/272_github_project_v2_source_candidate_gate.dot b/doc/docs/architecture/runtime/272_github_project_v2_source_candidate_gate.dot
+new file mode 100644
+index 0000000000000000000000000000000000000000..18037a8cb24863e077e1b0f8ece6549b5867730a
+--- /dev/null
++++ b/doc/docs/architecture/runtime/272_github_project_v2_source_candidate_gate.dot
+@@ -0,0 +1,26 @@
++digraph GitHubProjectV2SourceCandidateGate0272 {
++    rankdir=LR;
++    graph [fontname="Arial", fontsize=11, label="0272-r7 — Project-native SourceCandidate operator gate", labelloc=t];
++    node [shape=box, style="rounded,filled", fontname="Arial", fontsize=10, fillcolor="#e8f5e9", color="#2e7d32"];
++    edge [fontname="Arial", fontsize=9, arrowsize=0.7];
++
++    Project [label="GitHub ProjectV2 newicody/2\nquery-only source"];
++    Snapshot [label="r3 immutable snapshot"];
++    ChangeSet [label="r4 local change set"];
++    Handoff [label="r6 SourceCandidate\nhandoff batch"];
++    Gate [label="r7 explicit operator decision\nreuses SourceCandidateDecision"];
++    Record [label="immutable gate record\ncontent-addressed"];
++    Durable [label="r8 future\nSQL authority -> Qdrant sql_ref", style="rounded,dashed"];
++    Actions [label="optional repository-Issue\nActions artifact bridge", fillcolor="#fff8e1", color="#f9a825"];
++
++    Project -> Snapshot [label="GraphQL query only"];
++    Snapshot -> ChangeSet [label="local compare"];
++    ChangeSet -> Handoff [label="bounded conversion"];
++    Handoff -> Gate [label="candidate_id + decision_id"];
++    Gate -> Record [label="inspect / reject / promote / merge"];
++    Record -> Durable [style=dashed, label="promote or merge only"];
++    Actions -> Handoff [style=dotted, label="separate optional path"];
++
++    Gate -> Project [style=dashed, dir=none, label="no network / mutation"];
++    Gate -> Durable [style=dashed, dir=none, label="no SQL/Qdrant write in r7"];
++}
+diff --git a/doc/manifests/MANIFEST_0272_GITHUB_PROJECT_V2_SOURCE_CANDIDATE_GATE_CHANGED_FILES.md b/doc/manifests/MANIFEST_0272_GITHUB_PROJECT_V2_SOURCE_CANDIDATE_GATE_CHANGED_FILES.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..ae6f52a67fd673fbe787849b61730b693f9c49a4
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0272_GITHUB_PROJECT_V2_SOURCE_CANDIDATE_GATE_CHANGED_FILES.md
+@@ -0,0 +1,34 @@
++# Manifest — 0272-r7 ProjectV2 SourceCandidate operator gate
++
++## Modified
++
++- `README.md`
++- `config/github_project_v2_query_only.example.ini`
++- `src/context/github_project_system_deployment_readiness_0272.py`
++- `tools/run_github_project_system_deployment_readiness_0272.py`
++- `doc/operator/GITHUB_PROJECT_ACTIONS_CONFIGURATION_0272.md`
++- `doc/docs/architecture/00_global.dot`
++- `tests/context/test_github_project_system_deployment_readiness_0272.py`
++- `tests/tools/test_run_github_project_system_deployment_readiness_0272.py`
++
++## Added
++
++- `src/context/github_project_v2_source_candidate_gate_0272.py`
++- `tools/gate_github_project_v2_source_candidate_0272.py`
++- `tests/context/test_github_project_v2_source_candidate_gate_0272.py`
++- `tests/tools/test_gate_github_project_v2_source_candidate_0272.py`
++- `tests/rules/test_github_project_v2_source_candidate_gate_0272_rule.py`
++- `doc/architecture/GITHUB_PROJECT_V2_SOURCE_CANDIDATE_GATE_0272.md`
++- `doc/code-rules/0272_github_project_v2_source_candidate_gate_rule.md`
++- `doc/CHANGELOG_0272_GITHUB_PROJECT_V2_SOURCE_CANDIDATE_GATE.md`
++- `doc/releases/0272-r7-github-project-v2-source-candidate-operator-gate.md`
++- `doc/docs/architecture/runtime/272_github_project_v2_source_candidate_gate.dot`
++- `PHASE0272_GITHUB_PROJECT_V2_SOURCE_CANDIDATE_GATE_TEST_REPORT.md`
++
++## Explicitly unchanged
++
++- `src/scheduler.py`
++- `Scheduler.run()`
++- SQL store implementations
++- Qdrant projection/recall implementations
++- SHM, RouteProxy and ControlProxy
+diff --git a/doc/operator/GITHUB_PROJECT_ACTIONS_CONFIGURATION_0272.md b/doc/operator/GITHUB_PROJECT_ACTIONS_CONFIGURATION_0272.md
+index b80403d761e56e85479116bbf2450192f7ff7bc9..1ced834adfd55e3d7a07a5832a53f73d236be7ab 100644
+--- a/doc/operator/GITHUB_PROJECT_ACTIONS_CONFIGURATION_0272.md
++++ b/doc/operator/GITHUB_PROJECT_ACTIONS_CONFIGURATION_0272.md
+@@ -1,145 +1,58 @@
+-# Configuration opérateur GitHub ProjectV2 et GitHub Actions — phase 0272
++# Mode ProjectV2 natif et pont GitHub Actions optionnel — phase 0272
+ 
+-## Objet
++## Décision opérateur
+ 
+-Cette procédure configure manuellement les deux surfaces GitHub utilisées par
+-Autodoc/MissiPy :
++Le mode actuellement utilisé par Autodoc/MissiPy est le mode **Project-native** :
+ 
+ ```text
+-source canonique de lecture : ProjectV2 utilisateur newicody/2
+-surface secondaire          : workflow GitHub Actions dans un dépôt d'idées externe
++GitHub ProjectV2 utilisateur newicody/2
++-> lecture GraphQL query-only
++-> snapshots locaux immuables
++-> détection locale des changements
++-> SourceCandidate
++-> décision opérateur locale
+ ```
+ 
+-Aucun script d'installation ou de déploiement n'est fourni. Les scripts Python
+-du dépôt testent et utilisent une configuration existante ; ils ne créent pas
+-de dépôt, ne copient pas de workflow, ne modifient pas les permissions GitHub et
+-ne déclenchent pas d'Action.
++Ce chemin fonctionne avec des `DRAFT_ISSUE` du ProjectV2 et ne demande pas de
++dépôt d'idées externe, de workflow GitHub Actions ou de procédure d'installation.
+ 
+-## 1. Comprendre les deux chemins
++Le workflow présent dans `templates/github/` est une seconde capacité,
++optionnelle, destinée à transformer les événements `issues` d'un dépôt GitHub en
++artefacts Actions. Il ne constitue pas l'installation du mode ProjectV2.
+ 
+-### ProjectV2 direct
++## 1. Configuration minimale du mode Project-native
+ 
+-Le chemin principal lit le ProjectV2 utilisateur par GraphQL query-only :
++La configuration utilisée est :
+ 
+ ```text
+-https://github.com/users/newicody/projects/2
+-project_id = PVT_kwHOA3ouXM4Ba3Ar
++config/github_project_v2_query_only.example.ini
+ ```
+ 
+-Il récupère aussi les `DRAFT_ISSUE`, qui ne sont pas rattachées à un dépôt. Ce
+-chemin produit des snapshots locaux immuables.
+-
+-### GitHub Actions secondaire
+-
+-Le workflow fourni dans `templates/github/` écoute les événements `issues` d'un
+-dépôt GitHub externe. Il ne se déclenche pas lorsqu'une simple `DRAFT_ISSUE` est
+-créée ou modifiée dans le ProjectV2.
+-
+-Pour déclencher ce workflow, il faut créer ou modifier une vraie Issue dans le
+-dépôt externe configuré. Le workflow transforme l'événement en artefact JSON et
+-l'enregistre comme artefact GitHub Actions. Ce chemin reste secondaire et ne
+-remplace pas le snapshot ProjectV2 direct.
+-
+-## 2. Choisir le dépôt externe
+-
+-Choisir ou créer manuellement un dépôt GitHub dédié aux idées. Exemple :
+-
+-```text
+-newicody/autodoc-ideas
+-```
+-
+-Le dépôt Autodoc lui-même ne doit pas devenir la source d'ingestion de ses
+-propres artefacts. Le dépôt externe est une surface de travail et d'échange ; la
+-machine locale reste l'autorité.
+-
+-Reporter exactement le même nom de dépôt dans :
++Identité attendue :
+ 
+ ```ini
+-[artifact_source]
+-repositories = newicody/autodoc-ideas
+-
+-[safety]
+-allowed_repositories = newicody/autodoc-ideas
+-
+-[deployment_readiness]
+-workflow_repository = newicody/autodoc-ideas
+-```
+-
+-Remplacer l'exemple par le dépôt réellement choisi. Ces trois valeurs doivent
+-rester cohérentes.
+-
+-## 3. Copier manuellement les deux fichiers
+-
+-Depuis le dépôt Autodoc, copier le workflow et son builder dans le dépôt externe :
+-
+-```text
+-Autodoc                                             dépôt externe
+-templates/github/autodoc-ticket-artifact.yml     -> .github/workflows/autodoc-ticket-artifact.yml
+-templates/github/scripts/build_autodoc_ticket_artifact.py
+-                                                   -> scripts/build_autodoc_ticket_artifact.py
+-```
+-
+-Créer les répertoires `.github/workflows/` et `scripts/` dans le dépôt externe
+-si nécessaire, puis committer et pousser ces deux fichiers avec les outils Git
+-habituels de l'opérateur.
+-
+-Le script de readiness Autodoc ne fait pas cette copie et n'effectue aucun
+-`git commit` ou `git push`.
+-
+-## 4. Vérifier les réglages GitHub Actions
+-
+-Dans le dépôt externe, ouvrir :
+-
+-```text
+-Settings -> Actions -> General
+-```
+-
+-Vérifier que :
+-
+-- les Actions nécessaires sont autorisées ;
+-- les workflows peuvent utiliser `actions/checkout@v4` et
+-  `actions/upload-artifact@v4` ;
+-- les permissions par défaut du `GITHUB_TOKEN` restent en lecture ;
+-- aucune permission d'écriture n'est ajoutée au workflow ;
+-- aucun secret Autodoc n'est requis par le builder actuel.
+-
+-Le workflow versionné déclare seulement :
+-
+-```yaml
+-permissions:
+-  contents: read
+-  issues: read
+-  actions: read
++[project]
++owner = newicody
++number = 2
++project_id = PVT_kwHOA3ouXM4Ba3Ar
++view_number_hint = 2
+ ```
+ 
+-Il ne contient pas `workflow_dispatch` et ne peut donc pas être lancé à distance
+-par le système Autodoc.
+-
+-## 5. Configurer le token local
+-
+-Le token local est utilisé uniquement par les scripts query-only de snapshot et
+-de readiness. Il doit permettre de lire le ProjectV2 utilisateur et, pour le
+-test Actions, de lire le dépôt externe, ses workflows et leur contenu.
+-
+-Le nom de la variable vient de :
+-
+-```ini
+-[github]
+-token_env = GITHUB_TOKEN
+-```
++Le numéro de vue est un repère d'interface. L'identité durable est le couple
++`owner/number` vérifié avec le `project_id`.
+ 
+-Dans le terminal :
++Le token n'est jamais placé dans le `.ini` :
+ 
+ ```bash
+ export GITHUB_TOKEN='...'
+ ```
+ 
+-Ne jamais inscrire le token dans le fichier `.ini`, un rapport, un patch ou un
+-commit Git.
++Il doit permettre la lecture du ProjectV2. Les scripts interdisent les documents
++GraphQL contenant une mutation et ne sérialisent jamais le token.
+ 
+-## 6. Lancer le test de readiness
++## 2. Test du système Project-native
+ 
+-Test local sans réseau :
++Test local, sans réseau :
+ 
+ ```bash
+ PYTHONPATH=src:. python \
+@@ -148,40 +61,30 @@ PYTHONPATH=src:. python \
+   --format summary
+ ```
+ 
+-Test réel query-only :
++Test réel, query-only :
+ 
+ ```bash
+ PYTHONPATH=src:. python \
+   tools/run_github_project_system_deployment_readiness_0272.py \
+   --config config/github_project_v2_query_only.example.ini \
+   --execute \
+-  --policy-decision-id policy:0272:deployment-readiness \
++  --policy-decision-id policy:0272:project-native-readiness \
+   --format summary
+ ```
+ 
+-Le test distant vérifie le ProjectV2, l'existence du workflow, son état et la
+-correspondance entre les fichiers déployés et les templates locaux. Il ne répare
+-rien automatiquement.
+-
+-## 7. Tester le workflow Actions secondaire
+-
+-Créer ou modifier une vraie Issue dans le dépôt externe. Ouvrir ensuite :
++Avec `require_actions_deployment = false`, le résultat Project-native peut être
++vert même si aucun dépôt externe ou workflow Actions n'existe :
+ 
+ ```text
+-Actions -> autodoc-ticket-artifact
++project_read_ready=True
++actions_deployment_ready=False
++system_ready=True
+ ```
+ 
+-Le run doit produire au minimum :
++`actions_deployment_ready=False` n'est alors pas une panne ; cela signifie
++seulement que le pont secondaire n'a pas été demandé ou vérifié.
+ 
+-```text
+-autodoc-ticket-artifact-<run_id>
+-autodoc-ticket-artifact-bundle-<run_id>
+-```
+-
+-Une `DRAFT_ISSUE` créée uniquement dans le ProjectV2 ne déclenche pas ce run.
+-Elle doit apparaître dans le snapshot direct r3 à la place.
+-
+-## 8. Lancer le flux ProjectV2 entrant
++## 3. Flux entrant ProjectV2
+ 
+ ```bash
+ PYTHONPATH=src:. python \
+@@ -205,40 +108,111 @@ PYTHONPATH=src:. python \
+   --format summary
+ ```
+ 
+-Le troisième outil produit des `SourceCandidate` locales nécessitant une gate
+-opérateur future. Il n'écrit ni dans SQL ni dans Qdrant.
++Les handoffs sont écrits sous :
++
++```text
++.var/github/project_v2/handoffs/
++```
+ 
+-## 9. Diagnostic rapide
++Une décision est ensuite appliquée à une candidate précise :
+ 
+-### `project_read_ready=False`
++```bash
++PYTHONPATH=src:. python \
++  tools/gate_github_project_v2_source_candidate_0272.py \
++  --config config/github_project_v2_query_only.example.ini \
++  --candidate-id ghpv2-... \
++  --action inspect \
++  --reason "reviewed by operator" \
++  --execute \
++  --policy-decision-id policy:0272:source-candidate-gate \
++  --format summary
++```
++
++Les enregistrements de décision sont immuables et restent sous :
++
++```text
++.var/github/project_v2/decisions/
++```
++
++## 4. À quoi sert le pont Actions optionnel ?
++
++Le pont Actions s'applique seulement à une vraie Issue d'un dépôt :
++
++```text
++Issue repository event
++-> repository workflow
++-> JSON artifact
++-> future local artifact fetch/sync
++```
+ 
+-Vérifier le token, l'owner, le numéro du Project et son identifiant GraphQL.
++Un `DRAFT_ISSUE` créé uniquement dans le ProjectV2 n'est pas un événement Issue
++de dépôt et passe directement par la lecture GraphQL ProjectV2.
+ 
+-### `actions_deployment_ready=False`
++Ce pont peut être utile plus tard pour :
+ 
+-Vérifier :
++- récupérer un contexte enrichi par un workflow lié à une Issue réelle ;
++- transporter des artefacts versionnés entre GitHub et la machine locale ;
++- comparer le chemin ProjectV2 direct et le chemin Issue/Actions ;
++- déclencher une analyse GitHub-side sans accorder de droit d'écriture à Autodoc.
+ 
+-- le nom exact du dépôt externe dans les trois sections du `.ini` ;
+-- le chemin `.github/workflows/autodoc-ticket-artifact.yml` ;
+-- le chemin `scripts/build_autodoc_ticket_artifact.py` ;
+-- le commit/push manuel des deux fichiers ;
+-- l'activation des Actions dans le dépôt externe ;
+-- la capacité du token local à lire ce dépôt.
++Il reste facultatif tant que le travail est réalisé avec les drafts du ProjectV2.
+ 
+-### Aucun run après modification du Project
++## 5. Vérifier un pont Actions déjà déployé
++
++Pour demander explicitement ce contrôle :
++
++```bash
++PYTHONPATH=src:. python \
++  tools/run_github_project_system_deployment_readiness_0272.py \
++  --config config/github_project_v2_query_only.example.ini \
++  --execute \
++  --check-actions-bridge \
++  --policy-decision-id policy:0272:actions-bridge-readiness \
++  --format summary
++```
++
++Le script vérifie seulement par lecture :
++
++- le dépôt configuré ;
++- le workflow actif ;
++- le chemin du workflow ;
++- l'absence de `workflow_dispatch` ;
++- l'absence de permissions d'écriture ;
++- la correspondance avec les templates locaux.
++
++Il ne corrige et ne déploie rien.
++
++## 6. Déploiement manuel éventuel du pont
++
++Cette section ne concerne pas le mode Project-native minimal.
++
++Si un dépôt externe d'Issues est volontairement choisi, reporter son nom dans
++les sections `[artifact_source]`, `[safety]` et `[deployment_readiness]`, puis
++copier manuellement :
++
++```text
++templates/github/autodoc-ticket-artifact.yml
++-> .github/workflows/autodoc-ticket-artifact.yml
++
++templates/github/scripts/build_autodoc_ticket_artifact.py
++-> scripts/build_autodoc_ticket_artifact.py
++```
+ 
+-C'est normal pour une `DRAFT_ISSUE`. Le workflow écoute les Issues du dépôt
+-externe, pas les drafts du ProjectV2. Utiliser le snapshot GraphQL direct pour
+-les drafts ou convertir manuellement le draft en Issue du dépôt externe.
++Le commit et le push sont des opérations opérateur ordinaires. Aucun script
++Autodoc ne les effectue. Le workflow doit conserver des permissions de lecture
++et ne doit pas exposer `workflow_dispatch`.
+ 
+ ## Frontières
+ 
+ ```text
+-installation automatique : interdite
+-déploiement automatique  : interdit
+-workflow dispatch         : interdit
+-mutation GraphQL          : interdite
+-mutation GitHub distante  : interdite dans 0272
+-SQL/Qdrant                : interdits avant gate opérateur
+-Scheduler.run()           : inchangé
++mode ProjectV2 sans Actions : supporté et mode par défaut
++pont repository-Issue       : optionnel
++script d'installation       : absent
++script de déploiement        : absent
++déploiement automatique     : interdit
++workflow dispatch            : interdit
++mutation GraphQL             : interdite
++mutation GitHub distante     : interdite dans 0272
++SQL/Qdrant dans r7           : aucune écriture
++Scheduler.run() / SHM        : inchangés
+ ```
+diff --git a/doc/releases/0272-r7-github-project-v2-source-candidate-operator-gate.md b/doc/releases/0272-r7-github-project-v2-source-candidate-operator-gate.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..317a73b492f30f147a660c3a1762874eca414cb9
+--- /dev/null
++++ b/doc/releases/0272-r7-github-project-v2-source-candidate-operator-gate.md
+@@ -0,0 +1,36 @@
++# 0272-r7 — ProjectV2 SourceCandidate operator gate
++
++R7 ferme la gate locale entre les handoffs r6 et la future ingestion durable.
++Il corrige également le readiness : le mode ProjectV2 direct fonctionne sans
++installer ni déployer GitHub Actions.
++
++## Command
++
++```bash
++PYTHONPATH=src:. python \
++  tools/gate_github_project_v2_source_candidate_0272.py \
++  --config config/github_project_v2_query_only.example.ini \
++  --candidate-id ghpv2-... \
++  --action promote \
++  --reason "accepted by operator" \
++  --execute \
++  --policy-decision-id policy:0272:source-candidate-gate \
++  --format summary
++```
++
++## Result
++
++```text
++github_project_v2_source_candidate_gate_valid=True
++durable_ingestion_allowed=True
++durable_ingestion_performed=False
++external_call_performed=False
++sql_write_performed=False
++qdrant_write_performed=False
++remote_mutation_allowed=False
++```
++
++## Next
++
++0272-r8 consommera uniquement les gate records `promote` ou `merge`, écrira
++d'abord dans SQL autoritaire puis projettera dans Qdrant avec `payload.sql_ref`.
+diff --git a/src/context/github_project_system_deployment_readiness_0272.py b/src/context/github_project_system_deployment_readiness_0272.py
+index 2b9b09ca872046f65ae387b38a31570774dcc7d8..29dfdd13a9e99a2e9c62393148ae2e27ebef9066 100644
+--- a/src/context/github_project_system_deployment_readiness_0272.py
++++ b/src/context/github_project_system_deployment_readiness_0272.py
+@@ -260,8 +260,24 @@ def build_plan(
+     token_present: bool,
+ ) -> GitHubProjectSystemReadinessPlan:
+     issues = list(validate_config(config))
+-    issues.extend(f"local:{name}:missing" for name, ok in local_checks.items() if not ok)
+-    issues.extend(local_workflow_analysis.issues)
++    project_local_checks = {
++        "config",
++        "snapshot_tool",
++        "change_detection_tool",
++        "snapshot_dir_parent",
++        "report_dir_parent",
++    }
++    actions_local_checks = {"workflow_template", "builder_template"}
++    required_local_checks = set(project_local_checks)
++    if config.require_actions_deployment:
++        required_local_checks.update(actions_local_checks)
++    issues.extend(
++        f"local:{name}:missing"
++        for name in sorted(required_local_checks)
++        if not local_checks.get(name, False)
++    )
++    if config.require_actions_deployment:
++        issues.extend(local_workflow_analysis.issues)
+     if command.execute and not command.policy_decision_id.strip():
+         issues.append("gate:policy_decision_id:required")
+     if command.execute and not command.fixture_mode and not token_present:
+@@ -304,7 +320,22 @@ def close_result(
+ ) -> GitHubProjectSystemReadinessResult:
+     issues = list(plan.issues)
+     issues.extend(str(error) for error in errors)
+-    local_ready = all(plan.local_checks.values()) and plan.local_workflow_analysis.valid
++    project_local_checks = (
++        "config",
++        "snapshot_tool",
++        "change_detection_tool",
++        "snapshot_dir_parent",
++        "report_dir_parent",
++    )
++    project_local_ready = all(plan.local_checks.get(name, False) for name in project_local_checks)
++    actions_local_ready = (
++        plan.local_checks.get("workflow_template", False)
++        and plan.local_checks.get("builder_template", False)
++        and plan.local_workflow_analysis.valid
++    )
++    local_ready = project_local_ready and (
++        actions_local_ready or not plan.config.require_actions_deployment
++    )
+     project_read_ready = False
+     workflow_state = ""
+     workflow_path = ""
+@@ -367,6 +398,8 @@ def close_result(
+             "local_workflow": plan.local_workflow_analysis.to_json_dict(),
+             "remote_workflow": remote_workflow_analysis.to_json_dict() if remote_workflow_analysis else None,
+             "require_actions_deployment": plan.config.require_actions_deployment,
++            "project_native_ready": project_local_ready and project_read_ready,
++            "actions_bridge_optional": not plan.config.require_actions_deployment,
+             "boundaries": dict(plan.boundaries),
+         },
+     )
+diff --git a/src/context/github_project_v2_source_candidate_gate_0272.py b/src/context/github_project_v2_source_candidate_gate_0272.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..f18945a6446bce64a87e44f5da369bca8b285a60
+--- /dev/null
++++ b/src/context/github_project_v2_source_candidate_gate_0272.py
+@@ -0,0 +1,322 @@
++"""Operator gate for ProjectV2 SourceCandidate handoffs.
++
++This phase reuses the existing SourceCandidate decision contract.  It reads one
++immutable r6 handoff batch, applies one explicit local operator decision and
++produces one immutable gate record.  It performs no GitHub call, no SQL/Qdrant
++write and no Scheduler or SHM modification.
++"""
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++import hashlib
++import json
++from typing import Any, Mapping, Sequence
++
++from context.github_project_v2_change_handoff_0272 import HANDOFF_BATCH_SCHEMA
++from context.source_candidate import (
++    SourceCandidateDecision,
++    allowed_source_candidate_decisions,
++    apply_source_candidate_decision,
++)
++from context.source_candidate_store import source_candidate_store_snapshot_from_json_dict
++
++GATE_RECORD_SCHEMA = "missipy.github.project_v2_source_candidate_gate.v1"
++GATE_REPORT_SCHEMA = "missipy.github.project_v2_source_candidate_gate_report.v1"
++_APPROVING_ACTIONS = frozenset({"promote", "merge"})
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubProjectV2SourceCandidateGateCommand:
++    candidate_id: str
++    action: str
++    reason: str = ""
++    target_context_id: str | None = None
++    execute: bool = False
++    policy_decision_id: str = ""
++
++    def __post_init__(self) -> None:
++        if not self.candidate_id.strip():
++            raise ValueError("candidate_id is required")
++        if self.action not in allowed_source_candidate_decisions():
++            raise ValueError(
++                "action must be inspect, relaunch, reject, archive, promote or merge"
++            )
++        if self.action == "merge" and not (self.target_context_id or "").strip():
++            raise ValueError("target_context_id is required for merge")
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubProjectV2SourceCandidateGatePlan:
++    valid: bool
++    issues: tuple[str, ...]
++    execute: bool
++    policy_decision_id: str
++    handoff_batch_path: str
++    candidate_id: str
++    action: str
++    boundaries: Mapping[str, bool]
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubProjectV2SourceCandidateGateResult:
++    valid: bool
++    issues: tuple[str, ...]
++    execute: bool
++    policy_decision_id: str
++    handoff_batch_ref: str
++    handoff_ref: str
++    candidate_id: str
++    action: str
++    before_status: str
++    after_status: str
++    gate_ref: str
++    gate_path: str
++    durable_ingestion_allowed: bool
++    ingestion_mode: str
++    external_call_performed: bool = False
++    boundaries: Mapping[str, bool] = field(default_factory=dict)
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "schema": GATE_REPORT_SCHEMA,
++            "valid": self.valid,
++            "issues": list(self.issues),
++            "execute": self.execute,
++            "policy_decision_id": self.policy_decision_id,
++            "handoff_batch_ref": self.handoff_batch_ref,
++            "handoff_ref": self.handoff_ref,
++            "candidate_id": self.candidate_id,
++            "action": self.action,
++            "before_status": self.before_status,
++            "after_status": self.after_status,
++            "gate_ref": self.gate_ref,
++            "gate_path": self.gate_path,
++            "durable_ingestion_allowed": self.durable_ingestion_allowed,
++            "ingestion_mode": self.ingestion_mode,
++            "external_call_performed": self.external_call_performed,
++            "boundaries": dict(self.boundaries),
++        }
++
++    def to_summary(self) -> str:
++        return " ".join(
++            (
++                f"github_project_v2_source_candidate_gate_valid={self.valid}",
++                f"issues={len(self.issues)}",
++                f"execute={self.execute}",
++                f"candidate_id={self.candidate_id or '-'}",
++                f"action={self.action or '-'}",
++                f"status={self.before_status or '-'}->{self.after_status or '-'}",
++                f"gate_ref={self.gate_ref or '-'}",
++                f"durable_ingestion_allowed={self.durable_ingestion_allowed}",
++                f"ingestion_mode={self.ingestion_mode}",
++                "external_call_performed=False",
++                "sql_write_performed=False",
++                "qdrant_write_performed=False",
++                "remote_mutation_allowed=False",
++            )
++        )
++
++
++def build_gate_plan(
++    command: GitHubProjectV2SourceCandidateGateCommand,
++    *,
++    handoff_batch_path: str,
++) -> GitHubProjectV2SourceCandidateGatePlan:
++    issues: list[str] = []
++    if not handoff_batch_path.strip():
++        issues.append("handoff batch path is required")
++    if command.execute and not command.policy_decision_id.strip():
++        issues.append("policy_decision_id is required for execute mode")
++    return GitHubProjectV2SourceCandidateGatePlan(
++        valid=not issues,
++        issues=tuple(issues),
++        execute=command.execute,
++        policy_decision_id=command.policy_decision_id,
++        handoff_batch_path=handoff_batch_path,
++        candidate_id=command.candidate_id,
++        action=command.action,
++        boundaries=_boundaries(False),
++    )
++
++
++def validate_handoff_batch(payload: Mapping[str, Any]) -> tuple[str, ...]:
++    issues: list[str] = []
++    if str(payload.get("schema", "")) != HANDOFF_BATCH_SCHEMA:
++        issues.append("handoff batch schema mismatch")
++    if not str(payload.get("handoff_batch_ref", "")).startswith(
++        "github-project-v2-handoff-batch:"
++    ):
++        issues.append("handoff_batch_ref is invalid")
++    handoffs = payload.get("handoffs")
++    if not isinstance(handoffs, list):
++        issues.append("handoffs must be a list")
++    boundaries = _mapping(payload.get("boundaries"))
++    for key in (
++        "external_call_performed",
++        "graphql_mutation_allowed",
++        "remote_mutation_allowed",
++        "sql_write_allowed",
++        "qdrant_write_allowed",
++    ):
++        if boundaries.get(key) is not False:
++            issues.append(f"handoff batch boundary must forbid {key}")
++    return tuple(issues)
++
++
++def build_gate_record(
++    *,
++    handoff_batch: Mapping[str, Any],
++    command: GitHubProjectV2SourceCandidateGateCommand,
++) -> dict[str, Any]:
++    issues = validate_handoff_batch(handoff_batch)
++    if issues:
++        raise ValueError("; ".join(issues))
++    handoff = _find_handoff(handoff_batch, command.candidate_id)
++    if handoff is None:
++        raise ValueError(f"candidate not found in handoff batch: {command.candidate_id}")
++    if handoff.get("requires_operator_gate") is not True:
++        raise ValueError("handoff does not require an operator gate")
++    if handoff.get("durable_ingestion_allowed") is not False:
++        raise ValueError("ungated handoff must forbid durable ingestion")
++
++    change_kind = str(handoff.get("change_kind", ""))
++    if change_kind == "removed" and command.action in _APPROVING_ACTIONS:
++        raise ValueError("removed ProjectV2 items are advisory and cannot be promoted or merged")
++
++    candidate_payload = _mapping(handoff.get("candidate"))
++    snapshot = source_candidate_store_snapshot_from_json_dict(
++        {
++            "schema": "missipy.source_candidate.store.v1",
++            "repository": _candidate_repository(candidate_payload),
++            "metadata": {
++                "source": "github_project_v2_change_handoff_0272",
++                "handoff_batch_ref": str(handoff_batch.get("handoff_batch_ref", "")),
++            },
++            "candidates": [dict(candidate_payload)],
++        }
++    )
++    if len(snapshot.candidates) != 1:
++        raise ValueError("candidate reconstruction must produce exactly one candidate")
++    candidate_before = snapshot.candidates[0]
++    decision = SourceCandidateDecision(
++        action=command.action,
++        reason=command.reason,
++        target_context_id=command.target_context_id,
++    )
++    candidate_after = apply_source_candidate_decision(candidate_before, decision)
++    durable_allowed = command.action in _APPROVING_ACTIONS
++    ingestion_mode = command.action if durable_allowed else "none"
++    record: dict[str, Any] = {
++        "schema": GATE_RECORD_SCHEMA,
++        "kind": "github_project_v2_source_candidate_gate",
++        "policy_decision_id": command.policy_decision_id,
++        "handoff_batch_ref": str(handoff_batch.get("handoff_batch_ref", "")),
++        "handoff_ref": str(handoff.get("handoff_ref", "")),
++        "change_kind": change_kind,
++        "candidate_id": candidate_after.candidate_id,
++        "decision": decision.to_json_dict(),
++        "candidate_before": candidate_before.to_json_dict(),
++        "candidate_after": candidate_after.to_json_dict(),
++        "approval": {
++            "durable_ingestion_allowed": durable_allowed,
++            "ingestion_mode": ingestion_mode,
++            "target_context_id": command.target_context_id,
++            "durable_ingestion_performed": False,
++        },
++        "boundaries": _boundaries(durable_allowed),
++    }
++    digest = hashlib.sha256(_canonical_json(record).encode("utf-8")).hexdigest()[:16]
++    record["gate_ref"] = f"github-project-v2-source-candidate-gate:{digest}"
++    return record
++
++
++def close_gate_result(
++    plan: GitHubProjectV2SourceCandidateGatePlan,
++    *,
++    gate_record: Mapping[str, Any] | None,
++    gate_path: str,
++    errors: Sequence[str] = (),
++) -> GitHubProjectV2SourceCandidateGateResult:
++    issues = list(plan.issues)
++    issues.extend(str(error) for error in errors if str(error))
++    payload = dict(gate_record or {})
++    if plan.execute:
++        if not payload:
++            issues.append("execute mode must produce a gate record")
++        elif str(payload.get("schema", "")) != GATE_RECORD_SCHEMA:
++            issues.append("gate record schema mismatch")
++    elif payload:
++        issues.append("plan-only mode must not contain a gate record")
++    decision = _mapping(payload.get("decision"))
++    before = _mapping(payload.get("candidate_before"))
++    after = _mapping(payload.get("candidate_after"))
++    approval = _mapping(payload.get("approval"))
++    durable_allowed = bool(approval.get("durable_ingestion_allowed", False))
++    return GitHubProjectV2SourceCandidateGateResult(
++        valid=not issues,
++        issues=tuple(dict.fromkeys(issues)),
++        execute=plan.execute,
++        policy_decision_id=plan.policy_decision_id,
++        handoff_batch_ref=str(payload.get("handoff_batch_ref", "")),
++        handoff_ref=str(payload.get("handoff_ref", "")),
++        candidate_id=str(payload.get("candidate_id", plan.candidate_id)),
++        action=str(decision.get("action", plan.action)),
++        before_status=str(before.get("status", "")),
++        after_status=str(after.get("status", "")),
++        gate_ref=str(payload.get("gate_ref", "")),
++        gate_path=gate_path,
++        durable_ingestion_allowed=durable_allowed,
++        ingestion_mode=str(approval.get("ingestion_mode", "none")),
++        boundaries=_mapping(payload.get("boundaries")) or _boundaries(False),
++    )
++
++
++def _find_handoff(
++    handoff_batch: Mapping[str, Any],
++    candidate_id: str,
++) -> Mapping[str, Any] | None:
++    handoffs = handoff_batch.get("handoffs", [])
++    if not isinstance(handoffs, list):
++        return None
++    for handoff in handoffs:
++        if not isinstance(handoff, Mapping):
++            continue
++        candidate = _mapping(handoff.get("candidate"))
++        if str(candidate.get("candidate_id", "")) == candidate_id:
++            return handoff
++    return None
++
++
++def _candidate_repository(candidate: Mapping[str, Any]) -> str | None:
++    repository = _mapping(candidate.get("origin")).get("repository")
++    if repository is None:
++        return None
++    return str(repository)
++
++
++def _mapping(value: object) -> Mapping[str, Any]:
++    return value if isinstance(value, Mapping) else {}
++
++
++def _canonical_json(value: object) -> str:
++    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
++
++
++def _boundaries(durable_ingestion_allowed: bool) -> dict[str, bool]:
++    return {
++        "existing_source_candidate_decision_reused": True,
++        "operator_gate_applied": True,
++        "durable_ingestion_allowed": durable_ingestion_allowed,
++        "durable_ingestion_performed": False,
++        "external_call_performed": False,
++        "graphql_query_performed": False,
++        "graphql_mutation_allowed": False,
++        "remote_mutation_allowed": False,
++        "sql_write_allowed": False,
++        "sql_write_performed": False,
++        "qdrant_write_allowed": False,
++        "qdrant_write_performed": False,
++        "scheduler_modified": False,
++        "shm_modified": False,
++        "local_authority_preserved": True,
++    }
+diff --git a/tests/context/test_github_project_system_deployment_readiness_0272.py b/tests/context/test_github_project_system_deployment_readiness_0272.py
+index 1bbd4dd9376cbb74b654e285cbce23f677c899ea..737301499fb7bd872ba1076c75690863deef7b68 100644
+--- a/tests/context/test_github_project_system_deployment_readiness_0272.py
++++ b/tests/context/test_github_project_system_deployment_readiness_0272.py
+@@ -1,3 +1,5 @@
++from dataclasses import replace
++
+ from context.github_project_system_deployment_readiness_0272 import (
+     GitHubProjectSystemReadinessCommand,
+     GitHubProjectSystemReadinessConfig,
+@@ -61,7 +63,15 @@ def test_workflow_policy_rejects_dispatch_and_write() -> None:
+ def test_fixture_closes_green_readiness() -> None:
+     analysis = analyze_workflow(WORKFLOW, expected_builder_path="scripts/build_autodoc_ticket_artifact.py")
+     plan = build_plan(config(), GitHubProjectSystemReadinessCommand(True, "policy:test", True),
+-                      local_checks={"config": True, "workflow_template": True},
++                      local_checks={
++                          "config": True,
++                          "snapshot_tool": True,
++                          "change_detection_tool": True,
++                          "snapshot_dir_parent": True,
++                          "report_dir_parent": True,
++                          "workflow_template": True,
++                          "builder_template": True,
++                      },
+                       local_workflow_analysis=analysis, token_present=False)
+     result = close_result(
+         plan,
+@@ -74,3 +84,36 @@ def test_fixture_closes_green_readiness() -> None:
+     assert result.system_ready
+     assert not result.installation_performed
+     assert not result.deployment_performed
++
++
++def test_project_native_mode_is_ready_without_actions_bridge() -> None:
++    native = replace(config(), require_actions_deployment=False)
++    analysis = analyze_workflow(
++        WORKFLOW,
++        expected_builder_path="scripts/build_autodoc_ticket_artifact.py",
++    )
++    local_checks = {
++        "config": True,
++        "snapshot_tool": True,
++        "change_detection_tool": True,
++        "snapshot_dir_parent": True,
++        "report_dir_parent": True,
++        "workflow_template": False,
++        "builder_template": False,
++    }
++    plan = build_plan(
++        native,
++        GitHubProjectSystemReadinessCommand(True, "policy:project-native", True),
++        local_checks=local_checks,
++        local_workflow_analysis=analysis,
++        token_present=False,
++    )
++    result = close_result(
++        plan,
++        project_payload={"id": native.project_id, "number": 2, "url": native.project_url},
++    )
++    assert result.valid is True
++    assert result.project_read_ready is True
++    assert result.actions_deployment_ready is False
++    assert result.system_ready is True
++    assert result.details["actions_bridge_optional"] is True
+diff --git a/tests/context/test_github_project_v2_source_candidate_gate_0272.py b/tests/context/test_github_project_v2_source_candidate_gate_0272.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..91f824f7ffa394aacdd231895516de8271619bc1
+--- /dev/null
++++ b/tests/context/test_github_project_v2_source_candidate_gate_0272.py
+@@ -0,0 +1,184 @@
++from __future__ import annotations
++
++import pytest
++
++from context.github_project_v2_change_handoff_0272 import (
++    GitHubProjectV2ChangeHandoffPolicy,
++    build_change_handoff_batch,
++)
++from context.github_project_v2_snapshot_change_detection_0272 import CHANGE_SET_SCHEMA
++from context.github_project_v2_source_candidate_gate_0272 import (
++    GATE_RECORD_SCHEMA,
++    GitHubProjectV2SourceCandidateGateCommand,
++    build_gate_plan,
++    build_gate_record,
++    close_gate_result,
++)
++
++
++def _change_set() -> dict[str, object]:
++    return {
++        "schema": CHANGE_SET_SCHEMA,
++        "kind": "github_project_v2_snapshot_change_set",
++        "baseline": False,
++        "change_set_ref": "github-project-v2-change-set:0123456789abcdef",
++        "previous_snapshot_ref": "github-project-v2-snapshot:previous",
++        "current_snapshot_ref": "github-project-v2-snapshot:current",
++        "project": {
++            "id": "PVT_test",
++            "owner": "newicody",
++            "number": 2,
++            "title": "idea",
++            "url": "https://github.com/users/newicody/projects/2",
++        },
++        "items": {
++            "added": [
++                {
++                    "item_id": "PVTI_added",
++                    "item_type": "DRAFT_ISSUE",
++                    "content_id": "DI_added",
++                    "title": "Construire un chalouf",
++                    "body": "Étudier un levier et un contrepoids.",
++                    "status": "Todo",
++                    "repository": "",
++                    "number": 0,
++                    "url": "",
++                }
++            ],
++            "changed": [],
++            "removed": [
++                {
++                    "item_id": "PVTI_removed",
++                    "item_type": "DRAFT_ISSUE",
++                    "content_id": "DI_removed",
++                    "title": "Ancienne idée",
++                    "body": "Le retrait distant reste advisory.",
++                    "status": "Done",
++                    "repository": "",
++                    "number": 0,
++                    "url": "",
++                }
++            ],
++            "unchanged_ids": [],
++        },
++        "counts": {
++            "added_count": 1,
++            "changed_count": 0,
++            "removed_count": 1,
++            "unchanged_count": 0,
++        },
++        "boundaries": {
++            "external_call_performed": False,
++            "remote_mutation_allowed": False,
++            "sql_write_allowed": False,
++            "qdrant_write_allowed": False,
++        },
++    }
++
++
++def _batch() -> dict[str, object]:
++    return build_change_handoff_batch(
++        change_set=_change_set(),
++        policy=GitHubProjectV2ChangeHandoffPolicy(),
++    )
++
++
++def _candidate_id(batch: dict[str, object], change_kind: str) -> str:
++    handoffs = batch["handoffs"]
++    assert isinstance(handoffs, list)
++    handoff = next(item for item in handoffs if item["change_kind"] == change_kind)
++    return str(handoff["candidate"]["candidate_id"])
++
++
++def test_promote_reuses_existing_decision_and_opens_only_future_ingestion() -> None:
++    batch = _batch()
++    command = GitHubProjectV2SourceCandidateGateCommand(
++        candidate_id=_candidate_id(batch, "added"),
++        action="promote",
++        reason="preuve opérateur",
++        execute=True,
++        policy_decision_id="policy:0272:gate:promote",
++    )
++    record = build_gate_record(handoff_batch=batch, command=command)
++    assert record["schema"] == GATE_RECORD_SCHEMA
++    assert record["candidate_before"]["status"] == "new"
++    assert record["candidate_after"]["status"] == "promoted"
++    assert record["approval"] == {
++        "durable_ingestion_allowed": True,
++        "ingestion_mode": "promote",
++        "target_context_id": None,
++        "durable_ingestion_performed": False,
++    }
++    assert record["boundaries"]["sql_write_allowed"] is False
++    assert record["boundaries"]["qdrant_write_allowed"] is False
++    assert record["boundaries"]["remote_mutation_allowed"] is False
++
++
++def test_reject_closes_durable_ingestion() -> None:
++    batch = _batch()
++    command = GitHubProjectV2SourceCandidateGateCommand(
++        candidate_id=_candidate_id(batch, "added"),
++        action="reject",
++        reason="hors périmètre",
++        execute=True,
++        policy_decision_id="policy:0272:gate:reject",
++    )
++    record = build_gate_record(handoff_batch=batch, command=command)
++    assert record["candidate_after"]["status"] == "rejected"
++    assert record["approval"]["durable_ingestion_allowed"] is False
++    assert record["approval"]["ingestion_mode"] == "none"
++
++
++def test_merge_requires_target_context() -> None:
++    with pytest.raises(ValueError, match="target_context_id is required for merge"):
++        GitHubProjectV2SourceCandidateGateCommand(
++            candidate_id="ghpv2-test",
++            action="merge",
++            execute=True,
++            policy_decision_id="policy:test",
++        )
++
++
++def test_removed_item_cannot_be_promoted_or_merged() -> None:
++    batch = _batch()
++    removed_id = _candidate_id(batch, "removed")
++    for action, target in (("promote", None), ("merge", "ctx-existing")):
++        command = GitHubProjectV2SourceCandidateGateCommand(
++            candidate_id=removed_id,
++            action=action,
++            target_context_id=target,
++            execute=True,
++            policy_decision_id=f"policy:0272:gate:{action}",
++        )
++        with pytest.raises(ValueError, match="removed ProjectV2 items are advisory"):
++            build_gate_record(handoff_batch=batch, command=command)
++
++
++def test_execute_plan_requires_policy_decision_id() -> None:
++    command = GitHubProjectV2SourceCandidateGateCommand(
++        candidate_id="ghpv2-test",
++        action="inspect",
++        execute=True,
++    )
++    plan = build_gate_plan(command, handoff_batch_path="handoff.json")
++    assert plan.valid is False
++    assert "policy_decision_id is required for execute mode" in plan.issues
++
++
++def test_result_closure_reports_immutable_gate_without_side_effects() -> None:
++    batch = _batch()
++    command = GitHubProjectV2SourceCandidateGateCommand(
++        candidate_id=_candidate_id(batch, "added"),
++        action="inspect",
++        execute=True,
++        policy_decision_id="policy:0272:gate:inspect",
++    )
++    plan = build_gate_plan(command, handoff_batch_path="handoff.json")
++    record = build_gate_record(handoff_batch=batch, command=command)
++    result = close_gate_result(plan, gate_record=record, gate_path="decision.json")
++    assert result.valid is True
++    assert result.after_status == "analyzed"
++    assert result.durable_ingestion_allowed is False
++    assert result.external_call_performed is False
++    assert result.boundaries["sql_write_performed"] is False
++    assert result.boundaries["qdrant_write_performed"] is False
+diff --git a/tests/rules/test_github_project_v2_source_candidate_gate_0272_rule.py b/tests/rules/test_github_project_v2_source_candidate_gate_0272_rule.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..ffb1d5af7a85725b7791574422735f998456783d
+--- /dev/null
++++ b/tests/rules/test_github_project_v2_source_candidate_gate_0272_rule.py
+@@ -0,0 +1,59 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++CORE = ROOT / "src/context/github_project_v2_source_candidate_gate_0272.py"
++CLI = ROOT / "tools/gate_github_project_v2_source_candidate_0272.py"
++README = ROOT / "README.md"
++OPERATOR = ROOT / "doc/operator/GITHUB_PROJECT_ACTIONS_CONFIGURATION_0272.md"
++GLOBAL = ROOT / "doc/docs/architecture/00_global.dot"
++RUNTIME = ROOT / "doc/docs/architecture/runtime/272_github_project_v2_source_candidate_gate.dot"
++
++
++def test_gate_reuses_existing_decision_contract_and_has_no_network_backend_imports() -> None:
++    core = CORE.read_text(encoding="utf-8")
++    cli = CLI.read_text(encoding="utf-8")
++    assert "SourceCandidateDecision" in core
++    assert "apply_source_candidate_decision" in core
++    forbidden_imports = (
++        "import urllib",
++        "from urllib",
++        "import requests",
++        "from requests",
++        "import qdrant_client",
++        "from qdrant_client",
++        "import psycopg",
++        "from psycopg",
++        "import sqlite3",
++        "import openvino",
++        "from openvino",
++        "from scheduler",
++        "import scheduler",
++        "from context.route_proxy",
++        "from context.control_proxy",
++    )
++    for forbidden in forbidden_imports:
++        assert forbidden not in core
++        assert forbidden not in cli
++
++
++
++def test_project_native_mode_does_not_require_actions_bridge() -> None:
++    readme = README.read_text(encoding="utf-8")
++    operator = OPERATOR.read_text(encoding="utf-8")
++    assert "Actions workflow are not\nrequired" in readme
++    assert "--check-actions-bridge" in readme
++    assert "mode **Project-native**" in operator
++    assert "require_actions_deployment = false" in operator
++    assert "pont secondaire" in operator
++
++
++def test_gate_graph_is_connected_to_r6_and_future_r8() -> None:
++    global_graph = GLOBAL.read_text(encoding="utf-8")
++    runtime_graph = RUNTIME.read_text(encoding="utf-8")
++    assert "SourceCandidateGate0272R7" in global_graph
++    assert "HandoffBatch0272R6 -> SourceCandidateGate0272R7" in global_graph
++    assert "GateRecord0272R7 -> FutureDurable0272R6" in global_graph
++    assert "Handoff -> Gate" in runtime_graph
++    assert "Record -> Durable" in runtime_graph
+diff --git a/tests/tools/test_gate_github_project_v2_source_candidate_0272.py b/tests/tools/test_gate_github_project_v2_source_candidate_0272.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..926dfbd73b7719817f3c9f13d43352ddc7602a14
+--- /dev/null
++++ b/tests/tools/test_gate_github_project_v2_source_candidate_0272.py
+@@ -0,0 +1,106 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++import subprocess
++import sys
++
++from context.github_project_v2_change_handoff_0272 import (
++    GitHubProjectV2ChangeHandoffPolicy,
++    build_change_handoff_batch,
++)
++from context.github_project_v2_snapshot_change_detection_0272 import CHANGE_SET_SCHEMA
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools/gate_github_project_v2_source_candidate_0272.py"
++
++
++def _batch() -> dict[str, object]:
++    change_set = {
++        "schema": CHANGE_SET_SCHEMA,
++        "kind": "github_project_v2_snapshot_change_set",
++        "baseline": False,
++        "change_set_ref": "github-project-v2-change-set:0123456789abcdef",
++        "previous_snapshot_ref": "github-project-v2-snapshot:previous",
++        "current_snapshot_ref": "github-project-v2-snapshot:current",
++        "project": {
++            "id": "PVT_test",
++            "owner": "newicody",
++            "number": 2,
++            "title": "idea",
++            "url": "https://github.com/users/newicody/projects/2",
++        },
++        "items": {
++            "added": [{
++                "item_id": "PVTI_1",
++                "item_type": "DRAFT_ISSUE",
++                "content_id": "DI_1",
++                "title": "Test gate",
++                "body": "Local only",
++                "status": "Todo",
++                "repository": "",
++                "number": 0,
++                "url": "",
++            }],
++            "changed": [],
++            "removed": [],
++            "unchanged_ids": [],
++        },
++        "counts": {"added_count": 1, "changed_count": 0, "removed_count": 0},
++        "boundaries": {
++            "external_call_performed": False,
++            "remote_mutation_allowed": False,
++            "sql_write_allowed": False,
++            "qdrant_write_allowed": False,
++        },
++    }
++    return build_change_handoff_batch(
++        change_set=change_set,
++        policy=GitHubProjectV2ChangeHandoffPolicy(),
++    )
++
++
++def test_cli_execute_writes_immutable_local_gate_record(tmp_path: Path) -> None:
++    handoff_dir = tmp_path / "handoffs"
++    decision_dir = tmp_path / "decisions"
++    handoff_dir.mkdir()
++    batch = _batch()
++    batch_path = handoff_dir / "project-v2-handoff-batch-test.json"
++    batch_path.write_text(json.dumps(batch, indent=2) + "\n", encoding="utf-8")
++    candidate_id = batch["handoffs"][0]["candidate"]["candidate_id"]
++    config = tmp_path / "config.ini"
++    config.write_text(
++        "\n".join((
++            "[candidate_gate]",
++            f"handoff_dir = {handoff_dir}",
++            f"decision_dir = {decision_dir}",
++            "",
++        )),
++        encoding="utf-8",
++    )
++    report = tmp_path / "report.json"
++    command = [
++        sys.executable,
++        str(TOOL),
++        "--config", str(config),
++        "--candidate-id", str(candidate_id),
++        "--action", "promote",
++        "--reason", "operator approved",
++        "--execute",
++        "--policy-decision-id", "policy:0272:test:gate",
++        "--output", str(report),
++        "--format", "summary",
++    ]
++    first = subprocess.run(command, cwd=ROOT, text=True, capture_output=True)
++    assert first.returncode == 0, first.stderr + first.stdout
++    payload = json.loads(report.read_text(encoding="utf-8"))
++    assert payload["valid"] is True
++    assert payload["durable_ingestion_allowed"] is True
++    assert payload["external_call_performed"] is False
++    gate_path = Path(payload["gate_path"])
++    assert gate_path.is_file()
++    before = gate_path.read_text(encoding="utf-8")
++
++    second = subprocess.run(command, cwd=ROOT, text=True, capture_output=True)
++    assert second.returncode == 0, second.stderr + second.stdout
++    assert gate_path.read_text(encoding="utf-8") == before
+diff --git a/tests/tools/test_run_github_project_system_deployment_readiness_0272.py b/tests/tools/test_run_github_project_system_deployment_readiness_0272.py
+index 27dd1857b400fbc174fa2dd96904075275c16c4d..41400665e253c833be0ad8965ef295c54f69cdd4 100644
+--- a/tests/tools/test_run_github_project_system_deployment_readiness_0272.py
++++ b/tests/tools/test_run_github_project_system_deployment_readiness_0272.py
+@@ -29,3 +29,30 @@ def test_cli_fixture_is_green(tmp_path: Path) -> None:
+     assert payload["external_call_performed"] is False
+     assert payload["installation_performed"] is False
+     assert payload["deployment_performed"] is False
++
++
++def test_cli_can_explicitly_verify_optional_actions_bridge(tmp_path: Path) -> None:
++    root = Path(__file__).resolve().parents[2]
++    workflow = (root / "templates/github/autodoc-ticket-artifact.yml").read_text()
++    builder = (root / "templates/github/scripts/build_autodoc_ticket_artifact.py").read_text()
++    fixture = tmp_path / "fixture-actions.json"
++    fixture.write_text(json.dumps({
++        "project": {"id": "PVT_kwHOA3ouXM4Ba3Ar", "number": 2,
++                    "url": "https://github.com/users/newicody/projects/2"},
++        "workflow": {"state": "active", "path": ".github/workflows/autodoc-ticket-artifact.yml"},
++        "workflow_content": workflow,
++        "builder_content": builder,
++    }))
++    output = tmp_path / "report-actions.json"
++    completed = subprocess.run([
++        sys.executable, "tools/run_github_project_system_deployment_readiness_0272.py",
++        "--config", "config/github_project_v2_query_only.example.ini",
++        "--execute", "--check-actions-bridge",
++        "--policy-decision-id", "policy:test:actions-bridge",
++        "--fixture-json", str(fixture), "--output", str(output), "--format", "summary",
++    ], cwd=root, text=True, capture_output=True)
++    assert completed.returncode == 0, completed.stderr + completed.stdout
++    payload = json.loads(output.read_text())
++    assert payload["system_ready"] is True
++    assert payload["actions_deployment_ready"] is True
++    assert payload["details"]["require_actions_deployment"] is True
+diff --git a/tools/gate_github_project_v2_source_candidate_0272.py b/tools/gate_github_project_v2_source_candidate_0272.py
+new file mode 100755
+index 0000000000000000000000000000000000000000..db7ddd59b5c6144b503cf0475c360629fa067ee1
+--- /dev/null
++++ b/tools/gate_github_project_v2_source_candidate_0272.py
+@@ -0,0 +1,168 @@
++#!/usr/bin/env python3
++"""Apply one local operator decision to one ProjectV2 SourceCandidate handoff."""
++from __future__ import annotations
++
++import argparse
++import configparser
++import json
++from pathlib import Path
++import sys
++from typing import Any, Mapping, Sequence
++
++_REPO_ROOT = Path(__file__).resolve().parents[1]
++_SRC_ROOT = _REPO_ROOT / "src"
++if str(_SRC_ROOT) not in sys.path:
++    sys.path.insert(0, str(_SRC_ROOT))
++
++from context.github_project_v2_source_candidate_gate_0272 import (  # noqa: E402
++    GitHubProjectV2SourceCandidateGateCommand,
++    build_gate_plan,
++    build_gate_record,
++    close_gate_result,
++)
++from context.source_candidate import allowed_source_candidate_decisions  # noqa: E402
++
++_DEFAULT_CONFIG = Path("config/github_project_v2_query_only.example.ini")
++_DEFAULT_REPORT = Path(".var/reports/github_project_v2_source_candidate_gate_0272.json")
++
++
++def parse_args(argv: Sequence[str]) -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--config", type=Path, default=_DEFAULT_CONFIG)
++    parser.add_argument("--handoff-batch", type=Path)
++    parser.add_argument("--candidate-id", required=True)
++    parser.add_argument("--action", required=True, choices=allowed_source_candidate_decisions())
++    parser.add_argument("--reason", default="")
++    parser.add_argument("--target-context-id")
++    parser.add_argument("--execute", action="store_true")
++    parser.add_argument("--policy-decision-id", default="")
++    parser.add_argument("--output", type=Path, default=_DEFAULT_REPORT)
++    parser.add_argument("--format", choices=("summary", "json"), default="summary")
++    return parser.parse_args(argv)
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = parse_args(tuple(sys.argv[1:] if argv is None else argv))
++    config = _load_config(args.config)
++    handoff_path, selection_issues = _select_handoff_batch(
++        explicit=args.handoff_batch,
++        handoff_dir=config["handoff_dir"],
++    )
++    command = GitHubProjectV2SourceCandidateGateCommand(
++        candidate_id=args.candidate_id,
++        action=args.action,
++        reason=args.reason,
++        target_context_id=args.target_context_id,
++        execute=args.execute,
++        policy_decision_id=args.policy_decision_id,
++    )
++    plan = build_gate_plan(
++        command,
++        handoff_batch_path=str(handoff_path or ""),
++    )
++    gate_record: Mapping[str, Any] | None = None
++    gate_path = ""
++    errors = list(selection_issues)
++    if args.execute and plan.valid and handoff_path is not None and not errors:
++        try:
++            handoff_batch = _read_json(handoff_path)
++            gate_record = build_gate_record(
++                handoff_batch=handoff_batch,
++                command=command,
++            )
++            gate_path = str(
++                _write_immutable_gate_record(
++                    Path(config["decision_dir"]),
++                    gate_record,
++                )
++            )
++        except (OSError, ValueError, json.JSONDecodeError) as exc:
++            errors.append(f"{type(exc).__name__}:{exc}")
++    result = close_gate_result(
++        plan,
++        gate_record=gate_record,
++        gate_path=gate_path,
++        errors=errors,
++    )
++    payload = result.to_json_dict()
++    _write_json_atomic(_repo_path(str(args.output)), payload)
++    print(json.dumps(payload, indent=2, sort_keys=True) if args.format == "json" else result.to_summary())
++    return 0 if result.valid else 2
++
++
++def _load_config(path: Path) -> dict[str, Path]:
++    parser = configparser.ConfigParser(interpolation=None)
++    if not parser.read(path, encoding="utf-8"):
++        raise ValueError(f"config not found: {path}")
++    gate = parser["candidate_gate"]
++    return {
++        "handoff_dir": _repo_path(gate.get("handoff_dir", ".var/github/project_v2/handoffs")),
++        "decision_dir": _repo_path(gate.get("decision_dir", ".var/github/project_v2/decisions")),
++    }
++
++
++def _select_handoff_batch(
++    *,
++    explicit: Path | None,
++    handoff_dir: Path,
++) -> tuple[Path | None, tuple[str, ...]]:
++    if explicit is not None:
++        return _repo_path(str(explicit)), ()
++    if not handoff_dir.exists():
++        return None, (f"handoff directory not found: {handoff_dir}",)
++    candidates = [
++        path
++        for path in handoff_dir.glob("project-v2-handoff-batch-*.json")
++        if path.is_file()
++    ]
++    candidates.sort(key=lambda path: (path.stat().st_mtime_ns, path.name))
++    if not candidates:
++        return None, (f"no ProjectV2 handoff batches found in {handoff_dir}",)
++    return candidates[-1], ()
++
++
++def _read_json(path: Path) -> Mapping[str, Any]:
++    payload = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(payload, Mapping):
++        raise ValueError(f"handoff batch must be a JSON object: {path}")
++    return payload
++
++
++def _write_immutable_gate_record(
++    output_dir: Path,
++    payload: Mapping[str, Any],
++) -> Path:
++    gate_ref = str(payload.get("gate_ref", ""))
++    digest = gate_ref.rsplit(":", 1)[-1]
++    if not digest:
++        raise ValueError("gate_ref missing")
++    output_dir.mkdir(parents=True, exist_ok=True)
++    path = output_dir / f"project-v2-source-candidate-gate-{digest}.json"
++    serialized = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
++    if path.exists():
++        if path.read_text(encoding="utf-8") != serialized:
++            raise ValueError(f"immutable gate-record collision: {path}")
++        return path
++    temporary = path.with_suffix(path.suffix + ".tmp")
++    temporary.write_text(serialized, encoding="utf-8")
++    temporary.replace(path)
++    return path
++
++
++def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    temporary = path.with_suffix(path.suffix + ".tmp")
++    temporary.write_text(
++        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
++        encoding="utf-8",
++    )
++    temporary.replace(path)
++
++
++def _repo_path(value: str) -> Path:
++    path = Path(value).expanduser()
++    return path if path.is_absolute() else _REPO_ROOT / path
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())
+diff --git a/tools/run_github_project_system_deployment_readiness_0272.py b/tools/run_github_project_system_deployment_readiness_0272.py
+index 423af4a3b168ab28a5ad68d7e4e9fa1b3ddd379f..cfb089fddb378bec933a8a6453d18e1d29b3cce1 100755
+--- a/tools/run_github_project_system_deployment_readiness_0272.py
++++ b/tools/run_github_project_system_deployment_readiness_0272.py
+@@ -5,6 +5,7 @@ from __future__ import annotations
+ import argparse
+ import base64
+ import configparser
++from dataclasses import replace
+ import json
+ import os
+ from pathlib import Path
+@@ -40,6 +41,11 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+     parser.add_argument("--execute", action="store_true")
+     parser.add_argument("--policy-decision-id", default="")
+     parser.add_argument("--fixture-json", type=Path, default=None)
++    parser.add_argument(
++        "--check-actions-bridge",
++        action="store_true",
++        help="Also verify the optional repository-Issue GitHub Actions bridge.",
++    )
+     parser.add_argument("--output", type=Path, default=_DEFAULT_OUTPUT)
+     parser.add_argument("--format", choices=("summary", "json"), default="summary")
+     return parser.parse_args(argv)
+@@ -48,6 +54,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+ def main(argv: Sequence[str] | None = None) -> int:
+     args = parse_args(tuple(sys.argv[1:] if argv is None else argv))
+     config = _load_config(args.config)
++    if args.check_actions_bridge and not config.require_actions_deployment:
++        config = replace(config, require_actions_deployment=True)
+     local_paths = {
+         "config": args.config,
+         "workflow_template": _repo_path(config.workflow_template_path),
+@@ -92,19 +100,24 @@ def main(argv: Sequence[str] | None = None) -> int:
+                 token = os.environ[config.token_env]
+                 external_call_performed = True
+                 project_payload = _query_project(config, token)
+-                workflow_payload = _get_json(
+-                    config.api_url,
+-                    token,
+-                    f"/repos/{config.workflow_repository}/actions/workflows/{quote(config.workflow_name, safe='')}",
+-                )
+-                remote_workflow_text = _get_repository_text(
+-                    config, token, config.workflow_path
++                if config.require_actions_deployment:
++                    workflow_payload = _get_json(
++                        config.api_url,
++                        token,
++                        f"/repos/{config.workflow_repository}/actions/workflows/{quote(config.workflow_name, safe='')}",
++                    )
++                    remote_workflow_text = _get_repository_text(
++                        config, token, config.workflow_path
++                    )
++                    remote_builder = _get_repository_bytes(config, token, config.builder_path)
++                else:
++                    remote_workflow_text = ""
++                    remote_builder = b""
++            if workflow_payload is not None:
++                remote_analysis = analyze_workflow(
++                    remote_workflow_text, expected_builder_path=config.builder_path
+                 )
+-                remote_builder = _get_repository_bytes(config, token, config.builder_path)
+-            remote_analysis = analyze_workflow(
+-                remote_workflow_text, expected_builder_path=config.builder_path
+-            )
+-            remote_builder_sha256 = sha256_bytes(remote_builder)
++                remote_builder_sha256 = sha256_bytes(remote_builder)
+         except (OSError, ValueError, KeyError, RuntimeError) as exc:
+             errors.append(f"{type(exc).__name__}:{exc}")
+     result = close_result(

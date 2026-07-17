@@ -1,0 +1,550 @@
+diff --git a/PHASE0254_SCHEDULER_OWNED_RUNTIME_COMPONENT_LIFECYCLE_TEST_REPORT.md b/PHASE0254_SCHEDULER_OWNED_RUNTIME_COMPONENT_LIFECYCLE_TEST_REPORT.md
+new file mode 100644
+index 0000000..cda6941
+--- /dev/null
++++ b/PHASE0254_SCHEDULER_OWNED_RUNTIME_COMPONENT_LIFECYCLE_TEST_REPORT.md
+@@ -0,0 +1,31 @@
++# Phase 0254 test report - Scheduler-owned runtime component lifecycle
++
++## Expected validation
++
++```text
++python -m compileall -q src tests tools
++python -m pytest -q tests/context/test_scheduler_owned_runtime_component_lifecycle_0254.py
++python -m pytest -q tests/tools/test_run_scheduler_owned_runtime_component_lifecycle_0254.py
++python -m pytest -q tests/rules/test_scheduler_owned_runtime_component_lifecycle_0254_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
++
++## Direct smoke
++
++```text
++PYTHONPATH=src:. python tools/run_scheduler_owned_runtime_component_lifecycle_0254.py --format summary
++```
++
++Expected:
++
++```text
++scheduler_owned_runtime_component_lifecycle_valid=True
++```
++
++## Boundary
++
++This patch defines the ownership and lifecycle model.  It does not start
++components, import factories, call Scheduler.run, publish events, open
++PostgreSQL/Qdrant/OpenVINO/GitHub connections, or create a parallel
++orchestrator.
+diff --git a/doc/CHANGELOG_0254_SCHEDULER_OWNED_RUNTIME_COMPONENT_LIFECYCLE.md b/doc/CHANGELOG_0254_SCHEDULER_OWNED_RUNTIME_COMPONENT_LIFECYCLE.md
+new file mode 100644
+index 0000000..fca2fbf
+--- /dev/null
++++ b/doc/CHANGELOG_0254_SCHEDULER_OWNED_RUNTIME_COMPONENT_LIFECYCLE.md
+@@ -0,0 +1,12 @@
++# Changelog 0254 - Scheduler-owned runtime component lifecycle
++
++## r2
++
++Pivots the production sequence from component readiness tooling toward
++Scheduler-owned runtime objects.
++
++The patch states that OpenRC supervises the process, the launcher is
++bootstrap-only, and the Scheduler owns runtime components and lifecycle.
++
++It also explicitly closes the wrong direction of one production CLI per
++component as the runtime API.
+diff --git a/doc/architecture/SCHEDULER_OWNED_RUNTIME_COMPONENT_LIFECYCLE_0254.md b/doc/architecture/SCHEDULER_OWNED_RUNTIME_COMPONENT_LIFECYCLE_0254.md
+new file mode 100644
+index 0000000..c9cfddb
+--- /dev/null
++++ b/doc/architecture/SCHEDULER_OWNED_RUNTIME_COMPONENT_LIFECYCLE_0254.md
+@@ -0,0 +1,62 @@
++# Scheduler-owned runtime component lifecycle - 0254
++
++## Intent
++
++This patch pivots the production sequence from readiness-only artifacts toward
++Scheduler-owned runtime execution.
++
++```text
++OpenRC -> launcher -> Scheduler
++```
++
++Scheduler owns runtime components.  The launcher is bootstrap-only.  OpenRC
++supervises the process and must not become an internal runtime orchestrator.
++
++## Runtime ownership
++
++The Scheduler owns runtime components and their lifecycle:
++
++```text
++Scheduler
++  -> ComponentRegistry
++  -> validate
++  -> instantiate
++  -> start
++  -> health
++  -> stop
++```
++
++Initial Scheduler-managed components:
++
++```text
++EventBus
++PassiveSupervisorSink
++SQLContextStore
++OpenVINOEmbeddingService
++QdrantProjectionStore
++GitHubArtifactExchange
++```
++
++## Command path and observation path
++
++```text
++Scheduler -> handlers/capabilities -> runtime components
++EventBus -> PassiveSupervisorSink -> CellularState
++```
++
++EventBus remains observation-only.  It carries facts, refs, summaries, and
++telemetry.  It does not become a command path.
++
++## No CLI per component
++
++The runtime API must not become one CLI per component.
++
++Patch smoke tools are temporary validation helpers.  Production execution should
++go through the Scheduler-owned objects, not through separated component CLIs.
++
++## Execution phase
++
++The execution phase is opened from this point forward.  New production patches
++should expose explicit controlled execution gates where mutation is possible,
++for example `--execute` plus a decision identifier, but the owned runtime path
++must remain Scheduler-centered.
+diff --git a/doc/code-rules/0254_scheduler_owned_runtime_component_lifecycle_rule.md b/doc/code-rules/0254_scheduler_owned_runtime_component_lifecycle_rule.md
+new file mode 100644
+index 0000000..fcc75e2
+--- /dev/null
++++ b/doc/code-rules/0254_scheduler_owned_runtime_component_lifecycle_rule.md
+@@ -0,0 +1,22 @@
++# Code rule 0254 - Scheduler-owned runtime component lifecycle
++
++Required:
++
++```text
++OpenRC -> launcher -> Scheduler
++Scheduler owns runtime components
++EventBus remains observation-only
++no CLI per component
++```
++
++The launcher is bootstrap-only.  Runtime components are instantiated and managed
++by the Scheduler.
++
++Forbidden:
++
++```text
++parallel runtime orchestrator
++launcher-owned component lifecycle
++EventBus command path
++component-specific production CLI as runtime API
++```
+diff --git a/doc/docs/architecture/runtime/254_scheduler_owned_runtime_component_lifecycle.dot b/doc/docs/architecture/runtime/254_scheduler_owned_runtime_component_lifecycle.dot
+new file mode 100644
+index 0000000..3fd7a2e
+--- /dev/null
++++ b/doc/docs/architecture/runtime/254_scheduler_owned_runtime_component_lifecycle.dot
+@@ -0,0 +1,27 @@
++digraph scheduler_owned_runtime_component_lifecycle_0254 {
++  rankdir=LR;
++
++  openrc [label="OpenRC\nprocess supervisor"];
++  launcher [label="launcher\nbootstrap only"];
++  scheduler [label="Scheduler\nruntime owner"];
++
++  registry [label="ComponentRegistry"];
++  eventbus [label="EventBus\nobservation only"];
++  sql [label="SQLContextStore"];
++  openvino [label="OpenVINOEmbeddingService"];
++  qdrant [label="QdrantProjectionStore"];
++  github [label="GitHubArtifactExchange"];
++  supervisor [label="PassiveSupervisorSink"];
++
++  openrc -> launcher;
++  launcher -> scheduler;
++  scheduler -> registry;
++  registry -> eventbus;
++  registry -> sql;
++  registry -> openvino;
++  registry -> qdrant;
++  registry -> github;
++  registry -> supervisor;
++  eventbus -> supervisor [label="facts only"];
++  sql -> openvino -> qdrant [label="projection path"];
++}
+diff --git a/doc/manifests/MANIFEST_0254_SCHEDULER_OWNED_RUNTIME_COMPONENT_LIFECYCLE_CHANGED_FILES.md b/doc/manifests/MANIFEST_0254_SCHEDULER_OWNED_RUNTIME_COMPONENT_LIFECYCLE_CHANGED_FILES.md
+new file mode 100644
+index 0000000..39b95fd
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0254_SCHEDULER_OWNED_RUNTIME_COMPONENT_LIFECYCLE_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest 0254 - Scheduler-owned runtime component lifecycle
++
++- `src/context/scheduler_owned_runtime_component_lifecycle_0254.py`
++- `tools/run_scheduler_owned_runtime_component_lifecycle_0254.py`
++- `tests/context/test_scheduler_owned_runtime_component_lifecycle_0254.py`
++- `tests/tools/test_run_scheduler_owned_runtime_component_lifecycle_0254.py`
++- `tests/rules/test_scheduler_owned_runtime_component_lifecycle_0254_rule.py`
++- `doc/architecture/SCHEDULER_OWNED_RUNTIME_COMPONENT_LIFECYCLE_0254.md`
++- `doc/code-rules/0254_scheduler_owned_runtime_component_lifecycle_rule.md`
++- `doc/docs/architecture/runtime/254_scheduler_owned_runtime_component_lifecycle.dot`
++- `doc/CHANGELOG_0254_SCHEDULER_OWNED_RUNTIME_COMPONENT_LIFECYCLE.md`
++- `doc/manifests/MANIFEST_0254_SCHEDULER_OWNED_RUNTIME_COMPONENT_LIFECYCLE_CHANGED_FILES.md`
++- `PHASE0254_SCHEDULER_OWNED_RUNTIME_COMPONENT_LIFECYCLE_TEST_REPORT.md`
+diff --git a/src/context/scheduler_owned_runtime_component_lifecycle_0254.py b/src/context/scheduler_owned_runtime_component_lifecycle_0254.py
+new file mode 100644
+index 0000000..a34e2c3
+--- /dev/null
++++ b/src/context/scheduler_owned_runtime_component_lifecycle_0254.py
+@@ -0,0 +1,170 @@
++"""Scheduler-owned runtime component lifecycle model.
++
++This module fixes the production runtime ownership boundary:
++
++OpenRC -> launcher -> Scheduler -> runtime components
++
++OpenRC supervises the process.  The launcher performs the minimal bootstrap
++needed to hand the production server configuration to the Scheduler.  The
++Scheduler owns runtime component instantiation and lifecycle management.
++
++The module is intentionally small and stdlib-only.  It does not start runtime
++objects, import factories, open SQL/Qdrant/OpenVINO/GitHub connections, publish
++events, or replace the existing Scheduler.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++import json
++from pathlib import Path
++from typing import Any, Iterable, Mapping, Sequence
++
++
++SCHEDULER_LIFECYCLE_AUTHORITY: dict[str, bool] = {
++    "openrc_supervises_process": True,
++    "launcher_bootstrap_only": True,
++    "scheduler_owns_runtime_components": True,
++    "scheduler_manages_component_lifecycle": True,
++    "eventbus_observation_only": True,
++    "no_cli_per_component_runtime_api": True,
++    "no_parallel_orchestrator": True,
++    "uses_scheduler_run": False,
++    "imports_factories": False,
++    "starts_components": False,
++    "writes_sql": False,
++    "writes_qdrant": False,
++    "calls_github_api": False,
++    "runs_openvino_inference": False,
++}
++
++
++DEFAULT_SCHEDULER_MANAGED_COMPONENTS: tuple[tuple[str, str, tuple[str, ...], tuple[str, ...]], ...] = (
++    ("eventbus", "observation", ("eventbus.publish_fact",), ()),
++    ("passive_supervisor_sink", "observation", ("supervisor.observe",), ("eventbus",)),
++    ("sql_context_store", "command", ("sql.context.write", "sql.context.rehydrate"), ()),
++    ("openvino_embedding_service", "command", ("embedding.openvino.query", "embedding.openvino.passage"), ()),
++    ("qdrant_projection_store", "command", ("qdrant.projection.upsert", "qdrant.recall"), ("sql_context_store", "openvino_embedding_service")),
++    ("github_artifact_exchange", "command", ("github.artifact.scan_once",), ()),
++)
++
++
++@dataclass(frozen=True)
++class SchedulerManagedComponentSpec:
++    """Declarative runtime component description owned by Scheduler."""
++
++    component_id: str
++    role: str
++    capabilities: tuple[str, ...] = field(default_factory=tuple)
++    depends_on: tuple[str, ...] = field(default_factory=tuple)
++    lifecycle: tuple[str, ...] = ("validate", "instantiate", "start", "health", "stop")
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "component_id": self.component_id,
++            "role": self.role,
++            "capabilities": list(self.capabilities),
++            "depends_on": list(self.depends_on),
++            "lifecycle": list(self.lifecycle),
++            "owner": "scheduler",
++        }
++
++
++@dataclass(frozen=True)
++class SchedulerOwnedRuntimeLifecycle:
++    """Serializable model for Scheduler-owned runtime lifecycle."""
++
++    bootstrap_path: tuple[str, ...]
++    authority: Mapping[str, bool]
++    components: tuple[SchedulerManagedComponentSpec, ...]
++    execution_phase_opened: bool = True
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "scheduler_owned_runtime_component_lifecycle": True,
++            "execution_phase_opened": self.execution_phase_opened,
++            "bootstrap_path": list(self.bootstrap_path),
++            "authority": dict(self.authority),
++            "components": [component.to_dict() for component in self.components],
++            "component_count": len(self.components),
++        }
++
++
++def default_scheduler_managed_components() -> tuple[SchedulerManagedComponentSpec, ...]:
++    """Return the production runtime components that Scheduler owns."""
++
++    return tuple(
++        SchedulerManagedComponentSpec(
++            component_id=component_id,
++            role=role,
++            capabilities=tuple(capabilities),
++            depends_on=tuple(depends_on),
++        )
++        for component_id, role, capabilities, depends_on in DEFAULT_SCHEDULER_MANAGED_COMPONENTS
++    )
++
++
++def _component_ids(components: Sequence[SchedulerManagedComponentSpec]) -> set[str]:
++    return {component.component_id for component in components}
++
++
++def validate_scheduler_owned_lifecycle(
++    lifecycle: SchedulerOwnedRuntimeLifecycle,
++) -> tuple[str, ...]:
++    """Validate Scheduler ownership and dependency shape."""
++
++    issues: list[str] = []
++    bootstrap = tuple(lifecycle.bootstrap_path)
++    if bootstrap != ("OpenRC", "launcher", "Scheduler"):
++        issues.append("bootstrap path must be OpenRC -> launcher -> Scheduler")
++    authority = dict(lifecycle.authority)
++    if not authority.get("scheduler_owns_runtime_components", False):
++        issues.append("Scheduler must own runtime components")
++    if not authority.get("launcher_bootstrap_only", False):
++        issues.append("launcher must remain bootstrap-only")
++    if not authority.get("eventbus_observation_only", False):
++        issues.append("EventBus must remain observation-only")
++    if not authority.get("no_cli_per_component_runtime_api", False):
++        issues.append("runtime API must not become one CLI per component")
++    if authority.get("starts_components", False):
++        issues.append("this model must not start components")
++    ids = _component_ids(lifecycle.components)
++    if "eventbus" not in ids:
++        issues.append("eventbus component is required")
++    if "sql_context_store" not in ids:
++        issues.append("sql_context_store component is required")
++    if "openvino_embedding_service" not in ids:
++        issues.append("openvino_embedding_service component is required")
++    if "qdrant_projection_store" not in ids:
++        issues.append("qdrant_projection_store component is required")
++    for component in lifecycle.components:
++        for dependency in component.depends_on:
++            if dependency not in ids:
++                issues.append(f"{component.component_id} depends on missing {dependency}")
++    return tuple(issues)
++
++
++def build_scheduler_owned_runtime_lifecycle(
++    components: Iterable[SchedulerManagedComponentSpec] | None = None,
++) -> SchedulerOwnedRuntimeLifecycle:
++    """Build the Scheduler-owned runtime lifecycle model."""
++
++    component_tuple = tuple(components) if components is not None else default_scheduler_managed_components()
++    return SchedulerOwnedRuntimeLifecycle(
++        bootstrap_path=("OpenRC", "launcher", "Scheduler"),
++        authority=dict(SCHEDULER_LIFECYCLE_AUTHORITY),
++        components=component_tuple,
++    )
++
++
++def write_scheduler_owned_runtime_lifecycle_report(path: Path) -> dict[str, Any]:
++    """Write the lifecycle model report as JSON."""
++
++    lifecycle = build_scheduler_owned_runtime_lifecycle()
++    issues = validate_scheduler_owned_lifecycle(lifecycle)
++    payload = lifecycle.to_dict()
++    payload["valid"] = not issues
++    payload["issues"] = list(issues)
++    path.parent.mkdir(parents=True, exist_ok=True)
++    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    return payload
+diff --git a/tests/context/test_scheduler_owned_runtime_component_lifecycle_0254.py b/tests/context/test_scheduler_owned_runtime_component_lifecycle_0254.py
+new file mode 100644
+index 0000000..579ca00
+--- /dev/null
++++ b/tests/context/test_scheduler_owned_runtime_component_lifecycle_0254.py
+@@ -0,0 +1,35 @@
++from context.scheduler_owned_runtime_component_lifecycle_0254 import (
++    build_scheduler_owned_runtime_lifecycle,
++    validate_scheduler_owned_lifecycle,
++)
++
++
++def test_scheduler_owns_runtime_components() -> None:
++    lifecycle = build_scheduler_owned_runtime_lifecycle()
++    payload = lifecycle.to_dict()
++
++    assert payload["bootstrap_path"] == ["OpenRC", "launcher", "Scheduler"]
++    assert payload["authority"]["scheduler_owns_runtime_components"] is True
++    assert payload["authority"]["launcher_bootstrap_only"] is True
++    assert payload["authority"]["no_cli_per_component_runtime_api"] is True
++    assert payload["execution_phase_opened"] is True
++
++
++def test_scheduler_lifecycle_includes_sql_openvino_qdrant() -> None:
++    lifecycle = build_scheduler_owned_runtime_lifecycle()
++    components = {component.component_id: component for component in lifecycle.components}
++
++    assert "sql_context_store" in components
++    assert "openvino_embedding_service" in components
++    assert "qdrant_projection_store" in components
++    assert "qdrant.recall" in components["qdrant_projection_store"].capabilities
++    assert components["qdrant_projection_store"].depends_on == (
++        "sql_context_store",
++        "openvino_embedding_service",
++    )
++
++
++def test_scheduler_lifecycle_validation_passes() -> None:
++    lifecycle = build_scheduler_owned_runtime_lifecycle()
++
++    assert validate_scheduler_owned_lifecycle(lifecycle) == ()
+diff --git a/tests/rules/test_scheduler_owned_runtime_component_lifecycle_0254_rule.py b/tests/rules/test_scheduler_owned_runtime_component_lifecycle_0254_rule.py
+new file mode 100644
+index 0000000..07a9636
+--- /dev/null
++++ b/tests/rules/test_scheduler_owned_runtime_component_lifecycle_0254_rule.py
+@@ -0,0 +1,32 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def test_0254_scheduler_ownership_rule_in_source() -> None:
++    source = (ROOT / "src/context/scheduler_owned_runtime_component_lifecycle_0254.py").read_text(
++        encoding="utf-8"
++    )
++
++    assert "scheduler_owns_runtime_components" in source
++    assert "launcher_bootstrap_only" in source
++    assert "no_cli_per_component_runtime_api" in source
++    assert "eventbus_observation_only" in source
++    assert "openvino_embedding_service" in source
++    assert "qdrant_projection_store" in source
++    assert "subprocess.run" not in source
++    assert "Scheduler.run(" not in source
++    assert ".upsert(" not in source
++
++
++def test_0254_docs_lock_scheduler_owned_runtime_boundary() -> None:
++    doc = (ROOT / "doc/architecture/SCHEDULER_OWNED_RUNTIME_COMPONENT_LIFECYCLE_0254.md").read_text(
++        encoding="utf-8"
++    )
++
++    assert "Scheduler owns runtime components" in doc
++    assert "OpenRC -> launcher -> Scheduler" in doc
++    assert "no CLI per component" in doc
++    assert "execution phase is opened" in doc
++    assert "EventBus remains observation-only" in doc
+diff --git a/tests/tools/test_run_scheduler_owned_runtime_component_lifecycle_0254.py b/tests/tools/test_run_scheduler_owned_runtime_component_lifecycle_0254.py
+new file mode 100644
+index 0000000..98d6230
+--- /dev/null
++++ b/tests/tools/test_run_scheduler_owned_runtime_component_lifecycle_0254.py
+@@ -0,0 +1,25 @@
++import subprocess
++import sys
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def test_scheduler_owned_runtime_component_lifecycle_tool_summary() -> None:
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/run_scheduler_owned_runtime_component_lifecycle_0254.py",
++            "--format",
++            "summary",
++        ],
++        cwd=ROOT,
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    assert "scheduler_owned_runtime_component_lifecycle_valid=True" in result.stdout
++    assert "openvino_embedding_service" in result.stdout
++    assert "qdrant_projection_store" in result.stdout
+diff --git a/tools/run_scheduler_owned_runtime_component_lifecycle_0254.py b/tools/run_scheduler_owned_runtime_component_lifecycle_0254.py
+new file mode 100755
+index 0000000..1cd6de5
+--- /dev/null
++++ b/tools/run_scheduler_owned_runtime_component_lifecycle_0254.py
+@@ -0,0 +1,55 @@
++#!/usr/bin/env python3
++"""Print or write the Scheduler-owned runtime component lifecycle model."""
++
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++
++REPO_ROOT = Path(__file__).resolve().parents[1]
++SRC_ROOT = REPO_ROOT / "src"
++for _path in (str(SRC_ROOT), str(REPO_ROOT)):
++    if _path not in sys.path:
++        sys.path.insert(0, _path)
++
++from context.scheduler_owned_runtime_component_lifecycle_0254 import (  # noqa: E402
++    build_scheduler_owned_runtime_lifecycle,
++    validate_scheduler_owned_lifecycle,
++    write_scheduler_owned_runtime_lifecycle_report,
++)
++
++
++def parse_args() -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--output", default="")
++    parser.add_argument("--format", choices=("json", "summary"), default="json")
++    return parser.parse_args()
++
++
++def main() -> int:
++    args = parse_args()
++    if args.output:
++        payload = write_scheduler_owned_runtime_lifecycle_report(Path(args.output))
++    else:
++        lifecycle = build_scheduler_owned_runtime_lifecycle()
++        issues = validate_scheduler_owned_lifecycle(lifecycle)
++        payload = lifecycle.to_dict()
++        payload["valid"] = not issues
++        payload["issues"] = list(issues)
++
++    if args.format == "summary":
++        components = ",".join(component["component_id"] for component in payload["components"])
++        print(
++            "scheduler_owned_runtime_component_lifecycle_valid="
++            f"{payload['valid']} issues={len(payload['issues'])} "
++            f"components={components}"
++        )
++    else:
++        print(json.dumps(payload, indent=2, sort_keys=True))
++    return 0 if payload["valid"] else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

@@ -1,0 +1,1027 @@
+diff --git a/src/context/deterministic_fake_laboratory_provider_0273.py b/src/context/deterministic_fake_laboratory_provider_0273.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/context/deterministic_fake_laboratory_provider_0273.py
+@@ -0,0 +1,437 @@
++"""Deterministic local fake laboratory provider for phase 0273-r3.
++
++This module implements one bounded provider membrane for
++``missipy.laboratory.v1``.  It is a tracer bullet used to validate the
++laboratory boundary before integrating the native Autodoc laboratory, GenAI,
++or a partner framework.
++
++The provider is local, synchronous, deterministic, stdlib-only and network
++closed.  It does not own orchestration, persistence, vector recall, GitHub
++mutation, event publication, route runtime, supervision or rendering.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Mapping
++from dataclasses import dataclass
++import hashlib
++import json
++from typing import Protocol, runtime_checkable
++
++from context.laboratory_framework_contract_0273 import (
++    LABORATORY_DESCRIPTOR_SCHEMA,
++    LABORATORY_REGISTRY_BINDING_SCHEMA,
++    LABORATORY_VISIT_RESULT_SCHEMA,
++    LaboratoryContractError,
++    LaboratoryDescriptor,
++    LaboratoryRegistryBindingPlan,
++    LaboratoryVisitRequest,
++    LaboratoryVisitResult,
++    validate_laboratory_visit_result,
++)
++from context.scheduler_owned_runtime_registry_0257 import (
++    SchedulerOwnedRuntimeComponentRegistration,
++    SchedulerOwnedRuntimeRegistry,
++    validate_scheduler_owned_runtime_registry,
++)
++
++DETERMINISTIC_FAKE_LABORATORY_PROVIDER_VERSION = "0273.r3"
++DETERMINISTIC_FAKE_LABORATORY_REF = "laboratory:local-fake"
++DETERMINISTIC_FAKE_COMPONENT_ID = "laboratory_provider_local_fake"
++DETERMINISTIC_FAKE_PROVIDER_SCHEMA = "missipy.laboratory.provider.fake.v1"
++DETERMINISTIC_FAKE_EXECUTION_SCHEMA = "missipy.laboratory.execution.fake.v1"
++DETERMINISTIC_FAKE_SOURCE_PATHS = (
++    "src/context/deterministic_fake_laboratory_provider_0273.py",
++    "src/context/laboratory_framework_contract_0273.py",
++)
++
++_ALLOWED_SCENARIOS = frozenset(
++    {
++        "completed",
++        "needs_context",
++        "needs_specialist",
++        "rejected",
++        "failed",
++    }
++)
++
++
++class LaboratoryProviderExecutionError(RuntimeError):
++    """Raised when a provider cannot execute a valid bounded visit."""
++
++
++@runtime_checkable
++class LaboratoryProvider(Protocol):
++    """Minimal provider membrane used at the existing Handler boundary."""
++
++    @property
++    def descriptor(self) -> LaboratoryDescriptor:
++        """Return the immutable provider descriptor."""
++
++    def execute(self, request: LaboratoryVisitRequest) -> LaboratoryVisitResult:
++        """Execute one bounded visit without owning orchestration."""
++
++
++@dataclass(frozen=True, slots=True)
++class DeterministicFakeLaboratoryProvider:
++    """Local deterministic fake implementing one laboratory visit."""
++
++    descriptor: LaboratoryDescriptor
++    provider_schema: str = DETERMINISTIC_FAKE_PROVIDER_SCHEMA
++
++    def __post_init__(self) -> None:
++        if self.provider_schema != DETERMINISTIC_FAKE_PROVIDER_SCHEMA:
++            raise LaboratoryContractError("unsupported fake laboratory provider schema")
++        if self.descriptor.laboratory_ref != DETERMINISTIC_FAKE_LABORATORY_REF:
++            raise LaboratoryContractError(
++                "fake provider requires laboratory:local-fake descriptor"
++            )
++        if self.descriptor.provider_kind != "local_fake":
++            raise LaboratoryContractError("fake provider requires provider_kind local_fake")
++        if self.descriptor.execution_boundary != "in_process":
++            raise LaboratoryContractError("fake provider must execute in_process")
++        if self.descriptor.availability != "ready" or not self.descriptor.enabled:
++            raise LaboratoryContractError("fake provider descriptor must be enabled and ready")
++        if self.descriptor.network_allowed:
++            raise LaboratoryContractError("fake provider must remain network closed")
++
++    def execute(self, request: LaboratoryVisitRequest) -> LaboratoryVisitResult:
++        _validate_request_for_provider(self.descriptor, request)
++        scenario = _request_scenario(request)
++        digest = _request_digest(request)
++        result = _build_result(request=request, scenario=scenario, digest=digest)
++        issues = validate_laboratory_visit_result(request, result)
++        if issues:
++            raise LaboratoryProviderExecutionError("; ".join(issues))
++        return result
++
++
++@dataclass(frozen=True, slots=True)
++class FakeLaboratoryExecutionRecord:
++    """Serializable handler-side record for one fake provider call."""
++
++    schema: str
++    provider_ref: str
++    registration_component_id: str
++    request: LaboratoryVisitRequest
++    result: LaboratoryVisitResult
++    result_valid: bool
++    validation_issues: tuple[str, ...]
++    handler_boundary: str = "Dispatcher -> Handler -> LaboratoryProvider.execute"
++    scheduler_path_required: bool = True
++    provider_owns_orchestration: bool = False
++    provider_owns_persistence: bool = False
++    provider_owns_vector_index: bool = False
++    provider_publishes_commands: bool = False
++    provider_uses_network: bool = False
++    real_backend_used: bool = False
++
++    def __post_init__(self) -> None:
++        if self.schema != DETERMINISTIC_FAKE_EXECUTION_SCHEMA:
++            raise LaboratoryContractError("unsupported fake execution record schema")
++        if self.provider_ref != self.request.laboratory_ref:
++            raise LaboratoryContractError("provider_ref must match request laboratory_ref")
++        if self.result.visit_ref != self.request.visit_ref:
++            raise LaboratoryContractError("result must belong to request visit_ref")
++        if self.result_valid != (not self.validation_issues):
++            raise LaboratoryContractError("result_valid must reflect validation_issues")
++        if not self.scheduler_path_required:
++            raise LaboratoryContractError("Scheduler path must remain required")
++        forbidden = (
++            self.provider_owns_orchestration,
++            self.provider_owns_persistence,
++            self.provider_owns_vector_index,
++            self.provider_publishes_commands,
++            self.provider_uses_network,
++            self.real_backend_used,
++        )
++        if any(forbidden):
++            raise LaboratoryContractError("fake execution must not claim external ownership")
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": self.schema,
++            "provider_ref": self.provider_ref,
++            "registration_component_id": self.registration_component_id,
++            "request": self.request.to_mapping(),
++            "result": self.result.to_mapping(),
++            "result_valid": self.result_valid,
++            "validation_issues": list(self.validation_issues),
++            "handler_boundary": self.handler_boundary,
++            "scheduler_path_required": self.scheduler_path_required,
++            "provider_owns_orchestration": self.provider_owns_orchestration,
++            "provider_owns_persistence": self.provider_owns_persistence,
++            "provider_owns_vector_index": self.provider_owns_vector_index,
++            "provider_publishes_commands": self.provider_publishes_commands,
++            "provider_uses_network": self.provider_uses_network,
++            "real_backend_used": self.real_backend_used,
++        }
++
++
++def build_deterministic_fake_laboratory_descriptor() -> LaboratoryDescriptor:
++    """Build the single enabled descriptor used by the r3 tracer bullet."""
++
++    return LaboratoryDescriptor(
++        schema=LABORATORY_DESCRIPTOR_SCHEMA,
++        laboratory_ref=DETERMINISTIC_FAKE_LABORATORY_REF,
++        provider_kind="local_fake",
++        display_name="Autodoc deterministic fake laboratory",
++        capabilities=(
++            "laboratory.visit.execute",
++            "laboratory.specialist.simulate",
++            "laboratory.followup.request",
++        ),
++        accepted_input_contract_refs=(
++            "contract:missipy.specialist.demand.v1",
++            "contract:missipy.laboratory.visit_request.v1",
++        ),
++        produced_output_contract_refs=(
++            "contract:missipy.laboratory.visit_result.v1",
++        ),
++        execution_boundary="in_process",
++        availability="ready",
++        enabled=True,
++        network_allowed=False,
++        metadata=(
++            ("implementation", "deterministic_fake"),
++            ("backend_status", "tracer_bullet"),
++        ),
++    )
++
++
++def build_deterministic_fake_laboratory_provider() -> DeterministicFakeLaboratoryProvider:
++    return DeterministicFakeLaboratoryProvider(
++        descriptor=build_deterministic_fake_laboratory_descriptor()
++    )
++
++
++def build_deterministic_fake_laboratory_binding_plan() -> LaboratoryRegistryBindingPlan:
++    """Build the active r3 plan targeting the existing 0257 registry type."""
++
++    descriptor = build_deterministic_fake_laboratory_descriptor()
++    return LaboratoryRegistryBindingPlan(
++        schema=LABORATORY_REGISTRY_BINDING_SCHEMA,
++        laboratory_ref=descriptor.laboratory_ref,
++        component_id=DETERMINISTIC_FAKE_COMPONENT_ID,
++        capabilities=descriptor.capabilities,
++        provider_source_paths=DETERMINISTIC_FAKE_SOURCE_PATHS,
++        ready_for_registry_attachment=True,
++        provider_active=True,
++    )
++
++
++def build_deterministic_fake_laboratory_registration() -> SchedulerOwnedRuntimeComponentRegistration:
++    """Convert the validated plan to the existing registry registration type."""
++
++    plan = build_deterministic_fake_laboratory_binding_plan()
++    return SchedulerOwnedRuntimeComponentRegistration(
++        component_id=plan.component_id,
++        surface="laboratory_provider",
++        owner=plan.owner,
++        role=plan.role,
++        capabilities=plan.capabilities,
++        depends_on=(),
++        source_paths=plan.provider_source_paths,
++        runtime_api_kind="scheduler_owned_object",
++        selected_from_existing_surfaces=False,
++    )
++
++
++def bind_deterministic_fake_laboratory_registration(
++    registry: SchedulerOwnedRuntimeRegistry,
++) -> SchedulerOwnedRuntimeRegistry:
++    """Return the existing registry value with the fake registration appended.
++
++    Exact replay is idempotent.  A conflicting registration with the same
++    component id is rejected.  No registry object is mutated in place.
++    """
++
++    registration = build_deterministic_fake_laboratory_registration()
++    by_id = {item.component_id: item for item in registry.registrations}
++    existing = by_id.get(registration.component_id)
++    if existing is not None:
++        if existing == registration:
++            return registry
++        raise LaboratoryContractError(
++            "conflicting laboratory provider registration already exists"
++        )
++    updated = SchedulerOwnedRuntimeRegistry(
++        registrations=registry.registrations + (registration,),
++        source_map_complete=registry.source_map_complete,
++        owner=registry.owner,
++        launcher_bootstrap_only=registry.launcher_bootstrap_only,
++        eventbus_observation_only=registry.eventbus_observation_only,
++        no_cli_per_component=registry.no_cli_per_component,
++        creates_runtime_manager=registry.creates_runtime_manager,
++        instantiates_components=registry.instantiates_components,
++    )
++    issues = validate_scheduler_owned_runtime_registry(updated)
++    if issues:
++        raise LaboratoryContractError("; ".join(issues))
++    return updated
++
++
++def execute_deterministic_fake_laboratory_visit(
++    request: LaboratoryVisitRequest,
++    *,
++    provider: LaboratoryProvider | None = None,
++) -> FakeLaboratoryExecutionRecord:
++    """Handler-side membrane for one deterministic fake visit."""
++
++    selected = provider or build_deterministic_fake_laboratory_provider()
++    result = selected.execute(request)
++    issues = validate_laboratory_visit_result(request, result)
++    return FakeLaboratoryExecutionRecord(
++        schema=DETERMINISTIC_FAKE_EXECUTION_SCHEMA,
++        provider_ref=selected.descriptor.laboratory_ref,
++        registration_component_id=DETERMINISTIC_FAKE_COMPONENT_ID,
++        request=request,
++        result=result,
++        result_valid=not issues,
++        validation_issues=issues,
++    )
++
++
++def _validate_request_for_provider(
++    descriptor: LaboratoryDescriptor,
++    request: LaboratoryVisitRequest,
++) -> None:
++    if request.laboratory_ref != descriptor.laboratory_ref:
++        raise LaboratoryProviderExecutionError(
++            "request laboratory_ref does not match provider descriptor"
++        )
++    if request.target_laboratory_ref != descriptor.laboratory_ref:
++        raise LaboratoryProviderExecutionError(
++            "request target_laboratory_ref does not match provider descriptor"
++        )
++    if request.input_contract_ref not in descriptor.accepted_input_contract_refs:
++        raise LaboratoryProviderExecutionError(
++            "request input contract is not accepted by provider"
++        )
++    if request.expected_output_contract_ref not in descriptor.produced_output_contract_refs:
++        raise LaboratoryProviderExecutionError(
++            "request output contract is not produced by provider"
++        )
++    if request.resource_budget.allow_network:
++        raise LaboratoryProviderExecutionError(
++            "deterministic fake provider refuses network-enabled visits"
++        )
++    if request.resource_budget.max_external_calls != 0:
++        raise LaboratoryProviderExecutionError(
++            "deterministic fake provider refuses external calls"
++        )
++
++
++def _request_scenario(request: LaboratoryVisitRequest) -> str:
++    metadata = dict(request.metadata)
++    scenario = metadata.get("fake_scenario", "completed")
++    if scenario not in _ALLOWED_SCENARIOS:
++        raise LaboratoryProviderExecutionError(
++            f"unsupported deterministic fake scenario: {scenario}"
++        )
++    return scenario
++
++
++def _request_digest(request: LaboratoryVisitRequest) -> str:
++    encoded = json.dumps(
++        request.to_mapping(),
++        sort_keys=True,
++        separators=(",", ":"),
++    ).encode("utf-8")
++    return "sha256:" + hashlib.sha256(encoded).hexdigest()
++
++
++def _build_result(
++    *,
++    request: LaboratoryVisitRequest,
++    scenario: str,
++    digest: str,
++) -> LaboratoryVisitResult:
++    short_digest = digest.split(":", 1)[1][:16]
++    common_machine_result: dict[str, object] = {
++        "schema": DETERMINISTIC_FAKE_EXECUTION_SCHEMA,
++        "provider_kind": "local_fake",
++        "scenario": scenario,
++        "request_digest": digest,
++        "objective_ref": request.objective_ref,
++        "context_generation": request.context_generation,
++        "context_ref_count": len(request.context_refs),
++        "evidence_ref_count": len(request.evidence_refs),
++        "deterministic": True,
++        "real_backend_used": False,
++    }
++    kwargs: dict[str, object] = {}
++    if scenario == "completed":
++        human = f"Deterministic fake laboratory completed visit {request.visit_ref}."
++        common_machine_result["finding"] = "bounded_fake_visit_completed"
++        status = "completed"
++        confidence = 0.5
++    elif scenario == "needs_context":
++        human = f"Deterministic fake laboratory requests additional context for {request.visit_ref}."
++        common_machine_result["finding"] = "additional_context_required"
++        kwargs["requested_context_refs"] = (f"ctx:requested:{short_digest}",)
++        kwargs["followup_request_refs"] = (
++            f"laboratory-followup:context:{short_digest}",
++        )
++        status = "needs_context"
++        confidence = 0.25
++    elif scenario == "needs_specialist":
++        human = f"Deterministic fake laboratory requests a validator for {request.visit_ref}."
++        common_machine_result["finding"] = "peer_validation_required"
++        kwargs["requested_specialist_refs"] = ("specialist:validator",)
++        kwargs["followup_request_refs"] = (
++            f"laboratory-followup:specialist:{short_digest}",
++        )
++        status = "needs_specialist"
++        confidence = 0.25
++    elif scenario == "rejected":
++        human = f"Deterministic fake laboratory rejected visit {request.visit_ref}."
++        common_machine_result["finding"] = "fake_policy_rejection"
++        status = "rejected"
++        confidence = 0.0
++    else:
++        human = f"Deterministic fake laboratory failed visit {request.visit_ref}."
++        common_machine_result["finding"] = "fake_execution_failure"
++        status = "failed"
++        confidence = 0.0
++
++    return LaboratoryVisitResult(
++        schema=LABORATORY_VISIT_RESULT_SCHEMA,
++        visit_ref=request.visit_ref,
++        laboratory_ref=request.laboratory_ref,
++        specialist_ref=request.specialist_ref,
++        status=status,
++        output_contract_ref=request.expected_output_contract_ref,
++        machine_result=common_machine_result,
++        human_representation=human,
++        confidence=confidence,
++        evidence_refs=request.evidence_refs,
++        conversation_ref=request.conversation_ref,
++        parent_visit_ref=request.parent_visit_ref,
++        provenance_refs=(
++            request.source_candidate_ref,
++            request.objective_ref,
++            digest,
++        ),
++        **kwargs,
++    )
++
++
++__all__ = (
++    "DETERMINISTIC_FAKE_COMPONENT_ID",
++    "DETERMINISTIC_FAKE_EXECUTION_SCHEMA",
++    "DETERMINISTIC_FAKE_LABORATORY_PROVIDER_VERSION",
++    "DETERMINISTIC_FAKE_LABORATORY_REF",
++    "DETERMINISTIC_FAKE_PROVIDER_SCHEMA",
++    "DETERMINISTIC_FAKE_SOURCE_PATHS",
++    "DeterministicFakeLaboratoryProvider",
++    "FakeLaboratoryExecutionRecord",
++    "LaboratoryProvider",
++    "LaboratoryProviderExecutionError",
++    "bind_deterministic_fake_laboratory_registration",
++    "build_deterministic_fake_laboratory_binding_plan",
++    "build_deterministic_fake_laboratory_descriptor",
++    "build_deterministic_fake_laboratory_provider",
++    "build_deterministic_fake_laboratory_registration",
++    "execute_deterministic_fake_laboratory_visit",
++)
+diff --git a/tests/context/test_deterministic_fake_laboratory_provider_0273.py b/tests/context/test_deterministic_fake_laboratory_provider_0273.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/context/test_deterministic_fake_laboratory_provider_0273.py
+@@ -0,0 +1,193 @@
++import json
++
++import pytest
++
++from context.deterministic_fake_laboratory_provider_0273 import (
++    DETERMINISTIC_FAKE_COMPONENT_ID,
++    DeterministicFakeLaboratoryProvider,
++    LaboratoryProvider,
++    LaboratoryProviderExecutionError,
++    bind_deterministic_fake_laboratory_registration,
++    build_deterministic_fake_laboratory_binding_plan,
++    build_deterministic_fake_laboratory_descriptor,
++    build_deterministic_fake_laboratory_provider,
++    build_deterministic_fake_laboratory_registration,
++    execute_deterministic_fake_laboratory_visit,
++)
++from context.laboratory_framework_contract_0273 import (
++    LABORATORY_VISIT_REQUEST_SCHEMA,
++    LaboratoryContractError,
++    LaboratoryDescriptor,
++    LaboratoryResourceBudget,
++    LaboratoryVisitRequest,
++)
++from context.scheduler_owned_runtime_registry_0257 import (
++    SchedulerOwnedRuntimeComponentRegistration,
++    build_scheduler_owned_runtime_registry,
++    validate_scheduler_owned_runtime_registry,
++)
++
++
++def request(**overrides):
++    values = {
++        "schema": LABORATORY_VISIT_REQUEST_SCHEMA,
++        "visit_ref": "laboratory-visit:r3-test",
++        "laboratory_ref": "laboratory:local-fake",
++        "specialist_ref": "specialist:technical",
++        "objective_ref": "orientation:r3-test",
++        "source_candidate_ref": "source-candidate:r3-test",
++        "context_generation": 1,
++        "input_contract_ref": "contract:missipy.specialist.demand.v1",
++        "expected_output_contract_ref": (
++            "contract:missipy.laboratory.visit_result.v1"
++        ),
++        "resource_budget": LaboratoryResourceBudget(),
++        "return_route_ref": "route:laboratory/r3-test/result",
++        "context_refs": ("sql:context:r3-test",),
++        "evidence_refs": ("artifact:evidence:r3-test",),
++    }
++    values.update(overrides)
++    return LaboratoryVisitRequest(**values)
++
++
++def test_fake_descriptor_is_enabled_ready_local_and_network_closed() -> None:
++    descriptor = build_deterministic_fake_laboratory_descriptor()
++    assert descriptor.laboratory_ref == "laboratory:local-fake"
++    assert descriptor.provider_kind == "local_fake"
++    assert descriptor.execution_boundary == "in_process"
++    assert descriptor.enabled is True
++    assert descriptor.availability == "ready"
++    assert descriptor.network_allowed is False
++
++
++def test_fake_provider_implements_membrane_and_is_deterministic() -> None:
++    provider = build_deterministic_fake_laboratory_provider()
++    assert isinstance(provider, LaboratoryProvider)
++
++    first = provider.execute(request())
++    second = provider.execute(request())
++    assert first.to_mapping() == second.to_mapping()
++    assert first.status == "completed"
++    assert first.machine_result["deterministic"] is True
++    assert first.machine_result["real_backend_used"] is False
++    json.dumps(first.to_mapping(), sort_keys=True)
++
++
++def test_handler_membrane_returns_bounded_execution_record() -> None:
++    record = execute_deterministic_fake_laboratory_visit(request())
++    payload = record.to_mapping()
++    assert payload["result_valid"] is True
++    assert payload["validation_issues"] == []
++    assert payload["scheduler_path_required"] is True
++    assert payload["provider_owns_orchestration"] is False
++    assert payload["provider_owns_persistence"] is False
++    assert payload["provider_owns_vector_index"] is False
++    assert payload["provider_uses_network"] is False
++    assert payload["real_backend_used"] is False
++    json.dumps(payload, sort_keys=True)
++
++
++def test_fake_provider_supports_context_and_specialist_followups() -> None:
++    context_result = execute_deterministic_fake_laboratory_visit(
++        request(metadata=(("fake_scenario", "needs_context"),))
++    ).result
++    assert context_result.status == "needs_context"
++    assert context_result.requested_context_refs
++    assert context_result.followup_request_refs
++
++    specialist_result = execute_deterministic_fake_laboratory_visit(
++        request(metadata=(("fake_scenario", "needs_specialist"),))
++    ).result
++    assert specialist_result.status == "needs_specialist"
++    assert specialist_result.requested_specialist_refs == ("specialist:validator",)
++
++
++def test_fake_provider_rejects_network_and_wrong_laboratory() -> None:
++    network_budget = LaboratoryResourceBudget(
++        allow_network=True,
++        max_external_calls=1,
++    )
++    with pytest.raises(LaboratoryProviderExecutionError, match="network-enabled"):
++        execute_deterministic_fake_laboratory_visit(
++            request(resource_budget=network_budget)
++        )
++
++    provider = build_deterministic_fake_laboratory_provider()
++    with pytest.raises(LaboratoryProviderExecutionError, match="laboratory_ref"):
++        provider.execute(
++            request(
++                laboratory_ref="laboratory:other",
++                target_laboratory_ref="laboratory:other",
++            )
++        )
++
++
++def test_fake_provider_rejects_unsupported_scenario() -> None:
++    with pytest.raises(LaboratoryProviderExecutionError, match="unsupported"):
++        execute_deterministic_fake_laboratory_visit(
++            request(metadata=(("fake_scenario", "unknown"),))
++        )
++
++
++def test_fake_provider_constructor_rejects_wrong_descriptor() -> None:
++    base = build_deterministic_fake_laboratory_descriptor()
++    wrong = LaboratoryDescriptor(
++        schema=base.schema,
++        laboratory_ref="laboratory:other",
++        provider_kind="local_fake",
++        display_name=base.display_name,
++        capabilities=base.capabilities,
++        accepted_input_contract_refs=base.accepted_input_contract_refs,
++        produced_output_contract_refs=base.produced_output_contract_refs,
++        execution_boundary="in_process",
++        availability="ready",
++        enabled=True,
++        network_allowed=False,
++    )
++    with pytest.raises(LaboratoryContractError, match="local-fake"):
++        DeterministicFakeLaboratoryProvider(wrong)
++
++
++def test_binding_plan_and_registration_target_existing_registry_type() -> None:
++    plan = build_deterministic_fake_laboratory_binding_plan()
++    registration = build_deterministic_fake_laboratory_registration()
++    assert plan.provider_active is True
++    assert plan.ready_for_registry_attachment is True
++    assert plan.creates_parallel_registry is False
++    assert plan.modifies_scheduler_run is False
++    assert isinstance(registration, SchedulerOwnedRuntimeComponentRegistration)
++    assert registration.component_id == DETERMINISTIC_FAKE_COMPONENT_ID
++    assert registration.surface == "laboratory_provider"
++    assert registration.owner == "scheduler"
++    assert registration.role == "command"
++    assert registration.selected_from_existing_surfaces is False
++
++
++def test_binding_appends_to_existing_registry_and_replay_is_idempotent() -> None:
++    registry = build_scheduler_owned_runtime_registry()
++    bound = bind_deterministic_fake_laboratory_registration(registry)
++    assert not validate_scheduler_owned_runtime_registry(bound)
++    ids = tuple(item.component_id for item in bound.registrations)
++    assert ids[-1] == DETERMINISTIC_FAKE_COMPONENT_ID
++
++    replayed = bind_deterministic_fake_laboratory_registration(bound)
++    assert replayed is bound
++
++
++def test_binding_rejects_conflicting_registration() -> None:
++    registry = build_scheduler_owned_runtime_registry()
++    conflicting = SchedulerOwnedRuntimeComponentRegistration(
++        component_id=DETERMINISTIC_FAKE_COMPONENT_ID,
++        surface="wrong",
++        owner="scheduler",
++        role="command",
++        capabilities=("laboratory.visit.execute",),
++        depends_on=(),
++        source_paths=("src/context/wrong.py",),
++    )
++    conflicting_registry = type(registry)(
++        registrations=registry.registrations + (conflicting,),
++        source_map_complete=registry.source_map_complete,
++    )
++    with pytest.raises(LaboratoryContractError, match="conflicting"):
++        bind_deterministic_fake_laboratory_registration(conflicting_registry)
+diff --git a/tests/rules/test_deterministic_fake_laboratory_provider_0273_rule.py b/tests/rules/test_deterministic_fake_laboratory_provider_0273_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_deterministic_fake_laboratory_provider_0273_rule.py
+@@ -0,0 +1,102 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++SOURCE = ROOT / "src/context/deterministic_fake_laboratory_provider_0273.py"
++ARCH = ROOT / "doc/architecture/DETERMINISTIC_FAKE_LABORATORY_PROVIDER_0273.md"
++GRAPH = ROOT / "doc/docs/architecture/runtime/273_r3_deterministic_fake_laboratory_provider.dot"
++MANIFEST = ROOT / "doc/manifests/MANIFEST_0273_R3_DETERMINISTIC_FAKE_LABORATORY_PROVIDER_CHANGED_FILES.md"
++REPORT = ROOT / "PHASE0273_R3_DETERMINISTIC_FAKE_LABORATORY_PROVIDER_TEST_REPORT.md"
++
++
++def test_fake_provider_reuses_existing_registry_type() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    for marker in (
++        "SchedulerOwnedRuntimeComponentRegistration",
++        "SchedulerOwnedRuntimeRegistry",
++        "validate_scheduler_owned_runtime_registry",
++        "selected_from_existing_surfaces=False",
++        "bind_deterministic_fake_laboratory_registration",
++    ):
++        assert marker in text
++
++
++def test_fake_provider_is_bounded_deterministic_and_not_real_backend() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    for marker in (
++        "DeterministicFakeLaboratoryProvider",
++        "validate_laboratory_visit_result",
++        '"deterministic": True',
++        '"real_backend_used": False',
++        "request.resource_budget.allow_network",
++        "max_external_calls",
++    ):
++        assert marker in text
++
++
++def test_fake_provider_does_not_create_parallel_authorities_or_backends() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    forbidden_imports = (
++        "import openvino",
++        "import qdrant",
++        "import vispy",
++        "import genai",
++        "import requests",
++        "import httpx",
++        "from kernel.scheduler",
++        "from kernel.event_bus",
++        "RouteRuntimeManager",
++    )
++    for marker in forbidden_imports:
++        assert marker not in text
++    for marker in (
++        "provider_owns_orchestration: bool = False",
++        "provider_owns_persistence: bool = False",
++        "provider_owns_vector_index: bool = False",
++        "provider_publishes_commands: bool = False",
++        "provider_uses_network: bool = False",
++        "real_backend_used: bool = False",
++    ):
++        assert marker in text
++
++
++def test_fake_provider_keeps_handler_and_scheduler_path_explicit() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    architecture = ARCH.read_text(encoding="utf-8")
++    assert "Dispatcher -> Handler -> LaboratoryProvider.execute" in text
++    assert "Scheduler.emit()" in architecture
++    assert "Scheduler.run()" in architecture
++    assert "EventBus" in architecture
++    assert "VisPy" in architecture
++
++
++def test_graph_binds_existing_registry_to_fake_provider() -> None:
++    graph = GRAPH.read_text(encoding="utf-8")
++    for marker in (
++        "ExistingRegistry -> Registration",
++        "Registration -> Handler",
++        "Handler -> FakeProvider",
++        "FakeProvider -> VisitResult",
++        "VisitResult -> EventBus",
++        "EventBus -> PassiveSupervisor",
++        "PassiveSupervisor -> VisPy",
++    ):
++        assert marker in graph
++
++
++def test_report_marks_tracer_bullet_not_real_backend() -> None:
++    report = REPORT.read_text(encoding="utf-8")
++    for marker in (
++        "live_path_status: transition",
++        "live_path_uses_real_backend: false",
++        "provider_active: true",
++        "network_added: false",
++        "external_dependencies_added: false",
++        "scheduler_modified: false",
++    ):
++        assert marker in report
++
++
++def test_manifest_contains_no_generated_or_binary_artifact() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    for marker in ("__pycache__", ".pyc", ".pyo", ".svg"):
++        assert marker not in manifest
+diff --git a/doc/architecture/DETERMINISTIC_FAKE_LABORATORY_PROVIDER_0273.md b/doc/architecture/DETERMINISTIC_FAKE_LABORATORY_PROVIDER_0273.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/DETERMINISTIC_FAKE_LABORATORY_PROVIDER_0273.md
+@@ -0,0 +1,122 @@
++# Deterministic fake laboratory provider — 0273-r3
++
++## Purpose
++
++0273-r3 activates the first `missipy.laboratory.v1` provider as a local,
++deterministic tracer bullet. It validates the provider membrane and the
++existing Scheduler-owned registry binding before a native Autodoc, GenAI or
++partner laboratory is integrated.
++
++The fake provider is not a real laboratory backend.
++
++## Reused boundaries
++
++```text
++LaboratoryVisitRequest
++-> Scheduler.emit()
++-> PolicyEngine.decide()
++-> PriorityQueue
++-> Scheduler.run()
++-> Dispatcher
++-> Handler
++-> LaboratoryProvider.execute
++-> LaboratoryVisitResult
++```
++
++This patch implements only the Handler-side provider membrane and registry
++registration. The complete Scheduler walking skeleton is deferred to 0274.
++`Scheduler.run()` is not modified.
++
++## Existing registry binding
++
++The provider is represented by the existing
++`SchedulerOwnedRuntimeComponentRegistration` type:
++
++```text
++component_id = laboratory_provider_local_fake
++surface = laboratory_provider
++owner = scheduler
++role = command
++runtime_api_kind = scheduler_owned_object
++selected_from_existing_surfaces = false
++```
++
++`selected_from_existing_surfaces = false` is deliberate: 0273-r1 proved the
++new seam was missing before this provider was added. No parallel registry is
++created. The immutable 0257 registry value is copied with one extra
++registration, and exact replay is idempotent.
++
++## Provider behavior
++
++The fake provider:
++
++- executes in process;
++- uses only the standard library;
++- is deterministic for the same visit request;
++- refuses network-enabled budgets and external calls;
++- accepts only declared input/output contracts;
++- returns immutable `LaboratoryVisitResult` records;
++- validates every result against the request budget;
++- supports deterministic `completed`, `needs_context`, `needs_specialist`,
++  `rejected` and `failed` scenarios.
++
++The scenario is selected only through test/operator metadata
++`fake_scenario`. No model or heuristic decides it.
++
++## Authority boundaries
++
++The provider does not own:
++
++- Scheduler or policy;
++- SQL persistence;
++- OpenVINO/E5 embedding;
++- Qdrant indexing or recall;
++- GitHub mutation;
++- EventBus command publication;
++- RouteProxy/ControlProxy lifecycle;
++- PassiveSupervisor;
++- Cell Lens or VisPy.
++
++Future 0274 composition may publish normalized observation facts after the
++result crosses the existing result boundary. EventBus remains observation-only,
++and VisPy remains a passive renderer.
++
++## Inter-laboratory behavior
++
++No external visit is executed. The v1 contracts keep the reserved laboratory
++and conversation refs, but this fake refuses a network-enabled visit. A future
++external request must return to `Scheduler.emit()` and pass policy before a
++target provider can be invoked.
++
++## Next phase
++
++0274 will compose:
++
++```text
++durable SourceCandidate
++-> ServerOrientation
++-> Scheduler deliberation command
++-> registered fake laboratory provider
++-> deterministic specialist result/follow-up
++-> validation and synthesis
++-> FinalArtifactEnvelope
++-> persistence / projection / observation / publication preview
++```
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++live_path_status: transition
++live_path_uses_real_backend: false
++context_contract_version: missipy.laboratory.v1
++context_contract_changed: false
++external_dependencies_added: false
++scheduler_modified: false
++provider_active: true
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++```
+diff --git a/doc/docs/architecture/runtime/273_r3_deterministic_fake_laboratory_provider.dot b/doc/docs/architecture/runtime/273_r3_deterministic_fake_laboratory_provider.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/273_r3_deterministic_fake_laboratory_provider.dot
+@@ -0,0 +1,28 @@
++digraph DeterministicFakeLaboratoryProvider0273R3 {
++  rankdir=LR;
++  node [shape=box];
++
++  Request [label="LaboratoryVisitRequest"];
++  Scheduler [label="Scheduler / Policy / Queue"];
++  ExistingRegistry [label="existing registry 0257"];
++  Registration [label="SchedulerOwnedRuntimeComponentRegistration"];
++  Handler [label="Dispatcher / Handler"];
++  FakeProvider [label="deterministic local fake provider"];
++  VisitResult [label="immutable LaboratoryVisitResult"];
++  EventBus [label="future observation facts only"];
++  PassiveSupervisor [label="PassiveSupervisor"];
++  VisPy [label="Cell Lens / VisPy"];
++
++  Request -> Scheduler;
++  ExistingRegistry -> Registration;
++  Registration -> Handler;
++  Scheduler -> Handler;
++  Handler -> FakeProvider;
++  FakeProvider -> VisitResult;
++  VisitResult -> EventBus [style=dashed, label="0274"];
++  EventBus -> PassiveSupervisor;
++  PassiveSupervisor -> VisPy;
++
++  Closed [shape=note, label="No network / SQL / Qdrant / GitHub / real model"];
++  FakeProvider -> Closed [style=dotted, arrowhead=none];
++}
+diff --git a/doc/manifests/MANIFEST_0273_R3_DETERMINISTIC_FAKE_LABORATORY_PROVIDER_CHANGED_FILES.md b/doc/manifests/MANIFEST_0273_R3_DETERMINISTIC_FAKE_LABORATORY_PROVIDER_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0273_R3_DETERMINISTIC_FAKE_LABORATORY_PROVIDER_CHANGED_FILES.md
+@@ -0,0 +1,16 @@
++# Manifest — 0273-r3 deterministic fake laboratory provider
++
++Changed files:
++
++- `PHASE0273_R3_DETERMINISTIC_FAKE_LABORATORY_PROVIDER_TEST_REPORT.md`
++- `doc/CHANGELOG_0273_R3_DETERMINISTIC_FAKE_LABORATORY_PROVIDER.md`
++- `doc/architecture/DETERMINISTIC_FAKE_LABORATORY_PROVIDER_0273.md`
++- `doc/docs/architecture/runtime/273_r3_deterministic_fake_laboratory_provider.dot`
++- `doc/manifests/MANIFEST_0273_R3_DETERMINISTIC_FAKE_LABORATORY_PROVIDER_CHANGED_FILES.md`
++- `doc/releases/0273-r3-deterministic-fake-laboratory-provider.md`
++- `src/context/deterministic_fake_laboratory_provider_0273.py`
++- `tests/context/test_deterministic_fake_laboratory_provider_0273.py`
++- `tests/rules/test_deterministic_fake_laboratory_provider_0273_rule.py`
++
++No Scheduler, EventBus, route runtime, SQL/Qdrant adapter, GitHub adapter,
++renderer or external dependency is changed.
+diff --git a/doc/CHANGELOG_0273_R3_DETERMINISTIC_FAKE_LABORATORY_PROVIDER.md b/doc/CHANGELOG_0273_R3_DETERMINISTIC_FAKE_LABORATORY_PROVIDER.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0273_R3_DETERMINISTIC_FAKE_LABORATORY_PROVIDER.md
+@@ -0,0 +1,20 @@
++# Changelog — 0273-r3 deterministic fake laboratory provider
++
++## Added
++
++- stdlib-only deterministic fake laboratory provider;
++- Handler-side provider membrane;
++- bounded completed/context/specialist/rejected/failed scenarios;
++- active binding plan and registration using the existing 0257 registry type;
++- immutable registry extension with idempotent replay;
++- execution record proving no orchestration, persistence, vector, command-bus,
++  network or real-backend ownership;
++- architecture, release, manifest, report and executable tests.
++
++## Not added
++
++- no real laboratory framework;
++- no GenAI or model;
++- no network;
++- no new manager, Scheduler, bus or registry;
++- no SQL/Qdrant/GitHub/VisPy behavior.
+diff --git a/doc/releases/0273-r3-deterministic-fake-laboratory-provider.md b/doc/releases/0273-r3-deterministic-fake-laboratory-provider.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/releases/0273-r3-deterministic-fake-laboratory-provider.md
+@@ -0,0 +1,11 @@
++# 0273-r3 — Deterministic fake laboratory provider
++
++The first laboratory provider is now active as a local deterministic tracer
++bullet. It uses the existing Scheduler-owned registration type and executes one
++bounded `missipy.laboratory.v1` visit behind the Handler membrane.
++
++It is not a real backend. The provider has no network, model, persistence,
++vector index, GitHub mutation, command bus or rendering ownership.
++
++0274 will compose this provider with the durable candidate, deliberation,
++synthesis, observation and publication-preview paths.
+diff --git a/PHASE0273_R3_DETERMINISTIC_FAKE_LABORATORY_PROVIDER_TEST_REPORT.md b/PHASE0273_R3_DETERMINISTIC_FAKE_LABORATORY_PROVIDER_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0273_R3_DETERMINISTIC_FAKE_LABORATORY_PROVIDER_TEST_REPORT.md
+@@ -0,0 +1,44 @@
++# Phase 0273-r3 test report — deterministic fake laboratory provider
++
++## Validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. python -m pytest -q tests/rules
++PYTHONPATH=src:. python -m pytest -q \
++  tests/context/test_deterministic_fake_laboratory_provider_0273.py
++PYTHONPATH=src:. python -m pytest -q
++```
++
++## Covered behavior
++
++- enabled/ready local descriptor with network closed;
++- runtime-checkable provider membrane;
++- deterministic result replay;
++- immutable serializable execution record;
++- bounded context and specialist follow-up scenarios;
++- network, wrong-laboratory and unsupported-scenario refusal;
++- active binding plan targeting the existing registry type;
++- immutable registry append, validation and idempotent replay;
++- conflicting registration refusal;
++- no parallel authority or real backend claim.
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: r1 audited the seam and r3 uses the existing registry and Handler boundary
++live_path_status: transition
++live_path_uses_real_backend: false
++context_contract_version: missipy.laboratory.v1
++context_contract_changed: false
++external_dependencies_added: false
++scheduler_modified: false
++provider_active: true
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```

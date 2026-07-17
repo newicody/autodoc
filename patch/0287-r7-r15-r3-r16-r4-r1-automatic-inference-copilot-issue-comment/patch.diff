@@ -1,0 +1,330 @@
+diff --git a/PHASE0287_R16_R4_R1_AUTOMATIC_COPILOT_ISSUE_COMMENT_REPORT.md b/PHASE0287_R16_R4_R1_AUTOMATIC_COPILOT_ISSUE_COMMENT_REPORT.md
+new file mode 100644
+index 0000000..2d324e5
+--- /dev/null
++++ b/PHASE0287_R16_R4_R1_AUTOMATIC_COPILOT_ISSUE_COMMENT_REPORT.md
+@@ -0,0 +1,29 @@
++# 0287 r16-r4-r1 — automatic Copilot advisory Issue comment
++
++## Finding
++
++The Projects workflow already produced the correlated request, advisory and
++manifest artifacts. The repository also already contained the pure v2 Issue
++comment planner and its controlled `gh` adapter. The missing wiring was inside
++the workflow: it never built the v2 preview and never invoked the publication
++adapter.
++
++## Change
++
++For every locally qualified inference dispatch with Copilot enabled, the
++workflow now:
++
++1. creates the three correlated artifacts;
++2. builds the existing v2 publication preview;
++3. plans the existing idempotent Issue comment;
++4. confirms that exact plan digest inside the same qualified workflow run;
++5. publishes and reads back the comment below the Issue;
++6. stores preview, plan and execution evidence with the manifest artifact.
++
++Artifact identity is built before publication. The three uploads use `always()`
++with file-existence guards, so a failed comment publication remains a failed run
++without destroying the artifacts needed for diagnosis and local recovery.
++
++The Issue body remains authoritative and unchanged. The comment is explicitly
++consultative. No laboratory execution, SQL write, Qdrant write or ProjectV2
++field mutation is introduced by this unit.
+diff --git a/doc/architecture/AUTOMATIC_COPILOT_ISSUE_COMMENT_0287_R16_R4_R1.dot b/doc/architecture/AUTOMATIC_COPILOT_ISSUE_COMMENT_0287_R16_R4_R1.dot
+new file mode 100644
+index 0000000..69b9f36
+--- /dev/null
++++ b/doc/architecture/AUTOMATIC_COPILOT_ISSUE_COMMENT_0287_R16_R4_R1.dot
+@@ -0,0 +1,16 @@
++digraph automatic_copilot_issue_comment_0287_r16_r4_r1 {
++  rankdir=LR;
++  project [label="ProjectV2\ninference-qualified item"];
++  dispatcher [label="existing local\ntransition dispatcher"];
++  workflow [label="Projects workflow_dispatch"];
++  artifacts [label="request + advisory + manifest"];
++  identity [label="artifact identity"];
++  preview [label="existing v2 preview"];
++  plan [label="existing comment plan\nmarker + digest + collision guard"];
++  issue [label="Issue comment\nvisible, consultative"];
++  uploads [label="three uploads\nalways() guarded"];
++  project -> dispatcher -> workflow -> artifacts -> identity -> preview -> plan -> issue;
++  identity -> uploads;
++  plan -> uploads;
++  issue -> uploads [label="readback evidence"];
++}
+diff --git a/doc/architecture/AUTOMATIC_COPILOT_ISSUE_COMMENT_0287_R16_R4_R1.md b/doc/architecture/AUTOMATIC_COPILOT_ISSUE_COMMENT_0287_R16_R4_R1.md
+new file mode 100644
+index 0000000..c1218d7
+--- /dev/null
++++ b/doc/architecture/AUTOMATIC_COPILOT_ISSUE_COMMENT_0287_R16_R4_R1.md
+@@ -0,0 +1,23 @@
++# Automatic Copilot Issue comment — 0287 r16-r4-r1
++
++```text
++ProjectV2 item enters the configured inference status
++  -> existing local transition dispatcher
++  -> workflow_dispatch(newicody/projects)
++  -> authoritative request + Copilot advisory + correlation manifest
++  -> human-readable artifact identity
++  -> existing v2 publication preview
++  -> existing deterministic Issue-comment plan
++  -> exact digest confirmation in the same qualified run
++  -> create or replay-noop below the source Issue
++  -> immediate readback
++  -> uploads always preserve artifacts and publication evidence
++```
++
++The local transition dispatcher remains the qualification boundary. The
++workflow does not add a broad `issues:` trigger because an Issue can exist
++without being selected for inference by ProjectV2.
++
++The Issue body is never rewritten. A visible comment is the primary GitHub
++surface for the first Copilot opinion. `Avis Copilot` is a secondary ProjectV2
++projection. Copilot remains untrusted and non-authoritative.
+diff --git a/doc/manifests/MANIFEST_0287_R16_R4_R1_AUTOMATIC_COPILOT_ISSUE_COMMENT.md b/doc/manifests/MANIFEST_0287_R16_R4_R1_AUTOMATIC_COPILOT_ISSUE_COMMENT.md
+new file mode 100644
+index 0000000..517f2a4
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0287_R16_R4_R1_AUTOMATIC_COPILOT_ISSUE_COMMENT.md
+@@ -0,0 +1,30 @@
++# Manifest — 0287 r16-r4-r1
++
++## Modified
++
++- `templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml`
++- `templates/github/projects-repository/COPILOT_ADVISORY_V2.md`
++
++## Added
++
++- `PHASE0287_R16_R4_R1_AUTOMATIC_COPILOT_ISSUE_COMMENT_REPORT.md`
++- `doc/architecture/AUTOMATIC_COPILOT_ISSUE_COMMENT_0287_R16_R4_R1.md`
++- `doc/architecture/AUTOMATIC_COPILOT_ISSUE_COMMENT_0287_R16_R4_R1.dot`
++- `tests/rules/test_automatic_copilot_issue_comment_0287_r16_r4_r1_rule.py`
++
++## Reused unchanged
++
++- `templates/github/projects-repository/scripts/build_copilot_advisory_v2_publication_preview.py`
++- `src/context/github_copilot_advisory_v2_issue_publication_0287.py`
++- `tools/publish_github_copilot_advisory_v2_issue_comment_0287.py`
++
++## Boundaries
++
++- no broad Issue trigger;
++- no Issue body mutation;
++- no sub-Issue creation;
++- no Scheduler or laboratory change;
++- no SQL or Qdrant write;
++- no ProjectV2 mutation in this unit;
++- only the non-authoritative first opinion is automatically published;
++- artifact uploads survive a comment-publication failure.
+diff --git a/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml b/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml
+index 01fad55..8139b42 100644
+--- a/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml
++++ b/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml
+@@ -30,7 +30,7 @@ on:
+ 
+ permissions:
+   contents: read
+-  issues: read
++  issues: write
+   actions: read
+   copilot-requests: write
+ 
+@@ -155,12 +155,68 @@ jobs:
+           python
+           autodoc-runtime/templates/github/projects-repository/scripts/build_human_readable_artifact_identity.py
+ 
++      - name: Build Copilot advisory v2 publication preview
++        if: ${{ hashFiles('out/copilot_advisory.json') != '' }}
++        run: >
++          python
++          autodoc-runtime/templates/github/projects-repository/scripts/build_copilot_advisory_v2_publication_preview.py
++          --advisory out/copilot_advisory.json
++          --request out/authoritative_request.json
++          --manifest out/dual_artifact_manifest.json
++          --run-id "${{ github.run_id }}"
++          --repository "${{ github.repository }}"
++          --issue-number "${{ inputs.issue_number }}"
++          --output out/copilot_advisory_publication_preview_v2.json
++
++      - name: Plan automatic Copilot advisory Issue comment
++        id: copilot-comment-plan
++        if: ${{ hashFiles('out/copilot_advisory.json') != '' }}
++        env:
++          GH_TOKEN: ${{ github.token }}
++        shell: bash
++        run: |
++          set -euo pipefail
++          python \
++            autodoc-runtime/tools/publish_github_copilot_advisory_v2_issue_comment_0287.py \
++            --repository "${{ github.repository }}" \
++            --issue-number "${{ inputs.issue_number }}" \
++            --preview out/copilot_advisory_publication_preview_v2.json \
++            --policy-decision-id "policy:projects:automatic-copilot-issue-comment:${{ github.run_id }}" \
++            --operator-decision approve \
++            --format json \
++            > out/copilot_issue_comment_plan.json
++          plan_digest="$(
++            python -c 'import json; print(json.load(open("out/copilot_issue_comment_plan.json", encoding="utf-8"))["plan"]["plan_digest"])'
++          )"
++          test -n "$plan_digest"
++          printf 'plan_digest=%s\n' "$plan_digest" >> "$GITHUB_OUTPUT"
++
++      - name: Publish automatic Copilot advisory below Issue
++        if: ${{ hashFiles('out/copilot_advisory.json') != '' }}
++        env:
++          GH_TOKEN: ${{ github.token }}
++          AUTODOC_REMOTE_MUTATION_ALLOWED: "true"
++          AUTODOC_ISSUE_PUBLICATION_ALLOWED: "true"
++        run: >
++          python
++          autodoc-runtime/tools/publish_github_copilot_advisory_v2_issue_comment_0287.py
++          --repository "${{ github.repository }}"
++          --issue-number "${{ inputs.issue_number }}"
++          --preview out/copilot_advisory_publication_preview_v2.json
++          --policy-decision-id "policy:projects:automatic-copilot-issue-comment:${{ github.run_id }}"
++          --operator-decision approve
++          --execute
++          --confirm-plan-digest "${{ steps.copilot-comment-plan.outputs.plan_digest }}"
++          --format json
++          > out/copilot_issue_comment_execute.json
++
+       # Legacy fixed names remain indexed in artifact_identity.json and are
+       # accepted by the local importer for historical runs:
+       # - autodoc-authoritative-request
+       # - autodoc-copilot-advisory
+       # - autodoc-dual-artifact-manifest
+       - name: Upload authoritative request
++        if: ${{ always() && hashFiles('out/authoritative_request.json') != '' }}
+         uses: actions/upload-artifact@v7
+         with:
+           name: ${{ steps.artifact-identity.outputs.request_name }}
+@@ -168,7 +224,7 @@ jobs:
+           if-no-files-found: error
+ 
+       - name: Upload optional Copilot advisory
+-        if: ${{ hashFiles('out/copilot_advisory.json') != '' }}
++        if: ${{ always() && hashFiles('out/copilot_advisory.json') != '' }}
+         uses: actions/upload-artifact@v7
+         with:
+           name: ${{ steps.artifact-identity.outputs.advisory_name }}
+@@ -176,10 +232,14 @@ jobs:
+           if-no-files-found: error
+ 
+       - name: Upload manifest
++        if: ${{ always() && hashFiles('out/dual_artifact_manifest.json') != '' }}
+         uses: actions/upload-artifact@v7
+         with:
+           name: ${{ steps.artifact-identity.outputs.manifest_name }}
+           path: |
+             out/dual_artifact_manifest.json
+             out/artifact_identity.json
++            out/copilot_advisory_publication_preview_v2.json
++            out/copilot_issue_comment_plan.json
++            out/copilot_issue_comment_execute.json
+           if-no-files-found: error
+diff --git a/templates/github/projects-repository/COPILOT_ADVISORY_V2.md b/templates/github/projects-repository/COPILOT_ADVISORY_V2.md
+index dcf65cf..a65cab5 100644
+--- a/templates/github/projects-repository/COPILOT_ADVISORY_V2.md
++++ b/templates/github/projects-repository/COPILOT_ADVISORY_V2.md
+@@ -136,3 +136,32 @@ export AUTODOC_ISSUE_PUBLICATION_ALLOWED=true
+ Relancer la même commande avec `--execute` et le
+ `--confirm-plan-digest` exact. L’adapter relit le commentaire créé, refuse les
+ collisions et transforme un replay strictement identique en no-op.
++
++
++## Publication automatique pour les Issues qualifiées pour l’inférence
++
++Le passage d’un item ProjectV2 dans l’état localement configuré comme destiné à
++l’inférence autorise le connecteur local à déclencher `workflow_dispatch`. Cette
++décision de dispatch vaut approbation bornée pour publier uniquement le premier
++avis Copilot, explicitement consultatif, sous l’Issue source. Elle n’autorise ni
++l’exécution du laboratoire ni la publication d’un résultat final.
++
++Lorsque `AUTODOC_COPILOT_ADVISORY_ENABLED=true`, le workflow doit, dans la même
++exécution :
++
++1. produire `authoritative_request.json`, `copilot_advisory.json` et le manifest
++   corrélé ;
++2. construire la preview v2 et son plan déterministe ;
++3. publier le commentaire Markdown sous l’Issue avec `issues: write` ;
++4. relire immédiatement le commentaire ;
++5. conserver le plan et le rapport d’exécution dans l’artefact manifest.
++
++Le corps de l’Issue n’est jamais modifié. Une réexécution strictement identique
++devient un no-op idempotent ; une nouvelle empreinte d’avis produit un nouveau
++commentaire et conserve donc l’historique des cycles. Les collisions restent
++fermées. La projection `Avis Copilot` dans ProjectV2 demeure une projection
++secondaire locale et ne remplace pas le commentaire visible sous l’Issue.
++
++Les trois uploads utilisent `always()` après la construction de leur identité :
++si la publication du commentaire échoue, les artefacts corrélés et les preuves
++disponibles restent récupérables, tandis que le run conserve son état d’échec.
+diff --git a/tests/rules/test_automatic_copilot_issue_comment_0287_r16_r4_r1_rule.py b/tests/rules/test_automatic_copilot_issue_comment_0287_r16_r4_r1_rule.py
+new file mode 100644
+index 0000000..c7d9423
+--- /dev/null
++++ b/tests/rules/test_automatic_copilot_issue_comment_0287_r16_r4_r1_rule.py
+@@ -0,0 +1,59 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++WORKFLOW = ROOT / "templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml"
++DOC = ROOT / "templates/github/projects-repository/COPILOT_ADVISORY_V2.md"
++PLANNER = ROOT / "src/context/github_copilot_advisory_v2_issue_publication_0287.py"
++ADAPTER = ROOT / "tools/publish_github_copilot_advisory_v2_issue_comment_0287.py"
++
++
++def test_workflow_automatically_publishes_the_existing_v2_issue_comment() -> None:
++    text = WORKFLOW.read_text(encoding="utf-8")
++
++    assert "  issues: write" in text
++    assert "Build Copilot advisory v2 publication preview" in text
++    assert "Plan automatic Copilot advisory Issue comment" in text
++    assert "Publish automatic Copilot advisory below Issue" in text
++    assert "build_copilot_advisory_v2_publication_preview.py" in text
++    assert "publish_github_copilot_advisory_v2_issue_comment_0287.py" in text
++    assert "--confirm-plan-digest \"${{ steps.copilot-comment-plan.outputs.plan_digest }}\"" in text
++    assert 'AUTODOC_ISSUE_PUBLICATION_ALLOWED: "true"' in text
++    assert "out/copilot_issue_comment_execute.json" in text
++
++
++def test_artifacts_survive_a_comment_publication_failure() -> None:
++    text = WORKFLOW.read_text(encoding="utf-8")
++
++    assert "always() && hashFiles('out/authoritative_request.json') != ''" in text
++    assert "always() && hashFiles('out/copilot_advisory.json') != ''" in text
++    assert "always() && hashFiles('out/dual_artifact_manifest.json') != ''" in text
++    assert text.index("Build human-readable artifact identities") < text.index(
++        "Publish automatic Copilot advisory below Issue"
++    )
++    assert text.index("Publish automatic Copilot advisory below Issue") < text.index(
++        "Upload authoritative request"
++    )
++
++
++def test_workflow_keeps_project_qualification_and_does_not_mutate_issue_body() -> None:
++    text = WORKFLOW.read_text(encoding="utf-8")
++
++    assert "workflow_dispatch:" in text
++    assert "\n  issues:\n" not in text
++    assert "/issues/${ISSUE_NUMBER}/comments" not in text
++    assert "sub-issue" not in text.lower()
++    assert "updateProjectV2ItemFieldValue" not in text
++
++
++def test_existing_issue_publication_contract_is_reused() -> None:
++    planner = PLANNER.read_text(encoding="utf-8")
++    adapter = ADAPTER.read_text(encoding="utf-8")
++    documentation = DOC.read_text(encoding="utf-8")
++
++    assert "MARKER_PREFIX = \"autodoc:copilot-advisory-v2\"" in planner
++    assert 'action == "replay"' in planner
++    assert "multiple existing comments carry the same marker" in planner
++    assert "readback_verified" in adapter
++    assert "Le corps de l’Issue n’est jamais modifié" in documentation
++    assert "ProjectV2 demeure une projection" in documentation

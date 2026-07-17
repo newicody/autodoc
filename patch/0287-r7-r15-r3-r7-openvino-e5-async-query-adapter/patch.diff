@@ -1,0 +1,528 @@
+diff --git a/PHASE0287_R7_R15_R3_R7_OPENVINO_E5_ASYNC_QUERY_ADAPTER_REPORT.md b/PHASE0287_R7_R15_R3_R7_OPENVINO_E5_ASYNC_QUERY_ADAPTER_REPORT.md
+new file mode 100644
+index 0000000..ba293f7
+--- /dev/null
++++ b/PHASE0287_R7_R15_R3_R7_OPENVINO_E5_ASYNC_QUERY_ADAPTER_REPORT.md
+@@ -0,0 +1,26 @@
++# Phase 0287-r7-r15-r3-r7 — OpenVINO E5 async query adapter
++
++## Result
++
++The installed runtime now has a narrow asynchronous adapter between the
++already-built multilingual-e5-small pipeline and `DenseQueryEmbedding`.
++
++The adapter performs no runtime construction. It receives an existing pipeline,
++adds the locked `query:` prefix, awaits `embed_text()`, validates the normalized
++384-dimensional result and returns the existing dense-query contract.
++
++## Boundaries
++
++- existing E5 pipeline reused;
++- no nested event loop;
++- no `asyncio.run()` in runtime code;
++- no Scheduler construction;
++- no Qdrant or PostgreSQL call;
++- no raw vector in receipts;
++- E5 dimension remains exactly 384.
++
++## Next unit
++
++The next unit is **async hybrid retrieval execution**. It will add an async
++variant of the existing retrieval composition, await this adapter, and keep the
++Qdrant executor and SQL-authority reads behind their existing injected ports.
+diff --git a/doc/CHANGELOG_0287_R7_R15_R3_R7_OPENVINO_E5_ASYNC_QUERY_ADAPTER.md b/doc/CHANGELOG_0287_R7_R15_R3_R7_OPENVINO_E5_ASYNC_QUERY_ADAPTER.md
+new file mode 100644
+index 0000000..a0325bc
+--- /dev/null
++++ b/doc/CHANGELOG_0287_R7_R15_R3_R7_OPENVINO_E5_ASYNC_QUERY_ADAPTER.md
+@@ -0,0 +1,8 @@
++# Changelog 0287-r7-r15-r3-r7
++
++- Added an async adapter for the existing multilingual-e5-small pipeline.
++- Locked query prefixing to `query:`.
++- Locked normalized dense output to 384 dimensions.
++- Reused `DenseQueryEmbedding`.
++- Added serializable construction evidence without raw vectors.
++- Deferred Qdrant and SQL execution to the next unit.
+diff --git a/doc/architecture/OPENVINO_E5_ASYNC_QUERY_ADAPTER_0287_R7_R15_R3_R7.dot b/doc/architecture/OPENVINO_E5_ASYNC_QUERY_ADAPTER_0287_R7_R15_R3_R7.dot
+new file mode 100644
+index 0000000..876d924
+--- /dev/null
++++ b/doc/architecture/OPENVINO_E5_ASYNC_QUERY_ADAPTER_0287_R7_R15_R3_R7.dot
+@@ -0,0 +1,11 @@
++digraph openvino_e5_async_query_adapter_0287_r7_r15_r3_r7 {
++  rankdir=LR;
++  pipeline [label="Existing async E5 pipeline"];
++  adapter [label="Async query adapter\nquery: prefix + validation"];
++  dense [label="DenseQueryEmbedding\n384 / normalized"];
++  retrieval [label="Future async hybrid retrieval"];
++
++  pipeline -> adapter [label="await embed_text"];
++  adapter -> dense;
++  dense -> retrieval;
++}
+diff --git a/doc/architecture/OPENVINO_E5_ASYNC_QUERY_ADAPTER_0287_R7_R15_R3_R7.md b/doc/architecture/OPENVINO_E5_ASYNC_QUERY_ADAPTER_0287_R7_R15_R3_R7.md
+new file mode 100644
+index 0000000..d012571
+--- /dev/null
++++ b/doc/architecture/OPENVINO_E5_ASYNC_QUERY_ADAPTER_0287_R7_R15_R3_R7.md
+@@ -0,0 +1,17 @@
++# OpenVINO E5 async query adapter
++
++```text
++already-built multilingual-e5-small pipeline
++                  |
++                  | await embed_text("query: ...")
++                  v
++LoveOpenVinoE5AsyncQueryEmbedder
++                  |
++                  | DenseQueryEmbedding (384, normalized)
++                  v
++future async hybrid retrieval execution
++```
++
++The adapter is a signature boundary, not a runtime factory. The future
++tool-bounded composer remains responsible for constructing the existing E5
++pipeline from installed configuration.
+diff --git a/doc/manifests/MANIFEST_0287_R7_R15_R3_R7_OPENVINO_E5_ASYNC_QUERY_ADAPTER.md b/doc/manifests/MANIFEST_0287_R7_R15_R3_R7_OPENVINO_E5_ASYNC_QUERY_ADAPTER.md
+new file mode 100644
+index 0000000..6656556
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0287_R7_R15_R3_R7_OPENVINO_E5_ASYNC_QUERY_ADAPTER.md
+@@ -0,0 +1,20 @@
++# Manifest 0287-r7-r15-r3-r7
++
++## Added
++
++- `src/context/love_openvino_e5_async_query_adapter_0287.py`
++- `tests/context/test_love_openvino_e5_async_query_adapter_0287_r7_r15_r3_r7.py`
++- `tests/rules/test_love_openvino_e5_async_query_adapter_0287_r7_r15_r3_r7_rule.py`
++- `PHASE0287_R7_R15_R3_R7_OPENVINO_E5_ASYNC_QUERY_ADAPTER_REPORT.md`
++- `doc/CHANGELOG_0287_R7_R15_R3_R7_OPENVINO_E5_ASYNC_QUERY_ADAPTER.md`
++- `doc/architecture/OPENVINO_E5_ASYNC_QUERY_ADAPTER_0287_R7_R15_R3_R7.md`
++- `doc/architecture/OPENVINO_E5_ASYNC_QUERY_ADAPTER_0287_R7_R15_R3_R7.dot`
++- `doc/manifests/MANIFEST_0287_R7_R15_R3_R7_OPENVINO_E5_ASYNC_QUERY_ADAPTER.md`
++
++## Modified
++
++None.
++
++## Runtime boundary
++
++The patch adds no Scheduler, Qdrant, PostgreSQL or OpenVINO construction.
+diff --git a/src/context/love_openvino_e5_async_query_adapter_0287.py b/src/context/love_openvino_e5_async_query_adapter_0287.py
+new file mode 100644
+index 0000000..addae4e
+--- /dev/null
++++ b/src/context/love_openvino_e5_async_query_adapter_0287.py
+@@ -0,0 +1,208 @@
++"""Async OpenVINO E5 query adapter for the installed love runtime.
++
++This module adapts the existing asynchronous multilingual-e5-small embedding
++pipeline to the dense-query contract used by hybrid retrieval. It does not
++construct OpenVINO, a Scheduler, Qdrant or PostgreSQL. The already-built
++pipeline is injected by the future tool-bounded runtime composer.
++
++The adapter intentionally exposes ``async embed_query``. It never calls
++``asyncio.run`` and therefore cannot create a nested event loop inside the
++Scheduler-owned execution path.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from typing import Any, Protocol, runtime_checkable
++
++from context.hybrid_retrieval_sql_rehydration_0287 import (
++    DENSE_QUERY_EMBEDDING_SCHEMA,
++    DenseQueryEmbedding,
++)
++
++
++LOVE_OPENVINO_E5_ASYNC_QUERY_ADAPTER_SCHEMA = (
++    "missipy.love.openvino_e5_async_query_adapter.v1"
++)
++
++
++class LoveOpenVinoE5AsyncQueryAdapterError(RuntimeError):
++    """Raised when the injected E5 pipeline violates the locked contract."""
++
++
++@runtime_checkable
++class AsyncEmbeddingPipeline(Protocol):
++    """Narrow asynchronous subset of the existing embedding pipeline."""
++
++    async def embed_text(self, text: str) -> Any:
++        """Return one embedding-pipeline result for the supplied text."""
++
++
++@dataclass(frozen=True, slots=True)
++class LoveOpenVinoE5AsyncQueryAdapterSettings:
++    """Immutable identity and prefix settings for the installed E5 adapter."""
++
++    schema: str
++    model_ref: str
++    model_revision: str
++    backend_ref: str
++    query_prefix: str = "query:"
++    dimension: int = 384
++
++    def __post_init__(self) -> None:
++        if self.schema != LOVE_OPENVINO_E5_ASYNC_QUERY_ADAPTER_SCHEMA:
++            raise LoveOpenVinoE5AsyncQueryAdapterError(
++                "unsupported OpenVINO E5 async query-adapter schema"
++            )
++        for name in ("model_ref", "backend_ref"):
++            value = getattr(self, name)
++            if not isinstance(value, str) or ":" not in value:
++                raise LoveOpenVinoE5AsyncQueryAdapterError(
++                    f"{name} must be a typed reference"
++                )
++        if not isinstance(self.model_revision, str) or not self.model_revision:
++            raise LoveOpenVinoE5AsyncQueryAdapterError(
++                "model_revision must be a non-empty string"
++            )
++        if not isinstance(self.query_prefix, str) or not self.query_prefix.strip():
++            raise LoveOpenVinoE5AsyncQueryAdapterError(
++                "query_prefix must be a non-empty string"
++            )
++        if self.dimension != 384:
++            raise LoveOpenVinoE5AsyncQueryAdapterError(
++                "installed multilingual-e5-small dimension must be 384"
++            )
++
++
++@dataclass(frozen=True, slots=True)
++class LoveOpenVinoE5AsyncQueryAdapterReceipt:
++    """Serializable evidence for one adapter construction."""
++
++    schema: str
++    model_ref: str
++    model_revision: str
++    backend_ref: str
++    query_prefix: str
++    dimension: int
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": self.schema,
++            "model_ref": self.model_ref,
++            "model_revision": self.model_revision,
++            "backend_ref": self.backend_ref,
++            "query_prefix": self.query_prefix,
++            "dimension": self.dimension,
++            "boundaries": {
++                "existing_embedding_pipeline_reused": True,
++                "asyncio_run_used": False,
++                "scheduler_constructed": False,
++                "openvino_runtime_constructed": False,
++                "qdrant_called": False,
++                "postgresql_called": False,
++                "raw_vector_serialized": False,
++            },
++        }
++
++
++class LoveOpenVinoE5AsyncQueryEmbedder:
++    """Convert one existing async E5 pipeline result to DenseQueryEmbedding."""
++
++    def __init__(
++        self,
++        *,
++        pipeline: AsyncEmbeddingPipeline,
++        settings: LoveOpenVinoE5AsyncQueryAdapterSettings,
++    ) -> None:
++        if not isinstance(pipeline, AsyncEmbeddingPipeline):
++            raise LoveOpenVinoE5AsyncQueryAdapterError(
++                "pipeline must expose async embed_text()"
++            )
++        self._pipeline = pipeline
++        self._settings = settings
++        self._receipt = LoveOpenVinoE5AsyncQueryAdapterReceipt(
++            schema=settings.schema,
++            model_ref=settings.model_ref,
++            model_revision=settings.model_revision,
++            backend_ref=settings.backend_ref,
++            query_prefix=settings.query_prefix,
++            dimension=settings.dimension,
++        )
++
++    @property
++    def receipt(self) -> LoveOpenVinoE5AsyncQueryAdapterReceipt:
++        return self._receipt
++
++    async def embed_query(
++        self,
++        query_text: str,
++        *,
++        query_ref: str,
++        vector_name: str,
++    ) -> DenseQueryEmbedding:
++        """Embed a query without creating or nesting an event loop."""
++
++        text = _prefixed_query(query_text, self._settings.query_prefix)
++        result = await self._pipeline.embed_text(text)
++        vector = getattr(result, "vector", None)
++        if vector is None:
++            raise LoveOpenVinoE5AsyncQueryAdapterError(
++                "embedding pipeline result must expose vector"
++            )
++        values = tuple(getattr(vector, "values", ()))
++        dimension = getattr(vector, "dimension", len(values))
++        normalized = getattr(vector, "normalized", False)
++        if dimension != self._settings.dimension or len(values) != dimension:
++            raise LoveOpenVinoE5AsyncQueryAdapterError(
++                "E5 query vector dimension differs from configured dimension"
++            )
++        if normalized is not True:
++            raise LoveOpenVinoE5AsyncQueryAdapterError(
++                "E5 query vector must be normalized"
++            )
++        return DenseQueryEmbedding(
++            schema=DENSE_QUERY_EMBEDDING_SCHEMA,
++            query_ref=query_ref,
++            vector_name=vector_name,
++            model_ref=self._settings.model_ref,
++            model_revision=self._settings.model_revision,
++            backend_ref=self._settings.backend_ref,
++            values=values,
++            normalized=True,
++        )
++
++
++def build_love_openvino_e5_async_query_embedder(
++    *,
++    pipeline: AsyncEmbeddingPipeline,
++    settings: LoveOpenVinoE5AsyncQueryAdapterSettings,
++) -> LoveOpenVinoE5AsyncQueryEmbedder:
++    """Build the narrow adapter around an already-composed E5 pipeline."""
++
++    return LoveOpenVinoE5AsyncQueryEmbedder(
++        pipeline=pipeline,
++        settings=settings,
++    )
++
++
++def _prefixed_query(query_text: str, query_prefix: str) -> str:
++    if not isinstance(query_text, str) or not query_text.strip():
++        raise LoveOpenVinoE5AsyncQueryAdapterError(
++            "query_text must be a non-empty string"
++        )
++    prefix = query_prefix.strip()
++    text = query_text.strip()
++    if text == prefix or text.startswith(prefix + " "):
++        return text
++    return f"{prefix} {text}"
++
++
++__all__ = (
++    "LOVE_OPENVINO_E5_ASYNC_QUERY_ADAPTER_SCHEMA",
++    "AsyncEmbeddingPipeline",
++    "LoveOpenVinoE5AsyncQueryAdapterError",
++    "LoveOpenVinoE5AsyncQueryAdapterReceipt",
++    "LoveOpenVinoE5AsyncQueryAdapterSettings",
++    "LoveOpenVinoE5AsyncQueryEmbedder",
++    "build_love_openvino_e5_async_query_embedder",
++)
+diff --git a/tests/context/test_love_openvino_e5_async_query_adapter_0287_r7_r15_r3_r7.py b/tests/context/test_love_openvino_e5_async_query_adapter_0287_r7_r15_r3_r7.py
+new file mode 100644
+index 0000000..6b59381
+--- /dev/null
++++ b/tests/context/test_love_openvino_e5_async_query_adapter_0287_r7_r15_r3_r7.py
+@@ -0,0 +1,143 @@
++from __future__ import annotations
++
++import asyncio
++from dataclasses import dataclass
++
++import pytest
++
++from context.love_openvino_e5_async_query_adapter_0287 import (
++    LOVE_OPENVINO_E5_ASYNC_QUERY_ADAPTER_SCHEMA,
++    LoveOpenVinoE5AsyncQueryAdapterError,
++    LoveOpenVinoE5AsyncQueryAdapterSettings,
++    build_love_openvino_e5_async_query_embedder,
++)
++
++
++@dataclass(frozen=True)
++class _Vector:
++    values: tuple[float, ...]
++    normalized: bool = True
++
++    @property
++    def dimension(self) -> int:
++        return len(self.values)
++
++
++@dataclass(frozen=True)
++class _Result:
++    vector: _Vector
++
++
++class _Pipeline:
++    def __init__(self, vector: _Vector) -> None:
++        self.vector = vector
++        self.texts: list[str] = []
++
++    async def embed_text(self, text: str) -> _Result:
++        self.texts.append(text)
++        return _Result(self.vector)
++
++
++def _settings() -> LoveOpenVinoE5AsyncQueryAdapterSettings:
++    return LoveOpenVinoE5AsyncQueryAdapterSettings(
++        schema=LOVE_OPENVINO_E5_ASYNC_QUERY_ADAPTER_SCHEMA,
++        model_ref="model:multilingual-e5-small",
++        model_revision="installed",
++        backend_ref="openvino:multilingual-e5-small",
++    )
++
++
++def _unit_vector() -> tuple[float, ...]:
++    return (1.0,) + (0.0,) * 383
++
++
++def test_adapter_prefixes_query_and_returns_locked_dense_embedding() -> None:
++    pipeline = _Pipeline(_Vector(_unit_vector()))
++    adapter = build_love_openvino_e5_async_query_embedder(
++        pipeline=pipeline,
++        settings=_settings(),
++    )
++
++    result = asyncio.run(
++        adapter.embed_query(
++            "relation durable",
++            query_ref="retrieval-query:love-1",
++            vector_name="dense_e5_v1",
++        )
++    )
++
++    assert pipeline.texts == ["query: relation durable"]
++    assert result.dimension == 384
++    assert result.normalized is True
++    assert result.model_ref == "model:multilingual-e5-small"
++    assert result.backend_ref == "openvino:multilingual-e5-small"
++    assert result.to_mapping()["raw_vector_serialized"] is False
++
++
++def test_adapter_does_not_duplicate_existing_query_prefix() -> None:
++    pipeline = _Pipeline(_Vector(_unit_vector()))
++    adapter = build_love_openvino_e5_async_query_embedder(
++        pipeline=pipeline,
++        settings=_settings(),
++    )
++
++    asyncio.run(
++        adapter.embed_query(
++            "query: relation durable",
++            query_ref="retrieval-query:love-2",
++            vector_name="dense_e5_v1",
++        )
++    )
++
++    assert pipeline.texts == ["query: relation durable"]
++
++
++def test_adapter_rejects_wrong_dimension() -> None:
++    adapter = build_love_openvino_e5_async_query_embedder(
++        pipeline=_Pipeline(_Vector((1.0, 0.0))),
++        settings=_settings(),
++    )
++
++    with pytest.raises(
++        LoveOpenVinoE5AsyncQueryAdapterError,
++        match="dimension",
++    ):
++        asyncio.run(
++            adapter.embed_query(
++                "relation",
++                query_ref="retrieval-query:love-3",
++                vector_name="dense_e5_v1",
++            )
++        )
++
++
++def test_adapter_rejects_unnormalized_vector() -> None:
++    adapter = build_love_openvino_e5_async_query_embedder(
++        pipeline=_Pipeline(_Vector(_unit_vector(), normalized=False)),
++        settings=_settings(),
++    )
++
++    with pytest.raises(
++        LoveOpenVinoE5AsyncQueryAdapterError,
++        match="normalized",
++    ):
++        asyncio.run(
++            adapter.embed_query(
++                "relation",
++                query_ref="retrieval-query:love-4",
++                vector_name="dense_e5_v1",
++            )
++        )
++
++
++def test_receipt_exposes_boundaries_without_vector() -> None:
++    adapter = build_love_openvino_e5_async_query_embedder(
++        pipeline=_Pipeline(_Vector(_unit_vector())),
++        settings=_settings(),
++    )
++
++    mapping = adapter.receipt.to_mapping()
++
++    assert mapping["dimension"] == 384
++    assert mapping["boundaries"]["asyncio_run_used"] is False
++    assert "values" not in mapping
+diff --git a/tests/rules/test_love_openvino_e5_async_query_adapter_0287_r7_r15_r3_r7_rule.py b/tests/rules/test_love_openvino_e5_async_query_adapter_0287_r7_r15_r3_r7_rule.py
+new file mode 100644
+index 0000000..346042b
+--- /dev/null
++++ b/tests/rules/test_love_openvino_e5_async_query_adapter_0287_r7_r15_r3_r7_rule.py
+@@ -0,0 +1,47 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++SOURCE = ROOT / "src/context/love_openvino_e5_async_query_adapter_0287.py"
++REPORT = (
++    ROOT
++    / "PHASE0287_R7_R15_R3_R7_OPENVINO_E5_ASYNC_QUERY_ADAPTER_REPORT.md"
++)
++MANIFEST = (
++    ROOT
++    / "doc/manifests/"
++    "MANIFEST_0287_R7_R15_R3_R7_OPENVINO_E5_ASYNC_QUERY_ADAPTER.md"
++)
++
++
++def test_adapter_reuses_existing_contract_and_remains_async() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    for required in (
++        "DenseQueryEmbedding",
++        "DENSE_QUERY_EMBEDDING_SCHEMA",
++        "async def embed_query",
++        "await self._pipeline.embed_text",
++        "dimension: int = 384",
++        'query_prefix: str = "query:"',
++        "raw_vector_serialized",
++    ):
++        assert required in text
++
++    for forbidden in (
++        "asyncio.run",
++        "Scheduler(",
++        "QdrantClient",
++        "psycopg",
++        "openvino.runtime",
++        "RealOpenVINORuntime",
++        "build_multilingual_e5_small_pipeline",
++    ):
++        assert forbidden not in text
++
++
++def test_phase_artifacts_lock_next_boundary() -> None:
++    report = REPORT.read_text(encoding="utf-8")
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    assert "async hybrid retrieval execution" in report
++    assert "no nested event loop" in report
++    assert "love_openvino_e5_async_query_adapter_0287.py" in manifest

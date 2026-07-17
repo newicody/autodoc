@@ -1,0 +1,979 @@
+diff --git a/templates/github/projects-repository/INSTALLATION.md b/templates/github/projects-repository/INSTALLATION.md
+--- a/templates/github/projects-repository/INSTALLATION.md
++++ b/templates/github/projects-repository/INSTALLATION.md
+@@ -365,3 +365,8 @@
+ | Phase | Évolution |
+ |---|---|
+ | `0284-r9` | Vérification corrélée du chemin réel sans mutation. |
++
++## Avis Copilot visibles
++
++Le workflow produit l’artefact sans s’auto-publier. Le mode opératoire
++preview-first est dans `COPILOT_ADVISORY_PUBLICATION.md`.
+diff --git a/templates/github/projects-repository/scripts/build_copilot_advisory_publication_preview.py b/templates/github/projects-repository/scripts/build_copilot_advisory_publication_preview.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/templates/github/projects-repository/scripts/build_copilot_advisory_publication_preview.py
+@@ -0,0 +1,223 @@
++#!/usr/bin/env python3
++"""Build a controlled publication preview from correlated Copilot artifacts."""
++
++from __future__ import annotations
++
++from collections.abc import Mapping, Sequence
++import argparse
++import hashlib
++import json
++from pathlib import Path
++import sys
++from typing import Any
++
++
++_ADVISORY_SCHEMA = "missipy.github.copilot_advisory.v1"
++_REQUEST_SCHEMA = "missipy.github.authoritative_request.v1"
++_MANIFEST_SCHEMA = "missipy.github.dual_artifact_manifest.v1"
++_PREVIEW_SCHEMA = "missipy.github.copilot_advisory_publication_preview.v1"
++
++
++def _load_mapping(path: Path, *, schema: str, name: str) -> dict[str, Any]:
++    payload = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(payload, Mapping):
++        raise ValueError(f"{name} must be a JSON object")
++    if payload.get("schema") != schema:
++        raise ValueError(f"unexpected {name} schema")
++    return dict(payload)
++
++
++def _required_text(name: str, value: object) -> str:
++    if not isinstance(value, str) or not value.strip():
++        raise ValueError(f"{name} must be non-empty")
++    return value.strip()
++
++
++def _sha256(path: Path) -> str:
++    return hashlib.sha256(path.read_bytes()).hexdigest()
++
++
++def _confidence(value: object) -> float:
++    if isinstance(value, bool):
++        raise ValueError("confidence must be numeric")
++    try:
++        confidence = float(value)
++    except (TypeError, ValueError) as exc:
++        raise ValueError("confidence must be numeric") from exc
++    if not 0.0 <= confidence <= 1.0:
++        raise ValueError("confidence must be between 0 and 1")
++    return confidence
++
++
++def _string_list(name: str, value: object) -> list[str]:
++    if not isinstance(value, list) or not all(
++        isinstance(item, str) for item in value
++    ):
++        raise ValueError(f"{name} must be a JSON string array")
++    return [item.strip() for item in value if item.strip()]
++
++
++def build_copilot_advisory_publication_preview(
++    *,
++    advisory_path: Path,
++    request_path: Path,
++    manifest_path: Path,
++    run_id: str,
++    repository: str,
++    issue_number: int,
++) -> dict[str, Any]:
++    """Validate the dual artifacts and return a non-authoritative preview."""
++
++    if not run_id.strip():
++        raise ValueError("run_id must be non-empty")
++    if "/" not in repository:
++        raise ValueError("repository must use owner/name")
++    if issue_number <= 0:
++        raise ValueError("issue_number must be positive")
++
++    advisory = _load_mapping(
++        advisory_path,
++        schema=_ADVISORY_SCHEMA,
++        name="Copilot advisory",
++    )
++    request = _load_mapping(
++        request_path,
++        schema=_REQUEST_SCHEMA,
++        name="authoritative request",
++    )
++    manifest = _load_mapping(
++        manifest_path,
++        schema=_MANIFEST_SCHEMA,
++        name="dual artifact manifest",
++    )
++
++    expected = {
++        "origin_frame_id": request.get("origin_frame_id"),
++        "ticket_revision_id": request.get("ticket_revision_id"),
++        "request_artifact_ref": request.get("artifact_ref"),
++    }
++    for key, value in expected.items():
++        if advisory.get(key) != value:
++            raise ValueError(f"request/advisory correlation mismatch: {key}")
++        if manifest.get(key) != value:
++            raise ValueError(f"request/manifest correlation mismatch: {key}")
++
++    if manifest.get("advisory_artifact_ref") != advisory.get("artifact_ref"):
++        raise ValueError("manifest advisory_artifact_ref mismatch")
++    if manifest.get("request_is_authority") is not True:
++        raise ValueError("request_is_authority must remain true")
++    if manifest.get("advisory_is_authority") is not False:
++        raise ValueError("manifest advisory_is_authority must remain false")
++    if advisory.get("usable_as_authority") is not False:
++        raise ValueError("advisory usable_as_authority must remain false")
++    if advisory.get("usable_as_hint") is not True:
++        raise ValueError("advisory usable_as_hint must remain true")
++    if advisory.get("trusted") is not False:
++        raise ValueError("Copilot advisory must remain untrusted")
++
++    if manifest.get("request_sha256") != _sha256(request_path):
++        raise ValueError("authoritative request digest mismatch")
++    if manifest.get("advisory_sha256") != _sha256(advisory_path):
++        raise ValueError("Copilot advisory digest mismatch")
++
++    if request.get("repository") != repository:
++        raise ValueError("authoritative request repository mismatch")
++    if int(request.get("issue_number") or 0) != issue_number:
++        raise ValueError("authoritative request Issue mismatch")
++    if request.get("authoritative") is not True:
++        raise ValueError("authoritative request flag must remain true")
++
++    return {
++        "schema": _PREVIEW_SCHEMA,
++        "source_candidate_ref": _required_text(
++            "request artifact ref",
++            request.get("artifact_ref"),
++        ),
++        "advisory_artifact_ref": _required_text(
++            "advisory artifact ref",
++            advisory.get("artifact_ref"),
++        ),
++        "summary": _required_text("summary", advisory.get("summary")),
++        "suggested_route": _required_text(
++            "suggested_route",
++            advisory.get("suggested_route"),
++        ),
++        "confidence": _confidence(advisory.get("confidence")),
++        "assumptions": _string_list(
++            "assumptions",
++            advisory.get("assumptions"),
++        ),
++        "questions": _string_list(
++            "questions",
++            advisory.get("questions"),
++        ),
++        "risks": _string_list("risks", advisory.get("risks")),
++        "origin_frame_id": _required_text(
++            "origin_frame_id",
++            advisory.get("origin_frame_id"),
++        ),
++        "ticket_revision_id": _required_text(
++            "ticket_revision_id",
++            advisory.get("ticket_revision_id"),
++        ),
++        "prompt_digest": _required_text(
++            "prompt_digest",
++            advisory.get("prompt_digest"),
++        ),
++        "response_digest": _required_text(
++            "response_digest",
++            advisory.get("response_digest"),
++        ),
++        "workflow_run_ref": f"github-actions-run:{run_id.strip()}",
++        "repository": repository,
++        "issue_number": issue_number,
++        "advisory_is_authority": False,
++        "request_authoritative": True,
++        "operator_decision_required": True,
++        "publication_gate_required": True,
++        "github_mutation_performed": False,
++        "remote_mutation_allowed": False,
++    }
++
++
++def _parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--advisory", type=Path, required=True)
++    parser.add_argument("--request", type=Path, required=True)
++    parser.add_argument("--manifest", type=Path, required=True)
++    parser.add_argument("--run-id", required=True)
++    parser.add_argument("--repository", required=True)
++    parser.add_argument("--issue-number", type=int, required=True)
++    parser.add_argument("--output", type=Path, required=True)
++    return parser
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = _parser().parse_args(
++        tuple(sys.argv[1:] if argv is None else argv)
++    )
++    preview = build_copilot_advisory_publication_preview(
++        advisory_path=args.advisory,
++        request_path=args.request,
++        manifest_path=args.manifest,
++        run_id=args.run_id,
++        repository=args.repository,
++        issue_number=args.issue_number,
++    )
++    args.output.parent.mkdir(parents=True, exist_ok=True)
++    args.output.write_text(
++        json.dumps(
++            preview,
++            ensure_ascii=False,
++            indent=2,
++            sort_keys=True,
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++    print(args.output)
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/templates/github/projects-repository/scripts/project_copilot_advisory_from_run.py b/templates/github/projects-repository/scripts/project_copilot_advisory_from_run.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/templates/github/projects-repository/scripts/project_copilot_advisory_from_run.py
+@@ -0,0 +1,276 @@
++#!/usr/bin/env python3
++"""Download, validate and project one operator-approved Copilot advisory."""
++
++from __future__ import annotations
++
++import argparse
++from collections.abc import Mapping, Sequence
++from datetime import date
++import json
++import os
++from pathlib import Path
++import subprocess
++import sys
++from typing import Any
++
++from build_copilot_advisory_publication_preview import (
++    build_copilot_advisory_publication_preview,
++)
++from project_copilot_advisory_fields import (
++    CopilotFieldProjectionCommand,
++    GhGraphQLTransport,
++    execute_copilot_field_projection,
++)
++
++
++_ARTIFACTS = {
++    "request": (
++        "autodoc-authoritative-request",
++        "authoritative_request.json",
++    ),
++    "advisory": (
++        "autodoc-copilot-advisory",
++        "copilot_advisory.json",
++    ),
++    "manifest": (
++        "autodoc-dual-artifact-manifest",
++        "dual_artifact_manifest.json",
++    ),
++}
++_REPORT_SCHEMA = (
++    "autodoc.github.copilot_advisory_projectv2_publication_run.v1"
++)
++
++
++def _enabled(name: str) -> bool:
++    return os.environ.get(name, "").strip().lower() in {
++        "1",
++        "true",
++        "yes",
++        "on",
++    }
++
++
++def _run_download(
++    *,
++    gh_command: str,
++    repository: str,
++    run_id: str,
++    artifact_name: str,
++    destination: Path,
++    token: str,
++) -> None:
++    environment = dict(os.environ)
++    environment["GH_TOKEN"] = token
++    completed = subprocess.run(
++        [
++            gh_command,
++            "run",
++            "download",
++            run_id,
++            "--repo",
++            repository,
++            "--name",
++            artifact_name,
++            "--dir",
++            str(destination),
++        ],
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++        env=environment,
++        check=False,
++    )
++    if completed.returncode != 0:
++        detail = completed.stderr.strip() or "unknown gh failure"
++        raise RuntimeError(
++            f"cannot download {artifact_name}: {detail}"
++        )
++
++
++def _find_artifact(directory: Path, filename: str) -> Path:
++    matches = tuple(directory.rglob(filename))
++    if len(matches) != 1:
++        raise ValueError(
++            f"expected one {filename} under {directory}, got {len(matches)}"
++        )
++    return matches[0]
++
++
++def _download_artifacts(
++    *,
++    repository: str,
++    run_id: str,
++    workdir: Path,
++    gh_command: str,
++    token: str,
++) -> dict[str, Path]:
++    paths: dict[str, Path] = {}
++    for key, (artifact_name, filename) in _ARTIFACTS.items():
++        destination = workdir / artifact_name
++        destination.mkdir(parents=True, exist_ok=True)
++        _run_download(
++            gh_command=gh_command,
++            repository=repository,
++            run_id=run_id,
++            artifact_name=artifact_name,
++            destination=destination,
++            token=token,
++        )
++        paths[key] = _find_artifact(destination, filename)
++    return paths
++
++
++def _parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser(
++        description=(
++            "Preview or execute an operator-approved Copilot advisory "
++            "projection into ProjectV2 fields."
++        )
++    )
++    parser.add_argument("--run-id", required=True)
++    parser.add_argument("--repository", required=True)
++    parser.add_argument("--issue-number", type=int, required=True)
++    parser.add_argument(
++        "--config",
++        type=Path,
++        default=Path("projectv2_views.json"),
++    )
++    parser.add_argument(
++        "--workdir",
++        type=Path,
++        default=Path(".var/copilot-advisory-publication"),
++    )
++    parser.add_argument("--policy-decision-id", required=True)
++    parser.add_argument(
++        "--operator-decision",
++        choices=("approve",),
++        required=True,
++    )
++    parser.add_argument(
++        "--updated-date",
++        default=date.today().isoformat(),
++    )
++    parser.add_argument("--execute", action="store_true")
++    parser.add_argument("--confirm-plan-digest", default="")
++    parser.add_argument("--gh-command", default="gh")
++    parser.add_argument(
++        "--format",
++        choices=("summary", "json"),
++        default="summary",
++    )
++    return parser
++
++
++def _emit(report: Mapping[str, Any], output_format: str) -> None:
++    if output_format == "json":
++        print(
++            json.dumps(
++                report,
++                ensure_ascii=False,
++                indent=2,
++                sort_keys=True,
++            )
++        )
++        return
++    projection = report["projection"]
++    print(f"mode: {report['mode']}")
++    print(f"preview_path: {report['preview_path']}")
++    print(f"valid: {str(projection['valid']).lower()}")
++    print(f"plan_digest: {projection['plan_digest']}")
++    print(f"mutations: {len(projection['mutations'])}")
++    print(
++        "mutation_performed: "
++        f"{str(projection['mutation_performed']).lower()}"
++    )
++    for issue in projection["issues"]:
++        print(f"issue: {issue}")
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = _parser().parse_args(
++        tuple(sys.argv[1:] if argv is None else argv)
++    )
++    if not args.policy_decision_id.startswith("policy:"):
++        raise ValueError("policy_decision_id must start with policy:")
++
++    token = os.environ.get("AUTODOC_PROJECT_TOKEN", "").strip()
++    if not token:
++        raise ValueError("AUTODOC_PROJECT_TOKEN is required")
++
++    run_workdir = args.workdir / str(args.run_id)
++    artifact_paths = _download_artifacts(
++        repository=args.repository,
++        run_id=str(args.run_id),
++        workdir=run_workdir,
++        gh_command=args.gh_command,
++        token=token,
++    )
++    preview_path = run_workdir / "publication_preview.json"
++    preview = build_copilot_advisory_publication_preview(
++        advisory_path=artifact_paths["advisory"],
++        request_path=artifact_paths["request"],
++        manifest_path=artifact_paths["manifest"],
++        run_id=str(args.run_id),
++        repository=args.repository,
++        issue_number=args.issue_number,
++    )
++    preview_path.write_text(
++        json.dumps(
++            preview,
++            ensure_ascii=False,
++            indent=2,
++            sort_keys=True,
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++
++    command = CopilotFieldProjectionCommand(
++        configuration_path=args.config,
++        preview_path=preview_path,
++        repository=args.repository,
++        issue_number=args.issue_number,
++        policy_decision_id=args.policy_decision_id,
++        operator_decision=args.operator_decision,
++        updated_date=args.updated_date,
++        execute=args.execute,
++        remote_mutation_allowed=_enabled(
++            "AUTODOC_REMOTE_MUTATION_ALLOWED"
++        ),
++        project_projection_allowed=_enabled(
++            "AUTODOC_PROJECT_PROJECTION_ALLOWED"
++        ),
++        confirm_plan_digest=args.confirm_plan_digest,
++    )
++    transport = GhGraphQLTransport(
++        token=token,
++        command=args.gh_command,
++    )
++    plan = execute_copilot_field_projection(
++        command,
++        transport=transport,
++    )
++    report = {
++        "schema": _REPORT_SCHEMA,
++        "mode": "execute" if args.execute else "preview",
++        "repository": args.repository,
++        "issue_number": args.issue_number,
++        "run_id": str(args.run_id),
++        "preview_path": str(preview_path),
++        "artifacts": {
++            key: str(path)
++            for key, path in sorted(artifact_paths.items())
++        },
++        "operator_decision": args.operator_decision,
++        "policy_decision_id": args.policy_decision_id,
++        "projection": plan.to_mapping(),
++        "workflow_self_authorized": False,
++        "advisory_is_authority": False,
++    }
++    _emit(report, args.format)
++    return 0 if plan.valid else 2
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/templates/github/projects-repository/COPILOT_ADVISORY_PUBLICATION.md b/templates/github/projects-repository/COPILOT_ADVISORY_PUBLICATION.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/templates/github/projects-repository/COPILOT_ADVISORY_PUBLICATION.md
+@@ -0,0 +1,106 @@
++# Publication contrôlée des avis Copilot
++
++Le workflow produit trois artefacts :
++
++```text
++autodoc-authoritative-request
++autodoc-copilot-advisory
++autodoc-dual-artifact-manifest
++```
++
++Il ne remplit volontairement aucun champ ProjectV2. La publication locale
++vérifie les trois artefacts, construit le preview puis réutilise
++`project_copilot_advisory_fields.py`.
++
++## Prérequis
++
++```bash
++cd /home/eric/projet/git/projects
++
++gh variable get AUTODOC_COPILOT_ADVISORY_ENABLED \
++  --repo newicody/projects
++
++export AUTODOC_PROJECT_TOKEN="$(gh auth token -h github.com)"
++```
++
++La variable GitHub doit valoir `true`. Le token local doit avoir le scope
++`project`.
++
++Lister les exécutions :
++
++```bash
++gh run list \
++  --repo newicody/projects \
++  --workflow autodoc-controlled-research.yml \
++  --limit 10
++```
++
++## Preview
++
++```bash
++RUN_ID='<run-id>'
++ISSUE_NUMBER='<issue-number>'
++POLICY_DECISION_ID='policy:copilot-advisory-publication:<id>'
++
++python scripts/project_copilot_advisory_from_run.py \
++  --run-id "$RUN_ID" \
++  --repository newicody/projects \
++  --issue-number "$ISSUE_NUMBER" \
++  --policy-decision-id "$POLICY_DECISION_ID" \
++  --operator-decision approve \
++  --format json |
++tee /tmp/copilot-projectv2-plan.json
++```
++
++Le preview télécharge et corrèle les artefacts, puis affiche le
++`plan_digest`. Il ne réalise aucune mutation.
++
++## Exécution après revue
++
++```bash
++PLAN_DIGEST="$(
++  jq -r '.projection.plan_digest' \
++    /tmp/copilot-projectv2-plan.json
++)"
++
++export AUTODOC_REMOTE_MUTATION_ALLOWED=true
++export AUTODOC_PROJECT_PROJECTION_ALLOWED=true
++
++python scripts/project_copilot_advisory_from_run.py \
++  --run-id "$RUN_ID" \
++  --repository newicody/projects \
++  --issue-number "$ISSUE_NUMBER" \
++  --policy-decision-id "$POLICY_DECISION_ID" \
++  --operator-decision approve \
++  --execute \
++  --confirm-plan-digest "$PLAN_DIGEST" \
++  --format json
++```
++
++Les champs projetés sont ceux définis dans `projectv2_views.json`, notamment :
++
++```text
++Copilot
++Avis Copilot
++Route Copilot
++Confiance Copilot
++Dernière mise à jour
++Artefact
++Cycle
++```
++
++## Relecture
++
++Relancer l’outil de lecture/query-only ou ouvrir la vue `Copilot`. Le statut
++doit correspondre à l’option configurée, et les champs doivent contenir le
++résumé, la route, la confiance et les références des artefacts.
++
++## Limites d’autorité
++
++```text
++requête autoritative        = true
++avis Copilot autoritatif    = false
++décision opérateur requise  = true
++confirmation digest requise = true
++workflow auto-publicateur   = false
++```
+diff --git a/tests/tools/test_projects_copilot_advisory_publication_0287.py b/tests/tools/test_projects_copilot_advisory_publication_0287.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_projects_copilot_advisory_publication_0287.py
+@@ -0,0 +1,134 @@
++from hashlib import sha256
++import importlib.util
++import json
++from pathlib import Path
++
++import pytest
++
++
++ROOT = Path(__file__).resolve().parents[2]
++SCRIPT = (
++    ROOT
++    / "templates/github/projects-repository/scripts/"
++    "build_copilot_advisory_publication_preview.py"
++)
++
++
++def _module():
++    spec = importlib.util.spec_from_file_location(
++        "build_copilot_preview_0287",
++        SCRIPT,
++    )
++    assert spec is not None and spec.loader is not None
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
++    return module
++
++
++def _write(path: Path, payload: dict) -> Path:
++    path.write_text(
++        json.dumps(payload, sort_keys=True) + "\n",
++        encoding="utf-8",
++    )
++    return path
++
++
++def _fixtures(tmp_path: Path):
++    request = {
++        "schema": "missipy.github.authoritative_request.v1",
++        "origin_frame_id": "frame:1",
++        "ticket_revision_id": "ticket-revision:1",
++        "artifact_ref": "github-request:abc",
++        "repository": "newicody/projects",
++        "issue_number": 12,
++        "authoritative": True,
++    }
++    advisory = {
++        "schema": "missipy.github.copilot_advisory.v1",
++        "origin_frame_id": "frame:1",
++        "ticket_revision_id": "ticket-revision:1",
++        "artifact_ref": "github-advisory:def",
++        "request_artifact_ref": "github-request:abc",
++        "prompt_digest": "a" * 64,
++        "response_digest": "b" * 64,
++        "summary": "Résumé Copilot",
++        "suggested_route": "Revoir le contrat",
++        "assumptions": ["A"],
++        "questions": ["Q"],
++        "risks": ["R"],
++        "confidence": 0.75,
++        "trusted": False,
++        "usable_as_hint": True,
++        "usable_as_authority": False,
++    }
++    request_path = _write(tmp_path / "authoritative_request.json", request)
++    advisory_path = _write(tmp_path / "copilot_advisory.json", advisory)
++    manifest = {
++        "schema": "missipy.github.dual_artifact_manifest.v1",
++        "origin_frame_id": "frame:1",
++        "ticket_revision_id": "ticket-revision:1",
++        "request_artifact_ref": "github-request:abc",
++        "request_sha256": sha256(request_path.read_bytes()).hexdigest(),
++        "advisory_artifact_ref": "github-advisory:def",
++        "advisory_sha256": sha256(advisory_path.read_bytes()).hexdigest(),
++        "request_is_authority": True,
++        "advisory_is_authority": False,
++    }
++    manifest_path = _write(
++        tmp_path / "dual_artifact_manifest.json",
++        manifest,
++    )
++    return advisory_path, request_path, manifest_path
++
++
++def test_builds_non_authoritative_correlated_preview(tmp_path: Path):
++    module = _module()
++    advisory, request, manifest = _fixtures(tmp_path)
++    preview = module.build_copilot_advisory_publication_preview(
++        advisory_path=advisory,
++        request_path=request,
++        manifest_path=manifest,
++        run_id="123",
++        repository="newicody/projects",
++        issue_number=12,
++    )
++    assert preview["schema"] == (
++        "missipy.github.copilot_advisory_publication_preview.v1"
++    )
++    assert preview["summary"] == "Résumé Copilot"
++    assert preview["confidence"] == 0.75
++    assert preview["operator_decision_required"] is True
++    assert preview["publication_gate_required"] is True
++    assert preview["github_mutation_performed"] is False
++    assert preview["advisory_is_authority"] is False
++
++
++def test_rejects_digest_mismatch(tmp_path: Path):
++    module = _module()
++    advisory, request, manifest = _fixtures(tmp_path)
++    payload = json.loads(manifest.read_text(encoding="utf-8"))
++    payload["advisory_sha256"] = "0" * 64
++    _write(manifest, payload)
++    with pytest.raises(ValueError, match="advisory digest mismatch"):
++        module.build_copilot_advisory_publication_preview(
++            advisory_path=advisory,
++            request_path=request,
++            manifest_path=manifest,
++            run_id="123",
++            repository="newicody/projects",
++            issue_number=12,
++        )
++
++
++def test_rejects_issue_mismatch(tmp_path: Path):
++    module = _module()
++    advisory, request, manifest = _fixtures(tmp_path)
++    with pytest.raises(ValueError, match="Issue mismatch"):
++        module.build_copilot_advisory_publication_preview(
++            advisory_path=advisory,
++            request_path=request,
++            manifest_path=manifest,
++            run_id="123",
++            repository="newicody/projects",
++            issue_number=13,
++        )
+diff --git a/tests/rules/test_projects_copilot_advisory_publication_0287_rule.py b/tests/rules/test_projects_copilot_advisory_publication_0287_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_projects_copilot_advisory_publication_0287_rule.py
+@@ -0,0 +1,80 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++BUILDER = (
++    ROOT
++    / "templates/github/projects-repository/scripts/"
++    "build_copilot_advisory_publication_preview.py"
++)
++RUNNER = (
++    ROOT
++    / "templates/github/projects-repository/scripts/"
++    "project_copilot_advisory_from_run.py"
++)
++RUNBOOK = (
++    ROOT
++    / "templates/github/projects-repository/"
++    "COPILOT_ADVISORY_PUBLICATION.md"
++)
++INSTALLATION = (
++    ROOT / "templates/github/projects-repository/INSTALLATION.md"
++)
++WORKFLOW = (
++    ROOT
++    / "templates/github/projects-repository/.github/workflows/"
++    "autodoc-controlled-research.yml"
++)
++REPORT = (
++    ROOT
++    / "PHASE0287_R7_R1_COPILOT_ADVISORY_PROJECTV2_"
++    "PUBLICATION_REPORT.md"
++)
++
++
++def test_artifact_correlation_is_required():
++    text = BUILDER.read_text(encoding="utf-8")
++    for marker in (
++        "request/advisory correlation mismatch",
++        "request/manifest correlation mismatch",
++        "authoritative request digest mismatch",
++        "Copilot advisory digest mismatch",
++        "advisory_is_authority",
++        "operator_decision_required",
++        "publication_gate_required",
++    ):
++        assert marker in text
++
++
++def test_runner_reuses_controlled_projection_adapter():
++    text = RUNNER.read_text(encoding="utf-8")
++    assert "project_copilot_advisory_fields" in text
++    assert "CopilotFieldProjectionCommand" in text
++    assert "execute_copilot_field_projection" in text
++    assert "AUTODOC_REMOTE_MUTATION_ALLOWED" in text
++    assert "AUTODOC_PROJECT_PROJECTION_ALLOWED" in text
++    assert "--confirm-plan-digest" in text
++    assert "workflow_self_authorized" in text
++
++
++def test_workflow_still_cannot_self_publish():
++    text = WORKFLOW.read_text(encoding="utf-8")
++    assert "Upload optional Copilot advisory" in text
++    assert "project_copilot_advisory_from_run.py" not in text
++    assert "project_copilot_advisory_fields.py" not in text
++
++
++def test_installation_links_short_runbook_within_budget():
++    text = INSTALLATION.read_text(encoding="utf-8")
++    assert "COPILOT_ADVISORY_PUBLICATION.md" in text
++    assert len(text.splitlines()) < 380
++    runbook = RUNBOOK.read_text(encoding="utf-8")
++    assert "project_copilot_advisory_from_run.py" in runbook
++    assert "AUTODOC_PROJECT_TOKEN" in runbook
++    assert "plan_digest" in runbook
++
++
++def test_report_explains_missing_visible_advisories():
++    text = REPORT.read_text(encoding="utf-8")
++    assert "artifact upload was already working" in text
++    assert "field projection was not invoked" in text
+diff --git a/PHASE0287_R7_R1_COPILOT_ADVISORY_PROJECTV2_PUBLICATION_REPORT.md b/PHASE0287_R7_R1_COPILOT_ADVISORY_PROJECTV2_PUBLICATION_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0287_R7_R1_COPILOT_ADVISORY_PROJECTV2_PUBLICATION_REPORT.md
+@@ -0,0 +1,20 @@
++# Phase 0287-r7-r1 — Copilot advisory ProjectV2 publication
++
++Status: controlled local publication path complete.
++
++The missing visible advisories were not caused by Copilot field rendering.
++The artifact upload was already working, but field projection was not invoked.
++
++This patch adds:
++
++- strict correlation of authoritative request, advisory and dual manifest;
++- SHA-256 verification of request and advisory artifacts;
++- construction of the existing publication-preview schema;
++- local `gh run download` orchestration;
++- reuse of `project_copilot_advisory_fields.py`;
++- preview-first planning and exact digest confirmation;
++- explicit operator approval and the two existing mutation locks;
++- a concise runbook copied into `newicody/projects`.
++
++The workflow remains producer-only and cannot self-authorize publication.
++Copilot remains non-authoritative.
+diff --git a/doc/architecture/COPILOT_ADVISORY_PROJECTV2_PUBLICATION_0287_R7_R1.md b/doc/architecture/COPILOT_ADVISORY_PROJECTV2_PUBLICATION_0287_R7_R1.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/COPILOT_ADVISORY_PROJECTV2_PUBLICATION_0287_R7_R1.md
+@@ -0,0 +1,23 @@
++# Copilot advisory ProjectV2 publication closure
++
++```text
++GitHub Actions run
++├── authoritative request
++├── Copilot advisory
++└── dual artifact manifest
++        ↓ download locally
++digest and correlation validation
++        ↓
++publication preview
++        ↓ operator approve
++ProjectV2 projection preview
++        ↓ exact plan digest + two locks
++ProjectV2 field mutation
++        ↓
++query-only relecture / Copilot view
++```
++
++The workflow is deliberately unchanged. It cannot call the projection adapter.
++The local operator supplies the Issue number, policy decision and approval.
++
++The authoritative request remains authoritative. Copilot is an untrusted hint.
+diff --git a/doc/architecture/COPILOT_ADVISORY_PROJECTV2_PUBLICATION_0287_R7_R1.dot b/doc/architecture/COPILOT_ADVISORY_PROJECTV2_PUBLICATION_0287_R7_R1.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/COPILOT_ADVISORY_PROJECTV2_PUBLICATION_0287_R7_R1.dot
+@@ -0,0 +1,19 @@
++digraph phase_0287_r7_r1 {
++  rankdir=LR;
++  workflow [label="Actions producer"];
++  request [label="authoritative request"];
++  advisory [label="Copilot advisory\nnon-authoritative"];
++  manifest [label="dual manifest"];
++  validate [label="correlation + SHA-256"];
++  preview [label="publication preview"];
++  operator [label="operator approve"];
++  project [label="ProjectV2 field plan"];
++  execute [label="confirmed mutation"];
++  workflow -> request;
++  workflow -> advisory;
++  workflow -> manifest;
++  request -> validate;
++  advisory -> validate;
++  manifest -> validate;
++  validate -> preview -> operator -> project -> execute;
++}
+diff --git a/doc/CHANGELOG_0287_R7_R1_COPILOT_ADVISORY_PROJECTV2_PUBLICATION.md b/doc/CHANGELOG_0287_R7_R1_COPILOT_ADVISORY_PROJECTV2_PUBLICATION.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0287_R7_R1_COPILOT_ADVISORY_PROJECTV2_PUBLICATION.md
+@@ -0,0 +1,10 @@
++# Changelog 0287-r7-r1
++
++- add correlated Copilot advisory publication-preview builder;
++- verify authoritative request and advisory SHA-256 digests;
++- add local run-artifact downloader and ProjectV2 projection wrapper;
++- reuse the existing controlled field projection adapter;
++- preserve explicit operator approval, locks and plan-digest confirmation;
++- keep the workflow unable to self-publish;
++- add a concise Projects repository publication runbook;
++- link the runbook from the cumulative installation guide.
+diff --git a/doc/manifests/MANIFEST_0287_R7_R1_COPILOT_ADVISORY_PROJECTV2_PUBLICATION.md b/doc/manifests/MANIFEST_0287_R7_R1_COPILOT_ADVISORY_PROJECTV2_PUBLICATION.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0287_R7_R1_COPILOT_ADVISORY_PROJECTV2_PUBLICATION.md
+@@ -0,0 +1,16 @@
++# Manifest 0287-r7-r1
++
++Added:
++
++- `templates/github/projects-repository/scripts/build_copilot_advisory_publication_preview.py`
++- `templates/github/projects-repository/scripts/project_copilot_advisory_from_run.py`
++- `templates/github/projects-repository/COPILOT_ADVISORY_PUBLICATION.md`
++- tool and rule tests
++- phase report
++- architecture document and DOT graph
++- changelog
++- this manifest
++
++Modified:
++
++- `templates/github/projects-repository/INSTALLATION.md`

@@ -1,0 +1,158 @@
+diff --git a/PHASE0278_TEST_REPORT.md b/PHASE0278_TEST_REPORT.md
+new file mode 100644
+index 0000000..085c87a
+--- /dev/null
++++ b/PHASE0278_TEST_REPORT.md
+@@ -0,0 +1,19 @@
++# Phase 0278 test report
++
++Scope: controlled GitHub workflow event-path boundary.
++
++Validation commands:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q templates/github/scripts tests/tools
++PYTHONPATH=src:. pytest -q \
++  tests/rules/test_github_dual_artifact_actions_workflow_0275_rule.py \
++  tests/tools/test_github_copilot_advisory_optional_0277.py
++```
++
++Focused coverage:
++
++- controlled workflow uses `AUTODOC_EVENT_PATH`;
++- native `GITHUB_EVENT_PATH` remains a fallback;
++- an explicit controlled event wins when both paths exist;
++- the authoritative builder still rejects a missing Issue envelope.
+diff --git a/doc/architecture/GITHUB_CONTROLLED_EVENT_PATH_0278.md b/doc/architecture/GITHUB_CONTROLLED_EVENT_PATH_0278.md
+new file mode 100644
+index 0000000..4552a80
+--- /dev/null
++++ b/doc/architecture/GITHUB_CONTROLLED_EVENT_PATH_0278.md
+@@ -0,0 +1,23 @@
++# GitHub controlled event path — 0278
++
++## Problem
++
++GitHub Actions reserves the `GITHUB_*` environment namespace. A workflow step
++cannot replace `GITHUB_EVENT_PATH` with a synthetic event path. During a
++`workflow_dispatch` run, the authoritative request builder therefore reads the
++native dispatch payload, which does not expose an `issue` object.
++
++## Decision
++
++Controlled workflows pass their normalized synthetic Issue event through
++`AUTODOC_EVENT_PATH`. The authoritative request builder prefers that explicit
++path and falls back to GitHub's native `GITHUB_EVENT_PATH` for workflows
++triggered directly by an Issue event.
++
++## Boundaries
++
++- the normalized Issue event remains local to the runner;
++- no Issue or ProjectV2 mutation is introduced;
++- no SQL or Qdrant write is introduced;
++- Scheduler and `Scheduler.run()` are unchanged;
++- no non-stdlib dependency is introduced.
+diff --git a/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml b/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml
+index fbaf8ca..f4d89d3 100644
+--- a/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml
++++ b/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml
+@@ -75,7 +75,7 @@ jobs:
+ 
+       - name: Build authoritative request
+         env:
+-          GITHUB_EVENT_PATH: ${{ github.workspace }}/out/autodoc_issue_event.json
++          AUTODOC_EVENT_PATH: ${{ github.workspace }}/out/autodoc_issue_event.json
+           AUTODOC_OUTPUT: out/authoritative_request.json
+         run: >
+           python
+diff --git a/templates/github/scripts/build_autodoc_authoritative_request.py b/templates/github/scripts/build_autodoc_authoritative_request.py
+index ea15242..a9f5c7b 100644
+--- a/templates/github/scripts/build_autodoc_authoritative_request.py
++++ b/templates/github/scripts/build_autodoc_authoritative_request.py
+@@ -27,7 +27,16 @@ def _require_mapping(value: object, *, name: str) -> dict[str, Any]:
+ 
+ 
+ def main() -> int:
+-    event_path = Path(os.environ["GITHUB_EVENT_PATH"])
++    event_path_value = (
++        os.environ.get("AUTODOC_EVENT_PATH")
++        or os.environ.get("GITHUB_EVENT_PATH")
++        or ""
++    ).strip()
++    if not event_path_value:
++        raise ValueError(
++            "authoritative request requires AUTODOC_EVENT_PATH or GITHUB_EVENT_PATH"
++        )
++    event_path = Path(event_path_value)
+     event = _require_mapping(
+         json.loads(event_path.read_text(encoding="utf-8")),
+         name="GitHub event",
+diff --git a/tests/rules/test_github_dual_artifact_actions_workflow_0275_rule.py b/tests/rules/test_github_dual_artifact_actions_workflow_0275_rule.py
+index af26f3d..0068ff7 100644
+--- a/tests/rules/test_github_dual_artifact_actions_workflow_0275_rule.py
++++ b/tests/rules/test_github_dual_artifact_actions_workflow_0275_rule.py
+@@ -37,7 +37,8 @@ def test_controlled_research_builds_the_issue_event_before_the_request() -> None
+     text = WORKFLOWS[1].read_text(encoding="utf-8")
+     assert "Read selected issue" in text
+     assert "build_workflow_dispatch_issue_event.py" in text
+-    assert "GITHUB_EVENT_PATH:" in text
++    assert "AUTODOC_EVENT_PATH:" in text
++    assert "GITHUB_EVENT_PATH:" not in text
+ 
+ 
+ def test_copilot_is_optional_advisory_and_tool_denied() -> None:
+diff --git a/tests/tools/test_github_copilot_advisory_optional_0277.py b/tests/tools/test_github_copilot_advisory_optional_0277.py
+index 482f46a..73ebf6b 100644
+--- a/tests/tools/test_github_copilot_advisory_optional_0277.py
++++ b/tests/tools/test_github_copilot_advisory_optional_0277.py
+@@ -170,3 +170,50 @@ def test_authoritative_request_accepts_title_only_issue(tmp_path: Path) -> None:
+     assert payload["issue_number"] == 8
+     assert payload["title"] == "Real request"
+     assert payload["body"] == ""
++
++
++def test_authoritative_request_prefers_controlled_event_path(tmp_path: Path) -> None:
++    native_event_path = tmp_path / "native-workflow-dispatch.json"
++    controlled_event_path = tmp_path / "controlled-issue-event.json"
++    output_path = tmp_path / "request.json"
++
++    native_event_path.write_text(
++        json.dumps({"inputs": {"issue_number": "8"}}),
++        encoding="utf-8",
++    )
++    controlled_event_path.write_text(
++        json.dumps(
++            {
++                "issue": {
++                    "number": 8,
++                    "title": "Controlled request",
++                    "body": "Research this issue.",
++                    "labels": [],
++                },
++                "repository": {"full_name": "newicody/projects"},
++                "sender": {"login": "newicody"},
++            }
++        ),
++        encoding="utf-8",
++    )
++
++    env = os.environ.copy()
++    env.update(
++        {
++            "GITHUB_EVENT_PATH": str(native_event_path),
++            "AUTODOC_EVENT_PATH": str(controlled_event_path),
++            "AUTODOC_OUTPUT": str(output_path),
++        }
++    )
++    result = subprocess.run(
++        [sys.executable, str(REQUEST_SCRIPT)],
++        env=env,
++        capture_output=True,
++        text=True,
++        check=False,
++    )
++
++    assert result.returncode == 0, result.stderr
++    payload = json.loads(output_path.read_text(encoding="utf-8"))
++    assert payload["issue_number"] == 8
++    assert payload["title"] == "Controlled request"

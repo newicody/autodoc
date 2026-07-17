@@ -1,0 +1,253 @@
+diff --git a/PHASE0280_R2_GITHUB_TEMPLATE_SCRIPT_SYNTAX_REPAIR_REPORT.md b/PHASE0280_R2_GITHUB_TEMPLATE_SCRIPT_SYNTAX_REPAIR_REPORT.md
+new file mode 100644
+index 0000000..24c183d
+--- /dev/null
++++ b/PHASE0280_R2_GITHUB_TEMPLATE_SCRIPT_SYNTAX_REPAIR_REPORT.md
+@@ -0,0 +1,40 @@
++# Phase 0280-r2 report — GitHub template script syntax repair
++
++Scope: repair the tracked syntax error in the standalone GitHub ticket artifact
++builder and add a permanent syntax gate for every Python script distributed in
++the GitHub templates directory.
++
++Validation commands:
++
++```bash
++PYTHONPATH=src:. python -m py_compile \
++  templates/github/scripts/build_autodoc_ticket_artifact.py
++PYTHONPATH=src:. python -m pytest -q \
++  tests/rules/test_github_template_scripts_compile_0280_rule.py \
++  tests/tools/test_github_ticket_artifact_template_0280.py
++PYTHONPATH=src:. python -m pytest -q tests/rules
++```
++
++Expected result:
++
++```text
++all templates/github/scripts/**/*.py compile successfully
++ticket_artifact.json ends with one newline and remains valid JSON
++artifact_bundle.json ends with one newline and remains valid JSON
++```
++
++Phase review:
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: existing stdlib, deterministic and boundary rules cover the repair
++live_path_status: repair
++context_contract_version: unchanged
++context_contract_changed: false
++stdlib_only: true
++scheduler_modified: false
++scheduler_run_modified: false
++remote_mutation_added: false
++graph_update_required: false
++```
+diff --git a/doc/architecture/GITHUB_TEMPLATE_SCRIPT_SYNTAX_GATE_0280.md b/doc/architecture/GITHUB_TEMPLATE_SCRIPT_SYNTAX_GATE_0280.md
+new file mode 100644
+index 0000000..095b95f
+--- /dev/null
++++ b/doc/architecture/GITHUB_TEMPLATE_SCRIPT_SYNTAX_GATE_0280.md
+@@ -0,0 +1,43 @@
++# GitHub template script syntax gate — 0280
++
++## Problem
++
++The standard patch queue compiles `src` and `tests`, but standalone Python
++scripts distributed under `templates/github/scripts/` are not part of that
++compile target. A malformed newline literal in
++`build_autodoc_ticket_artifact.py` therefore remained tracked while the normal
++test suites stayed green.
++
++## Repair
++
++`write_json()` now appends the explicit string `"\n"` through a valid
++multi-line `Path.write_text()` call. The JSON payload, key ordering and UTF-8
++encoding contract remain unchanged.
++
++## Permanent gate
++
++The rule test recursively discovers every `*.py` file below
++`templates/github/scripts/` and passes its source to Python's built-in
++`compile()` function. It does not import or execute the scripts, so no CLI,
++filesystem, network or GitHub effect is triggered.
++
++The test aggregates syntax failures and reports their relative path, line,
++column and message. Because it lives in `tests/rules`, the existing patch queue
++gate executes it on every normal patch.
++
++## Functional validation
++
++A bounded subprocess test runs the repaired ticket builder with a local event
++fixture and temporary output directory. It verifies that the two mandatory
++artifacts are valid JSON, carry the expected schemas and end with exactly one
++newline. The optional Copilot artifact remains absent when no preliminary
++summary is supplied.
++
++## Boundaries
++
++- stdlib only;
++- no Scheduler or `Scheduler.run()` change;
++- no SQL or Qdrant access;
++- no GitHub API or remote mutation;
++- no change to ticket or bundle schema names;
++- no generated artifact is committed.
+diff --git a/doc/manifests/MANIFEST_0280_R2_GITHUB_TEMPLATE_SCRIPT_SYNTAX_REPAIR.md b/doc/manifests/MANIFEST_0280_R2_GITHUB_TEMPLATE_SCRIPT_SYNTAX_REPAIR.md
+new file mode 100644
+index 0000000..97e60ad
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0280_R2_GITHUB_TEMPLATE_SCRIPT_SYNTAX_REPAIR.md
+@@ -0,0 +1,14 @@
++# Manifest 0280-r2 — GitHub template script syntax repair
++
++Changed files:
++
++- `templates/github/scripts/build_autodoc_ticket_artifact.py`
++- `tests/rules/test_github_template_scripts_compile_0280_rule.py`
++- `tests/tools/test_github_ticket_artifact_template_0280.py`
++- `doc/architecture/GITHUB_TEMPLATE_SCRIPT_SYNTAX_GATE_0280.md`
++- `doc/manifests/MANIFEST_0280_R2_GITHUB_TEMPLATE_SCRIPT_SYNTAX_REPAIR.md`
++- `PHASE0280_R2_GITHUB_TEMPLATE_SCRIPT_SYNTAX_REPAIR_REPORT.md`
++
++No Scheduler, SQL, Qdrant, GitHub remote mutation, generated SVG or external
++Python dependency is added. Existing ticket artifact and bundle schemas remain
++unchanged.
+diff --git a/templates/github/scripts/build_autodoc_ticket_artifact.py b/templates/github/scripts/build_autodoc_ticket_artifact.py
+--- a/templates/github/scripts/build_autodoc_ticket_artifact.py
++++ b/templates/github/scripts/build_autodoc_ticket_artifact.py
+@@ -118,8 +118,10 @@ def digest(value: str) -> str:
+ 
+ 
+ def write_json(path: Path, payload: dict) -> None:
+-   path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "
+-", encoding="utf-8")
++   path.write_text(
++      json.dumps(payload, indent=2, sort_keys=True) + "\n",
++      encoding="utf-8",
++   )
+ 
+ 
+ if __name__ == "__main__":
+diff --git a/tests/rules/test_github_template_scripts_compile_0280_rule.py b/tests/rules/test_github_template_scripts_compile_0280_rule.py
+new file mode 100644
+index 0000000..a5824fd
+--- /dev/null
++++ b/tests/rules/test_github_template_scripts_compile_0280_rule.py
+@@ -0,0 +1,30 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++SCRIPTS_ROOT = ROOT / "templates" / "github" / "scripts"
++
++
++def test_all_github_template_python_scripts_compile() -> None:
++    scripts = tuple(sorted(SCRIPTS_ROOT.rglob("*.py")))
++    assert scripts, f"no Python scripts found below {SCRIPTS_ROOT}"
++
++    failures: list[str] = []
++    for path in scripts:
++        relative = path.relative_to(ROOT).as_posix()
++        source = path.read_text(encoding="utf-8")
++        try:
++            compile(source, relative, "exec")
++        except SyntaxError as exc:
++            line = exc.lineno or 0
++            column = exc.offset or 0
++            failures.append(
++                f"{relative}:{line}:{column}: {exc.msg}"
++            )
++
++    assert not failures, (
++        "GitHub template Python syntax failures:\n"
++        + "\n".join(failures)
++    )
+diff --git a/tests/tools/test_github_ticket_artifact_template_0280.py b/tests/tools/test_github_ticket_artifact_template_0280.py
+new file mode 100644
+index 0000000..9e1e412
+--- /dev/null
++++ b/tests/tools/test_github_ticket_artifact_template_0280.py
+@@ -0,0 +1,80 @@
++from __future__ import annotations
++
++import json
++import os
++from pathlib import Path
++import subprocess
++import sys
++
++
++ROOT = Path(__file__).resolve().parents[2]
++SCRIPT = (
++    ROOT
++    / "templates"
++    / "github"
++    / "scripts"
++    / "build_autodoc_ticket_artifact.py"
++)
++
++
++def test_ticket_artifact_builder_writes_valid_newline_terminated_json(
++    tmp_path: Path,
++) -> None:
++    event_path = tmp_path / "event.json"
++    output_dir = tmp_path / "out"
++    event_path.write_text(
++        json.dumps(
++            {
++                "action": "opened",
++                "repository": {"full_name": "newicody/projects"},
++                "issue": {
++                    "number": 15,
++                    "title": "Test controlled research",
++                    "body": "column: Recherche\nrequested_depth: normal",
++                    "html_url": (
++                        "https://github.com/newicody/projects/issues/15"
++                    ),
++                    "updated_at": "2026-07-13T09:00:00Z",
++                },
++            },
++            sort_keys=True,
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++
++    env = dict(os.environ)
++    env.pop("AUTODOC_COPILOT_PRELIMINARY_SUMMARY", None)
++    env["GITHUB_SHA"] = "0280-test-revision"
++    subprocess.run(
++        (
++            sys.executable,
++            str(SCRIPT),
++            "--event-path",
++            str(event_path),
++            "--project-url",
++            "https://github.com/users/newicody/projects/3",
++            "--output-dir",
++            str(output_dir),
++        ),
++        cwd=ROOT,
++        env=env,
++        check=True,
++        text=True,
++        stdout=subprocess.PIPE,
++        stderr=subprocess.PIPE,
++    )
++
++    expected = {
++        "ticket_artifact.json": "missipy.github_action.ticket_artifact.v1",
++        "artifact_bundle.json": (
++            "missipy.github_action.ticket_artifact_bundle.v1"
++        ),
++    }
++    for filename, schema in expected.items():
++        content = (output_dir / filename).read_bytes()
++        assert content.endswith(b"\n")
++        assert not content.endswith(b"\n\n")
++        assert json.loads(content)["schema"] == schema
++
++    assert not (output_dir / "copilot_preliminary_opinion.json").exists()

@@ -1,0 +1,412 @@
+diff --git a/PHASE0168_R1_GITHUB_ARTIFACT_DOWNLOAD_REDIRECT_AUTH_FIX_REPORT.md b/PHASE0168_R1_GITHUB_ARTIFACT_DOWNLOAD_REDIRECT_AUTH_FIX_REPORT.md
+new file mode 100644
+index 0000000..31964dc
+--- /dev/null
++++ b/PHASE0168_R1_GITHUB_ARTIFACT_DOWNLOAD_REDIRECT_AUTH_FIX_REPORT.md
+@@ -0,0 +1,14 @@
++# Phase 0168-r1 report
++
++The authenticated API request is separated from the temporary signed artifact
++request. The latter receives no GitHub bearer token.
++
++```text
++code_rule_review: done
++existing_fetcher_reused: true
++new_fetcher_added: false
++external_dependencies_added: false
++remote_mutation_added: false
++scheduler_modified: false
++projects_repository_change_required: false
++```
+diff --git a/doc/architecture/GITHUB_ACTIONS_ARTIFACT_DOWNLOAD_REDIRECT_AUTH_0168.md b/doc/architecture/GITHUB_ACTIONS_ARTIFACT_DOWNLOAD_REDIRECT_AUTH_0168.md
+new file mode 100644
+index 0000000..0aef04e
+--- /dev/null
++++ b/doc/architecture/GITHUB_ACTIONS_ARTIFACT_DOWNLOAD_REDIRECT_AUTH_0168.md
+@@ -0,0 +1,18 @@
++# GitHub Actions artifact redirect authentication — 0168-r1
++
++```text
++GitHub API origin
++  -> authenticated request
++  -> direct ZIP or intercepted redirect
++  -> validated credential-free HTTPS URL
++  -> unauthenticated ZIP request
++  -> existing safe extraction and dataset sync
++```
++
++```text
++existing_fetcher_reused: true
++new_fetcher_added: false
++external_dependencies_added: false
++remote_mutation_added: false
++projects_repository_change_required: false
++```
+diff --git a/doc/manifests/MANIFEST_0168_R1_GITHUB_ARTIFACT_DOWNLOAD_REDIRECT_AUTH_FIX.md b/doc/manifests/MANIFEST_0168_R1_GITHUB_ARTIFACT_DOWNLOAD_REDIRECT_AUTH_FIX.md
+new file mode 100644
+index 0000000..85956a5
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0168_R1_GITHUB_ARTIFACT_DOWNLOAD_REDIRECT_AUTH_FIX.md
+@@ -0,0 +1,11 @@
++# Manifest 0168-r1
++
++- modify the existing 0168 fetcher only;
++- add redirect authentication tests;
++- add architecture and phase documentation.
++
++```text
++Repo autodoc: OUI
++Repo projects: NON
++projects_repository_change_required: false
++```
+diff --git a/tests/rules/test_github_actions_artifact_download_redirect_auth_0168_rule.py b/tests/rules/test_github_actions_artifact_download_redirect_auth_0168_rule.py
+new file mode 100644
+index 0000000..b51168e
+--- /dev/null
++++ b/tests/rules/test_github_actions_artifact_download_redirect_auth_0168_rule.py
+@@ -0,0 +1,47 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools/run_github_actions_artifact_fetch_once.py"
++REPORT = (
++    ROOT
++    / "PHASE0168_R1_GITHUB_ARTIFACT_DOWNLOAD_REDIRECT_AUTH_FIX_REPORT.md"
++)
++ARCHITECTURE = (
++    ROOT
++    / "doc/architecture/"
++    "GITHUB_ACTIONS_ARTIFACT_DOWNLOAD_REDIRECT_AUTH_0168.md"
++)
++
++
++def test_redirect_boundary_is_local_to_existing_fetcher() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    for required in (
++        "_download_artifact_archive",
++        "HTTPRedirectHandler",
++        "build_opener",
++        '"application/zip"',
++        "artifact redirect URL must be credential-free HTTPS",
++    ):
++        assert required in source
++
++    redirected_section = source.split(
++        "artifact_request = Request(location)",
++        maxsplit=1,
++    )[1].split("def _get_json", maxsplit=1)[0]
++    assert "Authorization" not in redirected_section
++
++
++def test_phase_boundaries_remain_locked() -> None:
++    combined = (
++        REPORT.read_text(encoding="utf-8")
++        + ARCHITECTURE.read_text(encoding="utf-8")
++    )
++    for required in (
++        "existing_fetcher_reused: true",
++        "new_fetcher_added: false",
++        "projects_repository_change_required: false",
++        "external_dependencies_added: false",
++        "remote_mutation_added: false",
++    ):
++        assert required in combined
+diff --git a/tests/tools/test_github_actions_artifact_download_redirect_auth_0168.py b/tests/tools/test_github_actions_artifact_download_redirect_auth_0168.py
+new file mode 100644
+index 0000000..41ee3fb
+--- /dev/null
++++ b/tests/tools/test_github_actions_artifact_download_redirect_auth_0168.py
+@@ -0,0 +1,198 @@
++from __future__ import annotations
++
++from email.message import Message
++from importlib.util import module_from_spec, spec_from_file_location
++from pathlib import Path
++import sys
++from urllib.error import HTTPError
++import urllib.request
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools/run_github_actions_artifact_fetch_once.py"
++
++
++class _Response:
++    def __init__(self, payload: bytes) -> None:
++        self.payload = payload
++
++    def __enter__(self):
++        return self
++
++    def __exit__(self, exc_type, exc, traceback) -> None:
++        return None
++
++    def read(self) -> bytes:
++        return self.payload
++
++
++def _load_tool():
++    spec = spec_from_file_location("fetch_redirect_auth_0168", TOOL)
++    assert spec is not None and spec.loader is not None
++    module = module_from_spec(spec)
++    sys.modules[spec.name] = module
++    spec.loader.exec_module(module)
++    return module
++
++
++def _redirect_error(url: str, location: str) -> HTTPError:
++    headers = Message()
++    headers["Location"] = location
++    return HTTPError(url, 302, "Found", headers, None)
++
++
++def test_redirect_download_does_not_forward_authorization(
++    monkeypatch,
++) -> None:
++    module = _load_tool()
++    initial = []
++    redirected = []
++    signed_url = (
++        "https://results-receiver.actions.githubusercontent.com/"
++        "artifact.zip?sig=temporary"
++    )
++
++    class _Opener:
++        def open(self, request, timeout):
++            initial.append(request)
++            raise _redirect_error(request.full_url, signed_url)
++
++    monkeypatch.setattr(
++        urllib.request,
++        "build_opener",
++        lambda *handlers: _Opener(),
++    )
++
++    def fake_urlopen(request, timeout):
++        redirected.append(request)
++        return _Response(b"PK\x03\x04artifact")
++
++    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
++
++    client = module.GitHubActionsClient(
++        "https://api.github.com",
++        "secret-token",
++    )
++    payload = client.download_artifact(
++        "newicody/projects",
++        {
++            "id": 123,
++            "archive_download_url": (
++                "https://api.github.com/repos/newicody/projects/"
++                "actions/artifacts/123/zip"
++            ),
++        },
++    )
++
++    assert payload == b"PK\x03\x04artifact"
++    assert initial[0].get_header("Authorization") == (
++        "Bearer secret-token"
++    )
++    assert redirected[0].full_url == signed_url
++    assert redirected[0].get_header("Authorization") is None
++
++
++def test_direct_zip_response_remains_supported(monkeypatch) -> None:
++    module = _load_tool()
++    initial = []
++
++    class _Opener:
++        def open(self, request, timeout):
++            initial.append(request)
++            return _Response(b"PK\x03\x04direct")
++
++    monkeypatch.setattr(
++        urllib.request,
++        "build_opener",
++        lambda *handlers: _Opener(),
++    )
++    monkeypatch.setattr(
++        urllib.request,
++        "urlopen",
++        lambda *args, **kwargs: (_ for _ in ()).throw(
++            AssertionError("redirect request must not execute")
++        ),
++    )
++
++    client = module.GitHubActionsClient(
++        "https://api.github.com",
++        "secret-token",
++    )
++
++    assert client.download_artifact(
++        "newicody/projects",
++        {"id": 123},
++    ) == b"PK\x03\x04direct"
++    assert initial[0].get_header("Authorization") == (
++        "Bearer secret-token"
++    )
++
++
++def test_http_redirect_is_rejected(monkeypatch) -> None:
++    module = _load_tool()
++
++    class _Opener:
++        def open(self, request, timeout):
++            raise _redirect_error(
++                request.full_url,
++                "http://storage.example.invalid/artifact.zip",
++            )
++
++    monkeypatch.setattr(
++        urllib.request,
++        "build_opener",
++        lambda *handlers: _Opener(),
++    )
++    monkeypatch.setattr(
++        urllib.request,
++        "urlopen",
++        lambda *args, **kwargs: (_ for _ in ()).throw(
++            AssertionError("unsafe redirect must not execute")
++        ),
++    )
++
++    client = module.GitHubActionsClient(
++        "https://api.github.com",
++        "secret-token",
++    )
++
++    try:
++        client.download_artifact(
++            "newicody/projects",
++            {"id": 123},
++        )
++    except ValueError as exc:
++        assert "credential-free HTTPS" in str(exc)
++    else:
++        raise AssertionError("HTTP redirect must be rejected")
++
++
++def test_foreign_api_origin_is_rejected(monkeypatch) -> None:
++    module = _load_tool()
++    monkeypatch.setattr(
++        urllib.request,
++        "build_opener",
++        lambda *handlers: (_ for _ in ()).throw(
++            AssertionError("foreign origin must be rejected first")
++        ),
++    )
++
++    client = module.GitHubActionsClient(
++        "https://api.github.com",
++        "secret-token",
++    )
++
++    try:
++        client.download_artifact(
++            "newicody/projects",
++            {
++                "id": 123,
++                "archive_download_url": (
++                    "https://example.invalid/artifact.zip"
++                ),
++            },
++        )
++    except ValueError as exc:
++        assert "configured GitHub API origin" in str(exc)
++    else:
++        raise AssertionError("foreign origin must be rejected")
+diff --git a/tools/run_github_actions_artifact_fetch_once.py b/tools/run_github_actions_artifact_fetch_once.py
+index e6cead8..b70e479 100644
+--- a/tools/run_github_actions_artifact_fetch_once.py
++++ b/tools/run_github_actions_artifact_fetch_once.py
+@@ -23,3 +23,88 @@ class GitHubActionsClient:
+             url = f"{self.api_url}/repos/{repository}/actions/artifacts/{artifact_id}/zip"
+-        return self._get_bytes(url, absolute=True)
++        return self._download_artifact_archive(url)
++
++    def _download_artifact_archive(self, url: str) -> bytes:
++        from urllib.error import HTTPError
++        from urllib.parse import urlsplit
++        from urllib.request import (
++            HTTPRedirectHandler,
++            Request,
++            build_opener,
++            urlopen,
++        )
++
++        class _NoRedirectHandler(HTTPRedirectHandler):
++            def redirect_request(
++                self,
++                req,
++                fp,
++                code,
++                msg,
++                headers,
++                newurl,
++            ):
++                return None
++
++        api_origin = urlsplit(self.api_url)
++        download_origin = urlsplit(url)
++        if (
++            download_origin.scheme.lower()
++            != api_origin.scheme.lower()
++            or download_origin.netloc.lower()
++            != api_origin.netloc.lower()
++        ):
++            raise ValueError(
++                "artifact API download URL must remain on the "
++                "configured GitHub API origin"
++            )
++
++        api_request = Request(url)
++        api_request.add_header(
++            "Accept",
++            "application/vnd.github+json",
++        )
++        api_request.add_header(
++            "Authorization",
++            f"Bearer {self.token}",
++        )
++        api_request.add_header(
++            "X-GitHub-Api-Version",
++            "2022-11-28",
++        )
++
++        opener = build_opener(_NoRedirectHandler())
++        try:
++            with opener.open(api_request, timeout=30) as response:
++                return response.read()
++        except HTTPError as exc:
++            try:
++                if exc.code not in (301, 302, 303, 307, 308):
++                    raise
++                location = str(
++                    exc.headers.get("Location", "")
++                    if exc.headers is not None
++                    else ""
++                ).strip()
++            finally:
++                exc.close()
++
++        redirected = urlsplit(location)
++        if (
++            redirected.scheme.lower() != "https"
++            or not redirected.hostname
++            or redirected.username is not None
++            or redirected.password is not None
++        ):
++            raise ValueError(
++                "artifact redirect URL must be credential-free HTTPS"
++            )
++
++        artifact_request = Request(location)
++        artifact_request.add_header(
++            "Accept",
++            "application/zip",
++        )
++        with urlopen(artifact_request, timeout=30) as response:
++            return response.read()
++
+ 

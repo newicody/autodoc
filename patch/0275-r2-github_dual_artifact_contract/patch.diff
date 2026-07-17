@@ -1,0 +1,248 @@
+diff --git a/src/context/github_dual_artifact_contract_0275.py b/src/context/github_dual_artifact_contract_0275.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/context/github_dual_artifact_contract_0275.py
+@@ -0,0 +1,97 @@
++"""Strict request/advisory separation for GitHub-produced artifacts."""
++from __future__ import annotations
++from dataclasses import dataclass, field
++from collections.abc import Mapping, Sequence
++from types import MappingProxyType
++from typing import Any
++import hashlib, json, re
++
++REQUEST_SCHEMA="missipy.github.authoritative_request.v1"
++ADVISORY_SCHEMA="missipy.github.copilot_advisory.v1"
++MANIFEST_SCHEMA="missipy.github.dual_artifact_manifest.v1"
++_DIGEST=re.compile(r"^[0-9a-f]{64}$")
++_REPO=re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
++
++class GitHubDualArtifactContractError(ValueError): pass
++
++def _text(name,v):
++ if not isinstance(v,str) or not v.strip(): raise GitHubDualArtifactContractError(f"{name} must be non-empty")
++ return v.strip()
++def _digest(name,v):
++ if not isinstance(v,str) or not _DIGEST.fullmatch(v): raise GitHubDualArtifactContractError(f"{name} must be sha256")
++ return v
++def _strings(name,v,empty=True):
++ vals=tuple(str(x).strip() for x in v if str(x).strip())
++ if not empty and not vals: raise GitHubDualArtifactContractError(f"{name} must not be empty")
++ return tuple(dict.fromkeys(vals))
++def canonical_json_bytes(payload: Mapping[str,Any])->bytes:
++ return (json.dumps(dict(payload),ensure_ascii=False,sort_keys=True,separators=(",",":"))+"\n").encode()
++def sha256_bytes(data:bytes)->str: return hashlib.sha256(data).hexdigest()
++
++@dataclass(frozen=True,slots=True)
++class GitHubAuthoritativeRequestArtifact:
++ origin_frame_id:str; ticket_revision_id:str; artifact_ref:str; repository:str
++ issue_number:int; title:str; body:str; issue_url:str; labels:tuple[str,...]=()
++ actor:str=""; event_name:str="issues"; metadata:tuple[tuple[str,str],...]=()
++ schema:str=REQUEST_SCHEMA; authoritative:bool=True; advisory_content_embedded:bool=False
++ remote_mutation_requested:bool=False
++ def __post_init__(self):
++  for n in ("origin_frame_id","ticket_revision_id","artifact_ref","title","body","issue_url"): object.__setattr__(self,n,_text(n,getattr(self,n)))
++  if not self.artifact_ref.startswith("github-request:"): raise GitHubDualArtifactContractError("artifact_ref must start with github-request:")
++  if not _REPO.fullmatch(self.repository): raise GitHubDualArtifactContractError("repository must be owner/name")
++  if isinstance(self.issue_number,bool) or self.issue_number<=0: raise GitHubDualArtifactContractError("issue_number must be > 0")
++  object.__setattr__(self,"labels",_strings("labels",self.labels))
++  object.__setattr__(self,"metadata",tuple(dict(self.metadata).items()))
++  if self.schema!=REQUEST_SCHEMA or not self.authoritative or self.advisory_content_embedded or self.remote_mutation_requested: raise GitHubDualArtifactContractError("request authority flags are locked")
++ def to_mapping(self): return {"schema":self.schema,"origin_frame_id":self.origin_frame_id,"ticket_revision_id":self.ticket_revision_id,"artifact_ref":self.artifact_ref,"repository":self.repository,"issue_number":self.issue_number,"title":self.title,"body":self.body,"issue_url":self.issue_url,"labels":list(self.labels),"actor":self.actor,"event_name":self.event_name,"metadata":dict(self.metadata),"authoritative":True,"advisory_content_embedded":False,"remote_mutation_requested":False}
++ @classmethod
++ def from_mapping(cls,m): return cls(origin_frame_id=m["origin_frame_id"],ticket_revision_id=m["ticket_revision_id"],artifact_ref=m["artifact_ref"],repository=m["repository"],issue_number=m["issue_number"],title=m["title"],body=m["body"],issue_url=m["issue_url"],labels=tuple(m.get("labels",())),actor=str(m.get("actor","")),event_name=str(m.get("event_name","issues")),metadata=tuple(dict(m.get("metadata",{})).items()),schema=str(m.get("schema",REQUEST_SCHEMA)),authoritative=bool(m.get("authoritative",False)),advisory_content_embedded=bool(m.get("advisory_content_embedded",False)),remote_mutation_requested=bool(m.get("remote_mutation_requested",False)))
++
++@dataclass(frozen=True,slots=True)
++class GitHubCopilotAdvisoryArtifact:
++ origin_frame_id:str; ticket_revision_id:str; artifact_ref:str; request_artifact_ref:str
++ prompt_digest:str; response_digest:str; summary:str; suggested_route:str
++ assumptions:tuple[str,...]=(); questions:tuple[str,...]=(); risks:tuple[str,...]=(); confidence:float=0.0
++ producer_kind:str="github_copilot_cli"; schema:str=ADVISORY_SCHEMA
++ trusted:bool=False; usable_as_hint:bool=True; usable_as_authority:bool=False
++ def __post_init__(self):
++  for n in ("origin_frame_id","ticket_revision_id","artifact_ref","request_artifact_ref","summary","suggested_route"): object.__setattr__(self,n,_text(n,getattr(self,n)))
++  if not self.artifact_ref.startswith("github-advisory:") or not self.request_artifact_ref.startswith("github-request:"): raise GitHubDualArtifactContractError("advisory refs are invalid")
++  _digest("prompt_digest",self.prompt_digest); _digest("response_digest",self.response_digest)
++  for n in ("assumptions","questions","risks"): object.__setattr__(self,n,_strings(n,getattr(self,n)))
++  if not 0<=self.confidence<=1: raise GitHubDualArtifactContractError("confidence must be between 0 and 1")
++  if self.schema!=ADVISORY_SCHEMA or self.trusted or not self.usable_as_hint or self.usable_as_authority: raise GitHubDualArtifactContractError("advisory authority flags are locked")
++ def to_mapping(self): return {"schema":self.schema,"origin_frame_id":self.origin_frame_id,"ticket_revision_id":self.ticket_revision_id,"artifact_ref":self.artifact_ref,"request_artifact_ref":self.request_artifact_ref,"prompt_digest":self.prompt_digest,"response_digest":self.response_digest,"summary":self.summary,"suggested_route":self.suggested_route,"assumptions":list(self.assumptions),"questions":list(self.questions),"risks":list(self.risks),"confidence":self.confidence,"producer_kind":self.producer_kind,"trusted":False,"usable_as_hint":True,"usable_as_authority":False}
++ @classmethod
++ def from_mapping(cls,m): return cls(origin_frame_id=m["origin_frame_id"],ticket_revision_id=m["ticket_revision_id"],artifact_ref=m["artifact_ref"],request_artifact_ref=m["request_artifact_ref"],prompt_digest=m["prompt_digest"],response_digest=m["response_digest"],summary=m["summary"],suggested_route=m["suggested_route"],assumptions=tuple(m.get("assumptions",())),questions=tuple(m.get("questions",())),risks=tuple(m.get("risks",())),confidence=float(m.get("confidence",0)),producer_kind=str(m.get("producer_kind","github_copilot_cli")),schema=str(m.get("schema",ADVISORY_SCHEMA)),trusted=bool(m.get("trusted",False)),usable_as_hint=bool(m.get("usable_as_hint",False)),usable_as_authority=bool(m.get("usable_as_authority",False)))
++
++@dataclass(frozen=True,slots=True)
++class GitHubDualArtifactManifest:
++ manifest_ref:str; origin_frame_id:str; ticket_revision_id:str
++ request_artifact_ref:str; request_filename:str; request_sha256:str
++ advisory_artifact_ref:str|None=None; advisory_filename:str|None=None; advisory_sha256:str|None=None
++ schema:str=MANIFEST_SCHEMA; request_is_authority:bool=True; advisory_is_authority:bool=False
++ def __post_init__(self):
++  for n in ("manifest_ref","origin_frame_id","ticket_revision_id","request_artifact_ref","request_filename"): object.__setattr__(self,n,_text(n,getattr(self,n)))
++  _digest("request_sha256",self.request_sha256)
++  if not self.manifest_ref.startswith("github-dual-manifest:") or not self.request_artifact_ref.startswith("github-request:"): raise GitHubDualArtifactContractError("manifest refs are invalid")
++  advisory_fields=(self.advisory_artifact_ref,self.advisory_filename,self.advisory_sha256)
++  if any(x is not None for x in advisory_fields) and not all(x is not None for x in advisory_fields): raise GitHubDualArtifactContractError("advisory manifest fields are all-or-none")
++  if self.advisory_sha256 is not None: _digest("advisory_sha256",self.advisory_sha256)
++  if self.advisory_artifact_ref==self.request_artifact_ref or self.advisory_filename==self.request_filename: raise GitHubDualArtifactContractError("request and advisory must be physically distinct")
++  if self.schema!=MANIFEST_SCHEMA or not self.request_is_authority or self.advisory_is_authority: raise GitHubDualArtifactContractError("manifest authority flags are locked")
++ def to_mapping(self): return {"schema":self.schema,"manifest_ref":self.manifest_ref,"origin_frame_id":self.origin_frame_id,"ticket_revision_id":self.ticket_revision_id,"request_artifact_ref":self.request_artifact_ref,"request_filename":self.request_filename,"request_sha256":self.request_sha256,"advisory_artifact_ref":self.advisory_artifact_ref,"advisory_filename":self.advisory_filename,"advisory_sha256":self.advisory_sha256,"request_is_authority":True,"advisory_is_authority":False}
++ @classmethod
++ def from_mapping(cls,m): return cls(manifest_ref=m["manifest_ref"],origin_frame_id=m["origin_frame_id"],ticket_revision_id=m["ticket_revision_id"],request_artifact_ref=m["request_artifact_ref"],request_filename=m["request_filename"],request_sha256=m["request_sha256"],advisory_artifact_ref=m.get("advisory_artifact_ref"),advisory_filename=m.get("advisory_filename"),advisory_sha256=m.get("advisory_sha256"),schema=str(m.get("schema",MANIFEST_SCHEMA)),request_is_authority=bool(m.get("request_is_authority",False)),advisory_is_authority=bool(m.get("advisory_is_authority",False)))
++
++def build_dual_artifact_manifest(request,request_bytes,advisory=None,advisory_bytes=None,request_filename="authoritative_request.json",advisory_filename="copilot_advisory.json"):
++ if advisory is None and advisory_bytes is not None or advisory is not None and advisory_bytes is None: raise GitHubDualArtifactContractError("advisory and advisory_bytes must be supplied together")
++ if advisory and (advisory.origin_frame_id!=request.origin_frame_id or advisory.ticket_revision_id!=request.ticket_revision_id or advisory.request_artifact_ref!=request.artifact_ref): raise GitHubDualArtifactContractError("advisory correlation mismatch")
++ identity=request.artifact_ref+"\0"+sha256_bytes(request_bytes)+"\0"+("" if advisory_bytes is None else sha256_bytes(advisory_bytes))
++ return GitHubDualArtifactManifest(manifest_ref="github-dual-manifest:"+hashlib.sha256(identity.encode()).hexdigest()[:16],origin_frame_id=request.origin_frame_id,ticket_revision_id=request.ticket_revision_id,request_artifact_ref=request.artifact_ref,request_filename=request_filename,request_sha256=sha256_bytes(request_bytes),advisory_artifact_ref=None if advisory is None else advisory.artifact_ref,advisory_filename=None if advisory is None else advisory_filename,advisory_sha256=None if advisory_bytes is None else sha256_bytes(advisory_bytes))
++
++def validate_dual_artifact_correlation(request,manifest,advisory=None):
++ issues=[]
++ if manifest.request_artifact_ref!=request.artifact_ref or manifest.origin_frame_id!=request.origin_frame_id or manifest.ticket_revision_id!=request.ticket_revision_id: issues.append("request/manifest correlation mismatch")
++ if advisory is not None and (manifest.advisory_artifact_ref!=advisory.artifact_ref or advisory.request_artifact_ref!=request.artifact_ref or advisory.origin_frame_id!=request.origin_frame_id or advisory.ticket_revision_id!=request.ticket_revision_id): issues.append("advisory correlation mismatch")
++ return tuple(issues)
+diff --git a/tests/context/test_github_dual_artifact_contract_0275.py b/tests/context/test_github_dual_artifact_contract_0275.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/context/test_github_dual_artifact_contract_0275.py
+@@ -0,0 +1,21 @@
++import json, pytest, dataclasses
++from context.github_dual_artifact_contract_0275 import *
++def request(): return GitHubAuthoritativeRequestArtifact("frame:1","revision:1","github-request:test","newicody/autodoc",42,"Title","Body","https://github.com/newicody/autodoc/issues/42",("feature",))
++def advisory(req=None):
++ req=req or request(); d="a"*64
++ return GitHubCopilotAdvisoryArtifact(req.origin_frame_id,req.ticket_revision_id,"github-advisory:test",req.artifact_ref,d,d,"Summary","laboratory",("assumption",),("question",),("risk",),0.5)
++def test_manifest_keeps_physical_separation_and_serializes():
++ r=request(); rb=canonical_json_bytes(r.to_mapping()); a=advisory(r); ab=canonical_json_bytes(a.to_mapping()); m=build_dual_artifact_manifest(r,rb,a,ab)
++ assert m.request_is_authority and not m.advisory_is_authority
++ assert m.request_filename!=m.advisory_filename
++ assert validate_dual_artifact_correlation(r,m,a)==()
++ json.dumps(m.to_mapping())
++def test_advisory_can_never_be_authority():
++ with pytest.raises(GitHubDualArtifactContractError):
++  GitHubCopilotAdvisoryArtifact("frame:1","revision:1","github-advisory:x","github-request:x","a"*64,"b"*64,"s","r",usable_as_authority=True)
++def test_request_rejects_embedded_advisory():
++ with pytest.raises(GitHubDualArtifactContractError):
++  GitHubAuthoritativeRequestArtifact("f","r","github-request:x","o/r",1,"t","b","https://x",advisory_content_embedded=True)
++def test_correlation_mismatch_is_rejected():
++ r=request(); a=advisory(r); bad=dataclasses.replace(a,ticket_revision_id="revision:2")
++ with pytest.raises(GitHubDualArtifactContractError): build_dual_artifact_manifest(r,canonical_json_bytes(r.to_mapping()),bad,canonical_json_bytes(bad.to_mapping()))
+diff --git a/tests/rules/test_github_dual_artifact_contract_0275_rule.py b/tests/rules/test_github_dual_artifact_contract_0275_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_github_dual_artifact_contract_0275_rule.py
+@@ -0,0 +1,10 @@
++from pathlib import Path
++ROOT=Path(__file__).resolve().parents[2]
++def test_contract_is_immutable_and_authority_locked():
++ t=(ROOT/"src/context/github_dual_artifact_contract_0275.py").read_text()
++ for m in ("@dataclass(frozen=True,slots=True)","request_is_authority:bool=True","advisory_is_authority:bool=False","usable_as_authority:bool=False","request and advisory must be physically distinct"):
++  assert m in t
++def test_no_runtime_or_network_imports():
++ t=(ROOT/"src/context/github_dual_artifact_contract_0275.py").read_text()
++ for m in ("Scheduler(","EventBus(","requests","urllib.request","openvino","qdrant"):
++  assert m not in t
+diff --git a/doc/architecture/GITHUB_DUAL_ARTIFACT_CONTRACT_0275.md b/doc/architecture/GITHUB_DUAL_ARTIFACT_CONTRACT_0275.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/GITHUB_DUAL_ARTIFACT_CONTRACT_0275.md
+@@ -0,0 +1,10 @@
++# GitHub dual-artifact contract — 0275-r2
++
++The request and Copilot advice are separate immutable files joined by a digest
++manifest. The request is the only authority. Advice is untrusted, hint-only and
++cannot replace title/body, make a SourceCandidate decision or permit mutation.
++
++The manifest verifies origin frame, ticket revision, refs, filenames and SHA-256
++digests. It can legally omit the optional advisory while retaining the request.
++
++No Scheduler, network, GitHub client, SQL or Qdrant behavior exists here.
+diff --git a/doc/docs/architecture/runtime/275_r2_github_dual_artifact_contract.dot b/doc/docs/architecture/runtime/275_r2_github_dual_artifact_contract.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/275_r2_github_dual_artifact_contract.dot
+@@ -0,0 +1 @@
++digraph GitHubDualArtifactContract0275R2 { rankdir=LR; Request[label="authoritative request"]; Advisory[label="advisory only"]; Manifest[label="digest manifest"]; Request->Manifest; Advisory->Manifest[style=dashed,label="optional"]; Authority[shape=note,label="request_is_authority=true\nadvisory_is_authority=false"]; Manifest->Authority; }
+diff --git a/doc/manifests/MANIFEST_0275_R2_GITHUB_DUAL_ARTIFACT_CONTRACT_CHANGED_FILES.md b/doc/manifests/MANIFEST_0275_R2_GITHUB_DUAL_ARTIFACT_CONTRACT_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0275_R2_GITHUB_DUAL_ARTIFACT_CONTRACT_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest — 0275-r2 GitHub dual-artifact contract
++
++Changed files:
++
++- `src/context/github_dual_artifact_contract_0275.py`
++- `tests/context/test_github_dual_artifact_contract_0275.py`
++- `tests/rules/test_github_dual_artifact_contract_0275_rule.py`
++- `doc/architecture/GITHUB_DUAL_ARTIFACT_CONTRACT_0275.md`
++- `doc/docs/architecture/runtime/275_r2_github_dual_artifact_contract.dot`
++
++No generated binaries, caches, secrets or local configuration are included.
+diff --git a/doc/CHANGELOG_0275_R2_GITHUB_DUAL_ARTIFACT_CONTRACT.md b/doc/CHANGELOG_0275_R2_GITHUB_DUAL_ARTIFACT_CONTRACT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0275_R2_GITHUB_DUAL_ARTIFACT_CONTRACT.md
+@@ -0,0 +1,14 @@
++# Changelog — 0275-r2 GitHub dual-artifact contract
++
++## Added
++
++- added strict immutable request, advisory and manifest records;
++- added SHA-256 and correlation validation;
++- made the advisory optional but never authoritative.
++
++## Boundaries
++
++- one existing Scheduler only;
++- SQL remains durable authority;
++- GitHub mutation remains closed unless this phase explicitly reaches the guarded adapter;
++- no secret is serialized.
+diff --git a/doc/releases/0275-r2-0275-r2-github-dual-artifact-contract.md b/doc/releases/0275-r2-0275-r2-github-dual-artifact-contract.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/releases/0275-r2-0275-r2-github-dual-artifact-contract.md
+@@ -0,0 +1,7 @@
++# 0275-r2 GitHub dual-artifact contract
++
++- added strict immutable request, advisory and manifest records;
++- added SHA-256 and correlation validation;
++- made the advisory optional but never authoritative.
++
++Next: 0275-r3 Actions producer.
+diff --git a/PHASE0275_R2_GITHUB_DUAL_ARTIFACT_CONTRACT_TEST_REPORT.md b/PHASE0275_R2_GITHUB_DUAL_ARTIFACT_CONTRACT_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0275_R2_GITHUB_DUAL_ARTIFACT_CONTRACT_TEST_REPORT.md
+@@ -0,0 +1,23 @@
++# Phase 0275-r2 test report — 0275-r2 GitHub dual-artifact contract
++
++## Validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. python -m pytest -q tests/rules
++PYTHONPATH=src:. python -m pytest -q
++```
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++external_dependencies_added: false
++scheduler_created: false
++scheduler_modified: false
++parallel_orchestrator_created: false
++parallel_eventbus_created: false
++parallel_registry_created: false
++github_mutation_performed: false
++```

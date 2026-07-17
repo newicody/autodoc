@@ -1,0 +1,208 @@
+diff --git a/PHASE0284_R1_R3_R2_GITHUB_PROJECT_CONNECTOR_RULE_MIGRATION_REPORT.md b/PHASE0284_R1_R3_R2_GITHUB_PROJECT_CONNECTOR_RULE_MIGRATION_REPORT.md
+new file mode 100644
+index 0000000..54c66ba
+--- /dev/null
++++ b/PHASE0284_R1_R3_R2_GITHUB_PROJECT_CONNECTOR_RULE_MIGRATION_REPORT.md
+@@ -0,0 +1,37 @@
++# Phase 0284-r1-r3-r2 — GitHub project connector rule migration
++
++## Result
++
++The historical 0275 rule assertions now validate the separated connector
++configuration introduced by 0284-r1-r3. The ProjectV2 query-only example keeps
++all remote mutation gates closed and no longer contains a workflow-dispatch
++section. The dedicated Projects dispatch example targets `newicody/projects`
++and remains disabled by default.
++
++## Boundaries
++
++```text
++scheduler_modified: false
++runtime_tool_modified: false
++query_only_config_modified: false
++dispatch_config_modified: false
++historical_rule_contract_migrated: true
++query_only_contains_workflow_dispatch: false
++dispatch_example_remote_gates_enabled: false
++sql_write_allowed: false
++qdrant_write_allowed: false
++```
++
++## Code rule review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: executable rule alignment after an intentional configuration boundary change
++live_path_status: n/a
++live_path_uses_real_backend: n/a
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++external_library_added: false
++```
+diff --git a/doc/CHANGELOG_0284_R1_R3_R2_GITHUB_PROJECT_CONNECTOR_RULE_MIGRATION.md b/doc/CHANGELOG_0284_R1_R3_R2_GITHUB_PROJECT_CONNECTOR_RULE_MIGRATION.md
+new file mode 100644
+index 0000000..fc04562
+--- /dev/null
++++ b/doc/CHANGELOG_0284_R1_R3_R2_GITHUB_PROJECT_CONNECTOR_RULE_MIGRATION.md
+@@ -0,0 +1,8 @@
++# Changelog — 0284-r1-r3-r2
++
++- migrated the locked 0272/0275 compatibility assertions to the separated
++  query-only and workflow-dispatch files;
++- aligned artifact/readiness expectations with `newicody/projects`;
++- preserved the query-only scan command and safety gates;
++- asserted that the dedicated dispatch example is disabled by default;
++- changed no runtime, Scheduler, SQL, OpenVINO, Qdrant or EventBus code.
+diff --git a/doc/manifests/MANIFEST_0284_R1_R3_R2_GITHUB_PROJECT_CONNECTOR_RULE_MIGRATION.md b/doc/manifests/MANIFEST_0284_R1_R3_R2_GITHUB_PROJECT_CONNECTOR_RULE_MIGRATION.md
+new file mode 100644
+index 0000000..f119574
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0284_R1_R3_R2_GITHUB_PROJECT_CONNECTOR_RULE_MIGRATION.md
+@@ -0,0 +1,12 @@
++# Manifest — 0284-r1-r3-r2
++
++## Modified
++
++- `tests/rules/test_github_project_v2_0272_config_compatibility_0275_r8_r1_rule.py`
++- `tests/rules/test_github_project_v2_en_cours_dispatch_copilot_groups_0275_r8_rule.py`
++
++## Added
++
++- `PHASE0284_R1_R3_R2_GITHUB_PROJECT_CONNECTOR_RULE_MIGRATION_REPORT.md`
++- `doc/CHANGELOG_0284_R1_R3_R2_GITHUB_PROJECT_CONNECTOR_RULE_MIGRATION.md`
++- `doc/manifests/MANIFEST_0284_R1_R3_R2_GITHUB_PROJECT_CONNECTOR_RULE_MIGRATION.md`
+diff --git a/tests/rules/test_github_project_v2_0272_config_compatibility_0275_r8_r1_rule.py b/tests/rules/test_github_project_v2_0272_config_compatibility_0275_r8_r1_rule.py
+index f5aed7f..9e5bb12 100644
+--- a/tests/rules/test_github_project_v2_0272_config_compatibility_0275_r8_r1_rule.py
++++ b/tests/rules/test_github_project_v2_0272_config_compatibility_0275_r8_r1_rule.py
+@@ -4,30 +4,39 @@ from pathlib import Path
+ 
+ ROOT = Path(__file__).resolve().parents[2]
+ CONFIG = ROOT / "config/github_project_v2_query_only.example.ini"
++DISPATCH_CONFIG = ROOT / "config/github_projects_workflow_dispatch.example.ini"
+ 
+ 
+-def _config() -> ConfigParser:
++def _read_config(path: Path) -> ConfigParser:
+     parser = ConfigParser(interpolation=None)
+-    loaded = parser.read(CONFIG, encoding="utf-8")
+-    assert loaded == [str(CONFIG)]
++    loaded = parser.read(path, encoding="utf-8")
++    assert loaded == [str(path)]
+     return parser
+ 
+ 
++def _config() -> ConfigParser:
++    return _read_config(CONFIG)
++
++
++def _dispatch_config() -> ConfigParser:
++    return _read_config(DISPATCH_CONFIG)
++
++
+ def test_0275_r8_r1_preserves_the_locked_0272_scan_contract() -> None:
+     parser = _config()
+ 
+-    assert parser["artifact_source"]["repositories"] == "newicody/autodoc-ideas"
++    assert parser["artifact_source"]["repositories"] == "newicody/projects"
+     assert (
+         parser["artifact_source"]["workflow_name"]
+-        == "autodoc-ticket-artifact.yml"
++        == "autodoc-controlled-research.yml"
+     )
+     assert (
+         parser["artifact_source"]["artifact_name_prefix"]
+-        == "autodoc-ticket-artifact-"
++        == "autodoc-"
+     )
+     assert (
+         parser["artifact_source"]["trigger_source"]
+-        == "github_action_on_ticket_event"
++        == "github_action_dispatch"
+     )
+     assert parser["scan"].getint("interval_minutes") == 10
+     assert (
+@@ -43,26 +52,27 @@ def test_0275_r8_r1_preserves_0272_readiness_and_safety_defaults() -> None:
+ 
+     assert (
+         parser["safety"]["allowed_repositories"]
+-        == "newicody/autodoc-ideas"
++        == "newicody/projects"
+     )
+     readiness = parser["deployment_readiness"]
+-    assert readiness["workflow_repository"] == "newicody/autodoc-ideas"
+-    assert readiness["workflow_name"] == "autodoc-ticket-artifact.yml"
++    assert readiness["workflow_repository"] == "newicody/projects"
++    assert readiness["workflow_name"] == "autodoc-controlled-research.yml"
+     assert (
+         readiness["workflow_path"]
+-        == ".github/workflows/autodoc-ticket-artifact.yml"
++        == ".github/workflows/autodoc-controlled-research.yml"
+     )
+ 
+ 
+ def test_0275_r8_r1_keeps_the_new_dispatch_scope_isolated() -> None:
+     parser = _config()
+ 
+-    dispatch = parser["workflow_dispatch"]
++    assert "workflow_dispatch" not in parser
++    dispatch = _dispatch_config()["workflow_dispatch"]
+     assert dispatch["repository"] == "newicody/projects"
+     assert dispatch["workflow_name"] == "autodoc-controlled-research.yml"
+     assert dispatch["target_status"] == "En cours"
+-    assert dispatch.getboolean("allow_workflow_dispatch") is True
+-    assert dispatch.getboolean("allow_remote_mutation") is True
++    assert dispatch.getboolean("allow_workflow_dispatch") is False
++    assert dispatch.getboolean("allow_remote_mutation") is False
+ 
+     safety = parser["safety"]
+     assert safety.getboolean("query_only") is True
+diff --git a/tests/rules/test_github_project_v2_en_cours_dispatch_copilot_groups_0275_r8_rule.py b/tests/rules/test_github_project_v2_en_cours_dispatch_copilot_groups_0275_r8_rule.py
+index 6e43350..5eb7efb 100644
+--- a/tests/rules/test_github_project_v2_en_cours_dispatch_copilot_groups_0275_r8_rule.py
++++ b/tests/rules/test_github_project_v2_en_cours_dispatch_copilot_groups_0275_r8_rule.py
+@@ -13,6 +13,7 @@ BOARD = (
+ )
+ README = ROOT / "templates/github/projects-repository/README.md"
+ CONFIG = ROOT / "config/github_project_v2_query_only.example.ini"
++DISPATCH_CONFIG = ROOT / "config/github_projects_workflow_dispatch.example.ini"
+ CONTRACT = (
+     ROOT
+     / "src/context/github_project_v2_en_cours_dispatch_0275_r8.py"
+@@ -53,19 +54,22 @@ def test_0275_r8_board_keeps_theme_rows_and_en_cours_command() -> None:
+ 
+ 
+ def test_0275_r8_scopes_dispatch_without_relaxing_query_only_snapshot() -> None:
+-    text = CONFIG.read_text(encoding="utf-8")
++    query = CONFIG.read_text(encoding="utf-8")
++    dispatch = DISPATCH_CONFIG.read_text(encoding="utf-8")
+ 
+-    assert "[safety]" in text
+-    assert "query_only = true" in text
+-    assert "graphql_mutation_allowed = false" in text
+-    assert "allow_workflow_dispatch = false" in text
+-    assert "allow_remote_mutation = false" in text
+-    assert "[workflow_dispatch]" in text
+-    assert "repository = newicody/projects" in text
+-    assert "workflow_name = autodoc-controlled-research.yml" in text
+-    assert "target_status = En cours" in text
+-    assert "allow_workflow_dispatch = true" in text
+-    assert "allow_remote_mutation = true" in text
++    assert "[safety]" in query
++    assert "query_only = true" in query
++    assert "graphql_mutation_allowed = false" in query
++    assert "allow_workflow_dispatch = false" in query
++    assert "allow_remote_mutation = false" in query
++    assert "[workflow_dispatch]" not in query
++
++    assert "[workflow_dispatch]" in dispatch
++    assert "repository = newicody/projects" in dispatch
++    assert "workflow_name = autodoc-controlled-research.yml" in dispatch
++    assert "target_status = En cours" in dispatch
++    assert "allow_workflow_dispatch = false" in dispatch
++    assert "allow_remote_mutation = false" in dispatch
+ 
+ 
+ def test_0275_r8_reuses_0272_and_keeps_scheduler_untouched() -> None:

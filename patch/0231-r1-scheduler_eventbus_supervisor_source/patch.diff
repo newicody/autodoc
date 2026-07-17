@@ -1,0 +1,590 @@
+diff --git a/PHASE0231_SCHEDULER_EVENTBUS_SUPERVISOR_SOURCE_TEST_REPORT.md b/PHASE0231_SCHEDULER_EVENTBUS_SUPERVISOR_SOURCE_TEST_REPORT.md
+new file mode 100644
+index 0000000..424b028
+--- /dev/null
++++ b/PHASE0231_SCHEDULER_EVENTBUS_SUPERVISOR_SOURCE_TEST_REPORT.md
+@@ -0,0 +1,22 @@
++# Phase 0231 test report — Scheduler EventBus supervisor source
++
++Validation performed on the patch build tree:
++
++```text
++git apply --check: OK
++git apply: OK
++python -m compileall -q src tests tools: OK
++pytest targeted 0231: OK
++smoke Scheduler event -> PassiveSupervisorSink -> snapshot/audit: OK
++```
++
++Boundary:
++
++```text
++Scheduler.run: not used
++Scheduler import: not used
++new EventBus: not created
++proxy/SHM/policy control: not used
++SQL/Qdrant/GitHub mutation: not used
++non-stdlib dependencies: not used
++```
+diff --git a/doc/CHANGELOG_0231_SCHEDULER_EVENTBUS_SUPERVISOR_SOURCE.md b/doc/CHANGELOG_0231_SCHEDULER_EVENTBUS_SUPERVISOR_SOURCE.md
+new file mode 100644
+index 0000000..d76d1c8
+--- /dev/null
++++ b/doc/CHANGELOG_0231_SCHEDULER_EVENTBUS_SUPERVISOR_SOURCE.md
+@@ -0,0 +1,7 @@
++# Changelog — 0231 Scheduler EventBus supervisor source
++
++- Added canonical Scheduler passive-supervision event builder.
++- Added `PassiveSupervisorSink.accept_scheduler_event(...)`.
++- Added smoke CLI for Scheduler-shaped EventBus events.
++- Added rules/docs/DOT/tests that keep Scheduler upstream-only and supervisor downstream-only.
++- Kept audit/snapshot optional and did not create a new EventBus.
+diff --git a/doc/architecture/SCHEDULER_EVENTBUS_SUPERVISOR_SOURCE_0231.md b/doc/architecture/SCHEDULER_EVENTBUS_SUPERVISOR_SOURCE_0231.md
+new file mode 100644
+index 0000000..7f97df9
+--- /dev/null
++++ b/doc/architecture/SCHEDULER_EVENTBUS_SUPERVISOR_SOURCE_0231.md
+@@ -0,0 +1,57 @@
++# 0231 — Scheduler EventBus supervisor source
++
++## Purpose
++
++This patch makes the Scheduler visible to the passive supervision path as an
++upstream EventBus source without making the supervisor a scheduler adapter.
++
++Canonical path:
++
++```text
++Scheduler = upstream orchestration authority
++Scheduler event -> EventBus -> PassiveSupervisorSink = downstream-only observer
++PassiveSupervisorSink -> CellularState / optional snapshot / optional audit
++```
++
++## What is implemented
++
++`0231` extends the existing passive supervisor module introduced by `0220` and
++extended by `0230`:
++
++- `scheduler_supervision_event(...)` builds a canonical `BusSupervisorEvent`
++  with `cell_kind="SCHEDULER"`.
++- `PassiveSupervisorSink.accept_scheduler_event(...)` accepts a scheduler-originated
++  event through the existing sink.
++- `tools/run_scheduler_eventbus_supervisor_smoke_0231.py` demonstrates the
++  downstream-only path using a Scheduler-shaped EventBus event.
++
++## Authority boundary
++
++Scheduler remains the authority for orchestration. The passive supervisor only
++observes Scheduler events after they are emitted/exposed to the EventBus.
++
++Forbidden:
++
++```text
++Scheduler.run() is forbidden
++Scheduler handler dispatch is forbidden
++Scheduler mutation is forbidden
++new EventBus creation is forbidden
++proxy control is forbidden
++SHM mutation is forbidden
++policy decision is forbidden
++SQL/Qdrant/GitHub mutation is forbidden
++```
++
++## Reuse decision
++
++This patch reuses:
++
++```text
++BusSupervisorEvent
++PassiveSupervisorSink
++build_cellular_snapshot
++snapshot/audit optional outputs
++```
++
++It does not create a new runtime, a new bus, or a parallel scheduler surface.
+diff --git a/doc/code-rules/0231_scheduler_eventbus_supervisor_source_rule.md b/doc/code-rules/0231_scheduler_eventbus_supervisor_source_rule.md
+new file mode 100644
+index 0000000..85d0e66
+--- /dev/null
++++ b/doc/code-rules/0231_scheduler_eventbus_supervisor_source_rule.md
+@@ -0,0 +1,31 @@
++# 0231 code rule — Scheduler EventBus supervisor source
++
++`0231` may only connect Scheduler-originated EventBus events to the existing
++passive supervisor sink.
++
++Required:
++
++```text
++Scheduler = upstream orchestration authority
++EventBus = canonical event transport
++PassiveSupervisorSink = downstream-only observer
++CellularState/snapshot = passive projection
++```
++
++Forbidden:
++
++```text
++Scheduler.run() is forbidden
++Scheduler imports are forbidden
++Scheduler handler dispatch by the supervisor is forbidden
++new EventBus implementation is forbidden
++status.json/events.jsonl as the normal path is forbidden
++proxy control is forbidden
++SHM writes are forbidden
++policy decisions are forbidden
++SQL/Qdrant/GitHub writes are forbidden
++non-stdlib dependencies are forbidden
++```
++
++The implementation must reuse the existing passive supervisor module and keep
++snapshot/audit outputs optional.
+diff --git a/doc/docs/architecture/runtime/231_scheduler_eventbus_supervisor_source.dot b/doc/docs/architecture/runtime/231_scheduler_eventbus_supervisor_source.dot
+new file mode 100644
+index 0000000..b23d206
+--- /dev/null
++++ b/doc/docs/architecture/runtime/231_scheduler_eventbus_supervisor_source.dot
+@@ -0,0 +1,15 @@
++digraph scheduler_eventbus_supervisor_source_0231 {
++  rankdir=LR;
++  node [shape=box];
++
++  scheduler [label="Scheduler\nupstream orchestration authority"];
++  eventbus [label="EventBus\ncanonical event transport"];
++  sink [label="PassiveSupervisorSink\ndownstream-only observer"];
++  cellular [label="CellularState\nin-memory projection"];
++  snapshot [label="snapshot/audit\noptional outputs"];
++
++  scheduler -> eventbus;
++  eventbus -> sink;
++  sink -> cellular;
++  cellular -> snapshot [style=dashed];
++}
+diff --git a/doc/manifests/MANIFEST_0231_SCHEDULER_EVENTBUS_SUPERVISOR_SOURCE_CHANGED_FILES.md b/doc/manifests/MANIFEST_0231_SCHEDULER_EVENTBUS_SUPERVISOR_SOURCE_CHANGED_FILES.md
+new file mode 100644
+index 0000000..dff25be
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0231_SCHEDULER_EVENTBUS_SUPERVISOR_SOURCE_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest — 0231 Scheduler EventBus supervisor source
++
++- `src/context/passive_bus_supervisor_cellular_snapshot.py`
++- `tools/run_scheduler_eventbus_supervisor_smoke_0231.py`
++- `tests/context/test_scheduler_eventbus_supervisor_source_0231.py`
++- `tests/tools/test_run_scheduler_eventbus_supervisor_smoke_0231.py`
++- `tests/rules/test_scheduler_eventbus_supervisor_source_0231_rule.py`
++- `doc/architecture/SCHEDULER_EVENTBUS_SUPERVISOR_SOURCE_0231.md`
++- `doc/code-rules/0231_scheduler_eventbus_supervisor_source_rule.md`
++- `doc/docs/architecture/runtime/231_scheduler_eventbus_supervisor_source.dot`
++- `doc/CHANGELOG_0231_SCHEDULER_EVENTBUS_SUPERVISOR_SOURCE.md`
++- `doc/manifests/MANIFEST_0231_SCHEDULER_EVENTBUS_SUPERVISOR_SOURCE_CHANGED_FILES.md`
++- `PHASE0231_SCHEDULER_EVENTBUS_SUPERVISOR_SOURCE_TEST_REPORT.md`
+diff --git a/src/context/passive_bus_supervisor_cellular_snapshot.py b/src/context/passive_bus_supervisor_cellular_snapshot.py
+index 38316e8..0a0ae78 100644
+--- a/src/context/passive_bus_supervisor_cellular_snapshot.py
++++ b/src/context/passive_bus_supervisor_cellular_snapshot.py
+@@ -264,6 +264,56 @@ def event_from_mapping(mapping: Mapping[str, Any]) -> BusSupervisorEvent:
+     )
+ 
+ 
++
++def scheduler_supervision_event(
++    *,
++    event_id: str,
++    event_kind: str,
++    state: str,
++    observed_at: str,
++    scheduler_ref: str = "scheduler:main",
++    cell_id: str | None = None,
++    source_ref: str | None = None,
++    route_ref: str = "",
++    policy_decision_id: str = "",
++    artifact_ref: str = "",
++    sql_ref: str = "",
++    qdrant_ref: str = "",
++    shm_ref: str = "",
++    error: str = "",
++    payload: Mapping[str, Any] | None = None,
++) -> BusSupervisorEvent:
++    """Build a canonical passive-supervision event for Scheduler emissions.
++
++    The Scheduler remains the upstream orchestration authority. This helper does
++    not import the Scheduler, does not execute the scheduler loop, and does
++    not dispatch handlers. It only gives existing Scheduler/EventBus surfaces a
++    stable event shape that the passive supervisor sink can consume.
++    """
++
++    resolved_scheduler_ref = _as_string(scheduler_ref) or "scheduler:main"
++    event_payload = dict(_as_string_mapping(payload))
++    event_payload.setdefault("scheduler_ref", resolved_scheduler_ref)
++    event_payload.setdefault("upstream_authority", "scheduler")
++    event_payload.setdefault("supervisor_role", "downstream_observer")
++    return BusSupervisorEvent(
++        event_id=event_id,
++        event_kind=event_kind,
++        cell_id=cell_id or resolved_scheduler_ref,
++        cell_kind="SCHEDULER",
++        state=state,
++        observed_at=observed_at,
++        source_ref=source_ref or resolved_scheduler_ref,
++        route_ref=route_ref,
++        policy_decision_id=policy_decision_id,
++        artifact_ref=artifact_ref,
++        sql_ref=sql_ref,
++        qdrant_ref=qdrant_ref,
++        shm_ref=shm_ref,
++        error=error,
++        payload=event_payload,
++    )
++
+ def build_cellular_snapshot(
+     events: Iterable[BusSupervisorEvent],
+     *,
+@@ -337,6 +387,47 @@ class PassiveSupervisorSink:
+             self._write_audit_event(normalized)
+         return normalized
+ 
++    def accept_scheduler_event(
++        self,
++        *,
++        event_id: str,
++        event_kind: str,
++        state: str,
++        observed_at: str,
++        scheduler_ref: str = "scheduler:main",
++        cell_id: str | None = None,
++        source_ref: str | None = None,
++        route_ref: str = "",
++        policy_decision_id: str = "",
++        artifact_ref: str = "",
++        sql_ref: str = "",
++        qdrant_ref: str = "",
++        shm_ref: str = "",
++        error: str = "",
++        payload: Mapping[str, Any] | None = None,
++    ) -> BusSupervisorEvent:
++        """Accept one Scheduler-originated EventBus event downstream-only."""
++
++        return self.accept(
++            scheduler_supervision_event(
++                event_id=event_id,
++                event_kind=event_kind,
++                state=state,
++                observed_at=observed_at,
++                scheduler_ref=scheduler_ref,
++                cell_id=cell_id,
++                source_ref=source_ref,
++                route_ref=route_ref,
++                policy_decision_id=policy_decision_id,
++                artifact_ref=artifact_ref,
++                sql_ref=sql_ref,
++                qdrant_ref=qdrant_ref,
++                shm_ref=shm_ref,
++                error=error,
++                payload=payload,
++            )
++        )
++
+     def accept_many(
+         self, events: Iterable[BusSupervisorEvent | Mapping[str, Any]]
+     ) -> tuple[BusSupervisorEvent, ...]:
+diff --git a/tests/context/test_scheduler_eventbus_supervisor_source_0231.py b/tests/context/test_scheduler_eventbus_supervisor_source_0231.py
+new file mode 100644
+index 0000000..ddf9f51
+--- /dev/null
++++ b/tests/context/test_scheduler_eventbus_supervisor_source_0231.py
+@@ -0,0 +1,49 @@
++from src.context.passive_bus_supervisor_cellular_snapshot import (
++    PassiveSupervisorSink,
++    scheduler_supervision_event,
++)
++
++
++def test_scheduler_supervision_event_keeps_scheduler_upstream_only() -> None:
++    event = scheduler_supervision_event(
++        event_id="scheduler-evt-1",
++        event_kind="scheduler_tick",
++        state="running",
++        observed_at="2026-07-08T00:00:00Z",
++        scheduler_ref="scheduler:main",
++        route_ref="route-1",
++        policy_decision_id="policy-1",
++        payload={"handler": "dry-run"},
++    )
++
++    assert event.cell_kind == "SCHEDULER"
++    assert event.cell_id == "scheduler:main"
++    assert event.source_ref == "scheduler:main"
++    assert event.route_ref == "route-1"
++    assert event.policy_decision_id == "policy-1"
++    assert event.payload["scheduler_ref"] == "scheduler:main"
++    assert event.payload["upstream_authority"] == "scheduler"
++    assert event.payload["supervisor_role"] == "downstream_observer"
++
++
++def test_passive_supervisor_sink_accepts_scheduler_event_without_scheduler_run() -> None:
++    sink = PassiveSupervisorSink(metadata={"test": "0231"})
++    accepted = sink.accept_scheduler_event(
++        event_id="scheduler-evt-2",
++        event_kind="scheduler_handler_planned",
++        state="queued",
++        observed_at="2026-07-08T00:00:01Z",
++        scheduler_ref="scheduler:main",
++        artifact_ref="artifact-1",
++    )
++
++    payload = sink.snapshot_payload(generated_at="2026-07-08T00:00:02Z")
++    cells = {cell["cell_id"]: cell for cell in payload["cells"]}
++
++    assert accepted.cell_kind == "SCHEDULER"
++    assert sink.event_count() == 1
++    assert payload["event_count"] == 1
++    assert payload["cell_count"] == 1
++    assert payload["metadata"]["scheduler_role"] == "upstream_orchestration_authority"
++    assert payload["supervision_authority_violation"] is False
++    assert cells["scheduler:main"]["refs"]["artifact_ref"] == "artifact-1"
+diff --git a/tests/rules/test_scheduler_eventbus_supervisor_source_0231_rule.py b/tests/rules/test_scheduler_eventbus_supervisor_source_0231_rule.py
+new file mode 100644
+index 0000000..35b6599
+--- /dev/null
++++ b/tests/rules/test_scheduler_eventbus_supervisor_source_0231_rule.py
+@@ -0,0 +1,53 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def _read(path: str) -> str:
++    return (ROOT / path).read_text(encoding="utf-8")
++
++
++def test_0231_reuses_existing_passive_supervisor_sink() -> None:
++    source = _read("src/context/passive_bus_supervisor_cellular_snapshot.py")
++    tool = _read("tools/run_scheduler_eventbus_supervisor_smoke_0231.py")
++
++    assert "class PassiveSupervisorSink" in source
++    assert "def scheduler_supervision_event" in source
++    assert "def accept_scheduler_event" in source
++    assert "from src.context.passive_bus_supervisor_cellular_snapshot import PassiveSupervisorSink" in tool
++
++
++def test_0231_does_not_call_scheduler_run_or_create_scheduler_adapter() -> None:
++    runtime = "\n".join(
++        [
++            _read("src/context/passive_bus_supervisor_cellular_snapshot.py"),
++            _read("tools/run_scheduler_eventbus_supervisor_smoke_0231.py"),
++        ]
++    )
++    docs = "\n".join(
++        [
++            _read("doc/architecture/SCHEDULER_EVENTBUS_SUPERVISOR_SOURCE_0231.md"),
++            _read("doc/code-rules/0231_scheduler_eventbus_supervisor_source_rule.md"),
++        ]
++    )
++
++    assert "Scheduler.run()" in docs
++    assert "Scheduler.run(" not in runtime
++    assert "import Scheduler" not in runtime
++    assert "class Scheduler" not in runtime
++    assert "new EventBus" not in runtime
++    assert "control_proxy(" not in runtime
++    assert "write_sql" not in runtime
++    assert "upsert" not in runtime
++
++
++def test_0231_docs_keep_scheduler_upstream_and_supervisor_downstream() -> None:
++    doc = _read("doc/architecture/SCHEDULER_EVENTBUS_SUPERVISOR_SOURCE_0231.md")
++    dot = _read("doc/docs/architecture/runtime/231_scheduler_eventbus_supervisor_source.dot")
++
++    assert "Scheduler = upstream orchestration authority" in doc
++    assert "PassiveSupervisorSink = downstream-only observer" in doc
++    assert "Scheduler.run() is forbidden" in doc
++    assert "scheduler -> eventbus" in dot
++    assert "eventbus -> sink" in dot
++    assert "sink -> scheduler" not in dot
+diff --git a/tests/tools/test_run_scheduler_eventbus_supervisor_smoke_0231.py b/tests/tools/test_run_scheduler_eventbus_supervisor_smoke_0231.py
+new file mode 100644
+index 0000000..24bde9a
+--- /dev/null
++++ b/tests/tools/test_run_scheduler_eventbus_supervisor_smoke_0231.py
+@@ -0,0 +1,68 @@
++import json
++from pathlib import Path
++import subprocess
++import sys
++
++
++def test_run_scheduler_eventbus_supervisor_smoke_writes_snapshot_and_audit(tmp_path: Path) -> None:
++    snapshot = tmp_path / "snapshot.json"
++    audit = tmp_path / "audit.jsonl"
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/run_scheduler_eventbus_supervisor_smoke_0231.py",
++            "--event-id",
++            "scheduler-evt-cli",
++            "--event-kind",
++            "scheduler_tick",
++            "--state",
++            "running",
++            "--observed-at",
++            "2026-07-08T00:00:00Z",
++            "--scheduler-ref",
++            "scheduler:main",
++            "--route-ref",
++            "route-1",
++            "--snapshot-output",
++            str(snapshot),
++            "--audit-jsonl",
++            str(audit),
++            "--format",
++            "json",
++        ],
++        cwd=Path(__file__).resolve().parents[2],
++        check=True,
++        text=True,
++        capture_output=True,
++    )
++
++    payload = json.loads(result.stdout)
++    written = json.loads(snapshot.read_text(encoding="utf-8"))
++    audit_lines = audit.read_text(encoding="utf-8").strip().splitlines()
++
++    assert payload["scheduler_eventbus_supervisor_source_ready"] is True
++    assert payload["cellular_snapshot_written"] is True
++    assert payload["accepted_event"]["cell_kind"] == "SCHEDULER"
++    assert payload["accepted_event"]["route_ref"] == "route-1"
++    assert written["metadata"]["scheduler_role"] == "upstream_orchestration_authority"
++    assert len(audit_lines) == 1
++    assert json.loads(audit_lines[0])["event_id"] == "scheduler-evt-cli"
++
++
++def test_run_scheduler_eventbus_supervisor_smoke_summary(tmp_path: Path) -> None:
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/run_scheduler_eventbus_supervisor_smoke_0231.py",
++            "--format",
++            "summary",
++        ],
++        cwd=Path(__file__).resolve().parents[2],
++        check=True,
++        text=True,
++        capture_output=True,
++    )
++
++    assert "scheduler_source_ready=True" in result.stdout
++    assert "event_count=1" in result.stdout
++    assert "scheduler_ref=scheduler:main" in result.stdout
+diff --git a/tools/run_scheduler_eventbus_supervisor_smoke_0231.py b/tools/run_scheduler_eventbus_supervisor_smoke_0231.py
+new file mode 100755
+index 0000000..e412a64
+--- /dev/null
++++ b/tools/run_scheduler_eventbus_supervisor_smoke_0231.py
+@@ -0,0 +1,106 @@
++#!/usr/bin/env python3
++"""Smoke Scheduler upstream EventBus events into the passive supervisor sink."""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import sys
++from typing import Any
++
++ROOT = Path(__file__).resolve().parents[1]
++if str(ROOT) not in sys.path:
++    sys.path.insert(0, str(ROOT))
++
++from src.context.passive_bus_supervisor_cellular_snapshot import PassiveSupervisorSink
++
++
++def _load_payload(path: Path | None) -> dict[str, Any]:
++    if path is None:
++        return {}
++    value = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(value, dict):
++        raise SystemExit("--payload-json must contain a JSON object")
++    return value
++
++
++def parse_args(argv: tuple[str, ...]) -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--event-id", default="scheduler-event-0231")
++    parser.add_argument("--event-kind", default="scheduler_tick")
++    parser.add_argument("--state", default="running")
++    parser.add_argument("--observed-at", default="2026-07-08T00:00:00Z")
++    parser.add_argument("--scheduler-ref", default="scheduler:main")
++    parser.add_argument("--route-ref", default="")
++    parser.add_argument("--policy-decision-id", default="")
++    parser.add_argument("--artifact-ref", default="")
++    parser.add_argument("--sql-ref", default="")
++    parser.add_argument("--qdrant-ref", default="")
++    parser.add_argument("--shm-ref", default="")
++    parser.add_argument("--error", default="")
++    parser.add_argument("--payload-json", type=Path)
++    parser.add_argument("--snapshot-output", type=Path)
++    parser.add_argument("--audit-jsonl", type=Path)
++    parser.add_argument("--generated-at", default="2026-07-08T00:00:01Z")
++    parser.add_argument("--format", choices=("json", "summary"), default="json")
++    return parser.parse_args(argv)
++
++
++def run(options: argparse.Namespace) -> dict[str, Any]:
++    sink = PassiveSupervisorSink(
++        metadata={
++            "patch_id": "0231-r1-scheduler_eventbus_supervisor_upstream_source",
++            "source": "scheduler_eventbus_supervisor_smoke",
++            "scheduler_role": "upstream_orchestration_authority",
++            "supervisor_role": "downstream_observer",
++        },
++        audit_jsonl=options.audit_jsonl,
++    )
++    event = sink.accept_scheduler_event(
++        event_id=options.event_id,
++        event_kind=options.event_kind,
++        state=options.state,
++        observed_at=options.observed_at,
++        scheduler_ref=options.scheduler_ref,
++        route_ref=options.route_ref,
++        policy_decision_id=options.policy_decision_id,
++        artifact_ref=options.artifact_ref,
++        sql_ref=options.sql_ref,
++        qdrant_ref=options.qdrant_ref,
++        shm_ref=options.shm_ref,
++        error=options.error,
++        payload=_load_payload(options.payload_json),
++    )
++    if options.snapshot_output is not None:
++        payload = sink.write_snapshot(
++            options.snapshot_output,
++            generated_at=options.generated_at,
++        )
++    else:
++        payload = sink.snapshot_payload(generated_at=options.generated_at)
++    payload["accepted_event"] = event.to_dict()
++    payload["scheduler_eventbus_supervisor_source_ready"] = True
++    return payload
++
++
++def main(argv: tuple[str, ...] | None = None) -> int:
++    options = parse_args(tuple(sys.argv[1:] if argv is None else argv))
++    payload = run(options)
++    if options.format == "summary":
++        print(
++            "scheduler_source_ready={ready} event_count={event_count} cell_count={cell_count} "
++            "scheduler_ref={scheduler_ref}".format(
++                ready=payload["scheduler_eventbus_supervisor_source_ready"],
++                event_count=payload["event_count"],
++                cell_count=payload["cell_count"],
++                scheduler_ref=payload["accepted_event"]["source_ref"],
++            )
++        )
++    else:
++        print(json.dumps(payload, indent=2, sort_keys=True))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

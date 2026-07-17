@@ -1,0 +1,1555 @@
+diff --git a/src/context/fake_laboratory_recall_closed_result_frame_0274.py b/src/context/fake_laboratory_recall_closed_result_frame_0274.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/context/fake_laboratory_recall_closed_result_frame_0274.py
+@@ -0,0 +1,848 @@
++"""Recall, SQL rehydration and closed ResultFrame for laboratory output.
++
++0274-r4 reuses the existing 0261 query embedding, 0263 Qdrant recall/SQL
++rehydration, 0264 closed ResultFrame, 0265 EventBus observation and 0266
++PassiveSupervisor surfaces around the converged local handoff produced by
++0274-r3.
++
++The passage embedding projected by r3 and the query embedding used by r4 are
++kept distinct while being required to share the same E5 vector space.  The
++module creates no Scheduler, queue, EventBus, registry, SQL authority, Qdrant
++authority, laboratory orchestrator, renderer or GitHub client.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Mapping, Sequence
++from dataclasses import dataclass, field, replace
++import hashlib
++import json
++from typing import Any, Callable, Protocol
++
++from context.closed_result_frame_eventbus_observation_0265 import (
++    build_closed_result_frame_eventbus_observation_report,
++    publish_closed_result_frame_observation_facts,
++)
++from context.fake_laboratory_closed_local_handoff_0274 import (
++    FakeLaboratoryClosedHandoffResult,
++)
++from context.github_project_v2_source_candidate_vector_projection_0272 import (
++    EmbeddingSpaceProfile,
++    attach_profile_to_embedding,
++    validate_embedding_against_profile,
++)
++from context.passive_supervisor_closed_result_frame_observation_0266 import (
++    build_passive_supervisor_closed_frame_observation_report,
++)
++from context.passive_supervisor_visual_layout_model import (
++    build_passive_supervisor_visual_layout_model,
++)
++from context.passive_supervisor_visual_read_model import build_visual_read_model
++from context.scheduler_managed_closed_result_frame_0264 import (
++    ClosedResultFrameReportRefs,
++    SchedulerManagedClosedResultFrame,
++    compose_scheduler_managed_closed_result_frame,
++)
++from context.scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263 import (
++    SchedulerManagedQdrantRecallSqlRehydrateRequest,
++    default_query_ref_from_embedding_report,
++    run_scheduler_managed_qdrant_recall_sql_rehydrate_usage,
++)
++from context.scheduler_managed_sql_ref_openvino_embedding_usage_0261 import (
++    SchedulerManagedSqlRefOpenVinoEmbeddingRequest,
++    run_scheduler_managed_sql_ref_openvino_embedding_usage,
++)
++
++LABORATORY_RECALL_COMMAND_SCHEMA = (
++    'missipy.laboratory.recall_closure_command.v1'
++)
++LABORATORY_CLOSED_RESULT_FRAME_SCHEMA = (
++    'missipy.laboratory.closed_result_frame.v1'
++)
++LABORATORY_RECALL_CLOSURE_RESULT_SCHEMA = (
++    'missipy.laboratory.recall_closure_result.v1'
++)
++LABORATORY_RECALL_CLOSURE_VERSION = '0274.r4'
++
++EmbeddingCallable = Callable[[str, str, str | None, str], Mapping[str, Any]]
++
++
++class ExistingObservationBus(Protocol):
++    """Existing EventBus surface accepted by the 0265 publisher."""
++
++    async def publish(self, event: object) -> None:
++        """Publish one immutable fact event."""
++
++
++class LaboratoryRecallClosureError(RuntimeError):
++    """Raised when recall closure would violate an authority boundary."""
++
++
++@dataclass(frozen=True, slots=True)
++class LaboratoryRecallClosureCommand:
++    """Explicit command for query embedding, recall and passive observation."""
++
++    execute: bool = False
++    policy_decision_id: str = ''
++    publish_observations: bool = False
++    model_dir: str | None = None
++    device: str = 'CPU'
++    recall_limit: int = 8
++    frame_ref: str = 'laboratory-frame:0274-r4'
++    schema: str = LABORATORY_RECALL_COMMAND_SCHEMA
++
++    def __post_init__(self) -> None:
++        if self.schema != LABORATORY_RECALL_COMMAND_SCHEMA:
++            raise LaboratoryRecallClosureError(
++                'unsupported laboratory recall command schema'
++            )
++        if self.execute and not self.policy_decision_id.strip():
++            raise LaboratoryRecallClosureError(
++                'execute requires policy_decision_id'
++            )
++        if self.publish_observations and not self.execute:
++            raise LaboratoryRecallClosureError(
++                'publish_observations requires execute'
++            )
++        if isinstance(self.recall_limit, bool) or not isinstance(
++            self.recall_limit, int
++        ):
++            raise LaboratoryRecallClosureError(
++                'recall_limit must be an integer'
++            )
++        if not 1 <= self.recall_limit <= 128:
++            raise LaboratoryRecallClosureError(
++                'recall_limit must be between 1 and 128'
++            )
++        if not self.frame_ref.startswith('laboratory-frame:'):
++            raise LaboratoryRecallClosureError(
++                'frame_ref must start with laboratory-frame:'
++            )
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            'schema': self.schema,
++            'execute': self.execute,
++            'policy_decision_id': self.policy_decision_id,
++            'publish_observations': self.publish_observations,
++            'model_dir': self.model_dir,
++            'device': self.device,
++            'recall_limit': self.recall_limit,
++            'frame_ref': self.frame_ref,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class LaboratoryClosedResultFrame:
++    """Laboratory provenance around the reused 0264 closed frame."""
++
++    base_frame: SchedulerManagedClosedResultFrame
++    laboratory_ref: str
++    final_ref: str
++    synthesis_ref: str
++    passage_profile_ref: str
++    query_profile_ref: str
++    passage_embedding_ref: str
++    query_embedding_ref: str
++    recall_query_ref: str
++    specialist_output_verified: bool
++    existing_scheduler_used_upstream: bool = True
++    scheduler_created: bool = False
++    scheduler_modified: bool = False
++    github_mutation_performed: bool = False
++
++    def __post_init__(self) -> None:
++        if not self.base_frame.valid:
++            raise LaboratoryRecallClosureError(
++                'laboratory frame requires a valid 0264 base frame'
++            )
++        if self.laboratory_ref != 'laboratory:local-fake':
++            raise LaboratoryRecallClosureError(
++                'r4 supports only laboratory:local-fake'
++            )
++        for name in (
++            'final_ref',
++            'synthesis_ref',
++            'passage_profile_ref',
++            'query_profile_ref',
++            'passage_embedding_ref',
++            'query_embedding_ref',
++            'recall_query_ref',
++        ):
++            if not str(getattr(self, name)).strip():
++                raise LaboratoryRecallClosureError(
++                    f'{name} must be non-empty'
++                )
++        if not self.specialist_output_verified:
++            raise LaboratoryRecallClosureError(
++                'closed frame requires verified specialist_output rehydration'
++            )
++        if (
++            not self.existing_scheduler_used_upstream
++            or self.scheduler_created
++            or self.scheduler_modified
++            or self.github_mutation_performed
++        ):
++            raise LaboratoryRecallClosureError(
++                'laboratory frame must preserve authority boundaries'
++            )
++
++    def to_mapping(self) -> dict[str, object]:
++        payload = self.base_frame.to_mapping()
++        payload.update(
++            {
++                'schema': LABORATORY_CLOSED_RESULT_FRAME_SCHEMA,
++                'laboratory_closed_result_frame': True,
++                'base_frame_schema': (
++                    'missipy.scheduler_managed_closed_result_frame.v1'
++                ),
++                'laboratory_ref': self.laboratory_ref,
++                'final_ref': self.final_ref,
++                'synthesis_ref': self.synthesis_ref,
++                'passage_profile_ref': self.passage_profile_ref,
++                'query_profile_ref': self.query_profile_ref,
++                'passage_embedding_ref': self.passage_embedding_ref,
++                'query_embedding_ref': self.query_embedding_ref,
++                'recall_query_ref': self.recall_query_ref,
++                'specialist_output_verified': self.specialist_output_verified,
++                'existing_scheduler_used_upstream': (
++                    self.existing_scheduler_used_upstream
++                ),
++                'scheduler_created': self.scheduler_created,
++                'scheduler_modified': self.scheduler_modified,
++                'github_mutation_performed': (
++                    self.github_mutation_performed
++                ),
++                'publication_gate_required': True,
++            }
++        )
++        trace = dict(payload.get('trace', {}))
++        trace['0274-r4-query'] = {
++            'kind': 'query_embedding_qdrant_recall',
++            'sql_ref': self.base_frame.sql_ref,
++            'query_embedding_ref': self.query_embedding_ref,
++            'query_profile_ref': self.query_profile_ref,
++            'recall_query_ref': self.recall_query_ref,
++        }
++        payload['trace'] = trace
++        return payload
++
++
++@dataclass(frozen=True, slots=True)
++class LaboratoryRecallClosureResult:
++    """Serializable result of the r4 recall and passive closure."""
++
++    valid: bool
++    issues: tuple[str, ...]
++    command: LaboratoryRecallClosureCommand
++    sql_ref: str
++    passage_profile: Mapping[str, Any]
++    query_profile: Mapping[str, Any]
++    query_embedding: Mapping[str, Any] = field(default_factory=dict)
++    query_compatibility: Mapping[str, Any] = field(default_factory=dict)
++    recall_rehydrate: Mapping[str, Any] = field(default_factory=dict)
++    closed_frame: Mapping[str, Any] = field(default_factory=dict)
++    observation_report: Mapping[str, Any] = field(default_factory=dict)
++    published_event_ids: tuple[str, ...] = ()
++    passive_supervisor: Mapping[str, Any] = field(default_factory=dict)
++    visual_read_model: Mapping[str, Any] = field(default_factory=dict)
++    visual_layout: Mapping[str, Any] = field(default_factory=dict)
++    github_preview: Mapping[str, Any] = field(default_factory=dict)
++    query_openvino_call_performed: bool = False
++    qdrant_recall_performed: bool = False
++    sql_rehydrate_performed: bool = False
++    closed_result_frame_built: bool = False
++    eventbus_publish_performed: bool = False
++    existing_scheduler_used_upstream: bool = True
++    scheduler_created: bool = False
++    scheduler_modified: bool = False
++    parallel_orchestrator_created: bool = False
++    parallel_eventbus_created: bool = False
++    parallel_registry_created: bool = False
++    sql_write_performed: bool = False
++    qdrant_write_performed: bool = False
++    github_mutation_performed: bool = False
++    schema: str = LABORATORY_RECALL_CLOSURE_RESULT_SCHEMA
++
++    def __post_init__(self) -> None:
++        if self.schema != LABORATORY_RECALL_CLOSURE_RESULT_SCHEMA:
++            raise LaboratoryRecallClosureError(
++                'unsupported laboratory recall result schema'
++            )
++        forbidden = (
++            not self.existing_scheduler_used_upstream,
++            self.scheduler_created,
++            self.scheduler_modified,
++            self.parallel_orchestrator_created,
++            self.parallel_eventbus_created,
++            self.parallel_registry_created,
++            self.sql_write_performed,
++            self.qdrant_write_performed,
++            self.github_mutation_performed,
++        )
++        if any(forbidden):
++            raise LaboratoryRecallClosureError(
++                'r4 must remain read/recall/observation only'
++            )
++        if self.command.execute and self.valid:
++            required = (
++                self.query_openvino_call_performed,
++                self.qdrant_recall_performed,
++                self.sql_rehydrate_performed,
++                self.closed_result_frame_built,
++            )
++            if not all(required):
++                raise LaboratoryRecallClosureError(
++                    'successful execute mode requires complete recall closure'
++                )
++        if self.command.publish_observations and self.valid:
++            if not self.eventbus_publish_performed:
++                raise LaboratoryRecallClosureError(
++                    'observation mode requires existing EventBus publication'
++                )
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            'schema': self.schema,
++            'valid': self.valid,
++            'issues': list(self.issues),
++            'command': self.command.to_mapping(),
++            'sql_ref': self.sql_ref,
++            'passage_profile': dict(self.passage_profile),
++            'query_profile': dict(self.query_profile),
++            'query_embedding': dict(self.query_embedding),
++            'query_compatibility': dict(self.query_compatibility),
++            'recall_rehydrate': dict(self.recall_rehydrate),
++            'closed_frame': dict(self.closed_frame),
++            'observation_report': dict(self.observation_report),
++            'published_event_ids': list(self.published_event_ids),
++            'passive_supervisor': dict(self.passive_supervisor),
++            'visual_read_model': dict(self.visual_read_model),
++            'visual_layout': dict(self.visual_layout),
++            'github_preview': dict(self.github_preview),
++            'query_openvino_call_performed': (
++                self.query_openvino_call_performed
++            ),
++            'qdrant_recall_performed': self.qdrant_recall_performed,
++            'sql_rehydrate_performed': self.sql_rehydrate_performed,
++            'closed_result_frame_built': self.closed_result_frame_built,
++            'eventbus_publish_performed': self.eventbus_publish_performed,
++            'existing_scheduler_used_upstream': (
++                self.existing_scheduler_used_upstream
++            ),
++            'scheduler_created': self.scheduler_created,
++            'scheduler_modified': self.scheduler_modified,
++            'parallel_orchestrator_created': (
++                self.parallel_orchestrator_created
++            ),
++            'parallel_eventbus_created': self.parallel_eventbus_created,
++            'parallel_registry_created': self.parallel_registry_created,
++            'sql_write_performed': self.sql_write_performed,
++            'qdrant_write_performed': self.qdrant_write_performed,
++            'github_mutation_performed': self.github_mutation_performed,
++            'sql_remains_authority': True,
++            'qdrant_recall_refs_only': True,
++            'eventbus_observation_only': True,
++            'passive_supervisor_observation_only': True,
++            'vispy_passive': True,
++            'publication_gate_required': True,
++        }
++
++
++async def run_fake_laboratory_recall_closure(
++    handoff: FakeLaboratoryClosedHandoffResult,
++    command: LaboratoryRecallClosureCommand,
++    *,
++    store: Any | None = None,
++    passage_profile: EmbeddingSpaceProfile | None = None,
++    query_profile: EmbeddingSpaceProfile | None = None,
++    embedder: EmbeddingCallable | None = None,
++    recall_executor: Any | None = None,
++    event_bus: ExistingObservationBus | None = None,
++) -> LaboratoryRecallClosureResult:
++    """Recall the r3 specialist output and build the closed passive frame."""
++
++    effective_passage = passage_profile or EmbeddingSpaceProfile()
++    effective_query = query_profile or replace(
++        effective_passage,
++        role='query',
++    )
++    issues = list(
++        _validate_inputs(
++            handoff,
++            command,
++            passage_profile=effective_passage,
++            query_profile=effective_query,
++            store=store,
++            recall_executor=recall_executor,
++            event_bus=event_bus,
++        )
++    )
++    sql_ref = str(handoff.sql_record.get('context_ref', ''))
++
++    if issues or not command.execute:
++        return _result(
++            issues=issues,
++            command=command,
++            sql_ref=sql_ref,
++            passage_profile=effective_passage,
++            query_profile=effective_query,
++            github_preview=handoff.github_preview,
++        )
++
++    query_request = SchedulerManagedSqlRefOpenVinoEmbeddingRequest(
++        sql_ref=sql_ref,
++        role='query',
++        policy_decision_id=command.policy_decision_id,
++        model_dir=command.model_dir,
++        device=command.device,
++    )
++    query_result = run_scheduler_managed_sql_ref_openvino_embedding_usage(
++        store,
++        query_request,
++        execute=True,
++        embedder=embedder,
++    )
++    query_report = query_result.to_mapping()
++    if not query_result.valid:
++        issues.extend(query_result.issues)
++        return _result(
++            issues=issues,
++            command=command,
++            sql_ref=sql_ref,
++            passage_profile=effective_passage,
++            query_profile=effective_query,
++            query_embedding=query_report,
++            github_preview=handoff.github_preview,
++            query_openvino_call_performed=True,
++        )
++
++    query_embedding = _mapping(query_report.get('embedding'))
++    compatibility = validate_embedding_against_profile(
++        query_embedding,
++        effective_query,
++        expected_sql_ref=sql_ref,
++    )
++    if not compatibility.compatible:
++        issues.extend(compatibility.issues)
++        return _result(
++            issues=issues,
++            command=command,
++            sql_ref=sql_ref,
++            passage_profile=effective_passage,
++            query_profile=effective_query,
++            query_embedding=query_report,
++            query_compatibility=compatibility.to_mapping(),
++            github_preview=handoff.github_preview,
++            query_openvino_call_performed=True,
++        )
++
++    profiled_query_report = dict(query_report)
++    profiled_query_report['embedding'] = attach_profile_to_embedding(
++        query_embedding,
++        effective_query,
++    )
++    recall_request = SchedulerManagedQdrantRecallSqlRehydrateRequest(
++        query_ref=default_query_ref_from_embedding_report(
++            profiled_query_report
++        ),
++        policy_decision_id=command.policy_decision_id,
++        collection_name=effective_passage.collection_name,
++        vector_dimension=effective_passage.dimension,
++        limit=command.recall_limit,
++    )
++    recall_result = run_scheduler_managed_qdrant_recall_sql_rehydrate_usage(
++        profiled_query_report,
++        store,
++        recall_request,
++        execute=True,
++        executor=recall_executor,
++    )
++    recall_mapping = recall_result.to_mapping()
++    if not recall_result.valid:
++        issues.extend(recall_result.issues)
++    verified_record = _verify_rehydrated_specialist_output(
++        handoff,
++        recall_mapping,
++    )
++    if not verified_record:
++        issues.append(
++            'recall must rehydrate the exact r3 specialist_output record'
++        )
++
++    base_frame: SchedulerManagedClosedResultFrame | None = None
++    laboratory_frame: LaboratoryClosedResultFrame | None = None
++    if not issues:
++        base_frame = compose_scheduler_managed_closed_result_frame(
++            sql_write_report={
++                'sql_ref': sql_ref,
++                'result': dict(handoff.sql_write),
++            },
++            embedding_report=handoff.embedding,
++            projection_report=handoff.projection,
++            recall_rehydrate_report=recall_mapping,
++            report_refs=ClosedResultFrameReportRefs(
++                sql_write_report='memory:0274-r3:sql-write',
++                embedding_report='memory:0274-r3:passage-embedding',
++                projection_report='memory:0274-r3:qdrant-projection',
++                recall_rehydrate_report='memory:0274-r4:recall-rehydrate',
++            ),
++        )
++        if not base_frame.valid:
++            issues.extend(base_frame.issues)
++        else:
++            final_ref = str(
++                handoff.github_preview.get('final_ref', '')
++            )
++            synthesis_ref = str(
++                handoff.github_preview.get('synthesis_ref', '')
++            )
++            passage_embedding = _mapping(
++                handoff.embedding.get('embedding')
++            )
++            laboratory_frame = LaboratoryClosedResultFrame(
++                base_frame=base_frame,
++                laboratory_ref='laboratory:local-fake',
++                final_ref=final_ref,
++                synthesis_ref=synthesis_ref,
++                passage_profile_ref=effective_passage.profile_ref,
++                query_profile_ref=effective_query.profile_ref,
++                passage_embedding_ref=str(
++                    passage_embedding.get('embedding_ref', '')
++                ),
++                query_embedding_ref=str(
++                    query_embedding.get('embedding_ref', '')
++                ),
++                recall_query_ref=recall_request.query_ref,
++                specialist_output_verified=True,
++            )
++
++    observation_mapping: dict[str, Any] = {}
++    passive_mapping: dict[str, Any] = {}
++    visual_mapping: dict[str, Any] = {}
++    layout_mapping: dict[str, Any] = {}
++    published_ids: tuple[str, ...] = ()
++
++    if not issues and laboratory_frame is not None:
++        frame_mapping = laboratory_frame.to_mapping()
++        observation = build_closed_result_frame_eventbus_observation_report(
++            frame_mapping,
++            frame_ref=command.frame_ref,
++        )
++        observation_mapping = observation.to_mapping()
++        if not observation.valid:
++            issues.extend(observation.issues)
++        else:
++            passive = build_passive_supervisor_closed_frame_observation_report(
++                observation_mapping,
++                source_observation_ref=(
++                    'laboratory-recall-observation:' + _digest(sql_ref)
++                ),
++            )
++            passive_mapping = passive.to_mapping()
++            if not passive.valid:
++                issues.extend(passive.issues)
++            snapshot = _build_visual_snapshot(
++                handoff,
++                laboratory_frame,
++                recall_mapping,
++            )
++            visual_mapping = build_visual_read_model(
++                snapshot,
++                layout_kind='laboratory-recall-cellular',
++            ).to_dict()
++            layout_mapping = build_passive_supervisor_visual_layout_model(
++                visual_mapping
++            )
++            if command.publish_observations and not issues:
++                published = await publish_closed_result_frame_observation_facts(
++                    event_bus,
++                    observation.facts,
++                )
++                published_ids = tuple(event.id for event in published)
++
++    return _result(
++        issues=issues,
++        command=command,
++        sql_ref=sql_ref,
++        passage_profile=effective_passage,
++        query_profile=effective_query,
++        query_embedding=profiled_query_report,
++        query_compatibility=compatibility.to_mapping(),
++        recall_rehydrate=recall_mapping,
++        closed_frame=(
++            {} if laboratory_frame is None else laboratory_frame.to_mapping()
++        ),
++        observation_report=observation_mapping,
++        published_event_ids=published_ids,
++        passive_supervisor=passive_mapping,
++        visual_read_model=visual_mapping,
++        visual_layout=layout_mapping,
++        github_preview=handoff.github_preview,
++        query_openvino_call_performed=True,
++        qdrant_recall_performed=bool(recall_mapping),
++        sql_rehydrate_performed=verified_record,
++        closed_result_frame_built=laboratory_frame is not None,
++        eventbus_publish_performed=bool(published_ids),
++    )
++
++
++def _validate_inputs(
++    handoff: FakeLaboratoryClosedHandoffResult,
++    command: LaboratoryRecallClosureCommand,
++    *,
++    passage_profile: EmbeddingSpaceProfile,
++    query_profile: EmbeddingSpaceProfile,
++    store: Any | None,
++    recall_executor: Any | None,
++    event_bus: ExistingObservationBus | None,
++) -> tuple[str, ...]:
++    issues: list[str] = []
++    if not isinstance(handoff, FakeLaboratoryClosedHandoffResult):
++        return ('handoff must be FakeLaboratoryClosedHandoffResult',)
++    if not handoff.valid:
++        issues.append('r3 handoff must be valid')
++    if not handoff.command.execute:
++        issues.append('r3 handoff must come from execute mode')
++    if not handoff.sql_write_performed or not handoff.sql_readback_performed:
++        issues.append('r3 handoff must have durable SQL write/readback')
++    if not handoff.qdrant_write_performed:
++        issues.append('r3 handoff must have an acknowledged passage projection')
++    sql_ref = str(handoff.sql_record.get('context_ref', ''))
++    if not sql_ref.startswith('sql:'):
++        issues.append('r3 handoff must expose a typed sql_ref')
++    if handoff.sql_record.get('kind') != 'specialist_output':
++        issues.append('r3 SQL record must be specialist_output')
++    if passage_profile.role != 'passage':
++        issues.append('passage_profile.role must be passage')
++    if query_profile.role != 'query':
++        issues.append('query_profile.role must be query')
++    if not _profiles_share_vector_space(passage_profile, query_profile):
++        issues.append('query and passage profiles must share one vector space')
++    if str(handoff.compatibility.get('profile_ref', '')) != (
++        passage_profile.profile_ref
++    ):
++        issues.append('r3 compatibility profile must match passage profile')
++    projection_request = _mapping(handoff.projection.get('request'))
++    if projection_request.get('collection_name') != (
++        passage_profile.collection_name
++    ):
++        issues.append('r3 projection collection must match passage profile')
++    if projection_request.get('vector_dimension') != passage_profile.dimension:
++        issues.append('r3 projection dimension must match passage profile')
++    if handoff.github_preview.get('publication_gate_required') is not True:
++        issues.append('r3 GitHub preview must require publication gate')
++    if handoff.github_preview.get('github_mutation_performed') is not False:
++        issues.append('r3 handoff must not have mutated GitHub')
++    if command.execute and store is None:
++        issues.append('execute requires existing SQLContextStore')
++    if command.execute and recall_executor is None:
++        issues.append('execute requires injected Qdrant recall executor')
++    if command.publish_observations and event_bus is None:
++        issues.append('publish_observations requires existing EventBus')
++    return tuple(dict.fromkeys(issues))
++
++
++def _profiles_share_vector_space(
++    passage: EmbeddingSpaceProfile,
++    query: EmbeddingSpaceProfile,
++) -> bool:
++    passage_mapping = passage.to_mapping()
++    query_mapping = query.to_mapping()
++    ignored = {'schema', 'profile_ref', 'role'}
++    return {
++        key: value
++        for key, value in passage_mapping.items()
++        if key not in ignored
++    } == {
++        key: value
++        for key, value in query_mapping.items()
++        if key not in ignored
++    }
++
++
++def _verify_rehydrated_specialist_output(
++    handoff: FakeLaboratoryClosedHandoffResult,
++    recall: Mapping[str, Any],
++) -> bool:
++    sql_ref = str(handoff.sql_record.get('context_ref', ''))
++    sql_refs = recall.get('sql_refs', [])
++    if not isinstance(sql_refs, list) or sql_ref not in sql_refs:
++        return False
++    if recall.get('missing_count') != 0:
++        return False
++    records = recall.get('hydrated_records', [])
++    if not isinstance(records, list):
++        return False
++    expected = _canonical_mapping(handoff.sql_record)
++    for record in records:
++        if not isinstance(record, Mapping):
++            continue
++        if record.get('context_ref') != sql_ref:
++            continue
++        return (
++            record.get('kind') == 'specialist_output'
++            and _canonical_mapping(record) == expected
++        )
++    return False
++
++
++def _build_visual_snapshot(
++    handoff: FakeLaboratoryClosedHandoffResult,
++    frame: LaboratoryClosedResultFrame,
++    recall: Mapping[str, Any],
++) -> dict[str, Any]:
++    sql_ref = frame.base_frame.sql_ref
++    collection = str(
++        _mapping(recall.get('request')).get('collection_name', '')
++    )
++    qdrant_ref = (
++        f'qdrant:{collection}:recall:{_digest(frame.recall_query_ref)}'
++    )
++    rehydrate_ref = f'ctx-result:laboratory-rehydrate:{_digest(sql_ref)}'
++    cells = [
++        {
++            'cell_id': frame.laboratory_ref,
++            'cell_kind': 'LABORATORY',
++            'state': 'closed',
++            'health': 'healthy',
++            'last_event': 'laboratory.closed_result_frame.validated',
++            'payload': {
++                'laboratory_ref': frame.laboratory_ref,
++                'sql_ref': sql_ref,
++                'final_ref': frame.final_ref,
++                'synthesis_ref': frame.synthesis_ref,
++            },
++        },
++        {
++            'cell_id': sql_ref,
++            'cell_kind': 'SQL_STORE',
++            'state': 'authoritative',
++            'health': 'healthy',
++            'last_event': 'laboratory.recall.sql_rehydrated',
++            'payload': {'sql_ref': sql_ref},
++        },
++        {
++            'cell_id': qdrant_ref,
++            'cell_kind': 'QDRANT_PROJECTION',
++            'state': 'recall_confirmed',
++            'health': 'healthy',
++            'last_event': 'laboratory.qdrant.recall.completed',
++            'payload': {
++                'qdrant_ref': qdrant_ref,
++                'sql_ref': sql_ref,
++            },
++        },
++        {
++            'cell_id': rehydrate_ref,
++            'cell_kind': 'REHYDRATION',
++            'state': 'verified',
++            'health': 'healthy',
++            'last_event': 'laboratory.specialist_output.verified',
++            'payload': {
++                'sql_ref': sql_ref,
++                'qdrant_ref': qdrant_ref,
++            },
++        },
++        {
++            'cell_id': frame.final_ref,
++            'cell_kind': 'FINAL_ARTIFACT',
++            'state': 'pending_review',
++            'health': 'healthy',
++            'last_event': 'laboratory.github_preview.pending',
++            'payload': {
++                'final_ref': frame.final_ref,
++                'synthesis_ref': frame.synthesis_ref,
++                'sql_ref': sql_ref,
++                'artifact_ref': handoff.github_preview.get('final_ref', ''),
++            },
++        },
++    ]
++    return {
++        'generated_at': '',
++        'event_count': 3,
++        'cell_count': len(cells),
++        'blocked_count': 0,
++        'failed_count': 0,
++        'stale_count': 0,
++        'cells': cells,
++    }
++
++
++def _result(
++    *,
++    issues: Sequence[str],
++    command: LaboratoryRecallClosureCommand,
++    sql_ref: str,
++    passage_profile: EmbeddingSpaceProfile,
++    query_profile: EmbeddingSpaceProfile,
++    query_embedding: Mapping[str, Any] | None = None,
++    query_compatibility: Mapping[str, Any] | None = None,
++    recall_rehydrate: Mapping[str, Any] | None = None,
++    closed_frame: Mapping[str, Any] | None = None,
++    observation_report: Mapping[str, Any] | None = None,
++    published_event_ids: tuple[str, ...] = (),
++    passive_supervisor: Mapping[str, Any] | None = None,
++    visual_read_model: Mapping[str, Any] | None = None,
++    visual_layout: Mapping[str, Any] | None = None,
++    github_preview: Mapping[str, Any] | None = None,
++    query_openvino_call_performed: bool = False,
++    qdrant_recall_performed: bool = False,
++    sql_rehydrate_performed: bool = False,
++    closed_result_frame_built: bool = False,
++    eventbus_publish_performed: bool = False,
++) -> LaboratoryRecallClosureResult:
++    normalized = tuple(dict.fromkeys(str(item) for item in issues if str(item)))
++    return LaboratoryRecallClosureResult(
++        valid=not normalized,
++        issues=normalized,
++        command=command,
++        sql_ref=sql_ref,
++        passage_profile=passage_profile.to_mapping(),
++        query_profile=query_profile.to_mapping(),
++        query_embedding=dict(query_embedding or {}),
++        query_compatibility=dict(query_compatibility or {}),
++        recall_rehydrate=dict(recall_rehydrate or {}),
++        closed_frame=dict(closed_frame or {}),
++        observation_report=dict(observation_report or {}),
++        published_event_ids=published_event_ids,
++        passive_supervisor=dict(passive_supervisor or {}),
++        visual_read_model=dict(visual_read_model or {}),
++        visual_layout=dict(visual_layout or {}),
++        github_preview=dict(github_preview or {}),
++        query_openvino_call_performed=query_openvino_call_performed,
++        qdrant_recall_performed=qdrant_recall_performed,
++        sql_rehydrate_performed=sql_rehydrate_performed,
++        closed_result_frame_built=closed_result_frame_built,
++        eventbus_publish_performed=eventbus_publish_performed,
++    )
++
++
++def _mapping(value: object) -> Mapping[str, Any]:
++    return value if isinstance(value, Mapping) else {}
++
++
++def _canonical_mapping(value: Mapping[str, Any]) -> str:
++    return json.dumps(
++        dict(value),
++        sort_keys=True,
++        separators=(',', ':'),
++        ensure_ascii=False,
++    )
++
++
++def _digest(value: str) -> str:
++    return hashlib.sha256(value.encode('utf-8')).hexdigest()[:16]
++
++
++__all__ = (
++    'LABORATORY_CLOSED_RESULT_FRAME_SCHEMA',
++    'LABORATORY_RECALL_CLOSURE_RESULT_SCHEMA',
++    'LABORATORY_RECALL_CLOSURE_VERSION',
++    'LABORATORY_RECALL_COMMAND_SCHEMA',
++    'LaboratoryClosedResultFrame',
++    'LaboratoryRecallClosureCommand',
++    'LaboratoryRecallClosureError',
++    'LaboratoryRecallClosureResult',
++    'run_fake_laboratory_recall_closure',
++)
+diff --git a/tests/context/test_fake_laboratory_recall_closed_result_frame_0274.py b/tests/context/test_fake_laboratory_recall_closed_result_frame_0274.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/context/test_fake_laboratory_recall_closed_result_frame_0274.py
+@@ -0,0 +1,296 @@
++import asyncio
++import json
++
++import pytest
++
++from context.fake_laboratory_closed_local_handoff_0274 import (
++    FakeLaboratoryClosedHandoffCommand,
++    run_fake_laboratory_closed_local_handoff,
++)
++from context.fake_laboratory_deliberation_composition_0274 import (
++    FAKE_LABORATORY_DELIBERATION_COMMAND_SCHEMA,
++    FakeLaboratoryDeliberationCommand,
++    run_fake_laboratory_deliberation,
++)
++from context.fake_laboratory_recall_closed_result_frame_0274 import (
++    LaboratoryRecallClosureCommand,
++    run_fake_laboratory_recall_closure,
++)
++from context.github_project_v2_source_candidate_vector_projection_0272 import (
++    EmbeddingSpaceProfile,
++)
++from context.laboratory_framework_contract_0273 import LaboratoryResourceBudget
++from context.scheduler_laboratory_visit_binding_0274 import (
++    register_laboratory_visit_handler,
++)
++from context.scheduler_managed_embedding_qdrant_projection_usage_0262 import (
++    DemoQdrantProjectionExecutor,
++)
++from context.scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263 import (
++    DemoQdrantRecallExecutor,
++)
++from context.scheduler_managed_sql_ref_openvino_embedding_usage_0261 import (
++    build_embedding_mapping,
++)
++from context.server_oriented_deliberation_cycle import ServerOrientation
++from context.sql_context_store import SQLiteSqlContextStore
++from kernel.dispatcher import Dispatcher
++from kernel.event_bus import EventBus
++from kernel.queue import PriorityQueue
++from kernel.registry import Registry
++from kernel.scheduler import Scheduler
++
++
++def orientation() -> ServerOrientation:
++    return ServerOrientation(
++        orientation_ref='orientation:laboratory-r4',
++        artifact_ref='artifact:github-request:r4',
++        source_ref='artifact:source-candidate:r4',
++        sql_context_ref='sql:github_artifact:r4-parent',
++        title='Recall laboratoire fictif',
++        intent='Vérifier le résultat spécialiste par recall et SQL.',
++        requested_specialist_refs=(
++            'specialist:technical',
++            'specialist:validator',
++        ),
++        requested_document_kinds=('analysis',),
++        do_directives=('Conserver les preuves.',),
++        avoid_directives=('Ne pas publier sans gate.',),
++        context_refs=('ctx:project:r4',),
++    )
++
++
++def deliberation_command() -> FakeLaboratoryDeliberationCommand:
++    return FakeLaboratoryDeliberationCommand(
++        schema=FAKE_LABORATORY_DELIBERATION_COMMAND_SCHEMA,
++        orientation=orientation(),
++        artifact_ref='artifact:github-request:r4',
++        source_candidate_ref='source-candidate:projectv2:r4',
++        target_ref='github:issue:newicody/ideas/44',
++        context_generation=5,
++        resource_budget=LaboratoryResourceBudget(
++            max_duration_ms=2_000,
++            max_context_refs=16,
++            max_evidence_refs=16,
++            max_followup_requests=8,
++        ),
++    )
++
++
++def passage_profile() -> EmbeddingSpaceProfile:
++    return EmbeddingSpaceProfile(
++        backend_ref='openvino:model:multilingual-e5-small',
++        model_ref='openvino.embedding.e5-small',
++        model_revision='local-test',
++        tokenizer_ref='transformers.multilingual-e5-small',
++        role='passage',
++        collection_name='laboratory_outputs_e5_384',
++    )
++
++
++def embedder(text, sql_ref, model_dir, device):
++    vector = [0.0] * 384
++    vector[0] = 1.0
++    role = 'query' if text.startswith('query:') else 'passage'
++    return build_embedding_mapping(
++        sql_ref=sql_ref,
++        role=role,
++        text=text,
++        vector=vector,
++        backend_ref='openvino:model:multilingual-e5-small',
++        model='openvino.embedding.e5-small',
++        tokenizer='transformers.multilingual-e5-small',
++        model_path=model_dir or '',
++        device=device,
++    )
++
++
++async def build_r3_handoff():
++    event_bus = EventBus()
++    dispatcher = Dispatcher(event_bus)
++    register_laboratory_visit_handler(dispatcher)
++    scheduler = Scheduler(
++        queue=PriorityQueue(),
++        dispatcher=dispatcher,
++        event_bus=event_bus,
++        registry=Registry(),
++        context_interval=60.0,
++    )
++    run_task = asyncio.create_task(scheduler.run())
++    store = SQLiteSqlContextStore()
++    try:
++        deliberation = await run_fake_laboratory_deliberation(
++            scheduler,
++            deliberation_command(),
++            timeout_per_visit=1.0,
++        )
++        handoff = await run_fake_laboratory_closed_local_handoff(
++            deliberation,
++            FakeLaboratoryClosedHandoffCommand(
++                execute=True,
++                policy_decision_id='policy:0274:r4:r3',
++                vector_execute=True,
++            ),
++            store=store,
++            profile=passage_profile(),
++            embedder=embedder,
++            qdrant_executor=DemoQdrantProjectionExecutor(),
++        )
++        return handoff, store
++    finally:
++        await scheduler.shutdown()
++        await asyncio.wait_for(run_task, timeout=1.0)
++
++
++def test_dry_run_validates_plan_without_recall_effects() -> None:
++    handoff, store = asyncio.run(build_r3_handoff())
++    result = asyncio.run(
++        run_fake_laboratory_recall_closure(
++            handoff,
++            LaboratoryRecallClosureCommand(),
++            store=store,
++            passage_profile=passage_profile(),
++        )
++    )
++
++    assert result.valid is True
++    assert result.query_profile['role'] == 'query'
++    assert result.query_openvino_call_performed is False
++    assert result.qdrant_recall_performed is False
++    assert result.sql_rehydrate_performed is False
++    assert result.closed_result_frame_built is False
++
++
++def test_execute_recalls_rehydrates_and_builds_closed_frame() -> None:
++    handoff, store = asyncio.run(build_r3_handoff())
++    sql_ref = handoff.sql_record['context_ref']
++    result = asyncio.run(
++        run_fake_laboratory_recall_closure(
++            handoff,
++            LaboratoryRecallClosureCommand(
++                execute=True,
++                policy_decision_id='policy:0274:r4:recall',
++            ),
++            store=store,
++            passage_profile=passage_profile(),
++            embedder=embedder,
++            recall_executor=DemoQdrantRecallExecutor(sql_refs=(sql_ref,)),
++        )
++    )
++
++    assert result.valid is True
++    assert result.query_embedding['embedding']['role'] == 'query'
++    assert result.query_compatibility['compatible'] is True
++    assert result.recall_rehydrate['sql_refs'] == [sql_ref]
++    assert result.recall_rehydrate['hydrated_count'] == 1
++    assert result.recall_rehydrate['missing_count'] == 0
++    assert result.closed_frame['valid'] is True
++    assert result.closed_frame['laboratory_ref'] == 'laboratory:local-fake'
++    assert result.closed_frame['specialist_output_verified'] is True
++    assert result.closed_frame['passage_embedding_ref'].startswith(
++        'embedding:passage:'
++    )
++    assert result.closed_frame['query_embedding_ref'].startswith(
++        'embedding:query:'
++    )
++    assert result.passive_supervisor['valid'] is True
++    assert result.visual_read_model['node_count'] == 5
++    assert result.visual_layout['node_count'] == 5
++    assert result.github_preview['publication_gate_required'] is True
++    assert result.github_mutation_performed is False
++    assert result.scheduler_created is False
++    json.dumps(result.to_mapping(), sort_keys=True)
++
++
++def test_observation_publication_uses_existing_eventbus() -> None:
++    handoff, store = asyncio.run(build_r3_handoff())
++    sql_ref = handoff.sql_record['context_ref']
++    event_bus = EventBus()
++    observer = event_bus.subscribe()
++    result = asyncio.run(
++        run_fake_laboratory_recall_closure(
++            handoff,
++            LaboratoryRecallClosureCommand(
++                execute=True,
++                policy_decision_id='policy:0274:r4:observe',
++                publish_observations=True,
++            ),
++            store=store,
++            passage_profile=passage_profile(),
++            embedder=embedder,
++            recall_executor=DemoQdrantRecallExecutor(sql_refs=(sql_ref,)),
++            event_bus=event_bus,
++        )
++    )
++
++    assert result.valid is True
++    assert result.eventbus_publish_performed is True
++    assert len(result.published_event_ids) == 3
++    assert observer.qsize() == 3
++    assert all(
++        fact['observation_only'] is True
++        and fact['command'] is False
++        for fact in result.observation_report['facts']
++    )
++
++
++def test_missing_specialist_output_hit_blocks_frame() -> None:
++    handoff, store = asyncio.run(build_r3_handoff())
++    result = asyncio.run(
++        run_fake_laboratory_recall_closure(
++            handoff,
++            LaboratoryRecallClosureCommand(
++                execute=True,
++                policy_decision_id='policy:0274:r4:missing',
++            ),
++            store=store,
++            passage_profile=passage_profile(),
++            embedder=embedder,
++            recall_executor=DemoQdrantRecallExecutor(
++                sql_refs=('sql:specialist_output:missing0000000000',)
++            ),
++        )
++    )
++
++    assert result.valid is False
++    assert result.sql_rehydrate_performed is False
++    assert result.closed_result_frame_built is False
++    assert any('exact r3 specialist_output' in issue for issue in result.issues)
++
++
++def test_query_profile_mismatch_blocks_before_recall() -> None:
++    handoff, store = asyncio.run(build_r3_handoff())
++    mismatched = EmbeddingSpaceProfile(
++        backend_ref='openvino:model:multilingual-e5-small',
++        model_ref='openvino.embedding.e5-small',
++        model_revision='other-revision',
++        tokenizer_ref='transformers.multilingual-e5-small',
++        role='query',
++        collection_name='laboratory_outputs_e5_384',
++    )
++    result = asyncio.run(
++        run_fake_laboratory_recall_closure(
++            handoff,
++            LaboratoryRecallClosureCommand(
++                execute=True,
++                policy_decision_id='policy:0274:r4:mismatch',
++            ),
++            store=store,
++            passage_profile=passage_profile(),
++            query_profile=mismatched,
++            embedder=embedder,
++            recall_executor=DemoQdrantRecallExecutor(sql_refs=()),
++        )
++    )
++
++    assert result.valid is False
++    assert result.query_openvino_call_performed is False
++    assert result.qdrant_recall_performed is False
++    assert 'query and passage profiles must share one vector space' in result.issues
++
++
++def test_command_rejects_uncontrolled_effects() -> None:
++    with pytest.raises(Exception, match='execute requires policy_decision_id'):
++        LaboratoryRecallClosureCommand(execute=True)
++    with pytest.raises(Exception, match='publish_observations requires execute'):
++        LaboratoryRecallClosureCommand(publish_observations=True)
+diff --git a/tests/rules/test_fake_laboratory_recall_closed_result_frame_0274_rule.py b/tests/rules/test_fake_laboratory_recall_closed_result_frame_0274_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_fake_laboratory_recall_closed_result_frame_0274_rule.py
+@@ -0,0 +1,122 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++SOURCE = ROOT / 'src/context/fake_laboratory_recall_closed_result_frame_0274.py'
++ARCH = ROOT / 'doc/architecture/FAKE_LABORATORY_RECALL_CLOSED_RESULT_FRAME_0274.md'
++GRAPH = ROOT / 'doc/docs/architecture/runtime/274_r4_fake_laboratory_recall_closed_result_frame.dot'
++MANIFEST = ROOT / 'doc/manifests/MANIFEST_0274_R4_FAKE_LABORATORY_RECALL_CLOSED_RESULT_FRAME_CHANGED_FILES.md'
++REPORT = ROOT / 'PHASE0274_R4_FAKE_LABORATORY_RECALL_CLOSED_RESULT_FRAME_TEST_REPORT.md'
++
++
++def test_r4_reuses_existing_0261_to_0266_surfaces() -> None:
++    text = SOURCE.read_text(encoding='utf-8')
++    for marker in (
++        'run_scheduler_managed_sql_ref_openvino_embedding_usage',
++        'run_scheduler_managed_qdrant_recall_sql_rehydrate_usage',
++        'compose_scheduler_managed_closed_result_frame',
++        'build_closed_result_frame_eventbus_observation_report',
++        'publish_closed_result_frame_observation_facts',
++        'build_passive_supervisor_closed_frame_observation_report',
++        'build_visual_read_model',
++        'build_passive_supervisor_visual_layout_model',
++    ):
++        assert marker in text
++
++
++def test_r4_keeps_query_and_passage_roles_distinct() -> None:
++    text = SOURCE.read_text(encoding='utf-8')
++    for marker in (
++        "role='query'",
++        'passage_profile.role',
++        'query_profile.role',
++        'passage_embedding_ref',
++        'query_embedding_ref',
++        'query and passage profiles must share one vector space',
++    ):
++        assert marker in text
++
++
++def test_r4_creates_no_scheduler_or_parallel_authority() -> None:
++    text = SOURCE.read_text(encoding='utf-8')
++    for forbidden in (
++        'Scheduler(',
++        'PriorityQueue(',
++        'EventBus(',
++        'Registry(',
++        'LaboratoryManager',
++        'LaboratoryOrchestrator',
++        'create_task(scheduler.run',
++        'await scheduler.run(',
++        'import vispy',
++        'import requests',
++        'import httpx',
++    ):
++        assert forbidden not in text
++    for marker in (
++        'scheduler_created: bool = False',
++        'scheduler_modified: bool = False',
++        'parallel_orchestrator_created: bool = False',
++        'parallel_eventbus_created: bool = False',
++        'parallel_registry_created: bool = False',
++        'sql_write_performed: bool = False',
++        'qdrant_write_performed: bool = False',
++        'github_mutation_performed: bool = False',
++    ):
++        assert marker in text
++
++
++def test_r4_observation_and_visualization_are_passive() -> None:
++    text = SOURCE.read_text(encoding='utf-8')
++    assert 'publish_closed_result_frame_observation_facts' in text
++    assert "'eventbus_observation_only': True" in text
++    assert "'passive_supervisor_observation_only': True" in text
++    assert "'vispy_passive': True" in text
++    assert "'publication_gate_required': True" in text
++
++
++def test_documentation_closes_recall_without_remote_mutation() -> None:
++    architecture = ARCH.read_text(encoding='utf-8')
++    graph = GRAPH.read_text(encoding='utf-8')
++    for marker in (
++        'one existing Scheduler',
++        'query embedding',
++        'passage embedding',
++        'SQL remains durable authority',
++        'Qdrant remains reference-only recall',
++        'EventBus remains observation-only',
++        'PassiveSupervisor',
++        'VisPy',
++        'publication gate',
++        '0274-r5',
++    ):
++        assert marker in architecture
++    for marker in (
++        'R3Handoff -> QueryE5',
++        'QueryE5 -> QueryProfile',
++        'QueryProfile -> Recall0263',
++        'Recall0263 -> SQLRehydrate',
++        'SQLRehydrate -> Frame0264',
++        'Frame0264 -> Facts0265',
++        'Facts0265 -> Supervisor0266',
++        'Supervisor0266 -> Visual',
++    ):
++        assert marker in graph
++
++
++def test_manifest_and_report_keep_patch_clean() -> None:
++    manifest = MANIFEST.read_text(encoding='utf-8')
++    report = REPORT.read_text(encoding='utf-8')
++    for marker in ('__pycache__', '.pyc', '.pyo', '.svg'):
++        assert marker not in manifest
++    for marker in (
++        'scheduler_created: false',
++        'scheduler_modified: false',
++        'parallel_orchestrator_created: false',
++        'external_dependencies_added: false',
++        'sql_write_performed: false',
++        'qdrant_write_performed: false',
++        'qdrant_recall_refs_only: true',
++        'github_mutation_performed: false',
++    ):
++        assert marker in report
+diff --git a/doc/architecture/FAKE_LABORATORY_RECALL_CLOSED_RESULT_FRAME_0274.md b/doc/architecture/FAKE_LABORATORY_RECALL_CLOSED_RESULT_FRAME_0274.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/FAKE_LABORATORY_RECALL_CLOSED_RESULT_FRAME_0274.md
+@@ -0,0 +1,114 @@
++# Fake laboratory recall and closed ResultFrame — 0274-r4
++
++## Purpose
++
++0274-r4 verifies the durable laboratory `specialist_output` through the
++existing recall and passive-observation path:
++
++```text
++converged r3 local handoff
++-> 0261 query embedding
++-> r9 query-profile compatibility
++-> 0263 Qdrant reference-only recall
++-> SQL rehydration
++-> exact specialist_output verification
++-> reused 0264 closed ResultFrame
++-> reused 0265 EventBus facts
++-> reused 0266 PassiveSupervisor
++-> existing Cell Lens / VisPy read models
++```
++
++There is **one existing Scheduler** upstream. r4 receives its already-completed
++result and creates no Scheduler or laboratory orchestrator.
++
++## Query and passage spaces
++
++The r3 projection uses a **passage embedding**. r4 creates a separate **query
++embedding**. The roles remain distinct:
++
++```text
++passage profile role = passage
++query profile role   = query
++```
++
++All other vector-space identity fields must match: backend, model, revision,
++tokenizer, pooling, normalization, dimension, distance, prefix policy,
++tokenization policy, collection and model digest.
++
++The query embedding is validated before 0263 can call Qdrant.
++
++## Recall authority
++
++Qdrant remains reference-only recall. It returns `sql_ref` values and never
++becomes the source of specialist content.
++
++SQL remains durable authority. r4 accepts the recall only when:
++
++- the r3 `sql_ref` is in the recall refs;
++- no recalled reference is missing for the closed result;
++- SQL returns a `specialist_output`;
++- the rehydrated record is exactly the immutable r3 SQL record.
++
++R4 performs no SQL write and no Qdrant write.
++
++## Closed ResultFrame
++
++The existing 0264 composer is reused with:
++
++- r3 SQL write report;
++- r3 passage embedding;
++- r3 Qdrant projection;
++- r4 recall and SQL-rehydration report.
++
++A laboratory wrapper adds the query embedding/profile provenance without
++changing the meaning of the 0264 passage/projection proof.
++
++## Passive observation and visualization
++
++The existing 0265 builder produces fact-only events. Publishing is optional and
++uses an injected existing EventBus. EventBus remains observation-only.
++
++The existing 0266 PassiveSupervisor consumes the report without commanding the
++runtime. The visual snapshot exposes laboratory, SQL authority, Qdrant recall,
++rehydration and final-artifact cells. VisPy remains passive and is not imported
++by r4.
++
++## GitHub boundary
++
++The r3 preview is preserved unchanged behind the existing publication gate:
++
++```text
++publication_gate_required = true
++remote_mutation_allowed = false
++github_mutation_performed = false
++```
++
++## Next phase
++
++**0274-r5** will compose a single operator smoke from durable SourceCandidate to
++r4 closed laboratory ResultFrame and publication preview. It will remain local,
++use the same Scheduler, and perform no GitHub mutation.
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++live_path_status: transition
++live_path_uses_real_backend: false
++context_contract_version: missipy.laboratory.v1
++context_contract_changed: false
++external_dependencies_added: false
++scheduler_created: false
++scheduler_modified: false
++parallel_orchestrator_created: false
++parallel_eventbus_created: false
++parallel_registry_created: false
++sql_write_performed: false
++qdrant_write_performed: false
++qdrant_recall_refs_only: true
++sql_rehydrate_performed: true
++eventbus_observation_only: true
++github_mutation_performed: false
++network_added: false
++```
+diff --git a/doc/docs/architecture/runtime/274_r4_fake_laboratory_recall_closed_result_frame.dot b/doc/docs/architecture/runtime/274_r4_fake_laboratory_recall_closed_result_frame.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/274_r4_fake_laboratory_recall_closed_result_frame.dot
+@@ -0,0 +1,29 @@
++digraph FakeLaboratoryRecallClosedResultFrame0274R4 {
++  rankdir=LR;
++  node [shape=box];
++
++  R3Handoff [label="r3 durable passage projection"];
++  QueryE5 [label="0261 query E5 embedding"];
++  QueryProfile [label="r9 query profile gate"];
++  Recall0263 [label="0263 Qdrant refs-only recall"];
++  SQLRehydrate [label="SQL specialist_output rehydrate"];
++  Frame0264 [label="0264 closed ResultFrame + laboratory provenance"];
++  Facts0265 [label="0265 fact-only EventBus report"];
++  Supervisor0266 [label="0266 PassiveSupervisor"];
++  Visual [label="Cell Lens read/layout -> VisPy"];
++  Preview [label="gated GitHub preview"];
++
++  R3Handoff -> QueryE5;
++  QueryE5 -> QueryProfile;
++  QueryProfile -> Recall0263;
++  Recall0263 -> SQLRehydrate;
++  R3Handoff -> Frame0264;
++  SQLRehydrate -> Frame0264;
++  Frame0264 -> Facts0265;
++  Facts0265 -> Supervisor0266;
++  Supervisor0266 -> Visual;
++  Frame0264 -> Preview;
++
++  Rejected [shape=note, label="No Scheduler / no SQL write / no Qdrant write / no GitHub mutation"];
++  R3Handoff -> Rejected [style=dotted, arrowhead=none];
++}
+diff --git a/doc/manifests/MANIFEST_0274_R4_FAKE_LABORATORY_RECALL_CLOSED_RESULT_FRAME_CHANGED_FILES.md b/doc/manifests/MANIFEST_0274_R4_FAKE_LABORATORY_RECALL_CLOSED_RESULT_FRAME_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0274_R4_FAKE_LABORATORY_RECALL_CLOSED_RESULT_FRAME_CHANGED_FILES.md
+@@ -0,0 +1,16 @@
++# Manifest — 0274-r4 fake laboratory recall closed ResultFrame
++
++Changed files:
++
++- `PHASE0274_R4_FAKE_LABORATORY_RECALL_CLOSED_RESULT_FRAME_TEST_REPORT.md`
++- `doc/CHANGELOG_0274_R4_FAKE_LABORATORY_RECALL_CLOSED_RESULT_FRAME.md`
++- `doc/architecture/FAKE_LABORATORY_RECALL_CLOSED_RESULT_FRAME_0274.md`
++- `doc/docs/architecture/runtime/274_r4_fake_laboratory_recall_closed_result_frame.dot`
++- `doc/manifests/MANIFEST_0274_R4_FAKE_LABORATORY_RECALL_CLOSED_RESULT_FRAME_CHANGED_FILES.md`
++- `doc/releases/0274-r4-fake-laboratory-recall-closed-result-frame.md`
++- `src/context/fake_laboratory_recall_closed_result_frame_0274.py`
++- `tests/context/test_fake_laboratory_recall_closed_result_frame_0274.py`
++- `tests/rules/test_fake_laboratory_recall_closed_result_frame_0274_rule.py`
++
++No existing Scheduler, queue, EventBus, registry, SQL store, Qdrant adapter,
++GitHub adapter, PassiveSupervisor or renderer implementation is modified.
+diff --git a/doc/CHANGELOG_0274_R4_FAKE_LABORATORY_RECALL_CLOSED_RESULT_FRAME.md b/doc/CHANGELOG_0274_R4_FAKE_LABORATORY_RECALL_CLOSED_RESULT_FRAME.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0274_R4_FAKE_LABORATORY_RECALL_CLOSED_RESULT_FRAME.md
+@@ -0,0 +1,19 @@
++# Changelog — 0274-r4 fake laboratory recall closed ResultFrame
++
++## Added
++
++- explicit query profile derived from the r3 passage vector space;
++- existing 0261 query embedding and r9 compatibility validation;
++- existing 0263 Qdrant recall and SQL rehydration;
++- exact immutable `specialist_output` verification;
++- reused 0264 closed ResultFrame with laboratory query provenance;
++- reused 0265 fact-only observation report and optional publication;
++- reused 0266 PassiveSupervisor and visual read/layout models;
++- architecture, manifest, release and executable tests.
++
++## Not added
++
++- no Scheduler, queue, EventBus, registry or orchestrator;
++- no SQL write or Qdrant write;
++- no GitHub mutation;
++- no network or external dependency.
+diff --git a/doc/releases/0274-r4-fake-laboratory-recall-closed-result-frame.md b/doc/releases/0274-r4-fake-laboratory-recall-closed-result-frame.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/releases/0274-r4-fake-laboratory-recall-closed-result-frame.md
+@@ -0,0 +1,9 @@
++# 0274-r4 — Fake laboratory recall closed ResultFrame
++
++The durable fake-laboratory specialist output can now be recalled through
++Qdrant references, rehydrated from SQL and verified against the immutable r3
++record.
++
++The existing 0264-0266 ResultFrame and passive-observation surfaces are reused.
++The query and passage E5 roles remain distinct but share one locked vector
++space. GitHub publication remains pending behind the existing review gate.
+diff --git a/PHASE0274_R4_FAKE_LABORATORY_RECALL_CLOSED_RESULT_FRAME_TEST_REPORT.md b/PHASE0274_R4_FAKE_LABORATORY_RECALL_CLOSED_RESULT_FRAME_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0274_R4_FAKE_LABORATORY_RECALL_CLOSED_RESULT_FRAME_TEST_REPORT.md
+@@ -0,0 +1,48 @@
++# Phase 0274-r4 test report — fake laboratory recall closed ResultFrame
++
++## Validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. python -m pytest -q tests/rules
++PYTHONPATH=src:. python -m pytest -q \
++  tests/context/test_fake_laboratory_recall_closed_result_frame_0274.py
++PYTHONPATH=src:. python -m pytest -q
++```
++
++## Covered behavior
++
++- dry-run creates no query, recall, rehydrate or observation effect;
++- query and passage profiles share one E5 space while retaining their roles;
++- Qdrant returns refs and SQL rehydrates the exact specialist output;
++- 0264 builds a valid closed ResultFrame;
++- 0265 facts publish through an injected existing EventBus only;
++- 0266 and visual models remain passive;
++- missing or wrong recalled output blocks frame creation;
++- profile mismatch blocks before OpenVINO and Qdrant recall;
++- GitHub mutation remains closed.
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++live_path_status: transition
++live_path_uses_real_backend: false
++context_contract_version: missipy.laboratory.v1
++context_contract_changed: false
++external_dependencies_added: false
++scheduler_created: false
++scheduler_modified: false
++parallel_orchestrator_created: false
++parallel_eventbus_created: false
++parallel_registry_created: false
++sql_write_performed: false
++qdrant_write_performed: false
++qdrant_recall_refs_only: true
++sql_rehydrate_performed: true
++eventbus_observation_only: true
++provider_active: true
++github_mutation_performed: false
++network_added: false
++```

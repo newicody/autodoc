@@ -1,0 +1,680 @@
+diff --git a/PHASE0251_PROD_SERVER_SQL_CONTROLLED_WRITE_HANDLER_READINESS_TEST_REPORT.md b/PHASE0251_PROD_SERVER_SQL_CONTROLLED_WRITE_HANDLER_READINESS_TEST_REPORT.md
+new file mode 100644
+index 0000000..bf58d0c
+--- /dev/null
++++ b/PHASE0251_PROD_SERVER_SQL_CONTROLLED_WRITE_HANDLER_READINESS_TEST_REPORT.md
+@@ -0,0 +1,26 @@
++# Phase 0251 test report - SQL controlled write handler readiness
++
++## Expected validation
++
++```text
++python -m compileall -q src tests tools
++python -m pytest -q tests/context/test_prod_server_sql_controlled_write_handler_readiness_0251.py
++python -m pytest -q tests/tools/test_run_prod_server_sql_controlled_write_handler_readiness_0251.py
++python -m pytest -q tests/rules/test_prod_server_sql_controlled_write_handler_readiness_0251_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
++
++## Direct smoke
++
++```text
++PYTHONPATH=src:. python tools/run_prod_server_sql_controlled_write_handler_readiness_0251.py --check-only --format summary
++PYTHONPATH=src:. python tools/run_prod_server_sql_controlled_write_handler_readiness_0251.py --format summary
++```
++
++## Boundary
++
++This patch prepares a dry-run handler frame only. It does not connect to
++PostgreSQL, execute SQL, call Scheduler.run, dispatch handlers, create EventBus,
++publish events, run OpenVINO, write Qdrant, call GitHub, or add non-stdlib
++dependencies.
+diff --git a/doc/CHANGELOG_0251_PROD_SERVER_SQL_CONTROLLED_WRITE_HANDLER_READINESS.md b/doc/CHANGELOG_0251_PROD_SERVER_SQL_CONTROLLED_WRITE_HANDLER_READINESS.md
+new file mode 100644
+index 0000000..6e613f7
+--- /dev/null
++++ b/doc/CHANGELOG_0251_PROD_SERVER_SQL_CONTROLLED_WRITE_HANDLER_READINESS.md
+@@ -0,0 +1,9 @@
++# Changelog 0251 - SQL controlled write handler readiness
++
++## r1
++
++Added a dry-run SQL controlled write handler frame derived from the Scheduler
++intention event surface and PostgreSQL schema readiness.
++
++The patch prepares `context_records` insert-if-absent metadata and preview SQL
++without opening PostgreSQL or executing SQL.
+diff --git a/doc/architecture/PROD_SERVER_SQL_CONTROLLED_WRITE_HANDLER_READINESS_0251.md b/doc/architecture/PROD_SERVER_SQL_CONTROLLED_WRITE_HANDLER_READINESS_0251.md
+new file mode 100644
+index 0000000..67ea1c8
+--- /dev/null
++++ b/doc/architecture/PROD_SERVER_SQL_CONTROLLED_WRITE_HANDLER_READINESS_0251.md
+@@ -0,0 +1,44 @@
++# SQL controlled write handler readiness - 0251
++
++## Intent
++
++This patch derives a minimal SQL controlled write handler frame from the typed
++Scheduler intention event surface introduced in 0250.
++
++No SQL is executed.
++
++## Handler frame
++
++The dry-run handler frame links:
++
++```text
++TypedSchedulerIntention
++  -> EventEnvelope
++  -> SQLControlledWriteRequest
++```
++
++The request targets:
++
++```text
++handler = handler.sql_context_store.controlled_write
++table = context_records
++operation = insert_if_absent
++primary_key = id
++idempotency_key = payload_hash
++```
++
++The SQL text is preview-only and uses `ON CONFLICT (id) DO NOTHING` to describe
++the intended idempotent behavior.
++
++## Boundary
++
++Scheduler remains command authority. EventBus remains observation only. This
++phase does not call Scheduler.run, dispatch handlers, create EventBus, publish
++events, connect to PostgreSQL, execute SQL, run OpenVINO, write Qdrant, or call
++GitHub.
++
++## Next step
++
++0252 can derive the embedding/projection readiness from this handler frame so the
++future controlled write result can feed OpenVINO and Qdrant without bypassing
++SQL authority.
+diff --git a/doc/code-rules/0251_prod_server_sql_controlled_write_handler_readiness_rule.md b/doc/code-rules/0251_prod_server_sql_controlled_write_handler_readiness_rule.md
+new file mode 100644
+index 0000000..b76de37
+--- /dev/null
++++ b/doc/code-rules/0251_prod_server_sql_controlled_write_handler_readiness_rule.md
+@@ -0,0 +1,29 @@
++# Code rule 0251 - SQL controlled write handler readiness
++
++Patch 0251 may derive a dry-run SQL controlled write handler frame only.
++
++Required:
++
++```text
++Scheduler intention is the command-side input
++Event envelope is observation-side data
++SQLControlledWriteRequest targets context_records
++write operation is insert_if_absent
++idempotency key is payload_hash
++SQL text is preview-only
++```
++
++Forbidden in this phase:
++
++```text
++opening PostgreSQL connections
++executing SQL
++calling Scheduler.run
++dispatching handlers
++creating EventBus instances
++publishing EventBus events
++running OpenVINO inference
++creating/upserting Qdrant collections or points
++calling GitHub API
++adding non-stdlib dependencies
++```
+diff --git a/doc/docs/architecture/runtime/251_prod_server_sql_controlled_write_handler_readiness.dot b/doc/docs/architecture/runtime/251_prod_server_sql_controlled_write_handler_readiness.dot
+new file mode 100644
+index 0000000..aee2f0d
+--- /dev/null
++++ b/doc/docs/architecture/runtime/251_prod_server_sql_controlled_write_handler_readiness.dot
+@@ -0,0 +1,12 @@
++digraph prod_server_sql_controlled_write_handler_readiness_0251 {
++  rankdir=LR;
++
++  intention [label="0250 intention event"];
++  schema [label="0245 SQL readiness"];
++  handler [label="0251 handler frame"];
++  sql [label="SQL not executed"];
++
++  intention -> handler;
++  schema -> handler;
++  handler -> sql [style=dashed];
++}
+diff --git a/doc/manifests/MANIFEST_0251_PROD_SERVER_SQL_CONTROLLED_WRITE_HANDLER_READINESS_CHANGED_FILES.md b/doc/manifests/MANIFEST_0251_PROD_SERVER_SQL_CONTROLLED_WRITE_HANDLER_READINESS_CHANGED_FILES.md
+new file mode 100644
+index 0000000..fd2ac84
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0251_PROD_SERVER_SQL_CONTROLLED_WRITE_HANDLER_READINESS_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest 0251 - SQL controlled write handler readiness
++
++- `src/context/prod_server_sql_controlled_write_handler_readiness_0251.py`
++- `tools/run_prod_server_sql_controlled_write_handler_readiness_0251.py`
++- `tests/context/test_prod_server_sql_controlled_write_handler_readiness_0251.py`
++- `tests/tools/test_run_prod_server_sql_controlled_write_handler_readiness_0251.py`
++- `tests/rules/test_prod_server_sql_controlled_write_handler_readiness_0251_rule.py`
++- `doc/architecture/PROD_SERVER_SQL_CONTROLLED_WRITE_HANDLER_READINESS_0251.md`
++- `doc/code-rules/0251_prod_server_sql_controlled_write_handler_readiness_rule.md`
++- `doc/docs/architecture/runtime/251_prod_server_sql_controlled_write_handler_readiness.dot`
++- `doc/CHANGELOG_0251_PROD_SERVER_SQL_CONTROLLED_WRITE_HANDLER_READINESS.md`
++- `doc/manifests/MANIFEST_0251_PROD_SERVER_SQL_CONTROLLED_WRITE_HANDLER_READINESS_CHANGED_FILES.md`
++- `PHASE0251_PROD_SERVER_SQL_CONTROLLED_WRITE_HANDLER_READINESS_TEST_REPORT.md`
+diff --git a/src/context/prod_server_sql_controlled_write_handler_readiness_0251.py b/src/context/prod_server_sql_controlled_write_handler_readiness_0251.py
+new file mode 100644
+index 0000000..1e14417
+--- /dev/null
++++ b/src/context/prod_server_sql_controlled_write_handler_readiness_0251.py
+@@ -0,0 +1,210 @@
++"""SQL controlled write handler readiness for phase 0251.
++
++This module derives a minimal Scheduler-controlled SQL write handler frame from
++the typed intention/event envelope surface introduced in phase 0250.
++
++It remains dry-run/readiness only: no PostgreSQL connection is opened, no SQL is
++executed, no EventBus is created, and no handler is dispatched by Scheduler.run.
++"""
++
++from __future__ import annotations
++
++import json
++from dataclasses import asdict, dataclass
++from pathlib import Path
++from typing import Any
++
++from context.prod_server_postgresql_schema_readiness_0245 import (
++    build_postgresql_schema_readiness,
++)
++from context.prod_server_scheduler_intention_event_emission_0250 import (
++    EventEnvelope,
++    TypedSchedulerIntention,
++    event_envelope_from_intention,
++    sample_scheduler_intention,
++)
++
++
++SQL_CONTROLLED_WRITE_HANDLER_READINESS_VERSION = "0251.r1"
++
++
++SQL_CONTROLLED_WRITE_HANDLER_READINESS_BOUNDARY: dict[str, bool] = {
++    "readiness_only": True,
++    "uses_scheduler_intention_event_emission": True,
++    "uses_postgresql_schema_readiness": True,
++    "connects_postgresql": False,
++    "executes_sql": False,
++    "writes_postgresql": False,
++    "creates_eventbus": False,
++    "publishes_events": False,
++    "calls_scheduler_run": False,
++    "dispatches_handler": False,
++    "runs_openvino_inference": False,
++    "writes_qdrant": False,
++    "calls_github_api": False,
++    "requires_non_stdlib": False,
++}
++
++
++@dataclass(frozen=True)
++class SQLControlledWriteIssue:
++    """One issue found while preparing the controlled SQL write handler frame."""
++
++    field: str
++    message: str
++
++
++@dataclass(frozen=True)
++class SQLControlledWriteRequest:
++    """Dry-run SQL controlled write request derived from a Scheduler intention."""
++
++    request_id: str
++    handler_id: str
++    intent_id: str
++    table: str
++    operation: str
++    primary_key_field: str
++    sql_ref: str
++    content_hash: str
++    payload_kind: str
++    payload_source: str
++    idempotency_key: str
++    preview_sql: str
++
++
++@dataclass(frozen=True)
++class SQLControlledWriteHandlerFrame:
++    """Minimal handler frame connecting intention, envelope, and SQL request."""
++
++    frame_id: str
++    intention: TypedSchedulerIntention
++    observed_event: EventEnvelope
++    write_request: SQLControlledWriteRequest
++    result_event_type: str
++
++
++@dataclass(frozen=True)
++class SQLControlledWriteHandlerReadinessReport:
++    """JSON-compatible SQL controlled write handler readiness report."""
++
++    version: str
++    server_config_path: str
++    openvino_config_path: str
++    ready: bool
++    handler_frame: SQLControlledWriteHandlerFrame | None
++    issues: tuple[SQLControlledWriteIssue, ...]
++
++
++def _context_records_primary_key(server_config_path: Path) -> tuple[str, tuple[SQLControlledWriteIssue, ...]]:
++    schema = build_postgresql_schema_readiness(server_config_path)
++    issues: list[SQLControlledWriteIssue] = []
++    if not schema.ready:
++        for issue in schema.issues:
++            issues.append(SQLControlledWriteIssue(issue.field, issue.message))
++    for table in schema.tables:
++        if table.table == "context_records":
++            return table.primary_key, tuple(issues)
++    return "", tuple(issues + [SQLControlledWriteIssue("context_records", "context_records table is required")])
++
++
++def _preview_insert_sql(table: str, primary_key: str) -> str:
++    return (
++        f"INSERT INTO {table} ({primary_key}, kind, payload_json, content_hash, created_at) "
++        "VALUES (:id, :kind, :payload_json, :content_hash, now()) "
++        f"ON CONFLICT ({primary_key}) DO NOTHING;"
++    )
++
++
++def build_sql_controlled_write_handler_readiness(
++    *,
++    server_config_path: Path,
++    openvino_config_path: Path,
++    intention: TypedSchedulerIntention | None = None,
++) -> SQLControlledWriteHandlerReadinessReport:
++    """Build a dry-run SQL controlled write handler frame."""
++
++    selected_intention = intention if intention is not None else sample_scheduler_intention()
++    event_report = event_envelope_from_intention(
++        selected_intention,
++        server_config_path=server_config_path,
++        openvino_config_path=openvino_config_path,
++    )
++    issues: list[SQLControlledWriteIssue] = []
++
++    if not event_report.valid:
++        for issue in event_report.issues:
++            issues.append(SQLControlledWriteIssue(issue.field, issue.message))
++    if event_report.envelope is None:
++        issues.append(SQLControlledWriteIssue("event_envelope", "event envelope is required"))
++
++    primary_key, schema_issues = _context_records_primary_key(server_config_path)
++    issues.extend(schema_issues)
++
++    if not selected_intention.sql_ref:
++        issues.append(SQLControlledWriteIssue("sql_ref", "sql_ref is required for controlled write"))
++    if not selected_intention.payload_hash:
++        issues.append(SQLControlledWriteIssue("payload_hash", "payload_hash is required for controlled write"))
++
++    if issues or event_report.envelope is None or not primary_key:
++        return SQLControlledWriteHandlerReadinessReport(
++            version=SQL_CONTROLLED_WRITE_HANDLER_READINESS_VERSION,
++            server_config_path=str(server_config_path),
++            openvino_config_path=str(openvino_config_path),
++            ready=False,
++            handler_frame=None,
++            issues=tuple(issues),
++        )
++
++    write_request = SQLControlledWriteRequest(
++        request_id="sql-write:" + selected_intention.intent_id,
++        handler_id="handler.sql_context_store.controlled_write",
++        intent_id=selected_intention.intent_id,
++        table="context_records",
++        operation="insert_if_absent",
++        primary_key_field=primary_key,
++        sql_ref=selected_intention.sql_ref,
++        content_hash=selected_intention.payload_hash,
++        payload_kind="scheduler_intention_projection_seed",
++        payload_source="scheduler_intention_event_envelope",
++        idempotency_key=selected_intention.payload_hash,
++        preview_sql=_preview_insert_sql("context_records", primary_key),
++    )
++    frame = SQLControlledWriteHandlerFrame(
++        frame_id="handler-frame:" + selected_intention.intent_id,
++        intention=event_report.intention,
++        observed_event=event_report.envelope,
++        write_request=write_request,
++        result_event_type="sql.controlled_write.prepared",
++    )
++
++    return SQLControlledWriteHandlerReadinessReport(
++        version=SQL_CONTROLLED_WRITE_HANDLER_READINESS_VERSION,
++        server_config_path=str(server_config_path),
++        openvino_config_path=str(openvino_config_path),
++        ready=True,
++        handler_frame=frame,
++        issues=tuple(),
++    )
++
++
++def sql_controlled_write_handler_readiness_to_dict(report: SQLControlledWriteHandlerReadinessReport) -> dict[str, Any]:
++    """Convert a handler readiness report to JSON-compatible data."""
++
++    return asdict(report)
++
++
++def write_sql_controlled_write_handler_readiness_report(*, server_config_path: Path, openvino_config_path: Path, output_path: Path) -> dict[str, Any]:
++    """Build and write the SQL controlled write handler readiness report."""
++
++    report = build_sql_controlled_write_handler_readiness(
++        server_config_path=server_config_path,
++        openvino_config_path=openvino_config_path,
++    )
++    payload = {
++        "production_server_sql_controlled_write_handler_readiness_written": True,
++        "sql_controlled_write_handler_readiness": sql_controlled_write_handler_readiness_to_dict(report),
++        "boundary": dict(SQL_CONTROLLED_WRITE_HANDLER_READINESS_BOUNDARY),
++    }
++    output_path.parent.mkdir(parents=True, exist_ok=True)
++    output_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + chr(10), encoding="utf-8")
++    return payload
+diff --git a/tests/context/test_prod_server_sql_controlled_write_handler_readiness_0251.py b/tests/context/test_prod_server_sql_controlled_write_handler_readiness_0251.py
+new file mode 100644
+index 0000000..a15e503
+--- /dev/null
++++ b/tests/context/test_prod_server_sql_controlled_write_handler_readiness_0251.py
+@@ -0,0 +1,83 @@
++from pathlib import Path
++
++from context.prod_server_scheduler_intention_event_emission_0250 import TypedSchedulerIntention
++from context.prod_server_sql_controlled_write_handler_readiness_0251 import (
++    SQL_CONTROLLED_WRITE_HANDLER_READINESS_BOUNDARY,
++    build_sql_controlled_write_handler_readiness,
++    write_sql_controlled_write_handler_readiness_report,
++)
++
++
++ROOT = Path(__file__).resolve().parents[2]
++SERVER_CONFIG = ROOT / "doc/examples/autodoc_prod_server_initial_0241.ini"
++OPENVINO_CONFIG = ROOT / "doc/examples/autodoc_openvino_embedding_e5_small_0246.ini"
++
++
++def test_sql_controlled_write_boundary_is_readiness_only() -> None:
++    assert SQL_CONTROLLED_WRITE_HANDLER_READINESS_BOUNDARY == {
++        "readiness_only": True,
++        "uses_scheduler_intention_event_emission": True,
++        "uses_postgresql_schema_readiness": True,
++        "connects_postgresql": False,
++        "executes_sql": False,
++        "writes_postgresql": False,
++        "creates_eventbus": False,
++        "publishes_events": False,
++        "calls_scheduler_run": False,
++        "dispatches_handler": False,
++        "runs_openvino_inference": False,
++        "writes_qdrant": False,
++        "calls_github_api": False,
++        "requires_non_stdlib": False,
++    }
++
++
++def test_sql_controlled_write_handler_frame_is_ready() -> None:
++    report = build_sql_controlled_write_handler_readiness(
++        server_config_path=SERVER_CONFIG,
++        openvino_config_path=OPENVINO_CONFIG,
++    )
++
++    assert report.ready is True
++    assert report.issues == ()
++    assert report.handler_frame is not None
++    request = report.handler_frame.write_request
++    assert request.handler_id == "handler.sql_context_store.controlled_write"
++    assert request.table == "context_records"
++    assert request.operation == "insert_if_absent"
++    assert request.primary_key_field == "id"
++    assert "ON CONFLICT (id) DO NOTHING" in request.preview_sql
++
++
++def test_missing_payload_hash_is_reported() -> None:
++    intention = TypedSchedulerIntention(
++        intent_id="intent:no-hash",
++        intent_type="scheduler.intent.sql-write",
++        component="scheduler",
++        phase="D07_functional_handler_chain",
++        trace_id="trace:no-hash",
++        priority=10,
++        sql_ref="context_records.id",
++    )
++
++    report = build_sql_controlled_write_handler_readiness(
++        server_config_path=SERVER_CONFIG,
++        openvino_config_path=OPENVINO_CONFIG,
++        intention=intention,
++    )
++
++    assert report.ready is False
++    assert any(issue.field == "payload_hash" for issue in report.issues)
++
++
++def test_write_sql_controlled_write_handler_readiness_report(tmp_path: Path) -> None:
++    output = tmp_path / "sql_controlled_write_handler_readiness.json"
++    payload = write_sql_controlled_write_handler_readiness_report(
++        server_config_path=SERVER_CONFIG,
++        openvino_config_path=OPENVINO_CONFIG,
++        output_path=output,
++    )
++
++    assert payload["production_server_sql_controlled_write_handler_readiness_written"] is True
++    assert payload["sql_controlled_write_handler_readiness"]["ready"] is True
++    assert output.exists()
+diff --git a/tests/rules/test_prod_server_sql_controlled_write_handler_readiness_0251_rule.py b/tests/rules/test_prod_server_sql_controlled_write_handler_readiness_0251_rule.py
+new file mode 100644
+index 0000000..d9754e6
+--- /dev/null
++++ b/tests/rules/test_prod_server_sql_controlled_write_handler_readiness_0251_rule.py
+@@ -0,0 +1,38 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def test_0251_sql_handler_readiness_does_not_execute_or_dispatch() -> None:
++    source = (ROOT / "src/context/prod_server_sql_controlled_write_handler_readiness_0251.py").read_text(
++        encoding="utf-8"
++    )
++    lowered = source.lower()
++
++    assert "readiness_only" in source
++    assert "connects_postgresql" in source
++    assert "executes_sql" in source
++    assert "writes_postgresql" in source
++    assert "creates_eventbus" in source
++    assert "publishes_events" in source
++    assert "calls_scheduler_run" in source
++    assert "dispatches_handler" in source
++    assert "psycopg" not in lowered
++    assert "subprocess.run" not in source
++    assert "scheduler.run(" not in lowered
++    assert ".publish(" not in lowered
++    assert ".execute(" not in lowered
++    assert ".upsert(" not in lowered
++
++
++def test_0251_docs_lock_sql_handler_boundary() -> None:
++    doc = (ROOT / "doc/architecture/PROD_SERVER_SQL_CONTROLLED_WRITE_HANDLER_READINESS_0251.md").read_text(
++        encoding="utf-8"
++    )
++
++    assert "SQL controlled write handler readiness" in doc
++    assert "No SQL is executed" in doc
++    assert "Scheduler remains command authority" in doc
++    assert "EventBus remains observation only" in doc
++    assert "0252" in doc
+diff --git a/tests/tools/test_run_prod_server_sql_controlled_write_handler_readiness_0251.py b/tests/tools/test_run_prod_server_sql_controlled_write_handler_readiness_0251.py
+new file mode 100644
+index 0000000..5a370e0
+--- /dev/null
++++ b/tests/tools/test_run_prod_server_sql_controlled_write_handler_readiness_0251.py
+@@ -0,0 +1,58 @@
++import subprocess
++import sys
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++SERVER_CONFIG = "doc/examples/autodoc_prod_server_initial_0241.ini"
++OPENVINO_CONFIG = "doc/examples/autodoc_openvino_embedding_e5_small_0246.ini"
++
++
++def test_sql_controlled_write_handler_tool_check_only_summary() -> None:
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/run_prod_server_sql_controlled_write_handler_readiness_0251.py",
++            "--server-config",
++            SERVER_CONFIG,
++            "--openvino-config",
++            OPENVINO_CONFIG,
++            "--check-only",
++            "--format",
++            "summary",
++        ],
++        cwd=ROOT,
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    assert "production_server_sql_controlled_write_handler_ready=True" in result.stdout
++    assert "issues=0" in result.stdout
++    assert "table=context_records" in result.stdout
++
++
++def test_sql_controlled_write_handler_tool_writes_report(tmp_path: Path) -> None:
++    output = tmp_path / "prod_server_sql_controlled_write_handler_readiness_0251.json"
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/run_prod_server_sql_controlled_write_handler_readiness_0251.py",
++            "--server-config",
++            SERVER_CONFIG,
++            "--openvino-config",
++            OPENVINO_CONFIG,
++            "--output",
++            str(output),
++            "--format",
++            "summary",
++        ],
++        cwd=ROOT,
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    assert "production_server_sql_controlled_write_handler_readiness_written=True" in result.stdout
++    assert "ready=True" in result.stdout
++    assert output.exists()
+diff --git a/tools/run_prod_server_sql_controlled_write_handler_readiness_0251.py b/tools/run_prod_server_sql_controlled_write_handler_readiness_0251.py
+new file mode 100755
+index 0000000..f9278f2
+--- /dev/null
++++ b/tools/run_prod_server_sql_controlled_write_handler_readiness_0251.py
+@@ -0,0 +1,92 @@
++#!/usr/bin/env python3
++"""Check phase 0251 SQL controlled write handler readiness."""
++
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++
++REPO_ROOT = Path(__file__).resolve().parents[1]
++SRC_ROOT = REPO_ROOT / "src"
++for _path in (str(SRC_ROOT), str(REPO_ROOT)):
++    if _path not in sys.path:
++        sys.path.insert(0, _path)
++
++from context.prod_server_sql_controlled_write_handler_readiness_0251 import (  # noqa: E402
++    SQL_CONTROLLED_WRITE_HANDLER_READINESS_BOUNDARY,
++    build_sql_controlled_write_handler_readiness,
++    sql_controlled_write_handler_readiness_to_dict,
++    write_sql_controlled_write_handler_readiness_report,
++)
++
++
++def parse_args() -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--server-config", default="doc/examples/autodoc_prod_server_initial_0241.ini")
++    parser.add_argument("--openvino-config", default="doc/examples/autodoc_openvino_embedding_e5_small_0246.ini")
++    parser.add_argument(
++        "--output",
++        default=".var/reports/prod_server_sql_controlled_write_handler_readiness_0251.json",
++    )
++    parser.add_argument("--check-only", action="store_true")
++    parser.add_argument("--format", choices=("json", "summary"), default="json")
++    return parser.parse_args()
++
++
++def main() -> int:
++    args = parse_args()
++    server_config_path = Path(args.server_config)
++    openvino_config_path = Path(args.openvino_config)
++    output_path = Path(args.output)
++
++    if args.check_only:
++        report = build_sql_controlled_write_handler_readiness(
++            server_config_path=server_config_path,
++            openvino_config_path=openvino_config_path,
++        )
++        payload = {
++            "production_server_sql_controlled_write_handler_ready": report.ready,
++            "sql_controlled_write_handler_readiness": sql_controlled_write_handler_readiness_to_dict(report),
++            "boundary": dict(SQL_CONTROLLED_WRITE_HANDLER_READINESS_BOUNDARY),
++        }
++    else:
++        payload = write_sql_controlled_write_handler_readiness_report(
++            server_config_path=server_config_path,
++            openvino_config_path=openvino_config_path,
++            output_path=output_path,
++        )
++        report = build_sql_controlled_write_handler_readiness(
++            server_config_path=server_config_path,
++            openvino_config_path=openvino_config_path,
++        )
++
++    if args.format == "summary":
++        issue_count = len(report.issues)
++        if report.handler_frame is None:
++            details = "handler=missing table=missing operation=missing"
++        else:
++            details = (
++                f"handler={report.handler_frame.write_request.handler_id} "
++                f"table={report.handler_frame.write_request.table} "
++                f"operation={report.handler_frame.write_request.operation}"
++            )
++        if args.check_only:
++            print(
++                "production_server_sql_controlled_write_handler_ready="
++                f"{str(report.ready)} issues={issue_count} {details}"
++            )
++        else:
++            print(
++                "production_server_sql_controlled_write_handler_readiness_written=True "
++                f"ready={str(report.ready)} issues={issue_count} output={output_path}"
++            )
++    else:
++        print(json.dumps(payload, indent=2, sort_keys=True))
++
++    return 0 if report.ready else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

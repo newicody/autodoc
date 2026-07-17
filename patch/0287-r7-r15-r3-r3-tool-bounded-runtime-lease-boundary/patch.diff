@@ -1,0 +1,1292 @@
+diff --git a/PHASE0287_R7_R15_R3_R3_TOOL_BOUNDED_RUNTIME_LEASE_BOUNDARY_REPORT.md b/PHASE0287_R7_R15_R3_R3_TOOL_BOUNDED_RUNTIME_LEASE_BOUNDARY_REPORT.md
+new file mode 100644
+index 0000000..e1d65f0
+--- /dev/null
++++ b/PHASE0287_R7_R15_R3_R3_TOOL_BOUNDED_RUNTIME_LEASE_BOUNDARY_REPORT.md
+@@ -0,0 +1,91 @@
++# Phase 0287-r7-r15-r3-r3 — tool-bounded runtime lease boundary
++
++## Decision
++
++The first live imported-run preview cannot safely be composed by registering
++runtime ports in one long-lived server process and consuming them from a
++separate CLI process.  The provider registry introduced by r15-r3-r2 is
++process-local by design.  Treating it as an interprocess bootstrap would create
++an invalid wiring claim.
++
++The imported-run CLI already owns a valid Scheduler lifecycle mode named
++`tool-bounded`.  This patch therefore closes the missing ownership boundary
++before any live PostgreSQL, Qdrant or OpenVINO composition is introduced.
++
++## Implemented boundary
++
++A runtime factory may now return either:
++
++1. legacy `ImportedActionsRuntimePorts`; or
++2. `ImportedActionsRuntimeLease`, which owns the same validated ports plus
++   synchronous close hooks.
++
++The lease:
++
++- is tied to the process that created it;
++- accepts close hooks only for `tool-bounded` runtimes;
++- closes hooks in reverse acquisition order;
++- executes every hook even if one hook fails;
++- closes exactly once and returns a replay receipt on later calls;
++- exposes a serializable readback without exposing callback objects;
++- keeps legacy direct-port factories compatible through a no-op lease.
++
++## CLI integration
++
++`tools/run_love_actions_closed_loop_0287.py` now acquires a lease from the
++runtime factory and passes it into the existing r14 Scheduler lifecycle.
++
++For `tool-bounded` runtimes the order is:
++
++```text
++r14 completion or failure
++→ Scheduler shutdown / task completion
++→ runtime close hooks in reverse order
++→ lease readback
++→ publication preview construction
++```
++
++If the injected Scheduler fails before r14 completes, r14 is cancelled and the
++lease is still closed.  If command construction fails after factory creation,
++the outer guard closes the lease as well.
++
++For `externally-managed` runtimes the CLI neither starts/stops the Scheduler nor
++closes externally owned resources.
++
++The final preview JSON gains:
++
++```text
++_r15_runtime_lease
++```
++
++containing owner, process, Scheduler lifecycle, hook references, close status
++and the exact close receipt.
++
++## Boundaries preserved
++
++This patch does not:
++
++- construct a Scheduler or Dispatcher;
++- open PostgreSQL;
++- instantiate Qdrant;
++- compile or execute OpenVINO;
++- create a laboratory or manager;
++- perform a remote mutation;
++- claim that a live preview has already run.
++
++SQL remains the durable authority.  Qdrant remains a projection/recall surface
++for references.  E5 remains fixed at 384 dimensions by the existing runtime
++attestation.
++
++## Roadmap adjustment
++
++The originally planned live composer is moved to the next sub-unit:
++
++```text
++0287-r7-r15-r3-r3-r1
++canonical tool-bounded live runtime composer and first preview
++```
++
++That unit may now safely acquire PostgreSQL, Qdrant and OpenVINO in the CLI
++process and register deterministic close hooks without leaking resources or
++pretending that a process-local registry is shared between processes.
+diff --git a/doc/CHANGELOG_0287_R7_R15_R3_R3_TOOL_BOUNDED_RUNTIME_LEASE_BOUNDARY.md b/doc/CHANGELOG_0287_R7_R15_R3_R3_TOOL_BOUNDED_RUNTIME_LEASE_BOUNDARY.md
+new file mode 100644
+index 0000000..2d1397c
+--- /dev/null
++++ b/doc/CHANGELOG_0287_R7_R15_R3_R3_TOOL_BOUNDED_RUNTIME_LEASE_BOUNDARY.md
+@@ -0,0 +1,23 @@
++# Changelog — 0287-r7-r15-r3-r3
++
++## Added
++
++- process-local `ImportedActionsRuntimeLease` contract;
++- typed synchronous close hooks;
++- exact close/replay receipts;
++- reverse-order exact-once resource cleanup;
++- runtime lease readback in imported-run preview output;
++- focused lifecycle and architecture tests.
++
++## Changed
++
++- imported Actions runtime factories may return a lease or legacy direct ports;
++- the r15 imported-run CLI closes tool-bounded resources after Scheduler
++  shutdown and on failure paths.
++
++## Unchanged
++
++- no new Scheduler, manager, laboratory or backend;
++- no PostgreSQL, Qdrant or OpenVINO construction in this patch;
++- no remote mutation;
++- existing direct-port factories remain supported.
+diff --git a/doc/architecture/TOOL_BOUNDED_RUNTIME_LEASE_BOUNDARY_0287_R7_R15_R3_R3.dot b/doc/architecture/TOOL_BOUNDED_RUNTIME_LEASE_BOUNDARY_0287_R7_R15_R3_R3.dot
+new file mode 100644
+index 0000000..b2f2076
+--- /dev/null
++++ b/doc/architecture/TOOL_BOUNDED_RUNTIME_LEASE_BOUNDARY_0287_R7_R15_R3_R3.dot
+@@ -0,0 +1,24 @@
++digraph tool_bounded_runtime_lease_0287_r7_r15_r3_r3 {
++  rankdir=LR;
++  node [shape=box];
++
++  factory [label="Runtime factory\n(same CLI process)"];
++  lease [label="ImportedActionsRuntimeLease\nprocess-local owner"];
++  ports [label="Validated runtime ports\nScheduler / SQL / E5 / Qdrant"];
++  r14 [label="r14 execution"];
++  scheduler [label="Canonical Scheduler\ntool-bounded lifecycle"];
++  hooks [label="Close hooks\nreverse order / exact once"];
++  receipt [label="Lease receipt\nclosed or replay"];
++  preview [label="Preview JSON\n_r15_runtime_lease"];
++  external [label="Externally managed runtime\nno CLI close", shape=note];
++
++  factory -> lease;
++  lease -> ports;
++  ports -> r14;
++  scheduler -> r14;
++  r14 -> scheduler [label="shutdown"];
++  scheduler -> hooks;
++  hooks -> receipt;
++  receipt -> preview;
++  ports -> external [style=dashed, label="external lifecycle"];
++}
+diff --git a/doc/architecture/TOOL_BOUNDED_RUNTIME_LEASE_BOUNDARY_0287_R7_R15_R3_R3.md b/doc/architecture/TOOL_BOUNDED_RUNTIME_LEASE_BOUNDARY_0287_R7_R15_R3_R3.md
+new file mode 100644
+index 0000000..f0787bd
+--- /dev/null
++++ b/doc/architecture/TOOL_BOUNDED_RUNTIME_LEASE_BOUNDARY_0287_R7_R15_R3_R3.md
+@@ -0,0 +1,52 @@
++# Tool-bounded runtime lease boundary
++
++## Purpose
++
++A live preview factory must be able to construct machine-local resources in the
++same process as the CLI and prove that those resources were released.  A module
++global registry cannot transfer Python objects between the server process and a
++separate command process.
++
++## Ownership model
++
++```text
++runtime factory
++  ├─ validated ImportedActionsRuntimePorts
++  └─ ImportedActionsRuntimeLease
++       ├─ owner_ref
++       ├─ creator process_id
++       ├─ ordered synchronous close hooks
++       └─ exact close receipt
++```
++
++The Scheduler lifecycle remains separate:
++
++- `externally-managed`: the CLI borrows ports and performs no lifecycle effect;
++- `tool-bounded`: the CLI starts and stops the injected canonical Scheduler and
++  then closes the lease-owned backend resources.
++
++## Close order
++
++Resources are registered in acquisition order and closed in reverse order.  A
++future composer may therefore acquire:
++
++```text
++PostgreSQL → Qdrant → OpenVINO
++```
++
++and obtain:
++
++```text
++OpenVINO → Qdrant → PostgreSQL
++```
++
++at shutdown.
++
++All hooks run even if one fails.  A failure raises a typed close error carrying
++the complete receipt.  A second `close()` is a replay and performs no effect.
++
++## Serialization boundary
++
++`to_readback_mapping()` includes only references and outcomes.  Executable
++callback objects are never serialized into an artifact, SQL payload, ProjectV2
++field or Issue comment.
+diff --git a/doc/manifests/MANIFEST_0287_R7_R15_R3_R3_TOOL_BOUNDED_RUNTIME_LEASE_BOUNDARY.md b/doc/manifests/MANIFEST_0287_R7_R15_R3_R3_TOOL_BOUNDED_RUNTIME_LEASE_BOUNDARY.md
+new file mode 100644
+index 0000000..f78f6d7
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0287_R7_R15_R3_R3_TOOL_BOUNDED_RUNTIME_LEASE_BOUNDARY.md
+@@ -0,0 +1,28 @@
++# Manifest — 0287-r7-r15-r3-r3
++
++## Production files modified
++
++- `src/context/love_imported_actions_runtime_contract_0287.py`
++- `tools/run_love_actions_closed_loop_0287.py`
++
++## Tests added
++
++- `tests/context/test_love_imported_actions_runtime_lease_0287_r7_r15_r3_r3.py`
++- `tests/tools/test_run_love_actions_closed_loop_runtime_lease_0287_r7_r15_r3_r3.py`
++- `tests/rules/test_love_tool_bounded_runtime_lease_0287_r7_r15_r3_r3_rule.py`
++
++## Documentation added
++
++- `PHASE0287_R7_R15_R3_R3_TOOL_BOUNDED_RUNTIME_LEASE_BOUNDARY_REPORT.md`
++- `doc/CHANGELOG_0287_R7_R15_R3_R3_TOOL_BOUNDED_RUNTIME_LEASE_BOUNDARY.md`
++- `doc/architecture/TOOL_BOUNDED_RUNTIME_LEASE_BOUNDARY_0287_R7_R15_R3_R3.md`
++- `doc/architecture/TOOL_BOUNDED_RUNTIME_LEASE_BOUNDARY_0287_R7_R15_R3_R3.dot`
++- `doc/manifests/MANIFEST_0287_R7_R15_R3_R3_TOOL_BOUNDED_RUNTIME_LEASE_BOUNDARY.md`
++
++## Explicit non-effects
++
++- no database or vector write;
++- no OpenVINO inference;
++- no GitHub mutation;
++- no Scheduler construction;
++- no process-external runtime registry claim.
+diff --git a/src/context/love_imported_actions_runtime_contract_0287.py b/src/context/love_imported_actions_runtime_contract_0287.py
+index 2db9d6c..0c9a8b7 100644
+--- a/src/context/love_imported_actions_runtime_contract_0287.py
++++ b/src/context/love_imported_actions_runtime_contract_0287.py
+@@ -8,8 +8,11 @@ that the injected E5/OpenVINO and Qdrant paths are real.
+ 
+ from __future__ import annotations
+ 
+-from collections.abc import Mapping
+-from dataclasses import dataclass
++from collections.abc import Callable, Mapping
++from dataclasses import dataclass, field, replace
++import inspect
++import os
++from threading import RLock
+ from typing import Any, Literal, Protocol, runtime_checkable
+ 
+ from contracts.scheduler import SchedulerContract
+@@ -20,16 +23,41 @@ IMPORTED_ACTIONS_REAL_BACKEND_ATTESTATION_SCHEMA = (
+ IMPORTED_ACTIONS_RUNTIME_PORTS_SCHEMA = (
+     "missipy.love.imported_actions_runtime_ports.v1"
+ )
++IMPORTED_ACTIONS_RUNTIME_CLOSE_HOOK_SCHEMA = (
++    "missipy.love.imported_actions_runtime_close_hook.v1"
++)
++IMPORTED_ACTIONS_RUNTIME_LEASE_SCHEMA = (
++    "missipy.love.imported_actions_runtime_lease.v1"
++)
++IMPORTED_ACTIONS_RUNTIME_LEASE_RECEIPT_SCHEMA = (
++    "missipy.love.imported_actions_runtime_lease_receipt.v1"
++)
+ ImportedActionsSchedulerLifecycle = Literal[
+     "tool-bounded",
+     "externally-managed",
+ ]
++ImportedActionsRuntimeLeaseAction = Literal["closed", "replay"]
+ 
+ 
+ class ImportedActionsRuntimeContractError(RuntimeError):
+     """Raised when a runtime factory or its evidence fails closed."""
+ 
+ 
++class ImportedActionsRuntimeLeaseCloseError(
++    ImportedActionsRuntimeContractError
++):
++    """Raised after every close hook ran but at least one hook failed."""
++
++    def __init__(
++        self,
++        message: str,
++        *,
++        receipt: "ImportedActionsRuntimeLeaseReceipt",
++    ) -> None:
++        super().__init__(message)
++        self.receipt = receipt
++
++
+ def _require_text(name: str, value: object) -> str:
+     if not isinstance(value, str) or not value.strip():
+         raise ImportedActionsRuntimeContractError(
+@@ -248,6 +276,257 @@ class ImportedActionsRuntimePorts:
+         return self.attestation.to_mapping()
+ 
+ 
++@dataclass(frozen=True, slots=True)
++class ImportedActionsRuntimeCloseHook:
++    """One synchronous cleanup effect owned by a tool-bounded runtime."""
++
++    schema: str
++    hook_ref: str
++    callback: Callable[[], object] = field(repr=False, compare=False)
++
++    def __post_init__(self) -> None:
++        if self.schema != IMPORTED_ACTIONS_RUNTIME_CLOSE_HOOK_SCHEMA:
++            raise ImportedActionsRuntimeContractError(
++                "unsupported imported Actions runtime close-hook schema"
++            )
++        if not _require_text("hook_ref", self.hook_ref).startswith(
++            "runtime-close:"
++        ):
++            raise ImportedActionsRuntimeContractError(
++                "runtime close hook_ref must start with runtime-close:"
++            )
++        if not callable(self.callback):
++            raise ImportedActionsRuntimeContractError(
++                "runtime close hook callback must be callable"
++            )
++        if inspect.iscoroutinefunction(self.callback):
++            raise ImportedActionsRuntimeContractError(
++                "runtime close hook callback must be synchronous"
++            )
++
++
++@dataclass(frozen=True, slots=True)
++class ImportedActionsRuntimeLeaseReceipt:
++    """Serializable exact-once evidence for one process-local lease close."""
++
++    schema: str
++    runtime_ref: str
++    owner_ref: str
++    action: ImportedActionsRuntimeLeaseAction
++    process_id: int
++    completed_hook_refs: tuple[str, ...]
++    issues: tuple[str, ...]
++
++    def __post_init__(self) -> None:
++        if self.schema != IMPORTED_ACTIONS_RUNTIME_LEASE_RECEIPT_SCHEMA:
++            raise ImportedActionsRuntimeContractError(
++                "unsupported imported Actions runtime lease-receipt schema"
++            )
++        if not _require_text("runtime_ref", self.runtime_ref).startswith(
++            "runtime:"
++        ):
++            raise ImportedActionsRuntimeContractError(
++                "runtime_ref must start with runtime:"
++            )
++        if not _require_text("owner_ref", self.owner_ref).startswith(
++            "runtime-owner:"
++        ):
++            raise ImportedActionsRuntimeContractError(
++                "owner_ref must start with runtime-owner:"
++            )
++        if self.action not in {"closed", "replay"}:
++            raise ImportedActionsRuntimeContractError(
++                "runtime lease receipt action must be closed or replay"
++            )
++        if self.process_id <= 0:
++            raise ImportedActionsRuntimeContractError(
++                "runtime lease receipt process_id must be positive"
++            )
++
++    @property
++    def valid(self) -> bool:
++        return not self.issues
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "runtime_ref": self.runtime_ref,
++            "owner_ref": self.owner_ref,
++            "action": self.action,
++            "process_id": self.process_id,
++            "completed_hook_refs": list(self.completed_hook_refs),
++            "issues": list(self.issues),
++            "valid": self.valid,
++        }
++
++
++@dataclass(slots=True)
++class ImportedActionsRuntimeLease:
++    """Process-local owner for ports and their tool-bounded cleanup effects."""
++
++    schema: str
++    ports: ImportedActionsRuntimePorts
++    owner_ref: str
++    close_hooks: tuple[ImportedActionsRuntimeCloseHook, ...] = ()
++    process_id: int = field(default_factory=os.getpid)
++    _closed: bool = field(default=False, init=False, repr=False)
++    _receipt: ImportedActionsRuntimeLeaseReceipt | None = field(
++        default=None,
++        init=False,
++        repr=False,
++    )
++    _lock: RLock = field(
++        default_factory=RLock,
++        init=False,
++        repr=False,
++        compare=False,
++    )
++
++    def __post_init__(self) -> None:
++        if self.schema != IMPORTED_ACTIONS_RUNTIME_LEASE_SCHEMA:
++            raise ImportedActionsRuntimeContractError(
++                "unsupported imported Actions runtime lease schema"
++            )
++        self.ports = validate_imported_actions_runtime_ports(self.ports)
++        if not _require_text("owner_ref", self.owner_ref).startswith(
++            "runtime-owner:"
++        ):
++            raise ImportedActionsRuntimeContractError(
++                "owner_ref must start with runtime-owner:"
++            )
++        if self.process_id <= 0:
++            raise ImportedActionsRuntimeContractError(
++                "runtime lease process_id must be positive"
++            )
++        self.close_hooks = tuple(self.close_hooks)
++        if not all(
++            isinstance(hook, ImportedActionsRuntimeCloseHook)
++            for hook in self.close_hooks
++        ):
++            raise ImportedActionsRuntimeContractError(
++                "close_hooks must contain ImportedActionsRuntimeCloseHook"
++            )
++        if (
++            self.close_hooks
++            and self.ports.scheduler_lifecycle != "tool-bounded"
++        ):
++            raise ImportedActionsRuntimeContractError(
++                "only a tool-bounded runtime may own close hooks"
++            )
++        hook_refs = tuple(hook.hook_ref for hook in self.close_hooks)
++        if len(set(hook_refs)) != len(hook_refs):
++            raise ImportedActionsRuntimeContractError(
++                "runtime close hook references must be unique"
++            )
++
++    @property
++    def closed(self) -> bool:
++        with self._lock:
++            return self._closed
++
++    @property
++    def close_receipt(self) -> ImportedActionsRuntimeLeaseReceipt | None:
++        with self._lock:
++            return self._receipt
++
++    def to_readback_mapping(self) -> dict[str, Any]:
++        """Return lifecycle evidence without exposing executable callbacks."""
++
++        with self._lock:
++            receipt = self._receipt
++            return {
++                "schema": self.schema,
++                "runtime_ref": self.ports.runtime_ref,
++                "owner_ref": self.owner_ref,
++                "process_id": self.process_id,
++                "scheduler_lifecycle": self.ports.scheduler_lifecycle,
++                "close_hook_refs": [
++                    hook.hook_ref for hook in self.close_hooks
++                ],
++                "closed": self._closed,
++                "close_receipt": (
++                    receipt.to_mapping() if receipt is not None else None
++                ),
++            }
++
++    def ensure_current_process(self) -> None:
++        current_process_id = os.getpid()
++        if self.process_id != current_process_id:
++            raise ImportedActionsRuntimeContractError(
++                "runtime lease is process-local and cannot cross a process "
++                f"boundary: owner pid {self.process_id}, current pid "
++                f"{current_process_id}"
++            )
++
++    def close(self) -> ImportedActionsRuntimeLeaseReceipt:
++        """Close all owned effects in reverse order, exactly once."""
++
++        self.ensure_current_process()
++        with self._lock:
++            if self._closed:
++                if self._receipt is None:
++                    raise ImportedActionsRuntimeContractError(
++                        "closed runtime lease has no close receipt"
++                    )
++                return replace(self._receipt, action="replay")
++
++            completed: list[str] = []
++            issues: list[str] = []
++            for hook in reversed(self.close_hooks):
++                try:
++                    result = hook.callback()
++                    if inspect.isawaitable(result):
++                        close_awaitable = getattr(result, "close", None)
++                        if callable(close_awaitable):
++                            close_awaitable()
++                        raise TypeError(
++                            "runtime close hook returned an awaitable"
++                        )
++                    completed.append(hook.hook_ref)
++                except Exception as exc:  # noqa: BLE001 - close all hooks
++                    issues.append(
++                        f"{hook.hook_ref}: {type(exc).__name__}: {exc}"
++                    )
++
++            receipt = ImportedActionsRuntimeLeaseReceipt(
++                schema=IMPORTED_ACTIONS_RUNTIME_LEASE_RECEIPT_SCHEMA,
++                runtime_ref=self.ports.runtime_ref,
++                owner_ref=self.owner_ref,
++                action="closed",
++                process_id=self.process_id,
++                completed_hook_refs=tuple(completed),
++                issues=tuple(issues),
++            )
++            self._closed = True
++            self._receipt = receipt
++            if issues:
++                raise ImportedActionsRuntimeLeaseCloseError(
++                    "runtime lease close failed: " + "; ".join(issues),
++                    receipt=receipt,
++                )
++            return receipt
++
++
++def acquire_imported_actions_runtime_lease(
++    value: object,
++) -> ImportedActionsRuntimeLease:
++    """Normalize a modern lease or legacy direct ports without side effects."""
++
++    if isinstance(value, ImportedActionsRuntimeLease):
++        value.ensure_current_process()
++        return value
++    if isinstance(value, ImportedActionsRuntimePorts):
++        return ImportedActionsRuntimeLease(
++            schema=IMPORTED_ACTIONS_RUNTIME_LEASE_SCHEMA,
++            ports=value,
++            owner_ref="runtime-owner:legacy-direct-ports",
++        )
++    raise ImportedActionsRuntimeContractError(
++        "runtime factory must return ImportedActionsRuntimeLease or "
++        "ImportedActionsRuntimePorts"
++    )
++
++
+ @runtime_checkable
+ class ImportedActionsRuntimeFactory(Protocol):
+     """Portable factory signature loaded by the thin r15-r2 CLI."""
+@@ -260,8 +539,8 @@ class ImportedActionsRuntimeFactory(Protocol):
+         request_payload: Mapping[str, Any],
+         runtime_context: Mapping[str, Any],
+         created_at: str,
+-    ) -> ImportedActionsRuntimePorts:
+-        """Return initialized real ports and their exact attestation."""
++    ) -> ImportedActionsRuntimeLease | ImportedActionsRuntimePorts:
++        """Return initialized ports, preferably inside a process-local lease."""
+ 
+ 
+ def validate_imported_actions_runtime_ports(
+@@ -278,11 +557,20 @@ def validate_imported_actions_runtime_ports(
+ 
+ __all__ = (
+     "IMPORTED_ACTIONS_REAL_BACKEND_ATTESTATION_SCHEMA",
++    "IMPORTED_ACTIONS_RUNTIME_CLOSE_HOOK_SCHEMA",
++    "IMPORTED_ACTIONS_RUNTIME_LEASE_RECEIPT_SCHEMA",
++    "IMPORTED_ACTIONS_RUNTIME_LEASE_SCHEMA",
+     "IMPORTED_ACTIONS_RUNTIME_PORTS_SCHEMA",
+     "ImportedActionsRealBackendAttestation",
++    "ImportedActionsRuntimeCloseHook",
+     "ImportedActionsRuntimeContractError",
+     "ImportedActionsRuntimeFactory",
++    "ImportedActionsRuntimeLease",
++    "ImportedActionsRuntimeLeaseAction",
++    "ImportedActionsRuntimeLeaseCloseError",
++    "ImportedActionsRuntimeLeaseReceipt",
+     "ImportedActionsSchedulerLifecycle",
+     "ImportedActionsRuntimePorts",
++    "acquire_imported_actions_runtime_lease",
+     "validate_imported_actions_runtime_ports",
+ )
+diff --git a/tests/context/test_love_imported_actions_runtime_lease_0287_r7_r15_r3_r3.py b/tests/context/test_love_imported_actions_runtime_lease_0287_r7_r15_r3_r3.py
+new file mode 100644
+index 0000000..ee579e1
+--- /dev/null
++++ b/tests/context/test_love_imported_actions_runtime_lease_0287_r7_r15_r3_r3.py
+@@ -0,0 +1,221 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++import os
++
++import pytest
++
++from contracts.scheduler import SchedulerContract
++from context.love_imported_actions_runtime_contract_0287 import (
++    IMPORTED_ACTIONS_REAL_BACKEND_ATTESTATION_SCHEMA,
++    IMPORTED_ACTIONS_RUNTIME_CLOSE_HOOK_SCHEMA,
++    IMPORTED_ACTIONS_RUNTIME_LEASE_SCHEMA,
++    IMPORTED_ACTIONS_RUNTIME_PORTS_SCHEMA,
++    ImportedActionsRealBackendAttestation,
++    ImportedActionsRuntimeCloseHook,
++    ImportedActionsRuntimeContractError,
++    ImportedActionsRuntimeLease,
++    ImportedActionsRuntimeLeaseCloseError,
++    ImportedActionsRuntimePorts,
++    acquire_imported_actions_runtime_lease,
++)
++
++
++class _Scheduler(SchedulerContract):
++    async def emit(self, event):
++        return None
++
++    async def run(self):
++        return None
++
++    async def shutdown(self):
++        return None
++
++
++class _Dispatcher:
++    def register(self, event_type, handler):
++        return None
++
++
++class _Store:
++    def get_revision(self, ref):
++        return None
++
++    def put_object(self, value):
++        return None
++
++    def put_artifact(self, value):
++        return None
++
++    def put_revision(self, value):
++        return None
++
++    def put_projection(self, value):
++        return None
++
++    def put_relation(self, value):
++        return None
++
++
++class _Projection:
++    def project(self, value, **kwargs):
++        return None
++
++
++class _Embedder:
++    def embed_query(self, value, **kwargs):
++        return None
++
++
++class _Executor:
++    def search_dense(self, value, **kwargs):
++        return ()
++
++    def search_sparse(self, value, **kwargs):
++        return ()
++
++
++@dataclass
++class _Collection:
++    collection_name: str = "autodoc_context_current"
++
++
++def _ports(*, lifecycle: str = "tool-bounded") -> ImportedActionsRuntimePorts:
++    attestation = ImportedActionsRealBackendAttestation(
++        schema=IMPORTED_ACTIONS_REAL_BACKEND_ATTESTATION_SCHEMA,
++        runtime_ref="runtime:live-preview",
++        scheduler_ref="scheduler:canonical",
++        sql_authority_ref="sql-authority:context-revision",
++        projection_backend_ref="qdrant:autodoc-context-current",
++        embedding_backend_ref="openvino:multilingual-e5-small",
++        retrieval_backend_ref="hybrid:qdrant-sql",
++        model_ref="model:multilingual-e5-small",
++        model_revision="openvino-ir-v1",
++        qdrant_collection="autodoc_context_current",
++        evidence_refs=("evidence:manual-runtime-readiness",),
++        scheduler_lifecycle=lifecycle,
++    )
++    return ImportedActionsRuntimePorts(
++        schema=IMPORTED_ACTIONS_RUNTIME_PORTS_SCHEMA,
++        runtime_ref=attestation.runtime_ref,
++        scheduler=_Scheduler(),
++        dispatcher=_Dispatcher(),
++        authority_store=_Store(),
++        projection_port=_Projection(),
++        collection=_Collection(),
++        embedder=_Embedder(),
++        executor=_Executor(),
++        base_revision_ref="context-revision:base",
++        scheduler_lifecycle=lifecycle,
++        attestation=attestation,
++    )
++
++
++def _hook(reference: str, callback) -> ImportedActionsRuntimeCloseHook:
++    return ImportedActionsRuntimeCloseHook(
++        schema=IMPORTED_ACTIONS_RUNTIME_CLOSE_HOOK_SCHEMA,
++        hook_ref=reference,
++        callback=callback,
++    )
++
++
++def test_tool_bounded_lease_closes_in_reverse_order_exactly_once() -> None:
++    effects: list[str] = []
++    lease = ImportedActionsRuntimeLease(
++        schema=IMPORTED_ACTIONS_RUNTIME_LEASE_SCHEMA,
++        ports=_ports(),
++        owner_ref="runtime-owner:actions-preview-123",
++        close_hooks=(
++            _hook("runtime-close:postgresql", lambda: effects.append("sql")),
++            _hook("runtime-close:qdrant", lambda: effects.append("qdrant")),
++            _hook("runtime-close:openvino", lambda: effects.append("openvino")),
++        ),
++    )
++
++    receipt = lease.close()
++    replay = lease.close()
++
++    assert effects == ["openvino", "qdrant", "sql"]
++    assert receipt.action == "closed"
++    assert receipt.valid is True
++    assert receipt.completed_hook_refs == (
++        "runtime-close:openvino",
++        "runtime-close:qdrant",
++        "runtime-close:postgresql",
++    )
++    assert replay.action == "replay"
++    assert replay.completed_hook_refs == receipt.completed_hook_refs
++    assert lease.closed is True
++    readback = lease.to_readback_mapping()
++    assert readback["closed"] is True
++    assert readback["close_receipt"]["valid"] is True
++    assert "callback" not in str(readback)
++
++
++def test_close_runs_every_hook_before_reporting_failures() -> None:
++    effects: list[str] = []
++
++    def broken() -> None:
++        effects.append("broken")
++        raise RuntimeError("cannot close")
++
++    lease = ImportedActionsRuntimeLease(
++        schema=IMPORTED_ACTIONS_RUNTIME_LEASE_SCHEMA,
++        ports=_ports(),
++        owner_ref="runtime-owner:actions-preview-123",
++        close_hooks=(
++            _hook("runtime-close:postgresql", lambda: effects.append("sql")),
++            _hook("runtime-close:qdrant", broken),
++            _hook("runtime-close:openvino", lambda: effects.append("openvino")),
++        ),
++    )
++
++    with pytest.raises(ImportedActionsRuntimeLeaseCloseError) as raised:
++        lease.close()
++
++    assert effects == ["openvino", "broken", "sql"]
++    assert raised.value.receipt.completed_hook_refs == (
++        "runtime-close:openvino",
++        "runtime-close:postgresql",
++    )
++    assert raised.value.receipt.issues
++    assert lease.close().action == "replay"
++
++
++def test_legacy_direct_ports_are_wrapped_without_owned_close_hooks() -> None:
++    ports = _ports()
++    lease = acquire_imported_actions_runtime_lease(ports)
++
++    assert lease.ports is ports
++    assert lease.close_hooks == ()
++    assert lease.close().valid is True
++
++
++def test_runtime_lease_rejects_cross_process_use() -> None:
++    lease = ImportedActionsRuntimeLease(
++        schema=IMPORTED_ACTIONS_RUNTIME_LEASE_SCHEMA,
++        ports=_ports(),
++        owner_ref="runtime-owner:other-process",
++        process_id=os.getpid() + 1,
++    )
++
++    with pytest.raises(
++        ImportedActionsRuntimeContractError,
++        match="process-local",
++    ):
++        acquire_imported_actions_runtime_lease(lease)
++
++
++def test_externally_managed_runtime_cannot_own_close_hooks() -> None:
++    with pytest.raises(
++        ImportedActionsRuntimeContractError,
++        match="tool-bounded",
++    ):
++        ImportedActionsRuntimeLease(
++            schema=IMPORTED_ACTIONS_RUNTIME_LEASE_SCHEMA,
++            ports=_ports(lifecycle="externally-managed"),
++            owner_ref="runtime-owner:external-server",
++            close_hooks=(
++                _hook("runtime-close:postgresql", lambda: None),
++            ),
++        )
+diff --git a/tests/rules/test_love_tool_bounded_runtime_lease_0287_r7_r15_r3_r3_rule.py b/tests/rules/test_love_tool_bounded_runtime_lease_0287_r7_r15_r3_r3_rule.py
+new file mode 100644
+index 0000000..c20d510
+--- /dev/null
++++ b/tests/rules/test_love_tool_bounded_runtime_lease_0287_r7_r15_r3_r3_rule.py
+@@ -0,0 +1,40 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++CONTRACT = ROOT / "src/context/love_imported_actions_runtime_contract_0287.py"
++TOOL = ROOT / "tools/run_love_actions_closed_loop_0287.py"
++
++
++def test_runtime_lease_is_a_process_local_effect_boundary() -> None:
++    source = CONTRACT.read_text(encoding="utf-8")
++    for marker in (
++        "ImportedActionsRuntimeLease",
++        "runtime lease is process-local",
++        "for hook in reversed(self.close_hooks)",
++        "to_readback_mapping",
++        'owner_ref="runtime-owner:legacy-direct-ports"',
++        "only a tool-bounded runtime may own close hooks",
++    ):
++        assert marker in source
++    for forbidden in (
++        "from kernel.launcher import Launcher",
++        "Scheduler(",
++        "psycopg.connect(",
++        "QdrantClient(",
++        "RealOpenVINORuntime(",
++    ):
++        assert forbidden not in source
++
++
++def test_preview_tool_closes_only_tool_bounded_owned_resources() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    for marker in (
++        "acquire_imported_actions_runtime_lease",
++        "runtime_lease=runtime_lease",
++        'output["_r15_runtime_lease"]',
++        "_close_tool_bounded_runtime_lease",
++        'runtime.scheduler_lifecycle == "tool-bounded"',
++    ):
++        assert marker in source
++    assert "await runtime.scheduler.shutdown()" in source
+diff --git a/tests/tools/test_run_love_actions_closed_loop_runtime_lease_0287_r7_r15_r3_r3.py b/tests/tools/test_run_love_actions_closed_loop_runtime_lease_0287_r7_r15_r3_r3.py
+new file mode 100644
+index 0000000..5eac6f0
+--- /dev/null
++++ b/tests/tools/test_run_love_actions_closed_loop_runtime_lease_0287_r7_r15_r3_r3.py
+@@ -0,0 +1,210 @@
++from __future__ import annotations
++
++import asyncio
++import importlib.util
++from pathlib import Path
++import sys
++from types import ModuleType, SimpleNamespace
++
++import pytest
++
++
++def _load_tool(name: str) -> ModuleType:
++    path = (
++        Path(__file__).resolve().parents[2]
++        / "tools"
++        / "run_love_actions_closed_loop_0287.py"
++    )
++    spec = importlib.util.spec_from_file_location(name, path)
++    assert spec is not None and spec.loader is not None
++    module = importlib.util.module_from_spec(spec)
++    sys.modules[name] = module
++    try:
++        spec.loader.exec_module(module)
++    except BaseException:
++        sys.modules.pop(name, None)
++        raise
++    return module
++
++
++class _Lease:
++    def __init__(self) -> None:
++        self.close_count = 0
++
++    def close(self) -> None:
++        self.close_count += 1
++
++
++def _runtime(scheduler, lifecycle: str = "tool-bounded") -> SimpleNamespace:
++    return SimpleNamespace(
++        scheduler=scheduler,
++        dispatcher=object(),
++        authority_store=object(),
++        projection_port=object(),
++        collection=object(),
++        embedder=object(),
++        executor=object(),
++        scheduler_lifecycle=lifecycle,
++    )
++
++
++def test_tool_bounded_runtime_lease_closes_after_scheduler_shutdown(
++    monkeypatch,
++) -> None:
++    tool = _load_tool("run_love_actions_closed_loop_runtime_lease")
++    events: list[str] = []
++
++    class Scheduler:
++        def __init__(self) -> None:
++            self.running = False
++            self.stopped = asyncio.Event()
++
++        async def run(self) -> None:
++            self.running = True
++            await self.stopped.wait()
++            self.running = False
++            events.append("scheduler-stopped")
++
++        async def shutdown(self) -> None:
++            events.append("scheduler-shutdown")
++            self.stopped.set()
++
++    class Lease(_Lease):
++        def close(self) -> None:
++            events.append("lease-close")
++            super().close()
++
++    scheduler = Scheduler()
++    lease = Lease()
++
++    async def fake_r14(command, **ports):
++        assert scheduler.running is True
++        events.append("r14-complete")
++        return "r14-result"
++
++    monkeypatch.setattr(
++        tool,
++        "run_love_full_deterministic_local_smoke",
++        fake_r14,
++    )
++    result = asyncio.run(
++        tool._run_r14_on_existing_scheduler(
++            SimpleNamespace(run_id="123"),
++            _runtime(scheduler),
++            runtime_lease=lease,
++        )
++    )
++
++    assert result == "r14-result"
++    assert lease.close_count == 1
++    assert events.index("scheduler-stopped") < events.index("lease-close")
++
++
++def test_scheduler_failure_still_closes_tool_bounded_lease(monkeypatch) -> None:
++    tool = _load_tool("run_love_actions_closed_loop_runtime_lease_failure")
++
++    class Scheduler:
++        async def run(self) -> None:
++            raise RuntimeError("scheduler failed")
++
++        async def shutdown(self) -> None:
++            return None
++
++    lease = _Lease()
++
++    async def hanging_r14(command, **ports):
++        await asyncio.Event().wait()
++
++    monkeypatch.setattr(
++        tool,
++        "run_love_full_deterministic_local_smoke",
++        hanging_r14,
++    )
++    with pytest.raises(
++        tool.LoveActionsClosedLoopPreviewError,
++        match="Scheduler failed",
++    ):
++        asyncio.run(
++            tool._run_r14_on_existing_scheduler(
++                SimpleNamespace(run_id="123"),
++                _runtime(Scheduler()),
++                runtime_lease=lease,
++            )
++        )
++
++    assert lease.close_count == 1
++
++
++def test_externally_managed_runtime_does_not_close_injected_lease(
++    monkeypatch,
++) -> None:
++    tool = _load_tool("run_love_actions_closed_loop_runtime_lease_external")
++
++    class Scheduler:
++        async def run(self) -> None:
++            raise AssertionError("must not start")
++
++        async def shutdown(self) -> None:
++            raise AssertionError("must not stop")
++
++    lease = _Lease()
++
++    async def fake_r14(command, **ports):
++        return "external-result"
++
++    monkeypatch.setattr(
++        tool,
++        "run_love_full_deterministic_local_smoke",
++        fake_r14,
++    )
++    result = asyncio.run(
++        tool._run_r14_on_existing_scheduler(
++            SimpleNamespace(run_id="123"),
++            _runtime(Scheduler(), "externally-managed"),
++            runtime_lease=lease,
++        )
++    )
++
++    assert result == "external-result"
++    assert lease.close_count == 0
++
++
++def test_scheduler_failure_at_r14_completion_is_not_silenced(
++    monkeypatch,
++) -> None:
++    tool = _load_tool("run_love_actions_closed_loop_runtime_lease_race")
++    release_scheduler = asyncio.Event()
++
++    class Scheduler:
++        async def run(self) -> None:
++            await release_scheduler.wait()
++            raise RuntimeError("late scheduler failure")
++
++        async def shutdown(self) -> None:
++            release_scheduler.set()
++
++    lease = _Lease()
++
++    async def fake_r14(command, **ports):
++        release_scheduler.set()
++        await asyncio.sleep(0)
++        return "r14-result"
++
++    monkeypatch.setattr(
++        tool,
++        "run_love_full_deterministic_local_smoke",
++        fake_r14,
++    )
++    with pytest.raises(
++        tool.LoveActionsClosedLoopPreviewError,
++        match="Scheduler failed",
++    ):
++        asyncio.run(
++            tool._run_r14_on_existing_scheduler(
++                SimpleNamespace(run_id="123"),
++                _runtime(Scheduler()),
++                runtime_lease=lease,
++            )
++        )
++
++    assert lease.close_count == 1
+diff --git a/tools/run_love_actions_closed_loop_0287.py b/tools/run_love_actions_closed_loop_0287.py
+index e439355..3d573fa 100755
+--- a/tools/run_love_actions_closed_loop_0287.py
++++ b/tools/run_love_actions_closed_loop_0287.py
+@@ -46,9 +46,10 @@ from context.love_full_deterministic_local_smoke_0287 import (  # noqa: E402
+     run_love_full_deterministic_local_smoke,
+ )
+ from context.love_imported_actions_runtime_contract_0287 import (  # noqa: E402
++    ImportedActionsRuntimeLease,
+     ImportedActionsRuntimeContractError,
+     ImportedActionsRuntimeFactory,
+-    validate_imported_actions_runtime_ports,
++    acquire_imported_actions_runtime_lease,
+ )
+ from context.human_readable_artifact_identity_0287 import (  # noqa: E402
+     matches_actions_artifact_name,
+@@ -442,7 +443,7 @@ def execute_love_actions_closed_loop_preview(
+         )
+     )
+ 
+-    runtime = validate_imported_actions_runtime_ports(
++    runtime_lease = acquire_imported_actions_runtime_lease(
+         runtime_factory(
+             repository=command.repository,
+             run_id=command.run_id,
+@@ -458,42 +459,51 @@ def execute_love_actions_closed_loop_preview(
+             created_at=created_at,
+         )
+     )
+-    r14_command = LoveFullDeterministicLocalSmokeCommand(
+-        schema=LOVE_FULL_DETERMINISTIC_LOCAL_SMOKE_COMMAND_SCHEMA,
+-        repository=command.repository,
+-        run_id=command.run_id,
+-        members=tuple(members),
+-        operator_decision=SourceCandidateDecision(
+-            action=command.candidate_decision,
+-            reason=command.operator_reason,
+-            target_context_id=(
+-                command.target_context_id
+-                if command.candidate_decision == "merge"
+-                else None
++    runtime = runtime_lease.ports
++    try:
++        r14_command = LoveFullDeterministicLocalSmokeCommand(
++            schema=LOVE_FULL_DETERMINISTIC_LOCAL_SMOKE_COMMAND_SCHEMA,
++            repository=command.repository,
++            run_id=command.run_id,
++            members=tuple(members),
++            operator_decision=SourceCandidateDecision(
++                action=command.candidate_decision,
++                reason=command.operator_reason,
++                target_context_id=(
++                    command.target_context_id
++                    if command.candidate_decision == "merge"
++                    else None
++                ),
+             ),
+-        ),
+-        conversation_ref=(
+-            f"laboratory-conversation:actions-run-{command.run_id}"
+-        ),
+-        return_route_ref=f"route:github-issue-{issue_number}",
+-        context_generation=command.context_generation,
+-        base_revision_ref=runtime.base_revision_ref,
+-        branch_ref=command.branch_ref,
+-        project_ref=command.project_ref,
+-        security_scope=command.security_scope,
+-        artifact_storage_ref=command.artifact_storage_ref,
+-        created_at=created_at,
+-        policy_decision_id=command.policy_decision_id,
+-        project_item_id=project_target.project_item_id,
+-        project_field_ref=project_target.field_ref,
+-        project_field_name=project_target.field_name,
+-        project_status_value=command.project_status_value,
+-        context_refs=(f"ctx:github-actions-run:{command.run_id}",),
+-        evidence_refs=(f"evidence:github-actions-run:{command.run_id}",),
+-    )
+-    r14_result = asyncio.run(
+-        _run_r14_on_existing_scheduler(r14_command, runtime)
+-    )
++            conversation_ref=(
++                f"laboratory-conversation:actions-run-{command.run_id}"
++            ),
++            return_route_ref=f"route:github-issue-{issue_number}",
++            context_generation=command.context_generation,
++            base_revision_ref=runtime.base_revision_ref,
++            branch_ref=command.branch_ref,
++            project_ref=command.project_ref,
++            security_scope=command.security_scope,
++            artifact_storage_ref=command.artifact_storage_ref,
++            created_at=created_at,
++            policy_decision_id=command.policy_decision_id,
++            project_item_id=project_target.project_item_id,
++            project_field_ref=project_target.field_ref,
++            project_field_name=project_target.field_name,
++            project_status_value=command.project_status_value,
++            context_refs=(f"ctx:github-actions-run:{command.run_id}",),
++            evidence_refs=(f"evidence:github-actions-run:{command.run_id}",),
++        )
++        r14_result = asyncio.run(
++            _run_r14_on_existing_scheduler(
++                r14_command,
++                runtime,
++                runtime_lease=runtime_lease,
++            )
++        )
++    except BaseException:
++        _close_tool_bounded_runtime_lease(runtime, runtime_lease)
++        raise
+     r14_mapping = r14_result.to_mapping()
+ 
+     preview_command = LoveFinalDeliverableRemotePublicationCommand(
+@@ -538,6 +548,7 @@ def execute_love_actions_closed_loop_preview(
+         )
+     output = correlated.to_mapping()
+     output["_r15_resolution"] = project_target.to_mapping()
++    output["_r15_runtime_lease"] = runtime_lease.to_readback_mapping()
+     _write_json_atomic(command.output_path, output)
+     return output
+ 
+@@ -545,6 +556,8 @@ def execute_love_actions_closed_loop_preview(
+ async def _run_r14_on_existing_scheduler(
+     command: LoveFullDeterministicLocalSmokeCommand,
+     runtime: Any,
++    *,
++    runtime_lease: ImportedActionsRuntimeLease | None = None,
+ ) -> Any:
+     """Run r14 without stealing an externally managed Scheduler lifecycle."""
+ 
+@@ -571,27 +584,57 @@ async def _run_r14_on_existing_scheduler(
+         execute_r14(),
+         name=f"love-r15-r2-r14-{command.run_id}",
+     )
+-    done, _ = await asyncio.wait(
+-        {scheduler_task, r14_task},
+-        return_when=asyncio.FIRST_COMPLETED,
+-    )
+-    if scheduler_task in done and not r14_task.done():
+-        scheduler_error = scheduler_task.exception()
+-        r14_task.cancel()
+-        await asyncio.gather(r14_task, return_exceptions=True)
+-        if scheduler_error is not None:
+-            raise LoveActionsClosedLoopPreviewError(
+-                "injected Scheduler failed before r14 completed"
+-            ) from scheduler_error
+-        raise LoveActionsClosedLoopPreviewError(
+-            "injected Scheduler stopped before r14 completed"
+-        )
++    scheduler_completion_consumed = False
+     try:
++        done, _ = await asyncio.wait(
++            {scheduler_task, r14_task},
++            return_when=asyncio.FIRST_COMPLETED,
++        )
++        if scheduler_task in done and not r14_task.done():
++            scheduler_error = scheduler_task.exception()
++            scheduler_completion_consumed = True
++            r14_task.cancel()
++            await asyncio.gather(r14_task, return_exceptions=True)
++            if scheduler_error is not None:
++                raise LoveActionsClosedLoopPreviewError(
++                    "injected Scheduler failed before r14 completed"
++                ) from scheduler_error
++            raise LoveActionsClosedLoopPreviewError(
++                "injected Scheduler stopped before r14 completed"
++            )
+         return await r14_task
+     finally:
+-        if not scheduler_task.done():
+-            await runtime.scheduler.shutdown()
+-        await scheduler_task
++        try:
++            if not r14_task.done():
++                r14_task.cancel()
++                await asyncio.gather(r14_task, return_exceptions=True)
++            if not scheduler_task.done():
++                await runtime.scheduler.shutdown()
++            if scheduler_completion_consumed:
++                await asyncio.gather(
++                    scheduler_task,
++                    return_exceptions=True,
++                )
++            else:
++                try:
++                    await scheduler_task
++                except Exception as exc:
++                    raise LoveActionsClosedLoopPreviewError(
++                        "injected Scheduler failed during r14 lifecycle"
++                    ) from exc
++        finally:
++            if runtime_lease is not None:
++                _close_tool_bounded_runtime_lease(runtime, runtime_lease)
++
++
++def _close_tool_bounded_runtime_lease(
++    runtime: Any,
++    runtime_lease: ImportedActionsRuntimeLease,
++) -> None:
++    """Close only resources explicitly owned by a tool-bounded runtime."""
++
++    if runtime.scheduler_lifecycle == "tool-bounded":
++        runtime_lease.close()
+ 
+ 
+ def _load_runtime_factory(reference: str) -> ImportedActionsRuntimeFactory:

@@ -1,0 +1,313 @@
+diff --git a/src/context/github_publication_collision_guard_0276.py b/src/context/github_publication_collision_guard_0276.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/context/github_publication_collision_guard_0276.py
+@@ -0,0 +1,47 @@
++"""Remote preflight, revision and idempotency guard for 0276."""
++from __future__ import annotations
++from dataclasses import dataclass,field
++from collections.abc import Mapping
++from typing import Any
++import hashlib,json
++from context.github_controlled_publication_contract_0276 import GitHubControlledPublicationCommand,build_github_controlled_publication_plan
++from context.github_controlled_publication_adapter_0276 import GitHubControlledPublicationAdapter,GitHubControlledPublicationApplyResult,GitHubHttpTransport
++from context.source_candidate_remote_mutation_gate import SourceCandidateRemoteMutationGatePolicy
++GUARD_SCHEMA="missipy.github.publication_collision_guard.v1"
++@dataclass(frozen=True,slots=True)
++class GitHubPublicationCollisionGuardPolicy:
++ allow_closed_issue:bool=False; require_remote_revision:bool=True; scan_recent_comments:int=100
++@dataclass(frozen=True,slots=True)
++class GitHubPublicationCollisionGuardResult:
++ status:str; issues:tuple[str,...]; repository:str; issue_number:int; expected_revision:str; current_revision:str; etag:str; state:str; publication_marker:str; marker_found:bool; snapshot_digest:str; preflight_paths:tuple[str,...]; schema:str=GUARD_SCHEMA
++ @property
++ def clear(self): return self.status=="clear"
++ @property
++ def idempotent_replay(self): return self.status=="idempotent_replay"
++ def to_mapping(self): return {"schema":self.schema,"status":self.status,"issues":list(self.issues),"repository":self.repository,"issue_number":self.issue_number,"expected_revision":self.expected_revision,"current_revision":self.current_revision,"etag":self.etag,"state":self.state,"publication_marker":self.publication_marker,"marker_found":self.marker_found,"snapshot_digest":self.snapshot_digest,"preflight_paths":list(self.preflight_paths),"remote_mutation_performed":False}
++def _headers(token): return {"Authorization":"Bearer "+token,"Accept":"application/vnd.github+json","X-GitHub-Api-Version":"2022-11-28","User-Agent":"autodoc-publication-guard/0276"}
++def _digest(value): return "sha256:"+hashlib.sha256(json.dumps(value,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
++def _revision_matches(expected,updated,etag,digest): return expected in {updated,etag,digest,etag.strip('W/\"')}
++def run_github_publication_collision_guard(command,review,*,transport:GitHubHttpTransport,token:str,policy=None):
++ p=policy or GitHubPublicationCollisionGuardPolicy(); plan=build_github_controlled_publication_plan(command,review); issues=[]; paths=[]
++ if not token.strip(): return GitHubPublicationCollisionGuardResult("blocked",("token_missing",),command.repository,command.issue_number,command.expected_remote_revision,"","","",plan.publication_marker,False,"",())
++ issue_path=f"/repos/{command.repository}/issues/{command.issue_number}"; paths.append(issue_path); response=transport.request("GET",issue_path,headers=_headers(token),body=None)
++ if response.status!=200: return GitHubPublicationCollisionGuardResult("blocked",(f"issue_get_http_{response.status}",),command.repository,command.issue_number,command.expected_remote_revision,"",str(response.headers.get("ETag","")),"",plan.publication_marker,False,"",tuple(paths))
++ issue=response.json_mapping(); updated=str(issue.get("updated_at", "")); etag=str(response.headers.get("ETag",response.headers.get("etag",""))); digest=_digest(issue); state=str(issue.get("state","")); marker_found=plan.publication_marker in str(issue.get("body") or "")
++ if p.require_remote_revision and not _revision_matches(command.expected_remote_revision,updated,etag,digest): issues.append("remote_revision_conflict")
++ if state=="closed" and not p.allow_closed_issue: issues.append("issue_closed")
++ if command.mutation_kind=="issue_comment":
++  path=issue_path+f"/comments?per_page={p.scan_recent_comments}"; paths.append(path); comments=transport.request("GET",path,headers=_headers(token),body=None)
++  if comments.status!=200: issues.append(f"comments_get_http_{comments.status}")
++  else:
++   data=json.loads(comments.body or b"[]")
++   marker_found=any(plan.publication_marker in str(x.get("body") or "") for x in data if isinstance(x,dict))
++ elif command.mutation_kind=="issue_labels_replace":
++  current=tuple(sorted(str(x.get("name")) for x in issue.get("labels",[]) if isinstance(x,dict) and x.get("name"))); desired=tuple(sorted(command.labels)); marker_found=current==desired
++ status="conflict" if "remote_revision_conflict" in issues else "blocked" if issues else "idempotent_replay" if marker_found else "clear"
++ return GitHubPublicationCollisionGuardResult(status,tuple(dict.fromkeys(issues)),command.repository,command.issue_number,command.expected_remote_revision,updated,etag,state,plan.publication_marker,marker_found,digest,tuple(paths))
++def apply_guarded_github_publication(adapter,command,review,gate_policy,*,transport,token,guard_policy=None):
++ guard=run_github_publication_collision_guard(command,review,transport=transport,token=token,policy=guard_policy)
++ if guard.idempotent_replay: return guard,GitHubControlledPublicationApplyResult(False,True,"idempotent_replay",None)
++ if not guard.clear: return guard,GitHubControlledPublicationApplyResult(False,False,"blocked",None,blocked_reasons=guard.issues)
++ return guard,adapter.apply(command,review,gate_policy,transport=transport,token=token,guard_receipt=guard.to_mapping())
+diff --git a/tools/run_github_controlled_publication_smoke_0276.py b/tools/run_github_controlled_publication_smoke_0276.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/run_github_controlled_publication_smoke_0276.py
+@@ -0,0 +1,26 @@
++#!/usr/bin/env python3
++from pathlib import Path
++import argparse,json,os,sys
++from context.github_controlled_publication_contract_0276 import GitHubControlledPublicationCommand,build_github_controlled_publication_plan
++from context.github_controlled_publication_adapter_0276 import GitHubControlledPublicationAdapter,UrllibGitHubTransport
++from context.github_publication_collision_guard_0276 import run_github_publication_collision_guard,apply_guarded_github_publication
++from context.source_candidate_remote_mutation_gate import SourceCandidateRemoteMutationGatePolicy
++
++def load(path):
++ p=json.loads(Path(path).read_text());
++ if not isinstance(p,dict): raise ValueError("JSON must be an object")
++ return p
++def command_from(p): return GitHubControlledPublicationCommand(**p)
++def main(argv=None):
++ ap=argparse.ArgumentParser(); ap.add_argument("--command-json",required=True); ap.add_argument("--review-json",required=True); ap.add_argument("--mode",choices=("plan","preflight","apply"),default="plan"); ap.add_argument("--base-url",default="https://api.github.com"); ns=ap.parse_args(argv)
++ command=command_from(load(ns.command_json)); review=load(ns.review_json); adapter=GitHubControlledPublicationAdapter()
++ if ns.mode=="plan": payload={"mode":"plan","plan":build_github_controlled_publication_plan(command,review).to_mapping()}
++ else:
++  token=os.environ.get("AUTODOC_GITHUB_TOKEN",""); transport=UrllibGitHubTransport(base_url=ns.base_url)
++  if ns.mode=="preflight": payload={"mode":"preflight","guard":run_github_publication_collision_guard(command,review,transport=transport,token=token).to_mapping()}
++  else:
++   policy=SourceCandidateRemoteMutationGatePolicy(remote_mutation_enabled=command.remote_mutation_enabled,operator_confirmed=command.operator_confirmed,allowed_repositories=(command.repository,))
++   guard,result=apply_guarded_github_publication(adapter,command,review,policy,transport=transport,token=token); payload={"mode":"apply","guard":guard.to_mapping(),"result":result.to_mapping()}
++ text=json.dumps(payload,ensure_ascii=False,indent=2,sort_keys=True); assert token not in text if ns.mode!="plan" and token else True; print(text)
++ return 0
++if __name__=="__main__": raise SystemExit(main())
+diff --git a/tests/context/test_github_publication_collision_guard_0276.py b/tests/context/test_github_publication_collision_guard_0276.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/context/test_github_publication_collision_guard_0276.py
+@@ -0,0 +1,27 @@
++import json
++from context.github_publication_collision_guard_0276 import *
++from context.github_controlled_publication_contract_0276 import *
++from context.github_controlled_publication_adapter_0276 import *
++from context.source_candidate_remote_mutation_gate import SourceCandidateRemoteMutationGatePolicy
++class Transport:
++ def __init__(self,issue,comments=None): self.issue=issue; self.comments=comments or []; self.calls=[]
++ def request(self,m,p,*,headers,body=None):
++  self.calls.append((m,p,body));
++  if m=="GET" and "comments?" in p: return GitHubHttpResponse(200,{},json.dumps(self.comments).encode())
++  if m=="GET": return GitHubHttpResponse(200,{"ETag":"etag-1"},json.dumps(self.issue).encode())
++  return GitHubHttpResponse(201,{},b'{"id":9}')
++def cmd(rev="2026-07-11T00:00:00Z"): return GitHubControlledPublicationCommand("github-publication:x","newicody/autodoc",1,"issue_comment","github:issue:newicody/autodoc#1","artifact-final:x","sql:specialist_output:x","github-review:x","decision:1","policy:1",rev,"Result",execute=True,operator_confirmed=True,remote_mutation_enabled=True)
++def review(): return {"schema":"missipy.github_project.publication_review.v1","status":"approve","review_ref":"github-review:x","sql_context_ref":"sql:specialist_output:x"}
++def issue(): return {"state":"open","updated_at":"2026-07-11T00:00:00Z","body":"","labels":[]}
++def test_clear_guard_then_apply():
++ t=Transport(issue()); g,r=apply_guarded_github_publication(GitHubControlledPublicationAdapter(),cmd(),review(),SourceCandidateRemoteMutationGatePolicy(True,True,("newicody/autodoc",)),transport=t,token="secret")
++ assert g.clear and r.applied and any(c[0]=="POST" for c in t.calls)
++def test_revision_change_blocks_before_post():
++ t=Transport(issue()); g,r=apply_guarded_github_publication(GitHubControlledPublicationAdapter(),cmd("old"),review(),SourceCandidateRemoteMutationGatePolicy(True,True,("newicody/autodoc",)),transport=t,token="secret")
++ assert g.status=="conflict" and not r.applied and not any(c[0]=="POST" for c in t.calls)
++def test_existing_marker_is_idempotent_replay():
++ c=cmd(); marker=build_github_controlled_publication_plan(c,review()).publication_marker; t=Transport(issue(),[{"body":"done "+marker}]); g,r=apply_guarded_github_publication(GitHubControlledPublicationAdapter(),c,review(),SourceCandidateRemoteMutationGatePolicy(True,True,("newicody/autodoc",)),transport=t,token="secret")
++ assert g.idempotent_replay and r.idempotent_replay and not any(x[0]=="POST" for x in t.calls)
++def test_closed_issue_blocks():
++ i=issue(); i["state"]="closed"; g=run_github_publication_collision_guard(cmd(),review(),transport=Transport(i),token="secret")
++ assert g.status=="blocked" and "issue_closed" in g.issues
+diff --git a/tests/tools/test_run_github_controlled_publication_smoke_0276.py b/tests/tools/test_run_github_controlled_publication_smoke_0276.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_run_github_controlled_publication_smoke_0276.py
+@@ -0,0 +1,8 @@
++from pathlib import Path
++import json, os, subprocess, sys
++ROOT=Path(__file__).resolve().parents[2]
++def test_cli_plan_needs_no_token_and_prints_no_secret(tmp_path):
++ command={"publication_ref":"github-publication:x","repository":"newicody/autodoc","issue_number":1,"mutation_kind":"issue_comment","target_ref":"github:issue:newicody/autodoc#1","source_final_ref":"artifact-final:x","source_sql_ref":"sql:specialist_output:x","source_review_ref":"github-review:x","review_decision_id":"decision:1","policy_decision_id":"policy:1","expected_remote_revision":"rev:1","body":"Result"}
++ review={"schema":"missipy.github_project.publication_review.v1","status":"approve","review_ref":"github-review:x","sql_context_ref":"sql:specialist_output:x"}
++ cp=tmp_path/"c.json"; rp=tmp_path/"r.json"; cp.write_text(json.dumps(command)); rp.write_text(json.dumps(review)); env=dict(os.environ,AUTODOC_GITHUB_TOKEN="TOPSECRET",PYTHONPATH=str(ROOT/"src")+":"+str(ROOT)); p=subprocess.run([sys.executable,str(ROOT/"tools/run_github_controlled_publication_smoke_0276.py"),"--command-json",str(cp),"--review-json",str(rp),"--mode","plan"],env=env,text=True,capture_output=True,check=True)
++ assert "TOPSECRET" not in p.stdout and '"requires_collision_guard": true' in p.stdout
+diff --git a/tests/rules/test_github_publication_collision_guard_0276_rule.py b/tests/rules/test_github_publication_collision_guard_0276_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_github_publication_collision_guard_0276_rule.py
+@@ -0,0 +1,11 @@
++from pathlib import Path
++ROOT=Path(__file__).resolve().parents[2]
++def test_guard_checks_revision_state_marker_and_replay():
++ t=(ROOT/"src/context/github_publication_collision_guard_0276.py").read_text()
++ for m in ("remote_revision_conflict","issue_closed","idempotent_replay","publication_marker","comments?per_page","issue_labels_replace","apply_guarded_github_publication"):
++  assert m in t
++def test_cli_is_plan_by_default_and_token_from_environment_only():
++ t=(ROOT/"tools/run_github_controlled_publication_smoke_0276.py").read_text()
++ for m in ('default="plan"','AUTODOC_GITHUB_TOKEN','choices=("plan","preflight","apply")','assert token not in text'):
++  assert m in t
++ assert "--token" not in t
+diff --git a/doc/architecture/GITHUB_PUBLICATION_COLLISION_GUARD_0276.md b/doc/architecture/GITHUB_PUBLICATION_COLLISION_GUARD_0276.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/GITHUB_PUBLICATION_COLLISION_GUARD_0276.md
+@@ -0,0 +1,17 @@
++# GitHub publication collision guard — 0276-r4
++
++R4 completes the preflight required by r3. It reads the issue, compares the
++expected revision against `updated_at`, ETag or a canonical snapshot digest,
++blocks closed issues by default, and searches for the deterministic publication
++marker. Label replacement uses current-versus-desired labels as its replay test.
++
++Statuses are `clear`, `idempotent_replay`, `conflict` or `blocked`. Only `clear`
++may reach the adapter. Replay returns success semantics without another HTTP
++mutation.
++
++A CLI is included for the configured test. Its default mode is `plan`.
++`preflight` and `apply` read `AUTODOC_GITHUB_TOKEN` from the environment; the
++token is never accepted as an argument or printed.
++
++The first live test should target a disposable issue and begin with plan, then
++preflight, then apply after checking the exact expected revision.
+diff --git a/doc/runbooks/GITHUB_CONTROLLED_PUBLICATION_TEST_0276.md b/doc/runbooks/GITHUB_CONTROLLED_PUBLICATION_TEST_0276.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/runbooks/GITHUB_CONTROLLED_PUBLICATION_TEST_0276.md
+@@ -0,0 +1,43 @@
++# GitHub controlled publication test — after 0276-r4
++
++## Repository configuration
++
++1. Create a disposable issue in the target repository.
++2. Create a fine-grained token with the minimum Issues write permission needed
++   for the selected operation.
++3. Export it only in the shell:
++
++```bash
++export AUTODOC_GITHUB_TOKEN='...'
++```
++
++Do not place the token in JSON, Git, shell history or test fixtures.
++
++## Prepare files
++
++Create an approved review JSON and a command JSON. The command must contain the
++current issue `updated_at`, ETag or snapshot digest in `expected_remote_revision`.
++Keep `execute=false` for plan/preflight. Set `execute=true`,
++`operator_confirmed=true` and `remote_mutation_enabled=true` only for apply.
++
++## Sequence
++
++```bash
++PYTHONPATH=src:. python tools/run_github_controlled_publication_smoke_0276.py \
++  --command-json /secure/path/command.json \
++  --review-json /secure/path/review.json \
++  --mode plan
++
++PYTHONPATH=src:. python tools/run_github_controlled_publication_smoke_0276.py \
++  --command-json /secure/path/command.json \
++  --review-json /secure/path/review.json \
++  --mode preflight
++
++PYTHONPATH=src:. python tools/run_github_controlled_publication_smoke_0276.py \
++  --command-json /secure/path/command.json \
++  --review-json /secure/path/review.json \
++  --mode apply
++```
++
++Run apply only when preflight reports `status=clear`. Re-running the same command
++must report `idempotent_replay` and perform no second mutation.
+diff --git a/doc/docs/architecture/runtime/276_r4_github_publication_collision_guard.dot b/doc/docs/architecture/runtime/276_r4_github_publication_collision_guard.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/276_r4_github_publication_collision_guard.dot
+@@ -0,0 +1 @@
++digraph GitHubPublicationCollisionGuard0276R4 { Command->Plan; Plan->IssueGET; IssueGET->RevisionCheck; RevisionCheck->StateCheck; StateCheck->MarkerCheck; MarkerCheck->Clear[label="absent and current"]; MarkerCheck->Replay[label="already present"]; RevisionCheck->Conflict[label="stale"]; StateCheck->Blocked[label="closed"]; Clear->Adapter; Adapter->GitHub; Replay->NoMutation; }
+diff --git a/doc/manifests/MANIFEST_0276_R4_GITHUB_PUBLICATION_COLLISION_GUARD_CHANGED_FILES.md b/doc/manifests/MANIFEST_0276_R4_GITHUB_PUBLICATION_COLLISION_GUARD_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0276_R4_GITHUB_PUBLICATION_COLLISION_GUARD_CHANGED_FILES.md
+@@ -0,0 +1,14 @@
++# Manifest — 0276-r4 GitHub publication collision guard
++
++Changed files:
++
++- `src/context/github_publication_collision_guard_0276.py`
++- `tools/run_github_controlled_publication_smoke_0276.py`
++- `tests/context/test_github_publication_collision_guard_0276.py`
++- `tests/tools/test_run_github_controlled_publication_smoke_0276.py`
++- `tests/rules/test_github_publication_collision_guard_0276_rule.py`
++- `doc/architecture/GITHUB_PUBLICATION_COLLISION_GUARD_0276.md`
++- `doc/runbooks/GITHUB_CONTROLLED_PUBLICATION_TEST_0276.md`
++- `doc/docs/architecture/runtime/276_r4_github_publication_collision_guard.dot`
++
++No generated binaries, caches, secrets or local configuration are included.
+diff --git a/doc/CHANGELOG_0276_R4_GITHUB_PUBLICATION_COLLISION_GUARD.md b/doc/CHANGELOG_0276_R4_GITHUB_PUBLICATION_COLLISION_GUARD.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0276_R4_GITHUB_PUBLICATION_COLLISION_GUARD.md
+@@ -0,0 +1,14 @@
++# Changelog — 0276-r4 GitHub publication collision guard
++
++## Added
++
++- added remote revision, state and marker preflight;
++- added idempotent replay and conflict outcomes;
++- added a plan/preflight/apply CLI and live-test runbook.
++
++## Boundaries
++
++- one existing Scheduler only;
++- SQL remains durable authority;
++- GitHub mutation remains closed unless this phase explicitly reaches the guarded adapter;
++- no secret is serialized.
+diff --git a/doc/releases/0276-r4-0276-r4-github-publication-collision-guard.md b/doc/releases/0276-r4-0276-r4-github-publication-collision-guard.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/releases/0276-r4-0276-r4-github-publication-collision-guard.md
+@@ -0,0 +1,7 @@
++# 0276-r4 GitHub publication collision guard
++
++- added remote revision, state and marker preflight;
++- added idempotent replay and conflict outcomes;
++- added a plan/preflight/apply CLI and live-test runbook.
++
++Next: configured disposable-issue GitHub test.
+diff --git a/PHASE0276_R4_GITHUB_PUBLICATION_COLLISION_GUARD_TEST_REPORT.md b/PHASE0276_R4_GITHUB_PUBLICATION_COLLISION_GUARD_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0276_R4_GITHUB_PUBLICATION_COLLISION_GUARD_TEST_REPORT.md
+@@ -0,0 +1,26 @@
++# Phase 0276-r4 test report — 0276-r4 GitHub publication collision guard
++
++## Validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. python -m pytest -q tests/rules
++PYTHONPATH=src:. python -m pytest -q
++```
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++external_dependencies_added: false
++scheduler_created: false
++scheduler_modified: false
++parallel_orchestrator_created: false
++parallel_eventbus_created: false
++parallel_registry_created: false
++github_mutation_performed: false
++collision_guard_required: true
++token_serialized: false
++live_test_performed: false
++```

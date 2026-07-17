@@ -1,0 +1,219 @@
+diff --git a/doc/CHANGELOG_0260_SCHEDULER_MANAGED_DB_API_SQL_CONTEXT_STORE_BINDING.md b/doc/CHANGELOG_0260_SCHEDULER_MANAGED_DB_API_SQL_CONTEXT_STORE_BINDING.md
+index 9cc66dc..43700c4 100644
+--- a/doc/CHANGELOG_0260_SCHEDULER_MANAGED_DB_API_SQL_CONTEXT_STORE_BINDING.md
++++ b/doc/CHANGELOG_0260_SCHEDULER_MANAGED_DB_API_SQL_CONTEXT_STORE_BINDING.md
+@@ -3,3 +3,10 @@
+ ## r1
+ 
+ Adds discovery and binding for the existing DbApiSqlContextStore surface.
++
++## r5
++
++Adapts the Scheduler-managed wrapper to call existing `upsert_record` methods
++with a record-like object when the existing store rejects a raw payload dict.
++This keeps the real `DbApiSqlContextStore` contract intact and still returns a
++`sql_ref` derived from the record `context_ref`.
+diff --git a/src/context/scheduler_managed_sql_context_store_usage_0259.py b/src/context/scheduler_managed_sql_context_store_usage_0259.py
+index 0dfb6db..fdcd369 100644
+--- a/src/context/scheduler_managed_sql_context_store_usage_0259.py
++++ b/src/context/scheduler_managed_sql_context_store_usage_0259.py
+@@ -2,9 +2,11 @@
+ 
+ from __future__ import annotations
+ 
+-from dataclasses import dataclass, field
++from dataclasses import asdict, dataclass, field, is_dataclass
++import inspect
+ import json
+ from pathlib import Path
++from types import SimpleNamespace
+ from typing import Any, Mapping, Protocol
+ import uuid
+ 
+@@ -52,7 +54,7 @@ class SchedulerManagedSqlContextWriteRequest:
+ 
+ 
+ def _extract_sql_ref(result: Mapping[str, Any]) -> str:
+-    for key in ("sql_ref", "record_ref", "record_id", "id"):
++    for key in ("sql_ref", "record_ref", "record_id", "context_ref", "id"):
+         value = result.get(key)
+         if value:
+             return str(value)
+@@ -62,24 +64,138 @@ def _extract_sql_ref(result: Mapping[str, Any]) -> str:
+     return ""
+ 
+ 
++def _public_record_mapping(record: object) -> dict[str, Any]:
++    """Return a serialisable public mapping for a SQL record-like object."""
++
++    if isinstance(record, Mapping):
++        return dict(record)
++    if is_dataclass(record) and not isinstance(record, type):
++        return dict(asdict(record))
++    public: dict[str, Any] = {}
++    for name in (
++        "context_ref",
++        "record_ref",
++        "record_id",
++        "id",
++        "content",
++        "text",
++        "text_kind",
++        "source_ref",
++        "metadata",
++    ):
++        if hasattr(record, name):
++            value = getattr(record, name)
++            if isinstance(value, Mapping):
++                value = dict(value)
++            public[name] = value
++    return public
++
++
++def _store_result_to_mapping(result: object) -> Mapping[str, Any]:
++    """Normalise existing store results into a mapping for sql_ref extraction."""
++
++    if isinstance(result, Mapping):
++        return dict(result)
++    record = _public_record_mapping(result)
++    if record:
++        sql_ref = (
++            record.get("sql_ref")
++            or record.get("record_ref")
++            or record.get("record_id")
++            or record.get("context_ref")
++            or record.get("id")
++            or ""
++        )
++        return {"sql_ref": str(sql_ref) if sql_ref else "", "record": record}
++    return {"result": result}
++
++
++def _record_field_values_from_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
++    """Build common field values for an existing SQLContextStore record object."""
++
++    metadata = dict(payload.get("metadata", {}))
++    context_ref = str(
++        metadata.get("context_ref")
++        or payload.get("context_ref")
++        or payload.get("intent_id")
++        or uuid.uuid4().hex
++    )
++    text = str(payload.get("text", ""))
++    return {
++        "context_ref": context_ref,
++        "record_ref": context_ref,
++        "record_id": context_ref,
++        "id": context_ref,
++        "content": text,
++        "text": text,
++        "body": text,
++        "text_kind": str(payload.get("text_kind", "passage")),
++        "kind": str(payload.get("text_kind", "passage")),
++        "source_ref": str(payload.get("source_ref", "")),
++        "metadata": metadata,
++        "payload": dict(payload),
++    }
++
++
++def _construct_record_class(record_class: type[Any], values: Mapping[str, Any]) -> object:
++    """Construct an existing record class using only accepted constructor fields."""
++
++    signature = inspect.signature(record_class)
++    kwargs: dict[str, Any] = {}
++    for name, parameter in signature.parameters.items():
++        if name == "self":
++            continue
++        if parameter.kind in (parameter.VAR_POSITIONAL, parameter.VAR_KEYWORD):
++            continue
++        if name in values:
++            kwargs[name] = values[name]
++        elif parameter.default is inspect.Signature.empty:
++            if "ref" in name or name.endswith("_id"):
++                kwargs[name] = values["context_ref"]
++            elif "content" in name or name in {"text", "body"}:
++                kwargs[name] = values["content"]
++            elif "kind" in name:
++                kwargs[name] = values["text_kind"]
++            elif "metadata" in name:
++                kwargs[name] = values["metadata"]
++    return record_class(**kwargs)
++
++
++def _build_existing_store_record(store: object, payload: Mapping[str, Any]) -> object:
++    """Build a record object for existing DbApiSqlContextStore.upsert_record."""
++
++    values = _record_field_values_from_payload(payload)
++    store_module = inspect.getmodule(store.__class__)
++    for name in (
++        "SqlContextRecord",
++        "ContextRecord",
++        "DbApiSqlContextRecord",
++        "SQLContextRecord",
++    ):
++        record_class = getattr(store_module, name, None) if store_module is not None else None
++        if inspect.isclass(record_class):
++            try:
++                return _construct_record_class(record_class, values)
++            except TypeError:
++                continue
++    return SimpleNamespace(**values)
++
++
+ def _call_existing_store(store: object, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+     """Call an existing SQLContextStore-like object without knowing its class."""
+ 
+     controlled_write = getattr(store, "controlled_write", None)
+     if callable(controlled_write):
+         result = controlled_write(payload)
+-        return dict(result) if isinstance(result, Mapping) else {"result": result}
++        return _store_result_to_mapping(result)
+ 
+     upsert_record = getattr(store, "upsert_record", None)
+     if callable(upsert_record):
+         try:
+             result = upsert_record(payload)
+-        except TypeError:
+-            result = upsert_record(
+-                record_id=payload.get("intent_id"),
+-                content=payload.get("text"),
+-                metadata=dict(payload.get("metadata", {})),
+-            )
+-        return dict(result) if isinstance(result, Mapping) else {"result": result}
++        except (AttributeError, TypeError):
++            record = _build_existing_store_record(store, payload)
++            result = upsert_record(record)
++        return _store_result_to_mapping(result)
+ 
+     raise TypeError("existing SQLContextStore object must expose controlled_write or upsert_record")
+diff --git a/tests/context/test_scheduler_managed_sql_context_store_usage_0259.py b/tests/context/test_scheduler_managed_sql_context_store_usage_0259.py
+index 5ea6adc..ed5f7d5 100644
+--- a/tests/context/test_scheduler_managed_sql_context_store_usage_0259.py
++++ b/tests/context/test_scheduler_managed_sql_context_store_usage_0259.py
+@@ -14,3 +14,26 @@ class ExistingStore:
+ def test_existing_store_controlled_write() -> None:
+     result = _call_existing_store(ExistingStore(), {"intent_id": "intent:test", "text": "hello", "metadata": {}})
+     assert result["sql_ref"] == "sql:test/intent:test"
++
++
++class UpsertRecordStore:
++    def upsert_record(self, record):
++        assert record.context_ref == "intent:record"
++        assert record.content == "payload text"
++        return record
++
++
++def test_existing_store_upsert_record_accepts_record_object() -> None:
++    result = _call_existing_store(
++        UpsertRecordStore(),
++        {
++            "intent_id": "intent:record",
++            "text": "payload text",
++            "text_kind": "passage",
++            "source_ref": "test",
++            "metadata": {},
++        },
++    )
++
++    assert result["sql_ref"] == "intent:record"
++    assert result["record"]["context_ref"] == "intent:record"

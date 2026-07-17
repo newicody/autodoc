@@ -1,0 +1,473 @@
+diff --git a/PHASE0279_R1_COPILOT_ADVISORY_RESPONSE_EXTRACTION_REPORT.md b/PHASE0279_R1_COPILOT_ADVISORY_RESPONSE_EXTRACTION_REPORT.md
+new file mode 100644
+index 0000000..a99bba3
+--- /dev/null
++++ b/PHASE0279_R1_COPILOT_ADVISORY_RESPONSE_EXTRACTION_REPORT.md
+@@ -0,0 +1,40 @@
++# Phase 0279-r1 report — Copilot advisory response extraction
++
++Scope: make the existing optional GitHub Copilot advisory adapter consume the
++CLI structured JSONL response and produce the third dual-artifact output.
++
++Validation commands:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q templates/github/scripts tests/tools
++PYTHONPATH=src:. pytest -q \
++  tests/tools/test_github_copilot_advisory_response_extraction_0279.py \
++  tests/rules/test_copilot_advisory_response_extraction_0279_rule.py \
++  tests/rules/test_github_dual_artifact_actions_workflow_0275_rule.py \
++  tests/tools/test_github_copilot_advisory_optional_0277.py
++```
++
++Expected live validation:
++
++```text
++autodoc-authoritative-request
++autodoc-copilot-advisory
++autodoc-dual-artifact-manifest
++```
++
++Phase review:
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: existing adapter and effect-boundary rules already cover the change
++live_path_status: transition
++live_path_uses_real_backend: true
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++stdlib_only: true
++scheduler_modified: false
++scheduler_run_modified: false
++graph_update_required: false
++```
+diff --git a/doc/architecture/GITHUB_COPILOT_ADVISORY_RESPONSE_EXTRACTION_0279.md b/doc/architecture/GITHUB_COPILOT_ADVISORY_RESPONSE_EXTRACTION_0279.md
+new file mode 100644
+index 0000000..2c3c38f
+--- /dev/null
++++ b/doc/architecture/GITHUB_COPILOT_ADVISORY_RESPONSE_EXTRACTION_0279.md
+@@ -0,0 +1,41 @@
++# GitHub Copilot advisory response extraction — 0279
++
++## Problem
++
++The GitHub Copilot CLI completed successfully in the controlled research
++workflow, but the advisory script rejected its output as `invalid_response`.
++The script assumed that stdout was directly the business JSON object, while the
++CLI now exposes a structured JSONL transport with one JSON object per line.
++
++## Decision
++
++The existing advisory adapter now requests `--output-format=json` with
++`--stream=off`. It scans the JSONL event tree for a response containing the
++strict advisory contract. Direct JSON, fenced JSON, and a single JSON object
++surrounded by short explanatory text remain accepted for compatibility.
++
++The validated advisory contract remains:
++
++```text
++summary: string
++suggested_route: string
++assumptions: list[string]
++questions: list[string]
++risks: list[string]
++confidence: number in [0, 1]
++```
++
++The response digest is computed from canonical validated advisory JSON rather
++than transport metadata. Repeated JSONL event metadata therefore does not alter
++the artifact identity.
++
++## Security and authority boundaries
++
++- the authoritative GitHub request remains the only authority;
++- Copilot output remains `trusted=false` and `usable_as_authority=false`;
++- read, write, shell, URL, and memory tools are denied;
++- custom repository instructions are disabled for this bounded advisory;
++- stdout and stderr content are not copied into failure artifacts;
++- no Issue, ProjectV2, SQL, Qdrant, Scheduler, or `Scheduler.run()` mutation is
++  introduced;
++- no non-stdlib dependency is introduced.
+diff --git a/doc/manifests/MANIFEST_0279_R1_COPILOT_ADVISORY_RESPONSE_EXTRACTION.md b/doc/manifests/MANIFEST_0279_R1_COPILOT_ADVISORY_RESPONSE_EXTRACTION.md
+new file mode 100644
+index 0000000..102ff7b
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0279_R1_COPILOT_ADVISORY_RESPONSE_EXTRACTION.md
+@@ -0,0 +1,13 @@
++# Manifest 0279-r1 — Copilot advisory response extraction
++
++Changed files:
++
++- `templates/github/scripts/run_autodoc_copilot_advisory.py`
++- `tests/tools/test_github_copilot_advisory_response_extraction_0279.py`
++- `tests/rules/test_copilot_advisory_response_extraction_0279_rule.py`
++- `doc/architecture/GITHUB_COPILOT_ADVISORY_RESPONSE_EXTRACTION_0279.md`
++- `doc/manifests/MANIFEST_0279_R1_COPILOT_ADVISORY_RESPONSE_EXTRACTION.md`
++- `PHASE0279_R1_COPILOT_ADVISORY_RESPONSE_EXTRACTION_REPORT.md`
++
++No Scheduler, SQL, Qdrant, ProjectV2 mutation, generated SVG, or external Python
++dependency is added.
+diff --git a/templates/github/scripts/run_autodoc_copilot_advisory.py b/templates/github/scripts/run_autodoc_copilot_advisory.py
+--- a/templates/github/scripts/run_autodoc_copilot_advisory.py
++++ b/templates/github/scripts/run_autodoc_copilot_advisory.py
+@@ -9,2 +9,3 @@ import hashlib
+ import json
++import math
+ import os
+@@ -12,3 +13,3 @@ import subprocess
+ import sys
+-from typing import Any
++from typing import Any, Iterator
+ 
+@@ -58,2 +59,108 @@ def parse(text: str) -> dict[str, Any]:
+ 
++def _validate_advisory(payload: dict[str, Any]) -> dict[str, Any]:
++    for key in ("summary", "suggested_route"):
++        if not isinstance(payload[key], str):
++            raise ValueError(f"Copilot response {key} must be a string")
++
++    for key in ("assumptions", "questions", "risks"):
++        values = payload[key]
++        if not all(isinstance(value, str) for value in values):
++            raise ValueError(
++                f"Copilot response {key} entries must be strings"
++            )
++
++    raw_confidence = payload["confidence"]
++    if isinstance(raw_confidence, bool):
++        raise ValueError("Copilot response confidence must be numeric")
++
++    confidence = float(raw_confidence)
++    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
++        raise ValueError(
++            "Copilot response confidence must be between 0 and 1"
++        )
++
++    normalized = dict(payload)
++    normalized["confidence"] = confidence
++    return normalized
++
++
++def _walk_json(value: object) -> Iterator[object]:
++    yield value
++    if isinstance(value, dict):
++        preferred = ("content", "message", "text", "response", "value")
++        for key in preferred:
++            if key in value:
++                yield from _walk_json(value[key])
++        for key, child in value.items():
++            if key not in preferred:
++                yield from _walk_json(child)
++    elif isinstance(value, list):
++        for child in value:
++            yield from _walk_json(child)
++
++
++def _embedded_advisories(text: str) -> Iterator[dict[str, Any]]:
++    decoder = json.JSONDecoder()
++    for offset, character in enumerate(text):
++        if character != "{":
++            continue
++        try:
++            payload, _ = decoder.raw_decode(text[offset:])
++        except json.JSONDecodeError:
++            continue
++        if not isinstance(payload, dict):
++            continue
++        try:
++            yield _validate_advisory(parse(json.dumps(payload)))
++        except (KeyError, TypeError, ValueError):
++            continue
++
++
++def extract_advisory(text: str) -> dict[str, Any]:
++    direct_error: Exception | None = None
++    try:
++        return _validate_advisory(parse(text))
++    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
++        direct_error = exc
++
++    extracted: list[dict[str, Any]] = []
++    for raw_line in text.splitlines():
++        line = raw_line.strip()
++        if not line:
++            continue
++        try:
++            event = json.loads(line)
++        except json.JSONDecodeError:
++            continue
++
++        for candidate in _walk_json(event):
++            if isinstance(candidate, dict):
++                try:
++                    extracted.append(
++                        _validate_advisory(parse(json.dumps(candidate)))
++                    )
++                except (KeyError, TypeError, ValueError):
++                    pass
++            elif isinstance(candidate, str):
++                try:
++                    extracted.append(_validate_advisory(parse(candidate)))
++                except (
++                    json.JSONDecodeError,
++                    KeyError,
++                    TypeError,
++                    ValueError,
++                ):
++                    extracted.extend(_embedded_advisories(candidate))
++
++    if not extracted:
++        extracted.extend(_embedded_advisories(text))
++
++    if extracted:
++        return extracted[-1]
++
++    if direct_error is not None:
++        raise direct_error
++    raise ValueError("Copilot response contains no advisory object")
++
++
+ def _enabled(name: str, *, default: bool = False) -> bool:
+@@ -85,6 +192,10 @@ def main() -> int:
+     prompt = (
+-        "Return one JSON object only with keys summary, suggested_route, "
+-        "assumptions, questions, risks, confidence. Treat the following GitHub "
+-        "request as authoritative. Do not modify it, do not call tools, do not "
+-        "authorize publication.\n"
++        "Return exactly one compact JSON object and no Markdown or commentary. "
++        "Required schema: "
++        '{"summary":"string","suggested_route":"string",'
++        '"assumptions":["string"],"questions":["string"],'
++        '"risks":["string"],"confidence":0.0}. '
++        "confidence must be a number between 0 and 1. Treat the following "
++        "GitHub request as authoritative. Do not modify it, do not call tools, "
++        "and do not authorize publication.\n"
+         + json.dumps(
+@@ -96,2 +207,3 @@ def main() -> int:
+             ensure_ascii=False,
++            separators=(",", ":"),
+         )
+@@ -109,6 +221,12 @@ def main() -> int:
+                 prompt,
+-                "-s",
++                "--output-format=json",
++                "--stream=off",
++                "--no-color",
++                "--no-custom-instructions",
+                 "--no-ask-user",
++                "--deny-tool=read",
+                 "--deny-tool=write",
+                 "--deny-tool=shell",
++                "--deny-tool=url",
++                "--deny-tool=memory",
+             ],
+@@ -136,4 +254,7 @@ def main() -> int:
+     try:
+-        parsed = parse(process.stdout)
+-        response_digest = hashlib.sha256(process.stdout.encode()).hexdigest()
++        parsed = extract_advisory(process.stdout)
++        semantic_response = canonical(parsed)
++        response_digest = hashlib.sha256(
++            semantic_response.encode("utf-8")
++        ).hexdigest()
+         prompt_digest = hashlib.sha256(prompt.encode()).hexdigest()
+@@ -150,4 +271,4 @@ def main() -> int:
+             "response_digest": response_digest,
+-            "summary": str(parsed["summary"]),
+-            "suggested_route": str(parsed["suggested_route"]),
++            "summary": parsed["summary"],
++            "suggested_route": parsed["suggested_route"],
+             "assumptions": list(parsed["assumptions"]),
+@@ -155,3 +276,3 @@ def main() -> int:
+             "risks": list(parsed["risks"]),
+-            "confidence": float(parsed["confidence"]),
++            "confidence": parsed["confidence"],
+             "producer_kind": "github_copilot_cli",
+diff --git a/tests/rules/test_copilot_advisory_response_extraction_0279_rule.py b/tests/rules/test_copilot_advisory_response_extraction_0279_rule.py
+new file mode 100644
+index 0000000..494d2fe
+--- /dev/null
++++ b/tests/rules/test_copilot_advisory_response_extraction_0279_rule.py
+@@ -0,0 +1,24 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++SCRIPT = ROOT / "templates/github/scripts/run_autodoc_copilot_advisory.py"
++
++
++def test_copilot_advisory_uses_jsonl_transport_and_semantic_digest() -> None:
++    text = SCRIPT.read_text(encoding="utf-8")
++
++    for marker in (
++        "extract_advisory",
++        '"--output-format=json"',
++        '"--stream=off"',
++        "semantic_response = canonical(parsed)",
++        '"usable_as_authority": False',
++    ):
++        assert marker in text
++
++    for forbidden in (
++        "COPILOT_GITHUB_TOKEN",
++        "check=True",
++        "process.stderr",
++    ):
++        assert forbidden not in text
+diff --git a/tests/tools/test_github_copilot_advisory_response_extraction_0279.py b/tests/tools/test_github_copilot_advisory_response_extraction_0279.py
+new file mode 100644
+index 0000000..a40d3ea
+--- /dev/null
++++ b/tests/tools/test_github_copilot_advisory_response_extraction_0279.py
+@@ -0,0 +1,149 @@
++from __future__ import annotations
++
++from importlib.util import module_from_spec, spec_from_file_location
++from pathlib import Path
++
++import json
++import os
++import subprocess
++import sys
++
++ROOT = Path(__file__).resolve().parents[2]
++SCRIPT = ROOT / "templates/github/scripts/run_autodoc_copilot_advisory.py"
++
++
++def _load_module():
++    spec = spec_from_file_location("copilot_advisory_0279", SCRIPT)
++    assert spec is not None and spec.loader is not None
++    module = module_from_spec(spec)
++    spec.loader.exec_module(module)
++    return module
++
++
++def _advisory() -> dict[str, object]:
++    return {
++        "summary": "Advisory summary",
++        "suggested_route": "research",
++        "assumptions": ["Issue content is authoritative"],
++        "questions": [],
++        "risks": ["advisory_only"],
++        "confidence": 0.75,
++    }
++
++
++def _request() -> dict[str, object]:
++    return {
++        "origin_frame_id": "github-frame:newicody/projects:15:test",
++        "ticket_revision_id": "github-ticket-revision:test",
++        "artifact_ref": "github-request:newicody/projects:15:test",
++        "title": "Research request",
++        "body": "Analyze the requested topic.",
++        "labels": ["research"],
++    }
++
++
++def _fake_copilot(path: Path, stdout: str) -> Path:
++    path.write_text(
++        "#!/usr/bin/env python3\n"
++        "import sys\n"
++        f"sys.stdout.write({stdout!r})\n",
++        encoding="utf-8",
++    )
++    path.chmod(0o755)
++    return path
++
++
++def test_extracts_advisory_from_jsonl_assistant_message() -> None:
++    module = _load_module()
++    advisory = _advisory()
++    stdout = "\n".join(
++        (
++            json.dumps({"type": "session.start", "data": {"id": "s1"}}),
++            json.dumps(
++                {
++                    "type": "assistant.message",
++                    "data": {"content": json.dumps(advisory)},
++                }
++            ),
++        )
++    )
++
++    assert module.extract_advisory(stdout) == advisory
++
++
++def test_extracts_fenced_or_surrounded_advisory() -> None:
++    module = _load_module()
++    advisory = _advisory()
++    fenced = "```json\n" + json.dumps(advisory) + "\n```"
++    surrounded = "Result follows:\n" + json.dumps(advisory) + "\nDone."
++
++    assert module.extract_advisory(fenced) == advisory
++    assert module.extract_advisory(surrounded) == advisory
++
++
++def test_rejects_invalid_advisory_types_and_confidence() -> None:
++    module = _load_module()
++    invalid_list = _advisory() | {"risks": "not-a-list"}
++    invalid_confidence = _advisory() | {"confidence": 2.0}
++
++    for payload in (invalid_list, invalid_confidence):
++        try:
++            module.extract_advisory(json.dumps(payload))
++        except (TypeError, ValueError):
++            pass
++        else:
++            raise AssertionError("invalid advisory was accepted")
++
++
++def test_jsonl_cli_response_builds_advisory_artifact(tmp_path: Path) -> None:
++    advisory = _advisory()
++    jsonl = json.dumps(
++        {
++            "type": "assistant.message",
++            "data": {"content": json.dumps(advisory)},
++        }
++    ) + "\n"
++    command = _fake_copilot(tmp_path / "copilot", jsonl)
++    request_path = tmp_path / "request.json"
++    output_path = tmp_path / "advisory.json"
++    request_path.write_text(json.dumps(_request()), encoding="utf-8")
++
++    env = os.environ.copy()
++    env.update(
++        {
++            "AUTODOC_REQUEST": str(request_path),
++            "AUTODOC_ADVISORY": str(output_path),
++            "AUTODOC_COPILOT_COMMAND": str(command),
++            "AUTODOC_COPILOT_REQUIRED": "true",
++        }
++    )
++    result = subprocess.run(
++        [sys.executable, str(SCRIPT)],
++        env=env,
++        capture_output=True,
++        text=True,
++        check=False,
++    )
++
++    assert result.returncode == 0, result.stderr
++    payload = json.loads(output_path.read_text(encoding="utf-8"))
++    assert payload["summary"] == advisory["summary"]
++    assert payload["confidence"] == 0.75
++    assert payload["trusted"] is False
++    assert payload["usable_as_authority"] is False
++
++
++def test_cli_uses_structured_transport_and_denies_tools() -> None:
++    text = SCRIPT.read_text(encoding="utf-8")
++    for marker in (
++        '"--output-format=json"',
++        '"--stream=off"',
++        '"--no-color"',
++        '"--no-custom-instructions"',
++        '"--deny-tool=read"',
++        '"--deny-tool=write"',
++        '"--deny-tool=shell"',
++        '"--deny-tool=url"',
++        '"--deny-tool=memory"',
++    ):
++        assert marker in text

@@ -1,0 +1,805 @@
+diff --git a/PHASE0271_QDRANT_CLIENT_LIVE_PROJECTION_RECALL_BINDING_TEST_REPORT.md b/PHASE0271_QDRANT_CLIENT_LIVE_PROJECTION_RECALL_BINDING_TEST_REPORT.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..b08f4dd0656ffcd9fa851331fd63969495768ed2
+--- /dev/null
++++ b/PHASE0271_QDRANT_CLIENT_LIVE_PROJECTION_RECALL_BINDING_TEST_REPORT.md
+@@ -0,0 +1,22 @@
++# Phase 0271-r3 test report
++
++## Scope
++
++Bind the 0271-r2 `qdrant-client` executor into the existing 0262/0263 tools and
++expose an explicit live Qdrant mode in the existing 0269 composition.
++
++## Construction validation
++
++- Python compileall: passed
++- targeted context/rule tests: 16 passed
++- full repository suite: to be executed in the operator repository
++- Graphviz parse: passed
++
++## Boundary result
++
++- SQL remains authority: yes
++- Qdrant started by Scheduler: no
++- SHM modified or accessed: no
++- API-key value serialized: no
++- new manager/orchestrator: no
++- existing demo mode preserved: yes
+diff --git a/doc/CHANGELOG_0271_QDRANT_CLIENT_LIVE_PROJECTION_RECALL_BINDING.md b/doc/CHANGELOG_0271_QDRANT_CLIENT_LIVE_PROJECTION_RECALL_BINDING.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..0ab815cb87e18f51e575ae540510ad64d1228c54
+--- /dev/null
++++ b/doc/CHANGELOG_0271_QDRANT_CLIENT_LIVE_PROJECTION_RECALL_BINDING.md
+@@ -0,0 +1,9 @@
++# Changelog — 0271-r3 qdrant-client live projection/recall binding
++
++- Extended the existing 0262 projection CLI with a gated `qdrant-client` live
++  mode.
++- Extended the existing 0263 recall/SQL-rehydrate CLI with a gated live mode.
++- Extended the existing 0269 one-shot composition with mutually exclusive demo
++  and live Qdrant modes.
++- Added secret-safe connection argument propagation and live proof checks.
++- Kept SQL authority, OpenRC service ownership and SHM boundaries unchanged.
+diff --git a/doc/architecture/QDRANT_CLIENT_LIVE_PROJECTION_RECALL_BINDING_0271.md b/doc/architecture/QDRANT_CLIENT_LIVE_PROJECTION_RECALL_BINDING_0271.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..000702865e1c3f735f242c6f2a0eddb53a06dc09
+--- /dev/null
++++ b/doc/architecture/QDRANT_CLIENT_LIVE_PROJECTION_RECALL_BINDING_0271.md
+@@ -0,0 +1,47 @@
++# Qdrant-client live projection and recall binding — 0271-r3
++
++## Decision
++
++Reuse the existing `QdrantProjectionExecutor` protocol and the concrete
++`QdrantClientProjectionExecutor` added by 0271-r2.  The existing 0262 and 0263
++CLI boundaries now accept a mutually exclusive live opt-in in addition to their
++historical demo executors.
++
++## Live path
++
++```text
++0261 embedding report
++  -> 0262 existing projection use case
++  -> QdrantClientProjectionExecutor (write gate)
++  -> existing Qdrant service
++  -> 0263 existing recall use case
++  -> QdrantClientProjectionExecutor (search gate)
++  -> sql_ref hits
++  -> existing SQLiteSqlContextStore rehydrate
++```
++
++Qdrant remains a reconstructible projection. SQL remains the durable authority.
++The server must already be running under OpenRC/OS/admin responsibility.
++
++## Operator gates
++
++Live execution requires:
++
++- `--execute`;
++- a `policy_decision_id` beginning with `policy:`;
++- `--live-qdrant`;
++- an injected URL, timeout, optional gRPC preference and API-key environment
++  variable name.
++
++The API-key value is read from the environment only inside the IO CLI and is
++never written to reports or child process arguments.
++
++## Boundaries
++
++- no collection creation;
++- no Qdrant daemon start;
++- no PostgreSQL or OpenVINO start;
++- no SHM, RouteProxy or ControlProxy modification;
++- no Scheduler loop modification;
++- no manager or orchestrator;
++- demo mode remains available for deterministic local regression tests.
+diff --git a/doc/code-rules/0271_qdrant_client_live_projection_recall_binding_rule.md b/doc/code-rules/0271_qdrant_client_live_projection_recall_binding_rule.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..99ce6a60ef802aa69546ddd43ca4ac56f8f00914
+--- /dev/null
++++ b/doc/code-rules/0271_qdrant_client_live_projection_recall_binding_rule.md
+@@ -0,0 +1,18 @@
++# Rule 0271 — qdrant-client live projection/recall binding
++
++1. The live path must implement the existing QdrantProjectionExecutor boundary;
++   it must not introduce a second Qdrant manager, worker or orchestrator.
++2. Live Qdrant is an explicit live opt-in and is mutually exclusive with demo
++   Qdrant.
++3. Projection requires a write-only effect gate; recall requires a search-only
++   effect gate. Both require a typed `policy_decision_id`.
++4. SQL remains the durable authority. Qdrant hits must carry `sql_ref` and are
++   rehydrated from the existing SQL context store.
++5. OpenRC/OS/admin starts Qdrant. Scheduler and these CLIs never start or install
++   services.
++6. API-key values must not appear in command-line arguments, reports, manifests
++   or logs. Only the environment-variable name may be serialized.
++7. The live path does not read or write SHM and does not modify RouteProxy,
++   ControlProxy or the Scheduler loop.
++8. Collection creation and schema migration remain separate readiness/admin
++   concerns.
+diff --git a/doc/docs/architecture/runtime/271_qdrant_client_live_projection_recall_binding.dot b/doc/docs/architecture/runtime/271_qdrant_client_live_projection_recall_binding.dot
+new file mode 100644
+index 0000000000000000000000000000000000000000..8c467ec5f92ade970f301c6368e507ead3fff84e
+--- /dev/null
++++ b/doc/docs/architecture/runtime/271_qdrant_client_live_projection_recall_binding.dot
+@@ -0,0 +1,16 @@
++digraph qdrant_client_live_projection_recall_binding_0271 {
++  rankdir=LR;
++  node [shape=box];
++  embedding [label="0261 embedding report"];
++  projection [label="0262 existing projection use case"];
++  executor_write [label="QdrantClientProjectionExecutor\nwrite gate"];
++  qdrant [label="Qdrant service\nOpenRC/admin owned"];
++  executor_search [label="QdrantClientProjectionExecutor\nsearch gate"];
++  recall [label="0263 existing recall use case"];
++  sql [label="SQL context store\ndurable authority"];
++  shm [label="SHM data-plane\nunchanged", style=dashed];
++
++  embedding -> projection -> executor_write -> qdrant;
++  qdrant -> executor_search -> recall -> sql [label="sql_ref rehydrate"];
++  shm -> projection [style=dashed, label="no access"];
++}
+diff --git a/doc/manifests/MANIFEST_0271_QDRANT_CLIENT_LIVE_PROJECTION_RECALL_BINDING_CHANGED_FILES.md b/doc/manifests/MANIFEST_0271_QDRANT_CLIENT_LIVE_PROJECTION_RECALL_BINDING_CHANGED_FILES.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..64951eb9ec7c0236f9022f29926d1ce713062621
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0271_QDRANT_CLIENT_LIVE_PROJECTION_RECALL_BINDING_CHANGED_FILES.md
+@@ -0,0 +1,20 @@
++# Manifest — 0271-r3 qdrant-client live projection/recall binding
++
++## Modified existing surfaces
++
++- `tools/run_scheduler_managed_embedding_qdrant_projection_0262.py`
++- `tools/run_scheduler_managed_qdrant_recall_sql_rehydrate_0263.py`
++- `src/context/production_prototype_smoke_composition_0269.py`
++- `tools/run_production_prototype_smoke_composition_0269.py`
++
++## Added phase surfaces
++
++- `tests/context/test_qdrant_client_live_projection_recall_binding_0271.py`
++- `tests/rules/test_qdrant_client_live_projection_recall_binding_0271_rule.py`
++- `doc/architecture/QDRANT_CLIENT_LIVE_PROJECTION_RECALL_BINDING_0271.md`
++- `doc/code-rules/0271_qdrant_client_live_projection_recall_binding_rule.md`
++- `doc/CHANGELOG_0271_QDRANT_CLIENT_LIVE_PROJECTION_RECALL_BINDING.md`
++- `doc/docs/architecture/runtime/271_qdrant_client_live_projection_recall_binding.dot`
++- `PHASE0271_QDRANT_CLIENT_LIVE_PROJECTION_RECALL_BINDING_TEST_REPORT.md`
++
++No Scheduler, SHM, service manager or collection-creation surface is changed.
+diff --git a/src/context/production_prototype_smoke_composition_0269.py b/src/context/production_prototype_smoke_composition_0269.py
+index cfca0d468f3fa09887a35d50de501183342cc75d..24ec49c339157920fecb15424bde6f314e8fe7e7 100644
+--- a/src/context/production_prototype_smoke_composition_0269.py
++++ b/src/context/production_prototype_smoke_composition_0269.py
+@@ -55,6 +55,13 @@ class ProductionPrototypeSmokeCommand:
+     demo_embedding: bool = False
+     demo_eventbus: bool = False
+     demo_qdrant: bool = False
++    live_qdrant: bool = False
++    qdrant_url: str = "http://127.0.0.1:6333"
++    qdrant_collection: str = "autodoc_context_embeddings"
++    qdrant_timeout_seconds: float = 10.0
++    qdrant_prefer_grpc: bool = False
++    qdrant_grpc_port: int = 6334
++    qdrant_api_key_env: str = "QDRANT_API_KEY"
+ 
+     def issues(self, policy: ProductionPrototypeSmokePolicy) -> tuple[str, ...]:
+         issues: list[str] = []
+@@ -64,10 +71,21 @@ class ProductionPrototypeSmokeCommand:
+             issues.append("repository is required")
+         if self.execute and policy.require_policy_decision_id and not self.policy_decision_id.strip():
+             issues.append("execute requires policy_decision_id")
+-        if self.execute and policy.require_explicit_demo_qdrant and not self.demo_qdrant:
+-            issues.append(
+-                "execute currently requires explicit demo_qdrant because 0262/0263 expose no real Qdrant executor"
+-            )
++        if self.demo_qdrant and self.live_qdrant:
++            issues.append("demo_qdrant and live_qdrant are mutually exclusive")
++        if self.execute and policy.require_explicit_demo_qdrant and not (self.demo_qdrant or self.live_qdrant):
++            issues.append("execute requires explicit demo_qdrant or live_qdrant")
++        if self.live_qdrant:
++            if not self.qdrant_url.startswith(("http://", "https://")):
++                issues.append("live_qdrant requires an http(s) qdrant_url")
++            if not self.qdrant_collection.strip():
++                issues.append("qdrant_collection must not be empty")
++            if self.qdrant_timeout_seconds <= 0:
++                issues.append("qdrant_timeout_seconds must be > 0")
++            if not 1 <= self.qdrant_grpc_port <= 65535:
++                issues.append("qdrant_grpc_port must be between 1 and 65535")
++            if not self.qdrant_api_key_env.strip():
++                issues.append("qdrant_api_key_env must not be empty")
+         return tuple(issues)
+ 
+ 
+@@ -174,6 +192,7 @@ class ProductionPrototypeSmokeResult:
+             "outcomes": [outcome.to_mapping() for outcome in self.outcomes],
+             "references": self.references(),
+             "checks": checks,
++            "qdrant_mode": "live" if any(value for key, value in checks.items() if key in {"qdrant_projection_live", "qdrant_recall_live"}) else ("demo" if self.execute else "plan"),
+             "boundaries": {
+                 "scheduler_starts_external_services": self.policy.scheduler_starts_external_services,
+                 "remote_github_mutation_allowed": self.policy.remote_github_mutation_allowed,
+@@ -242,6 +261,24 @@ def build_production_prototype_smoke_plan(
+     if command.demo_qdrant:
+         execute_0262.append("--demo-qdrant")
+         execute_0263.append("--demo-qdrant")
++    if command.live_qdrant:
++        live_args = [
++            "--live-qdrant",
++            "--qdrant-url",
++            command.qdrant_url,
++            "--collection",
++            command.qdrant_collection,
++            "--qdrant-timeout-seconds",
++            str(command.qdrant_timeout_seconds),
++            "--qdrant-grpc-port",
++            str(command.qdrant_grpc_port),
++            "--qdrant-api-key-env",
++            command.qdrant_api_key_env,
++        ]
++        if command.qdrant_prefer_grpc:
++            live_args.append("--qdrant-prefer-grpc")
++        execute_0262.extend(live_args)
++        execute_0263.extend(live_args)
+ 
+     model_args: list[str] = []
+     if command.model_dir is not None:
+@@ -485,6 +522,10 @@ def run_production_prototype_smoke(
+         for name in REQUIRED_FALSE_CHECKS:
+             if checks.get(name) is not False:
+                 issues.append(f"required false boundary check failed or missing: {name}")
++        if command.live_qdrant:
++            for name in ("qdrant_projection_live", "qdrant_recall_live"):
++                if checks.get(name) is not True:
++                    issues.append(f"required live Qdrant check failed or missing: {name}")
+ 
+     valid = not issues and len(outcomes) == len(plan) and all(outcome.valid for outcome in outcomes)
+     return ProductionPrototypeSmokeResult(
+diff --git a/tests/context/test_qdrant_client_live_projection_recall_binding_0271.py b/tests/context/test_qdrant_client_live_projection_recall_binding_0271.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..61829dda65c47c1f64c0b083a23444e6e84db576
+--- /dev/null
++++ b/tests/context/test_qdrant_client_live_projection_recall_binding_0271.py
+@@ -0,0 +1,91 @@
++from pathlib import Path
++
++from context.production_prototype_smoke_composition_0269 import (
++    ProductionPrototypeSmokeCommand,
++    ProductionPrototypeStepOutcome,
++    build_production_prototype_smoke_plan,
++    run_production_prototype_smoke,
++)
++
++
++def _command(tmp_path: Path) -> ProductionPrototypeSmokeCommand:
++    return ProductionPrototypeSmokeCommand(
++        repo_root=tmp_path,
++        python_executable="python",
++        bootstrap_report=tmp_path / "bootstrap.json",
++        database_path=tmp_path / "store.sqlite3",
++        reports_dir=tmp_path / "reports",
++        openrc_script_output=tmp_path / "autodoc-local-runtime.openrc",
++        execute=True,
++        policy_decision_id="policy:0271:live-test",
++        live_qdrant=True,
++        qdrant_url="http://127.0.0.1:6333",
++        qdrant_collection="autodoc_live_test",
++        qdrant_timeout_seconds=7.0,
++        qdrant_prefer_grpc=True,
++        qdrant_grpc_port=6334,
++        qdrant_api_key_env="AUTODOC_TEST_QDRANT_API_KEY",
++    )
++
++
++def test_live_plan_injects_existing_executor_mode_into_0262_and_0263(tmp_path: Path) -> None:
++    plan = build_production_prototype_smoke_plan(_command(tmp_path))
++    for index in (2, 3):
++        argv = plan[index].argv
++        assert "--live-qdrant" in argv
++        assert "--demo-qdrant" not in argv
++        assert "--qdrant-url" in argv
++        assert "--collection" in argv
++        assert "autodoc_live_test" in argv
++        assert "--qdrant-prefer-grpc" in argv
++        assert "AUTODOC_TEST_QDRANT_API_KEY" in argv
++        assert "secret" not in " ".join(argv).lower()
++
++
++def test_live_run_requires_projection_and_recall_proofs(tmp_path: Path) -> None:
++    command = _command(tmp_path)
++
++    def executor(step):
++        refs = ()
++        checks = ()
++        if step.phase == "0260":
++            refs = (("sql_ref", "sql:test"),)
++        elif step.phase == "0261":
++            refs = (("embedding_ref", "embedding:test"),)
++        elif step.phase == "0265":
++            checks = (
++                ("eventbus_observation_only", True),
++                ("events_are_facts_not_commands", True),
++                ("starts_postgresql", False),
++                ("starts_openvino", False),
++                ("starts_qdrant", False),
++            )
++        elif step.phase == "0266":
++            checks = (("passive_supervisor_observation_only", True),)
++        elif step.phase == "0267":
++            refs = (("handoff_ref", "github-scan-once-handoff:test"),)
++            checks = (("remote_mutation_allowed", False),)
++        elif step.phase == "0268":
++            refs = (("readiness_ref", "openrc-launcher-readiness:test"),)
++            checks = (
++                ("sqlite_database_present", True),
++                ("readiness_only", True),
++                ("scheduler_starts_external_services", False),
++                ("calls_rc_service", False),
++                ("starts_postgresql", False),
++                ("starts_openvino", False),
++                ("starts_qdrant", False),
++            )
++        return ProductionPrototypeStepOutcome(
++            phase=step.phase,
++            returncode=0,
++            report_exists=True,
++            report_valid=True,
++            references=refs,
++            checks=checks,
++        )
++
++    result = run_production_prototype_smoke(command, executor)
++    assert result.valid is False
++    assert "required live Qdrant check failed or missing: qdrant_projection_live" in result.issues
++    assert "required live Qdrant check failed or missing: qdrant_recall_live" in result.issues
+diff --git a/tests/rules/test_qdrant_client_live_projection_recall_binding_0271_rule.py b/tests/rules/test_qdrant_client_live_projection_recall_binding_0271_rule.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..9cf3e9ed1bdd69a9f8be0be85f54ab004fa56c1d
+--- /dev/null
++++ b/tests/rules/test_qdrant_client_live_projection_recall_binding_0271_rule.py
+@@ -0,0 +1,60 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++PROJECTION = ROOT / "tools/run_scheduler_managed_embedding_qdrant_projection_0262.py"
++RECALL = ROOT / "tools/run_scheduler_managed_qdrant_recall_sql_rehydrate_0263.py"
++CORE = ROOT / "src/context/production_prototype_smoke_composition_0269.py"
++CLI = ROOT / "tools/run_production_prototype_smoke_composition_0269.py"
++RULE = ROOT / "doc/code-rules/0271_qdrant_client_live_projection_recall_binding_rule.md"
++MANIFEST = ROOT / "doc/manifests/MANIFEST_0271_QDRANT_CLIENT_LIVE_PROJECTION_RECALL_BINDING_CHANGED_FILES.md"
++
++
++def test_existing_0262_and_0263_tools_inject_the_0271_executor() -> None:
++    projection = PROJECTION.read_text(encoding="utf-8")
++    recall = RECALL.read_text(encoding="utf-8")
++    assert "build_qdrant_client_projection_executor" in projection
++    assert "allow_write=True" in projection
++    assert "allow_search=False" in projection
++    assert "build_qdrant_client_projection_executor" in recall
++    assert "allow_write=False" in recall
++    assert "allow_search=True" in recall
++    assert "--live-qdrant" in projection
++    assert "--live-qdrant" in recall
++
++
++def test_live_binding_keeps_service_and_shm_boundaries() -> None:
++    combined = "\n".join(path.read_text(encoding="utf-8") for path in (PROJECTION, RECALL, CORE, CLI))
++    forbidden = (
++        "rc-service",
++        "rc-update",
++        "subprocess.Popen",
++        "RuntimeManager",
++        "Scheduler.run(",
++        "multiprocessing.shared_memory",
++        "mmap.mmap",
++    )
++    for phrase in forbidden:
++        assert phrase not in combined
++    assert 'payload["touches_shm"] = False' in PROJECTION.read_text(encoding="utf-8")
++    assert 'payload["touches_shm"] = False' in RECALL.read_text(encoding="utf-8")
++
++
++def test_api_key_value_is_not_serialized_or_forwarded_in_0269_argv() -> None:
++    projection = PROJECTION.read_text(encoding="utf-8")
++    recall = RECALL.read_text(encoding="utf-8")
++    core = CORE.read_text(encoding="utf-8")
++    assert "os.environ.get(args.qdrant_api_key_env)" in projection
++    assert "os.environ.get(args.qdrant_api_key_env)" in recall
++    assert '"--qdrant-api-key",' not in core
++    assert "--qdrant-api-key-env" in core
++
++
++def test_rule_and_manifest_lock_reuse_and_live_opt_in() -> None:
++    rule = RULE.read_text(encoding="utf-8")
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    assert "existing QdrantProjectionExecutor" in rule
++    assert "live opt-in" in rule
++    assert "SQL remains the durable authority" in rule
++    assert "tools/run_scheduler_managed_embedding_qdrant_projection_0262.py" in manifest
++    assert "tools/run_scheduler_managed_qdrant_recall_sql_rehydrate_0263.py" in manifest
++    assert "src/context/production_prototype_smoke_composition_0269.py" in manifest
+diff --git a/tools/run_production_prototype_smoke_composition_0269.py b/tools/run_production_prototype_smoke_composition_0269.py
+index a54a102a6ad8b5b823a5692ea73099772b44be78..7bf86d3f4b5bf9149c137d5858abeedf1639baa4 100755
+--- a/tools/run_production_prototype_smoke_composition_0269.py
++++ b/tools/run_production_prototype_smoke_composition_0269.py
+@@ -48,7 +48,15 @@ def parse_args() -> argparse.Namespace:
+     parser.add_argument("--policy-decision-id", default="")
+     parser.add_argument("--demo-embedding", action="store_true")
+     parser.add_argument("--demo-eventbus", action="store_true")
+-    parser.add_argument("--demo-qdrant", action="store_true")
++    qdrant_mode = parser.add_mutually_exclusive_group()
++    qdrant_mode.add_argument("--demo-qdrant", action="store_true")
++    qdrant_mode.add_argument("--live-qdrant", action="store_true")
++    parser.add_argument("--qdrant-url", default="http://127.0.0.1:6333")
++    parser.add_argument("--qdrant-collection", default="autodoc_context_embeddings")
++    parser.add_argument("--qdrant-timeout-seconds", type=float, default=10.0)
++    parser.add_argument("--qdrant-prefer-grpc", action="store_true")
++    parser.add_argument("--qdrant-grpc-port", type=int, default=6334)
++    parser.add_argument("--qdrant-api-key-env", default="QDRANT_API_KEY")
+     parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
+     parser.add_argument("--format", choices=("json", "summary"), default="json")
+     return parser.parse_args()
+@@ -112,6 +120,9 @@ def _load_report(path: Path) -> tuple[bool | None, tuple[tuple[str, str], ...],
+             "passive_supervisor_observation_only",
+             "sqlite_database_present",
+             "readiness_only",
++            "qdrant_projection_live",
++            "qdrant_recall_live",
++            "uses_qdrant_client_executor",
+         },
+     )
+     references = tuple(
+@@ -187,6 +198,13 @@ def _command_from_args(args: argparse.Namespace) -> ProductionPrototypeSmokeComm
+         demo_embedding=args.demo_embedding,
+         demo_eventbus=args.demo_eventbus,
+         demo_qdrant=args.demo_qdrant,
++        live_qdrant=args.live_qdrant,
++        qdrant_url=args.qdrant_url,
++        qdrant_collection=args.qdrant_collection,
++        qdrant_timeout_seconds=args.qdrant_timeout_seconds,
++        qdrant_prefer_grpc=args.qdrant_prefer_grpc,
++        qdrant_grpc_port=args.qdrant_grpc_port,
++        qdrant_api_key_env=args.qdrant_api_key_env,
+     )
+ 
+ 
+@@ -204,6 +222,7 @@ def _summary(payload: Mapping[str, object]) -> str:
+         "production_prototype_smoke_composition_valid="
+         f"{payload.get('valid')} issues={len(payload.get('issues', []))} "
+         f"execute={payload.get('execute')} "
++        f"qdrant_mode={payload.get('qdrant_mode', '-')} "
+         f"steps={payload.get('valid_step_count', 0)}/{payload.get('planned_step_count', 0)} "
+         f"sql_ref={references.get('sql_ref', '-')} "
+         f"embedding_ref={references.get('embedding_ref', '-')} "
+diff --git a/tools/run_scheduler_managed_embedding_qdrant_projection_0262.py b/tools/run_scheduler_managed_embedding_qdrant_projection_0262.py
+index e240cfd5e4ceab5eccd4f60558bfcaabfce396b3..feb296831663d254f42e7fd474c1a15c65b400de 100755
+--- a/tools/run_scheduler_managed_embedding_qdrant_projection_0262.py
++++ b/tools/run_scheduler_managed_embedding_qdrant_projection_0262.py
+@@ -5,8 +5,10 @@ from __future__ import annotations
+ 
+ import argparse
+ import json
++import os
+ import sys
+ from pathlib import Path
++from typing import Any
+ 
+ ROOT = Path(__file__).resolve().parents[1]
+ SRC_ROOT = ROOT / "src"
+@@ -21,7 +23,11 @@ from context.scheduler_managed_embedding_qdrant_projection_usage_0262 import (
+     run_scheduler_managed_embedding_qdrant_projection_usage,
+     write_report,
+ )
+-
++from inference.qdrant_client_projection_executor import (  # noqa: E402
++    QdrantClientConnectionConfig,
++    QdrantClientEffectGate,
++    build_qdrant_client_projection_executor,
++)
+ 
+ DEFAULT_EMBEDDING_REPORT = ROOT / ".var/reports/scheduler_managed_sql_ref_openvino_embedding_0261.json"
+ 
+@@ -32,13 +38,60 @@ def parse_args() -> argparse.Namespace:
+     parser.add_argument("--output", default="")
+     parser.add_argument("--execute", action="store_true")
+     parser.add_argument("--policy-decision-id", default="")
+-    parser.add_argument("--demo-qdrant", action="store_true")
++    qdrant_mode = parser.add_mutually_exclusive_group()
++    qdrant_mode.add_argument("--demo-qdrant", action="store_true")
++    qdrant_mode.add_argument("--live-qdrant", action="store_true")
++    parser.add_argument("--qdrant-url", default="http://127.0.0.1:6333")
++    parser.add_argument("--qdrant-timeout-seconds", type=float, default=10.0)
++    parser.add_argument("--qdrant-prefer-grpc", action="store_true")
++    parser.add_argument("--qdrant-grpc-port", type=int, default=6334)
++    parser.add_argument("--qdrant-api-key-env", default="QDRANT_API_KEY")
+     parser.add_argument("--collection", default="autodoc_context_embeddings")
+     parser.add_argument("--dimension", type=int, default=384)
+     parser.add_argument("--format", choices=("json", "summary"), default="json")
+     return parser.parse_args()
+ 
+ 
++def _mode(args: argparse.Namespace) -> str:
++    if args.live_qdrant:
++        return "live"
++    if args.demo_qdrant:
++        return "demo"
++    return "none"
++
++
++def _build_live_executor(args: argparse.Namespace):
++    config = QdrantClientConnectionConfig(
++        url=args.qdrant_url,
++        timeout_seconds=args.qdrant_timeout_seconds,
++        prefer_grpc=args.qdrant_prefer_grpc,
++        grpc_port=args.qdrant_grpc_port,
++    )
++    gate = QdrantClientEffectGate(
++        policy_decision_id=args.policy_decision_id,
++        allow_write=True,
++        allow_search=False,
++    )
++    api_key = os.environ.get(args.qdrant_api_key_env) if args.qdrant_api_key_env else None
++    return build_qdrant_client_projection_executor(config, gate, api_key=api_key), config
++
++
++def _failure_payload(args: argparse.Namespace, exc: Exception) -> dict[str, Any]:
++    return {
++        "scheduler_managed_embedding_qdrant_projection_usage": True,
++        "valid": False,
++        "issues": [f"qdrant_client_executor:{type(exc).__name__}:{str(exc)[:500]}"],
++        "execute": args.execute,
++        "dry_run": not args.execute,
++        "qdrant_mode": _mode(args),
++        "uses_qdrant_client_executor": args.live_qdrant,
++        "qdrant_projection_live": False,
++        "starts_qdrant": False,
++        "touches_shm": False,
++        "sql_remains_authority": True,
++    }
++
++
+ def main() -> int:
+     args = parse_args()
+     report = load_json(Path(args.embedding_report))
+@@ -47,18 +100,36 @@ def main() -> int:
+         collection_name=args.collection,
+         vector_dimension=args.dimension,
+     )
+-    executor = DemoQdrantProjectionExecutor() if args.demo_qdrant else None
+-    result = run_scheduler_managed_embedding_qdrant_projection_usage(
+-        report,
+-        request,
+-        execute=args.execute,
+-        executor=executor,
+-    )
+-    payload = result.to_mapping()
+-
++    executor = None
++    config = None
++    try:
++        if args.live_qdrant and not args.execute:
++            raise ValueError("live_qdrant requires --execute")
++        if args.demo_qdrant:
++            executor = DemoQdrantProjectionExecutor()
++        elif args.live_qdrant:
++            executor, config = _build_live_executor(args)
++        result = run_scheduler_managed_embedding_qdrant_projection_usage(
++            report,
++            request,
++            execute=args.execute,
++            executor=executor,
++        )
++        payload = result.to_mapping()
++        payload["qdrant_mode"] = _mode(args)
++        payload["uses_qdrant_client_executor"] = args.live_qdrant
++        payload["qdrant_projection_live"] = bool(args.live_qdrant and args.execute and payload["valid"])
++        payload["touches_shm"] = False
++        if config is not None:
++            payload["qdrant_connection"] = config.to_mapping()
++    except Exception as exc:
++        payload = _failure_payload(args, exc)
++    finally:
++        close = getattr(executor, "close", None)
++        if callable(close):
++            close()
+     if args.output:
+         write_report(Path(args.output), payload)
+-
+     if args.format == "summary":
+         batch = payload.get("batch", {})
+         write = payload.get("write_result", {})
+@@ -66,6 +137,7 @@ def main() -> int:
+             "scheduler_managed_embedding_qdrant_projection_valid="
+             f"{payload['valid']} issues={len(payload['issues'])} "
+             f"execute={payload['execute']} dry_run={payload['dry_run']} "
++            f"qdrant_mode={payload.get('qdrant_mode', '-')} "
+             f"sql_ref={payload.get('sql_ref') or '-'} "
+             f"embedding_ref={payload.get('embedding_ref') or '-'} "
+             f"points={batch.get('point_count', '-') if isinstance(batch, dict) else '-'} "
+@@ -73,7 +145,6 @@ def main() -> int:
+         )
+     else:
+         print(json.dumps(payload, indent=2, sort_keys=True))
+-
+     return 0 if payload["valid"] else 2
+ 
+ 
+diff --git a/tools/run_scheduler_managed_qdrant_recall_sql_rehydrate_0263.py b/tools/run_scheduler_managed_qdrant_recall_sql_rehydrate_0263.py
+index 5d7a84ee24e1fbeaf6ad97171971d8c0ee7d738d..a5180b15578bbeeb0518718c10b0f66c75dd49cc 100755
+--- a/tools/run_scheduler_managed_qdrant_recall_sql_rehydrate_0263.py
++++ b/tools/run_scheduler_managed_qdrant_recall_sql_rehydrate_0263.py
+@@ -5,8 +5,10 @@ from __future__ import annotations
+ 
+ import argparse
+ import json
++import os
+ import sys
+ from pathlib import Path
++from typing import Any
+ 
+ ROOT = Path(__file__).resolve().parents[1]
+ SRC_ROOT = ROOT / "src"
+@@ -23,7 +25,11 @@ from context.scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263 import (
+     write_report,
+ )
+ from context.sql_context_store import SQLiteSqlContextStore  # noqa: E402
+-
++from inference.qdrant_client_projection_executor import (  # noqa: E402
++    QdrantClientConnectionConfig,
++    QdrantClientEffectGate,
++    build_qdrant_client_projection_executor,
++)
+ 
+ DEFAULT_DB_PATH = ROOT / ".var/local/scheduler_managed_db_api_sql_context_store_0260.sqlite3"
+ DEFAULT_EMBEDDING_REPORT = ROOT / ".var/reports/scheduler_managed_sql_ref_openvino_embedding_0261.json"
+@@ -38,7 +44,14 @@ def parse_args() -> argparse.Namespace:
+     parser.add_argument("--output", default="")
+     parser.add_argument("--execute", action="store_true")
+     parser.add_argument("--policy-decision-id", default="")
+-    parser.add_argument("--demo-qdrant", action="store_true")
++    qdrant_mode = parser.add_mutually_exclusive_group()
++    qdrant_mode.add_argument("--demo-qdrant", action="store_true")
++    qdrant_mode.add_argument("--live-qdrant", action="store_true")
++    parser.add_argument("--qdrant-url", default="http://127.0.0.1:6333")
++    parser.add_argument("--qdrant-timeout-seconds", type=float, default=10.0)
++    parser.add_argument("--qdrant-prefer-grpc", action="store_true")
++    parser.add_argument("--qdrant-grpc-port", type=int, default=6334)
++    parser.add_argument("--qdrant-api-key-env", default="QDRANT_API_KEY")
+     parser.add_argument("--query-ref", default="")
+     parser.add_argument("--collection", default="autodoc_context_embeddings")
+     parser.add_argument("--dimension", type=int, default=384)
+@@ -65,41 +78,102 @@ def _sql_refs_from_projection_report(path: Path) -> tuple[str, ...]:
+     return tuple(refs)
+ 
+ 
+-def main() -> int:
+-    args = parse_args()
+-    embedding_report = load_json(Path(args.embedding_report))
+-    query_ref = args.query_ref or default_query_ref_from_embedding_report(embedding_report)
+-    request = SchedulerManagedQdrantRecallSqlRehydrateRequest(
+-        query_ref=query_ref,
++def _mode(args: argparse.Namespace) -> str:
++    if args.live_qdrant:
++        return "live"
++    if args.demo_qdrant:
++        return "demo"
++    return "none"
++
++
++def _build_live_executor(args: argparse.Namespace):
++    config = QdrantClientConnectionConfig(
++        url=args.qdrant_url,
++        timeout_seconds=args.qdrant_timeout_seconds,
++        prefer_grpc=args.qdrant_prefer_grpc,
++        grpc_port=args.qdrant_grpc_port,
++    )
++    gate = QdrantClientEffectGate(
+         policy_decision_id=args.policy_decision_id,
+-        collection_name=args.collection,
+-        vector_dimension=args.dimension,
+-        limit=args.limit,
++        allow_write=False,
++        allow_search=True,
+     )
+-    store = SQLiteSqlContextStore(args.db_path)
+-    store.initialize_schema()
++    api_key = os.environ.get(args.qdrant_api_key_env) if args.qdrant_api_key_env else None
++    return build_qdrant_client_projection_executor(config, gate, api_key=api_key), config
++
++
++def _failure_payload(args: argparse.Namespace, exc: Exception) -> dict[str, Any]:
++    return {
++        "scheduler_managed_qdrant_recall_sql_rehydrate_usage": True,
++        "valid": False,
++        "issues": [f"qdrant_client_executor:{type(exc).__name__}:{str(exc)[:500]}"],
++        "execute": args.execute,
++        "dry_run": not args.execute,
++        "qdrant_mode": _mode(args),
++        "uses_qdrant_client_executor": args.live_qdrant,
++        "qdrant_recall_live": False,
++        "starts_qdrant": False,
++        "touches_shm": False,
++        "sql_remains_authority": True,
++        "qdrant_recall_refs_only": True,
++    }
+ 
+-    executor = None
+-    if args.demo_qdrant:
+-        executor = DemoQdrantRecallExecutor(sql_refs=_sql_refs_from_projection_report(Path(args.projection_report)))
+-
+-    result = run_scheduler_managed_qdrant_recall_sql_rehydrate_usage(
+-        embedding_report,
+-        store,
+-        request,
+-        execute=args.execute,
+-        executor=executor,
+-    )
+-    payload = result.to_mapping()
+ 
++def main() -> int:
++    args = parse_args()
++    store = None
++    executor = None
++    config = None
++    try:
++        if args.live_qdrant and not args.execute:
++            raise ValueError("live_qdrant requires --execute")
++        embedding_report = load_json(Path(args.embedding_report))
++        query_ref = args.query_ref or default_query_ref_from_embedding_report(embedding_report)
++        request = SchedulerManagedQdrantRecallSqlRehydrateRequest(
++            query_ref=query_ref,
++            policy_decision_id=args.policy_decision_id,
++            collection_name=args.collection,
++            vector_dimension=args.dimension,
++            limit=args.limit,
++        )
++        store = SQLiteSqlContextStore(args.db_path)
++        store.initialize_schema()
++        if args.demo_qdrant:
++            executor = DemoQdrantRecallExecutor(
++                sql_refs=_sql_refs_from_projection_report(Path(args.projection_report))
++            )
++        elif args.live_qdrant:
++            executor, config = _build_live_executor(args)
++        result = run_scheduler_managed_qdrant_recall_sql_rehydrate_usage(
++            embedding_report,
++            store,
++            request,
++            execute=args.execute,
++            executor=executor,
++        )
++        payload = result.to_mapping()
++        payload["qdrant_mode"] = _mode(args)
++        payload["uses_qdrant_client_executor"] = args.live_qdrant
++        payload["qdrant_recall_live"] = bool(args.live_qdrant and args.execute and payload["valid"])
++        payload["touches_shm"] = False
++        if config is not None:
++            payload["qdrant_connection"] = config.to_mapping()
++    except Exception as exc:
++        payload = _failure_payload(args, exc)
++    finally:
++        close = getattr(executor, "close", None)
++        if callable(close):
++            close()
++        if store is not None:
++            store.close()
+     if args.output:
+         write_report(Path(args.output), payload)
+-
+     if args.format == "summary":
+         print(
+             "scheduler_managed_qdrant_recall_sql_rehydrate_valid="
+             f"{payload['valid']} issues={len(payload['issues'])} "
+             f"execute={payload['execute']} dry_run={payload['dry_run']} "
++            f"qdrant_mode={payload.get('qdrant_mode', '-')} "
+             f"hits={payload.get('recall', {}).get('hit_count', '-') if isinstance(payload.get('recall'), dict) else '-'} "
+             f"hydrated={payload.get('hydrated_count', '-')} "
+             f"missing={payload.get('missing_count', '-')} "
+@@ -107,8 +181,6 @@ def main() -> int:
+         )
+     else:
+         print(json.dumps(payload, indent=2, sort_keys=True))
+-
+-    store.close()
+     return 0 if payload["valid"] else 2
+ 
+ 

@@ -1,0 +1,750 @@
+diff --git a/PHASE0271_QDRANT_SQL_AUTHORITY_SCOPE_STRICT_GRPC_TEST_REPORT.md b/PHASE0271_QDRANT_SQL_AUTHORITY_SCOPE_STRICT_GRPC_TEST_REPORT.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..78d03ac53a4b66447a56a021e5105990e7d21cda
+--- /dev/null
++++ b/PHASE0271_QDRANT_SQL_AUTHORITY_SCOPE_STRICT_GRPC_TEST_REPORT.md
+@@ -0,0 +1,26 @@
++# Phase 0271-r4 test report
++
++## Scope
++
++Add a reusable SQL-authority scope membrane and strict gRPC transport contract
++around the existing Qdrant executor protocol, without live IO or CLI binding.
++
++## Construction validation
++
++- Python compileall: passed
++- targeted inference tests: 6 passed
++- targeted rule tests: 4 passed
++- total targeted tests: 10 passed
++- Graphviz parse: passed
++- full repository suite: to be executed in the operator repository
++
++## Boundary result
++
++- existing executor protocol reused: yes
++- qdrant-client imported: no
++- network used: no
++- Qdrant called or started: no
++- SQL opened or written: no
++- SHM touched: no
++- Scheduler loop modified: no
++- next binding patch required: yes, 0271-r5
+diff --git a/doc/CHANGELOG_0271_QDRANT_SQL_AUTHORITY_SCOPE_STRICT_GRPC.md b/doc/CHANGELOG_0271_QDRANT_SQL_AUTHORITY_SCOPE_STRICT_GRPC.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..10cbbb734361510fdf9e7d29061a163805f6c703
+--- /dev/null
++++ b/doc/CHANGELOG_0271_QDRANT_SQL_AUTHORITY_SCOPE_STRICT_GRPC.md
+@@ -0,0 +1,8 @@
++# Changelog — 0271-r4 SQL-authority scope and strict gRPC
++
++- Added a protocol-preserving SQL-authority scope wrapper for Qdrant executors.
++- Added opaque SQLite authority-ref derivation without path disclosure.
++- Added projection payload enrichment and pre-rehydration recall filtering.
++- Added a strict gRPC transport policy separating REST administration from data.
++- Added a readiness-only CLI with no network, Qdrant, SQL or SHM effects.
++- Deferred integration into 0262/0263/0269 to 0271-r5.
+diff --git a/doc/architecture/QDRANT_SQL_AUTHORITY_SCOPE_STRICT_GRPC_0271.md b/doc/architecture/QDRANT_SQL_AUTHORITY_SCOPE_STRICT_GRPC_0271.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..88d8f3484787e84e4c1450a5db460f4aebc6bd4d
+--- /dev/null
++++ b/doc/architecture/QDRANT_SQL_AUTHORITY_SCOPE_STRICT_GRPC_0271.md
+@@ -0,0 +1,45 @@
++# Qdrant SQL-authority scope and strict gRPC contract — 0271-r4
++
++## Problem closed
++
++The live 0269 smoke proved real projection and recall over gRPC, but a shared
++collection can contain `sql_ref` values owned by another SQLite or PostgreSQL
++authority. Such hits must never reach the current SQL rehydration step.
++
++The successful network capture also established the intended split:
++
++- REST administration: `http://127.0.0.1:6333`;
++- gRPC data operations: `127.0.0.1:6334`.
++
++## Reuse decision
++
++0271-r4 wraps the existing `QdrantProjectionExecutor` protocol. It does not add
++a Qdrant manager, worker, client or orchestrator.
++
++The wrapper:
++
++1. adds `payload.sql_authority_ref` and `payload.sql_store_kind` before upsert;
++2. oversamples recall within the existing policy bound;
++3. rejects foreign and legacy unscoped hits before SQL rehydration;
++4. delegates close to the existing concrete executor.
++
++SQL remains the durable authority. Qdrant remains a reconstructible projection.
++
++## Transport contract
++
++`QdrantStrictGrpcTransportPolicy` requires separate REST and gRPC ports. In
++strict mode, `prefer_grpc` must be true. The REST URL is retained for
++administration/readiness only; the requested data transport is gRPC.
++
++This contract records operator intent. 0271-r5 will bind it to the existing
++0262, 0263 and 0269 live CLIs and add live report proofs.
++
++## Boundaries
++
++- no network IO in this patch;
++- no Qdrant service or collection creation;
++- no SQL read or write;
++- SHM remains unchanged;
++- RouteProxy and ControlProxy remain unchanged;
++- no Scheduler loop modification;
++- no API-key value serialization.
+diff --git a/doc/code-rules/0271_qdrant_sql_authority_scope_strict_grpc_rule.md b/doc/code-rules/0271_qdrant_sql_authority_scope_strict_grpc_rule.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..6a1c35b0fe17667728ae60af519463085a3cc6a9
+--- /dev/null
++++ b/doc/code-rules/0271_qdrant_sql_authority_scope_strict_grpc_rule.md
+@@ -0,0 +1,17 @@
++# Rule 0271-r4 — SQL-authority scope and strict gRPC
++
++1. SQL remains the durable authority; Qdrant stores reconstructible vectors and
++   typed references only.
++2. Every scoped Qdrant point carries `payload.sql_authority_ref` and
++   `payload.sql_store_kind`.
++3. Recall results from another authority, and legacy unscoped hits, are rejected
++   before SQL rehydration.
++4. The implementation wraps the existing `QdrantProjectionExecutor`; no second
++   manager, worker or orchestrator is allowed.
++5. REST administration and gRPC data operations use distinct ports. Strict data
++   gRPC requires `prefer_grpc=True`.
++6. The SQL database path is used only to derive an opaque reference and is not
++   serialized in the scope report.
++7. OpenRC/OS/admin owns Qdrant startup and collection administration.
++8. SHM remains unchanged; RouteProxy, ControlProxy and the Scheduler loop are
++   outside this patch.
+diff --git a/doc/docs/architecture/runtime/271_qdrant_sql_authority_scope_strict_grpc.dot b/doc/docs/architecture/runtime/271_qdrant_sql_authority_scope_strict_grpc.dot
+new file mode 100644
+index 0000000000000000000000000000000000000000..ca66d39391ff86960227536e459b8d3288926ff0
+--- /dev/null
++++ b/doc/docs/architecture/runtime/271_qdrant_sql_authority_scope_strict_grpc.dot
+@@ -0,0 +1,16 @@
++digraph qdrant_sql_authority_scope_strict_grpc_0271 {
++  rankdir=LR;
++  node [shape=box];
++  sql [label="SQL authority\nopaque authority_ref"];
++  scope [label="SqlAuthorityScopedQdrantExecutor\nexisting protocol wrapper"];
++  grpc [label="qdrant-client data path\ngRPC 6334"];
++  qdrant [label="Qdrant projection\npayload.sql_authority_ref"];
++  recall [label="scope-filtered recall\nforeign refs rejected"];
++  rehydrate [label="SQL rehydrate\nmissing=0"];
++  rest [label="REST 6333\nadministration only", style=dashed];
++  shm [label="SHM unchanged", style=dashed];
++
++  sql -> scope -> grpc -> qdrant -> recall -> rehydrate;
++  rest -> qdrant [style=dashed];
++  shm -> scope [style=dashed, label="no access"];
++}
+diff --git a/doc/manifests/MANIFEST_0271_QDRANT_SQL_AUTHORITY_SCOPE_STRICT_GRPC_CHANGED_FILES.md b/doc/manifests/MANIFEST_0271_QDRANT_SQL_AUTHORITY_SCOPE_STRICT_GRPC_CHANGED_FILES.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..699d770a6ba8aa756fc86ddfe131bb647627e3d7
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0271_QDRANT_SQL_AUTHORITY_SCOPE_STRICT_GRPC_CHANGED_FILES.md
+@@ -0,0 +1,21 @@
++# Manifest — 0271-r4 SQL-authority scope and strict gRPC
++
++## Added implementation surfaces
++
++- `src/inference/qdrant_sql_authority_scope.py`
++- `tools/check_qdrant_sql_authority_scope_0271.py`
++
++## Added tests
++
++- `tests/inference/test_qdrant_sql_authority_scope_0271.py`
++- `tests/rules/test_qdrant_sql_authority_scope_0271_rule.py`
++
++## Added documentation
++
++- `doc/architecture/QDRANT_SQL_AUTHORITY_SCOPE_STRICT_GRPC_0271.md`
++- `doc/code-rules/0271_qdrant_sql_authority_scope_strict_grpc_rule.md`
++- `doc/docs/architecture/runtime/271_qdrant_sql_authority_scope_strict_grpc.dot`
++- `doc/CHANGELOG_0271_QDRANT_SQL_AUTHORITY_SCOPE_STRICT_GRPC.md`
++- `PHASE0271_QDRANT_SQL_AUTHORITY_SCOPE_STRICT_GRPC_TEST_REPORT.md`
++
++No existing runtime, Scheduler, SHM, Qdrant client or service file is modified.
+diff --git a/src/inference/qdrant_sql_authority_scope.py b/src/inference/qdrant_sql_authority_scope.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..ab1a43d162516d08f043afa6155a358d64a1c248
+--- /dev/null
++++ b/src/inference/qdrant_sql_authority_scope.py
+@@ -0,0 +1,247 @@
++"""SQL-authority scope membrane for Qdrant projection and recall.
++
++This module wraps the existing ``QdrantProjectionExecutor`` protocol. It adds a
++stable SQL-authority reference to projection payloads and rejects recall hits
++that belong to another SQL authority before SQL rehydration.
++
++The wrapper does not import qdrant-client, open sockets, start services, or
++access SHM. A later binding patch may inject it around the existing concrete
++qdrant-client executor.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from hashlib import sha256
++from pathlib import Path
++import re
++from typing import Sequence
++from urllib.parse import urlparse
++
++from inference.qdrant_projection_adapter import (
++    QdrantProjectionExecutor,
++    QdrantProjectionPoint,
++    QdrantProjectionPolicy,
++    QdrantProjectionTarget,
++    QdrantProjectionWriteResult,
++    QdrantRecallQuery,
++    QdrantRecallResult,
++)
++
++_SCOPE_SCHEMA = "missipy.qdrant.sql_authority_scope.v1"
++_TRANSPORT_SCHEMA = "missipy.qdrant.strict_grpc_transport.v1"
++_TYPED_REF_RE = re.compile(r"^[a-z][a-z0-9-]*:[^\s].*$")
++_ALLOWED_STORE_KINDS = frozenset({"sqlite", "postgresql"})
++
++
++def _require_non_empty(name: str, value: str) -> None:
++    if not isinstance(value, str) or not value.strip():
++        raise ValueError(f"{name} must be a non-empty string")
++
++
++def _require_typed_ref(name: str, value: str) -> None:
++    _require_non_empty(name, value)
++    if not _TYPED_REF_RE.fullmatch(value):
++        raise ValueError(f"{name} must be a typed ref")
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantSqlAuthorityScope:
++    """Stable SQL authority identity stored in every Qdrant point payload."""
++
++    authority_ref: str
++    store_kind: str
++    namespace: str = "autodoc-local"
++
++    def __post_init__(self) -> None:
++        _require_typed_ref("authority_ref", self.authority_ref)
++        if self.store_kind not in _ALLOWED_STORE_KINDS:
++            raise ValueError("store_kind must be sqlite or postgresql")
++        _require_non_empty("namespace", self.namespace)
++
++    @property
++    def payload_items(self) -> tuple[tuple[str, str], ...]:
++        return (
++            ("sql_authority_ref", self.authority_ref),
++            ("sql_store_kind", self.store_kind),
++        )
++
++    def to_filter_mapping(self) -> dict[str, object]:
++        """Return a qdrant-client compatible filter description, data only."""
++
++        return {
++            "must": [
++                {
++                    "key": "sql_authority_ref",
++                    "match": {"value": self.authority_ref},
++                }
++            ]
++        }
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _SCOPE_SCHEMA,
++            "authority_ref": self.authority_ref,
++            "store_kind": self.store_kind,
++            "namespace": self.namespace,
++            "payload": dict(self.payload_items),
++            "filter": self.to_filter_mapping(),
++            "sql_path_disclosed": False,
++        }
++
++
++def derive_sqlite_authority_scope(
++    db_path: str | Path,
++    *,
++    namespace: str = "autodoc-local",
++) -> QdrantSqlAuthorityScope:
++    """Derive a stable opaque authority ref without serializing the DB path."""
++
++    _require_non_empty("namespace", namespace)
++    canonical_path = str(Path(db_path).expanduser().resolve(strict=False))
++    digest = sha256(
++        f"{namespace}\x00sqlite\x00{canonical_path}".encode("utf-8")
++    ).hexdigest()[:16]
++    return QdrantSqlAuthorityScope(
++        authority_ref=f"sql-authority:sqlite:{digest}",
++        store_kind="sqlite",
++        namespace=namespace,
++    )
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantStrictGrpcTransportPolicy:
++    """Separate REST administration from strict gRPC data operations."""
++
++    rest_admin_url: str = "http://127.0.0.1:6333"
++    grpc_port: int = 6334
++    prefer_grpc: bool = True
++    strict_data_grpc: bool = True
++
++    def __post_init__(self) -> None:
++        parsed = urlparse(self.rest_admin_url)
++        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
++            raise ValueError("rest_admin_url must be an http(s) URL with a host")
++        if not 1 <= self.grpc_port <= 65535:
++            raise ValueError("grpc_port must be between 1 and 65535")
++        rest_port = parsed.port or (443 if parsed.scheme == "https" else 80)
++        if rest_port == self.grpc_port:
++            raise ValueError("REST administration port must differ from gRPC port")
++        if self.strict_data_grpc and not self.prefer_grpc:
++            raise ValueError("strict_data_grpc requires prefer_grpc")
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": _TRANSPORT_SCHEMA,
++            "rest_admin_url": self.rest_admin_url,
++            "rest_admin_only": True,
++            "grpc_port": self.grpc_port,
++            "prefer_grpc": self.prefer_grpc,
++            "strict_data_grpc": self.strict_data_grpc,
++            "requested_data_transport": "grpc" if self.prefer_grpc else "rest",
++        }
++
++
++def add_sql_authority_scope_to_point(
++    point: QdrantProjectionPoint,
++    scope: QdrantSqlAuthorityScope,
++) -> QdrantProjectionPoint:
++    """Return a new point with reserved scope payload fields."""
++
++    payload = dict(point.payload)
++    for key, expected in scope.payload_items:
++        current = payload.get(key)
++        if current is not None and current != expected:
++            raise ValueError(f"point payload has conflicting {key}")
++        payload[key] = expected
++    return QdrantProjectionPoint(
++        point_id=point.point_id,
++        embedding_ref=point.embedding_ref,
++        source_ref=point.source_ref,
++        sql_context_ref=point.sql_context_ref,
++        vector=point.vector,
++        payload=tuple(sorted(payload.items())),
++    )
++
++
++class SqlAuthorityScopedQdrantExecutor:
++    """Protocol-preserving scope wrapper around an existing executor."""
++
++    def __init__(
++        self,
++        delegate: QdrantProjectionExecutor,
++        scope: QdrantSqlAuthorityScope,
++        *,
++        recall_oversample_factor: int = 4,
++    ) -> None:
++        if recall_oversample_factor <= 0:
++            raise ValueError("recall_oversample_factor must be > 0")
++        self._delegate = delegate
++        self._scope = scope
++        self._recall_oversample_factor = recall_oversample_factor
++
++    @property
++    def scope(self) -> QdrantSqlAuthorityScope:
++        return self._scope
++
++    def upsert_points(
++        self,
++        points: Sequence[QdrantProjectionPoint],
++        *,
++        target: QdrantProjectionTarget,
++        policy: QdrantProjectionPolicy,
++    ) -> QdrantProjectionWriteResult:
++        scoped_points = tuple(
++            add_sql_authority_scope_to_point(point, self._scope)
++            for point in points
++        )
++        return self._delegate.upsert_points(
++            scoped_points,
++            target=target,
++            policy=policy,
++        )
++
++    def search_vector(
++        self,
++        vector: Sequence[float],
++        *,
++        target: QdrantProjectionTarget,
++        policy: QdrantProjectionPolicy,
++        query: QdrantRecallQuery,
++    ) -> QdrantRecallResult:
++        expanded_limit = min(
++            policy.max_recall_hits,
++            max(query.limit, query.limit * self._recall_oversample_factor),
++        )
++        expanded_query = QdrantRecallQuery(
++            query_ref=query.query_ref,
++            limit=expanded_limit,
++            role=query.role,
++        )
++        result = self._delegate.search_vector(
++            vector,
++            target=target,
++            policy=policy,
++            query=expanded_query,
++        )
++        scoped_hits = tuple(
++            hit
++            for hit in result.hits
++            if dict(hit.payload).get("sql_authority_ref")
++            == self._scope.authority_ref
++        )[: query.limit]
++        return QdrantRecallResult(
++            target=result.target,
++            query=query,
++            hits=scoped_hits,
++            capped=(
++                result.capped
++                or result.hit_count >= expanded_limit
++                or len(scoped_hits) < result.hit_count
++            ),
++        )
++
++    def close(self) -> None:
++        close = getattr(self._delegate, "close", None)
++        if callable(close):
++            close()
+diff --git a/tests/inference/test_qdrant_sql_authority_scope_0271.py b/tests/inference/test_qdrant_sql_authority_scope_0271.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..96009486bac0d126e2f99c09bcd19969a601e9ed
+--- /dev/null
++++ b/tests/inference/test_qdrant_sql_authority_scope_0271.py
+@@ -0,0 +1,150 @@
++from __future__ import annotations
++
++from inference.qdrant_projection_adapter import (
++    QdrantProjectionPoint,
++    QdrantProjectionPolicy,
++    QdrantProjectionTarget,
++    QdrantProjectionWriteResult,
++    QdrantRecallHit,
++    QdrantRecallQuery,
++    QdrantRecallResult,
++)
++from inference.qdrant_sql_authority_scope import (
++    QdrantStrictGrpcTransportPolicy,
++    SqlAuthorityScopedQdrantExecutor,
++    add_sql_authority_scope_to_point,
++    derive_sqlite_authority_scope,
++)
++
++
++class FakeExecutor:
++    def __init__(self) -> None:
++        self.upserted = ()
++        self.search_query = None
++        self.closed = False
++
++    def upsert_points(self, points, *, target, policy):
++        self.upserted = tuple(points)
++        return QdrantProjectionWriteResult(
++            target=target,
++            point_ids=tuple(point.point_id for point in points),
++        )
++
++    def search_vector(self, vector, *, target, policy, query):
++        self.search_query = query
++        return QdrantRecallResult(
++            target=target,
++            query=query,
++            hits=(
++                QdrantRecallHit(
++                    point_id="qdrant-point:local",
++                    sql_context_ref="sql:local:1",
++                    score=0.9,
++                    payload=(("sql_authority_ref", "sql-authority:sqlite:local"),),
++                ),
++                QdrantRecallHit(
++                    point_id="qdrant-point:foreign",
++                    sql_context_ref="sql:foreign:1",
++                    score=0.8,
++                    payload=(("sql_authority_ref", "sql-authority:sqlite:foreign"),),
++                ),
++                QdrantRecallHit(
++                    point_id="qdrant-point:legacy",
++                    sql_context_ref="sql:legacy:1",
++                    score=0.7,
++                ),
++            ),
++        )
++
++    def close(self):
++        self.closed = True
++
++
++def _point() -> QdrantProjectionPoint:
++    return QdrantProjectionPoint(
++        point_id="qdrant-point:test",
++        embedding_ref="embedding:passage:test",
++        source_ref="source:test",
++        sql_context_ref="sql:local:1",
++        vector=(1.0, 0.0),
++        payload=(("sql_ref", "sql:local:1"),),
++    )
++
++
++def test_scope_is_stable_and_does_not_disclose_db_path(tmp_path) -> None:
++    scope1 = derive_sqlite_authority_scope(tmp_path / "context.sqlite3")
++    scope2 = derive_sqlite_authority_scope(tmp_path / "context.sqlite3")
++
++    assert scope1 == scope2
++    mapping = scope1.to_mapping()
++    assert mapping["authority_ref"].startswith("sql-authority:sqlite:")
++    assert str(tmp_path) not in str(mapping)
++    assert mapping["sql_path_disclosed"] is False
++
++
++def test_scope_enriches_point_payload() -> None:
++    scope = derive_sqlite_authority_scope(".var/local/context.sqlite3")
++    scoped = add_sql_authority_scope_to_point(_point(), scope)
++
++    payload = dict(scoped.payload)
++    assert payload["sql_ref"] == "sql:local:1"
++    assert payload["sql_authority_ref"] == scope.authority_ref
++    assert payload["sql_store_kind"] == "sqlite"
++
++
++def test_wrapper_filters_foreign_and_legacy_hits() -> None:
++    delegate = FakeExecutor()
++    scope = derive_sqlite_authority_scope(".var/local/context.sqlite3")
++    scope = type(scope)(
++        authority_ref="sql-authority:sqlite:local",
++        store_kind="sqlite",
++        namespace=scope.namespace,
++    )
++    wrapper = SqlAuthorityScopedQdrantExecutor(delegate, scope)
++    target = QdrantProjectionTarget(vector_dimension=2)
++    policy = QdrantProjectionPolicy(max_recall_hits=8)
++    query = QdrantRecallQuery(query_ref="embedding:query:test", limit=2)
++
++    result = wrapper.search_vector(
++        (1.0, 0.0),
++        target=target,
++        policy=policy,
++        query=query,
++    )
++
++    assert result.sql_context_refs == ("sql:local:1",)
++    assert delegate.search_query.limit == 8
++    assert result.capped is True
++
++
++def test_wrapper_scopes_upserts_and_closes_delegate() -> None:
++    delegate = FakeExecutor()
++    scope = derive_sqlite_authority_scope(".var/local/context.sqlite3")
++    wrapper = SqlAuthorityScopedQdrantExecutor(delegate, scope)
++    target = QdrantProjectionTarget(vector_dimension=2)
++    policy = QdrantProjectionPolicy()
++
++    result = wrapper.upsert_points((_point(),), target=target, policy=policy)
++    wrapper.close()
++
++    assert result.acknowledged is True
++    assert dict(delegate.upserted[0].payload)["sql_authority_ref"] == scope.authority_ref
++    assert delegate.closed is True
++
++
++def test_strict_grpc_separates_rest_and_grpc_ports() -> None:
++    policy = QdrantStrictGrpcTransportPolicy()
++    assert policy.to_mapping()["requested_data_transport"] == "grpc"
++    assert policy.to_mapping()["rest_admin_only"] is True
++
++
++def test_strict_grpc_rejects_rest_url_on_grpc_port() -> None:
++    try:
++        QdrantStrictGrpcTransportPolicy(
++            rest_admin_url="http://127.0.0.1:6334",
++            grpc_port=6334,
++        )
++    except ValueError as exc:
++        assert "must differ" in str(exc)
++    else:
++        raise AssertionError("expected ValueError")
+diff --git a/tests/rules/test_qdrant_sql_authority_scope_0271_rule.py b/tests/rules/test_qdrant_sql_authority_scope_0271_rule.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c7b20924d8f7c79cee01528145ce9cc351bb79a2
+--- /dev/null
++++ b/tests/rules/test_qdrant_sql_authority_scope_0271_rule.py
+@@ -0,0 +1,52 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src/inference/qdrant_sql_authority_scope.py"
++TOOL = ROOT / "tools/check_qdrant_sql_authority_scope_0271.py"
++DOC = ROOT / "doc/architecture/QDRANT_SQL_AUTHORITY_SCOPE_STRICT_GRPC_0271.md"
++RULE = ROOT / "doc/code-rules/0271_qdrant_sql_authority_scope_strict_grpc_rule.md"
++
++
++def test_0271_r4_reuses_existing_executor_protocol() -> None:
++    text = MODULE.read_text(encoding="utf-8")
++    assert "QdrantProjectionExecutor" in text
++    assert "class SqlAuthorityScopedQdrantExecutor" in text
++    assert "RuntimeManager" not in text
++    assert "Orchestrator" not in text
++
++
++def test_0271_r4_has_no_network_or_service_control() -> None:
++    combined = "\n".join(
++        path.read_text(encoding="utf-8") for path in (MODULE, TOOL, DOC, RULE)
++    )
++    for forbidden in (
++        "subprocess",
++        "rc-service",
++        "socket.",
++        "urllib.request",
++        "requests.",
++        "QdrantClient(",
++        "sqlite3.connect",
++        "Scheduler.run(",
++    ):
++        assert forbidden not in combined
++
++
++def test_0271_r4_preserves_authority_and_shm_boundaries() -> None:
++    combined = DOC.read_text(encoding="utf-8") + RULE.read_text(encoding="utf-8")
++    for phrase in (
++        "SQL remains the durable authority",
++        "payload.sql_authority_ref",
++        "REST administration",
++        "gRPC data operations",
++        "SHM remains unchanged",
++    ):
++        assert phrase in combined
++
++
++def test_0271_r4_tool_is_readiness_only() -> None:
++    text = TOOL.read_text(encoding="utf-8")
++    assert '"network_used": False' in text
++    assert '"qdrant_called": False' in text
++    assert '"touches_shm": False' in text
++    assert '"starts_qdrant": False' in text
+diff --git a/tools/check_qdrant_sql_authority_scope_0271.py b/tools/check_qdrant_sql_authority_scope_0271.py
+new file mode 100755
+index 0000000000000000000000000000000000000000..5b357a366cdd425b994a46e64ec725ea935d783a
+--- /dev/null
++++ b/tools/check_qdrant_sql_authority_scope_0271.py
+@@ -0,0 +1,108 @@
++#!/usr/bin/env python3
++"""Check SQL-authority scope and strict gRPC transport without network IO."""
++
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++SRC_ROOT = ROOT / "src"
++for _path in (str(SRC_ROOT), str(ROOT)):
++    if _path not in sys.path:
++        sys.path.insert(0, _path)
++
++from inference.qdrant_sql_authority_scope import (  # noqa: E402
++    QdrantStrictGrpcTransportPolicy,
++    derive_sqlite_authority_scope,
++)
++
++DEFAULT_DB_PATH = ROOT / ".var/local/scheduler_managed_db_api_sql_context_store_0260.sqlite3"
++DEFAULT_OUTPUT = ROOT / ".var/reports/qdrant_sql_authority_scope_strict_grpc_0271.json"
++
++
++def parse_args() -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--db-path", default=str(DEFAULT_DB_PATH))
++    parser.add_argument("--sql-authority-namespace", default="autodoc-local")
++    parser.add_argument("--qdrant-url", default="http://127.0.0.1:6333")
++    parser.add_argument("--qdrant-grpc-port", type=int, default=6334)
++    parser.add_argument(
++        "--qdrant-prefer-grpc",
++        action=argparse.BooleanOptionalAction,
++        default=True,
++    )
++    parser.add_argument(
++        "--strict-data-grpc",
++        action=argparse.BooleanOptionalAction,
++        default=True,
++    )
++    parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
++    parser.add_argument("--format", choices=("json", "summary"), default="json")
++    return parser.parse_args()
++
++
++def build_report(args: argparse.Namespace) -> dict[str, object]:
++    issues: list[str] = []
++    scope = None
++    transport = None
++    try:
++        scope = derive_sqlite_authority_scope(
++            args.db_path,
++            namespace=args.sql_authority_namespace,
++        )
++        transport = QdrantStrictGrpcTransportPolicy(
++            rest_admin_url=args.qdrant_url,
++            grpc_port=args.qdrant_grpc_port,
++            prefer_grpc=args.qdrant_prefer_grpc,
++            strict_data_grpc=args.strict_data_grpc,
++        )
++    except (TypeError, ValueError) as exc:
++        issues.append(f"{type(exc).__name__}:{exc}")
++
++    return {
++        "qdrant_sql_authority_scope_strict_grpc": True,
++        "valid": not issues,
++        "issues": issues,
++        "scope": scope.to_mapping() if scope is not None else None,
++        "transport": transport.to_mapping() if transport is not None else None,
++        "network_used": False,
++        "qdrant_called": False,
++        "touches_shm": False,
++        "starts_qdrant": False,
++        "sql_remains_authority": True,
++        "integration_required": True,
++        "next": "0271-r5-bind-sql-authority-scope-to-live-qdrant",
++    }
++
++
++def main() -> int:
++    args = parse_args()
++    report = build_report(args)
++    output = Path(args.output)
++    output.parent.mkdir(parents=True, exist_ok=True)
++    output.write_text(
++        json.dumps(report, indent=2, sort_keys=True) + "\n",
++        encoding="utf-8",
++    )
++    if args.format == "summary":
++        scope = report.get("scope") or {}
++        transport = report.get("transport") or {}
++        print(
++            "qdrant_sql_authority_scope_ready="
++            f"{report['valid']} issues={len(report['issues'])} "
++            f"authority_ref={scope.get('authority_ref', '-')} "
++            f"data_transport={transport.get('requested_data_transport', '-')} "
++            f"strict_data_grpc={transport.get('strict_data_grpc', False)} "
++            f"rest_admin_only={transport.get('rest_admin_only', False)} "
++            "network_used=False touches_shm=False"
++        )
++    else:
++        print(json.dumps(report, indent=2, sort_keys=True))
++    return 0 if report["valid"] else 2
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

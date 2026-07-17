@@ -1,0 +1,258 @@
+diff --git a/config/github_project_v2_query_only.example.ini b/config/github_project_v2_query_only.example.ini
+index 21fd98b..e1463b2 100644
+--- a/config/github_project_v2_query_only.example.ini
++++ b/config/github_project_v2_query_only.example.ini
+@@ -17,17 +17,17 @@
+ # Optional repository-Issue/Actions bridge only. The ProjectV2-native path does
+ # not contact this repository. Replace it only when intentionally enabling and
+ # checking the secondary bridge; keep the three repository values identical.
+-repositories = newicody/projects
+-workflow_name = autodoc-controlled-research.yml
+-artifact_name_prefix = autodoc-
+-trigger_source = github_action_workflow_dispatch
++repositories = newicody/autodoc-ideas
++workflow_name = autodoc-ticket-artifact.yml
++artifact_name_prefix = autodoc-ticket-artifact-
++trigger_source = github_action_on_ticket_event
+
+ [scan]
+ mode = fcron
+-interval_minutes = 1
++interval_minutes = 10
+ working_directory = /home/eric/projet/git/autodoc
+ python_executable = /home/eric/python/bin/python
+-scan_command = tools/run_github_project_v2_en_cours_dispatch_once_0275_r8.py --config config/github_project_v2_query_only.example.ini --execute --policy-decision-id policy:0275-r8:fcron-en-cours-dispatch
++scan_command = tools/run_github_project_v2_query_only_snapshot_0272.py --execute --policy-decision-id policy:0272:fcron-project-v2-query-only
+ state_path = .var/github/project_v2/state/index.json
+ inbox_dir = .var/github/project_v2/snapshots
+ fcron_table_path = .var/fcron/autodoc-github-project-v2-snapshot.fcrontab
+@@ -41,7 +41,7 @@
+
+ [safety]
+ development_repository = newicody/autodoc
+-allowed_repositories = newicody/projects
++allowed_repositories = newicody/autodoc-ideas
+ read_only_scan = true
+ query_only = true
+ graphql_mutation_allowed = false
+@@ -59,9 +59,9 @@
+ [deployment_readiness]
+ # Query-only readiness. ProjectV2 is mandatory; the repository-Issue Actions
+ # bridge is optional and checked only with --check-actions-bridge.
+-workflow_repository = newicody/projects
+-workflow_name = autodoc-controlled-research.yml
+-workflow_path = .github/workflows/autodoc-controlled-research.yml
++workflow_repository = newicody/autodoc-ideas
++workflow_name = autodoc-ticket-artifact.yml
++workflow_path = .github/workflows/autodoc-ticket-artifact.yml
+ workflow_template_path = templates/github/autodoc-ticket-artifact.yml
+ builder_path = scripts/build_autodoc_ticket_artifact.py
+ builder_template_path = templates/github/scripts/build_autodoc_ticket_artifact.py
+diff --git a/tests/rules/test_github_project_v2_0272_config_compatibility_0275_r8_r1_rule.py b/tests/rules/test_github_project_v2_0272_config_compatibility_0275_r8_r1_rule.py
+new file mode 100644
+index 0000000..f5aed7f
+--- /dev/null
++++ b/tests/rules/test_github_project_v2_0272_config_compatibility_0275_r8_r1_rule.py
+@@ -0,0 +1,71 @@
++from configparser import ConfigParser
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++CONFIG = ROOT / "config/github_project_v2_query_only.example.ini"
++
++
++def _config() -> ConfigParser:
++    parser = ConfigParser(interpolation=None)
++    loaded = parser.read(CONFIG, encoding="utf-8")
++    assert loaded == [str(CONFIG)]
++    return parser
++
++
++def test_0275_r8_r1_preserves_the_locked_0272_scan_contract() -> None:
++    parser = _config()
++
++    assert parser["artifact_source"]["repositories"] == "newicody/autodoc-ideas"
++    assert (
++        parser["artifact_source"]["workflow_name"]
++        == "autodoc-ticket-artifact.yml"
++    )
++    assert (
++        parser["artifact_source"]["artifact_name_prefix"]
++        == "autodoc-ticket-artifact-"
++    )
++    assert (
++        parser["artifact_source"]["trigger_source"]
++        == "github_action_on_ticket_event"
++    )
++    assert parser["scan"].getint("interval_minutes") == 10
++    assert (
++        parser["scan"]["scan_command"]
++        == "tools/run_github_project_v2_query_only_snapshot_0272.py "
++        "--execute --policy-decision-id "
++        "policy:0272:fcron-project-v2-query-only"
++    )
++
++
++def test_0275_r8_r1_preserves_0272_readiness_and_safety_defaults() -> None:
++    parser = _config()
++
++    assert (
++        parser["safety"]["allowed_repositories"]
++        == "newicody/autodoc-ideas"
++    )
++    readiness = parser["deployment_readiness"]
++    assert readiness["workflow_repository"] == "newicody/autodoc-ideas"
++    assert readiness["workflow_name"] == "autodoc-ticket-artifact.yml"
++    assert (
++        readiness["workflow_path"]
++        == ".github/workflows/autodoc-ticket-artifact.yml"
++    )
++
++
++def test_0275_r8_r1_keeps_the_new_dispatch_scope_isolated() -> None:
++    parser = _config()
++
++    dispatch = parser["workflow_dispatch"]
++    assert dispatch["repository"] == "newicody/projects"
++    assert dispatch["workflow_name"] == "autodoc-controlled-research.yml"
++    assert dispatch["target_status"] == "En cours"
++    assert dispatch.getboolean("allow_workflow_dispatch") is True
++    assert dispatch.getboolean("allow_remote_mutation") is True
++
++    safety = parser["safety"]
++    assert safety.getboolean("query_only") is True
++    assert safety.getboolean("graphql_mutation_allowed") is False
++    assert safety.getboolean("allow_workflow_dispatch") is False
++    assert safety.getboolean("allow_remote_mutation") is False
+diff --git a/doc/CHANGELOG_0275_R8_R1_PROJECT_V2_0272_CONFIG_COMPATIBILITY_FIX.md b/doc/CHANGELOG_0275_R8_R1_PROJECT_V2_0272_CONFIG_COMPATIBILITY_FIX.md
+new file mode 100644
+index 0000000..0a9ee63
+--- /dev/null
++++ b/doc/CHANGELOG_0275_R8_R1_PROJECT_V2_0272_CONFIG_COMPATIBILITY_FIX.md
+@@ -0,0 +1,24 @@
++# Changelog — 0275-r8-r1 ProjectV2 0272 config compatibility fix
++
++## Fixed
++
++- restored the locked 0272 artifact-source trigger;
++- restored the locked ten-minute 0272 scan interval;
++- restored the original 0272 query-only scan command;
++- restored the 0272 safety allow-list and optional Actions bridge;
++- kept the new 0275-r8 `[workflow_dispatch]` scope unchanged.
++
++## Root cause
++
++0275-r8 reused the existing 0272 configuration file but replaced values
++validated by `github_project_push_frame_config.py`. This caused all consumers
++of the established 0272 loader to reject the example config before reaching
++their own logic.
++
++## Boundaries
++
++- no runtime contract change;
++- no Project or issue mutation;
++- no workflow-template change;
++- no Scheduler change;
++- no dependency change.
+diff --git a/doc/manifests/MANIFEST_0275_R8_R1_PROJECT_V2_0272_CONFIG_COMPATIBILITY_FIX_CHANGED_FILES.md b/doc/manifests/MANIFEST_0275_R8_R1_PROJECT_V2_0272_CONFIG_COMPATIBILITY_FIX_CHANGED_FILES.md
+new file mode 100644
+index 0000000..e1736e5
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0275_R8_R1_PROJECT_V2_0272_CONFIG_COMPATIBILITY_FIX_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest — 0275-r8-r1 ProjectV2 0272 config compatibility fix
++
++Modified:
++
++- `config/github_project_v2_query_only.example.ini`
++
++Added:
++
++- `tests/rules/test_github_project_v2_0272_config_compatibility_0275_r8_r1_rule.py`
++- `doc/CHANGELOG_0275_R8_R1_PROJECT_V2_0272_CONFIG_COMPATIBILITY_FIX.md`
++- `doc/manifests/MANIFEST_0275_R8_R1_PROJECT_V2_0272_CONFIG_COMPATIBILITY_FIX_CHANGED_FILES.md`
++- `doc/releases/0275-r8-r1-project-v2-0272-config-compatibility-fix.md`
++- `PHASE0275_R8_R1_PROJECT_V2_0272_CONFIG_COMPATIBILITY_FIX_TEST_REPORT.md`
+diff --git a/doc/releases/0275-r8-r1-project-v2-0272-config-compatibility-fix.md b/doc/releases/0275-r8-r1-project-v2-0272-config-compatibility-fix.md
+new file mode 100644
+index 0000000..9b1da47
+--- /dev/null
++++ b/doc/releases/0275-r8-r1-project-v2-0272-config-compatibility-fix.md
+@@ -0,0 +1,9 @@
++# 0275-r8-r1 — ProjectV2 0272 config compatibility fix
++
++This microfix restores every established 0272 value that was changed by
++0275-r8 while retaining the isolated `[workflow_dispatch]` section used for
++`newicody/projects`.
++
++The query-only snapshot, readiness fixture and optional legacy bridge remain
++backward compatible. The new `En cours` dispatcher remains available through
++its own config section and bounded runner.
+diff --git a/PHASE0275_R8_R1_PROJECT_V2_0272_CONFIG_COMPATIBILITY_FIX_TEST_REPORT.md b/PHASE0275_R8_R1_PROJECT_V2_0272_CONFIG_COMPATIBILITY_FIX_TEST_REPORT.md
+new file mode 100644
+index 0000000..74923c7
+--- /dev/null
++++ b/PHASE0275_R8_R1_PROJECT_V2_0272_CONFIG_COMPATIBILITY_FIX_TEST_REPORT.md
+@@ -0,0 +1,61 @@
++# Phase 0275-r8-r1 test report — ProjectV2 0272 compatibility
++
++## Reported failure
++
++```text
++4 failed, 2705 passed, 1 skipped
++```
++
++All four failures stopped in the common 0272 configuration loader with:
++
++```text
++github artifact scan config rejected: interval_not_10, trigger_source
++```
++
++The affected tests were the two deployment-readiness CLI fixtures and the
++two ProjectV2 query-only snapshot CLI fixtures.
++
++## Correction
++
++Existing 0272 sections are restored exactly:
++
++```text
++artifact_source
++scan
++safety
++deployment_readiness
++```
++
++The new section remains:
++
++```text
++workflow_dispatch
++```
++
++## Validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++
++PYTHONPATH=src:. python -m pytest -q \
++  tests/rules/test_github_project_v2_0272_config_compatibility_0275_r8_r1_rule.py \
++  tests/tools/test_run_github_project_system_deployment_readiness_0272.py \
++  tests/tools/test_run_github_project_v2_query_only_snapshot_0272.py \
++  tests/context/test_github_project_v2_en_cours_dispatch_0275_r8.py \
++  tests/tools/test_github_project_v2_en_cours_dispatch_tools_0275_r8.py
++
++PYTHONPATH=src:. python -m pytest -q tests/rules
++PYTHONPATH=src:. python -m pytest -q
++```
++
++## Phase review
++
++```text
++config_0272_contract_restored: true
++workflow_dispatch_section_preserved: true
++scheduler_modified: false
++scheduler_run_modified: false
++project_mutation_added: false
++issue_mutation_added: false
++non_stdlib_dependencies_added: false
++```

@@ -1,0 +1,821 @@
+diff --git a/PHASE0259_SCHEDULER_MANAGED_SQL_CONTEXT_STORE_USAGE_TEST_REPORT.md b/PHASE0259_SCHEDULER_MANAGED_SQL_CONTEXT_STORE_USAGE_TEST_REPORT.md
+new file mode 100644
+index 0000000..9e61e47
+--- /dev/null
++++ b/PHASE0259_SCHEDULER_MANAGED_SQL_CONTEXT_STORE_USAGE_TEST_REPORT.md
+@@ -0,0 +1,30 @@
++# Phase 0259 test report - Scheduler-managed SQLContextStore usage
++
++## Expected validation
++
++```text
++python -m compileall -q src tests tools
++python -m pytest -q tests/context/test_scheduler_managed_sql_context_store_usage_0259.py
++python -m pytest -q tests/tools/test_build_scheduler_managed_sql_context_store_usage_0259.py
++python -m pytest -q tests/rules/test_scheduler_managed_sql_context_store_usage_0259_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
++
++## Direct smoke
++
++```text
++PYTHONPATH=src:. python tools/build_scheduler_managed_sql_context_store_usage_0259.py --bootstrap .var/reports/scheduler_runtime_bootstrap_registry_attachment_0258.json --output .var/reports/scheduler_managed_sql_context_store_usage_0259.json --format summary
++```
++
++## Execute smoke with smoke-only existing store
++
++```text
++PYTHONPATH=src:. python tools/build_scheduler_managed_sql_context_store_usage_0259.py --bootstrap .var/reports/scheduler_runtime_bootstrap_registry_attachment_0258.json --execute --policy-decision-id policy:0259:demo --demo-existing-store --format summary
++```
++
++## Boundary
++
++Scheduler uses an existing SQLContextStore object.  It does not start
++PostgreSQL, create a SQL store, create a RuntimeManager, modify Scheduler.run,
++call Qdrant, run OpenVINO, call GitHub, or publish EventBus commands.
+diff --git a/doc/CHANGELOG_0259_SCHEDULER_MANAGED_SQL_CONTEXT_STORE_USAGE.md b/doc/CHANGELOG_0259_SCHEDULER_MANAGED_SQL_CONTEXT_STORE_USAGE.md
+new file mode 100644
+index 0000000..be0e165
+--- /dev/null
++++ b/doc/CHANGELOG_0259_SCHEDULER_MANAGED_SQL_CONTEXT_STORE_USAGE.md
+@@ -0,0 +1,13 @@
++# Changelog 0259 - Scheduler-managed SQLContextStore usage
++
++## r1
++
++Adds the Scheduler-managed SQLContextStore usage boundary.
++
++The patch validates that the 0258 bootstrap attachment exposes
++`sql.context.write` and `sql.context.rehydrate` through `sql_context_store`.
++It supports controlled execution only when a policy decision id and existing
++store object are supplied.
++
++It does not create a new SQL store, does not start PostgreSQL, does not modify
++Scheduler.run, and does not create a RuntimeManager.
+diff --git a/doc/architecture/SCHEDULER_MANAGED_SQL_CONTEXT_STORE_USAGE_0259.md b/doc/architecture/SCHEDULER_MANAGED_SQL_CONTEXT_STORE_USAGE_0259.md
+new file mode 100644
+index 0000000..2ab9cbd
+--- /dev/null
++++ b/doc/architecture/SCHEDULER_MANAGED_SQL_CONTEXT_STORE_USAGE_0259.md
+@@ -0,0 +1,57 @@
++# Scheduler-managed SQLContextStore usage - 0259
++
++## Intent
++
++0259 adapts SQL usage under Scheduler ownership.
++
++Scheduler-managed SQLContextStore usage means:
++
++```text
++Scheduler bootstrap attachment
++  -> sql.context.write
++  -> existing SQLContextStore object
++```
++
++Scheduler does not start PostgreSQL.  OpenRC and the host operating system own
++the PostgreSQL daemon lifecycle.
++
++Scheduler uses an existing SQLContextStore object.  It does not create a new SQL
++store, SQL worker, SQL orchestrator, RuntimeManager, or component-specific
++production CLI.
++
++## Capability requirement
++
++The 0258 attachment must expose:
++
++```text
++sql.context.write resolves to sql_context_store
++sql.context.rehydrate resolves to sql_context_store
++```
++
++## Controlled execution
++
++Dry-run is valid without a store object.
++
++Execution requires:
++
++```text
++execute=True
++policy_decision_id
++existing SQLContextStore object
++```
++
++The required wording is: execute requires policy_decision_id.
++
++## Boundary
++
++No PostgreSQL daemon start.  No Qdrant call.  No OpenVINO call.  No GitHub call.
++No EventBus command path.  No Scheduler.run modification.
++
++Smoke tools remain validation helpers only.  There is no CLI per component as
++the runtime API.
++
++## Next step
++
++0260 can bind the real DbApiSqlContextStore constructor or existing factory
++surface selected by the 0256/0257 reports, then perform a real controlled write
++through Scheduler ownership.
+diff --git a/doc/code-rules/0259_scheduler_managed_sql_context_store_usage_rule.md b/doc/code-rules/0259_scheduler_managed_sql_context_store_usage_rule.md
+new file mode 100644
+index 0000000..429ab57
+--- /dev/null
++++ b/doc/code-rules/0259_scheduler_managed_sql_context_store_usage_rule.md
+@@ -0,0 +1,31 @@
++# Code rule 0259 - Scheduler-managed SQLContextStore usage
++
++Required:
++
++```text
++Scheduler-managed SQLContextStore usage
++Scheduler does not start PostgreSQL
++Scheduler uses an existing SQLContextStore object
++sql.context.write resolves to sql_context_store
++execute requires policy_decision_id
++no CLI per component
++```
++
++Forbidden:
++
++```text
++new SQL store
++SQL worker
++SQL orchestrator
++RuntimeManager
++Scheduler.run modification
++PostgreSQL daemon start
++Qdrant call
++OpenVINO call
++GitHub call
++EventBus command path
++```
++
++0260 can bind the real DbApiSqlContextStore constructor selected by the reuse
++reports.  0259 only adapts the Scheduler-managed usage boundary and controlled
++execution gate.
+diff --git a/doc/docs/architecture/runtime/259_scheduler_managed_sql_context_store_usage.dot b/doc/docs/architecture/runtime/259_scheduler_managed_sql_context_store_usage.dot
+new file mode 100644
+index 0000000..c5f9c62
+--- /dev/null
++++ b/doc/docs/architecture/runtime/259_scheduler_managed_sql_context_store_usage.dot
+@@ -0,0 +1,14 @@
++digraph scheduler_managed_sql_context_store_usage_0259 {
++  rankdir=LR;
++
++  attach [label="0258 Scheduler attachment"];
++  cap [label="sql.context.write"];
++  sqlobj [label="existing SQLContextStore object"];
++  pg [label="PostgreSQL daemon\nexternal lifecycle"];
++  result [label="sql_ref"];
++
++  attach -> cap;
++  cap -> sqlobj [label="Scheduler uses"];
++  sqlobj -> pg [label="uses, does not start"];
++  sqlobj -> result;
++}
+diff --git a/doc/manifests/MANIFEST_0259_SCHEDULER_MANAGED_SQL_CONTEXT_STORE_USAGE_CHANGED_FILES.md b/doc/manifests/MANIFEST_0259_SCHEDULER_MANAGED_SQL_CONTEXT_STORE_USAGE_CHANGED_FILES.md
+new file mode 100644
+index 0000000..a877f25
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0259_SCHEDULER_MANAGED_SQL_CONTEXT_STORE_USAGE_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest 0259 - Scheduler-managed SQLContextStore usage
++
++- `src/context/scheduler_managed_sql_context_store_usage_0259.py`
++- `tools/build_scheduler_managed_sql_context_store_usage_0259.py`
++- `tests/context/test_scheduler_managed_sql_context_store_usage_0259.py`
++- `tests/tools/test_build_scheduler_managed_sql_context_store_usage_0259.py`
++- `tests/rules/test_scheduler_managed_sql_context_store_usage_0259_rule.py`
++- `doc/architecture/SCHEDULER_MANAGED_SQL_CONTEXT_STORE_USAGE_0259.md`
++- `doc/code-rules/0259_scheduler_managed_sql_context_store_usage_rule.md`
++- `doc/docs/architecture/runtime/259_scheduler_managed_sql_context_store_usage.dot`
++- `doc/CHANGELOG_0259_SCHEDULER_MANAGED_SQL_CONTEXT_STORE_USAGE.md`
++- `doc/manifests/MANIFEST_0259_SCHEDULER_MANAGED_SQL_CONTEXT_STORE_USAGE_CHANGED_FILES.md`
++- `PHASE0259_SCHEDULER_MANAGED_SQL_CONTEXT_STORE_USAGE_TEST_REPORT.md`
+diff --git a/src/context/scheduler_managed_sql_context_store_usage_0259.py b/src/context/scheduler_managed_sql_context_store_usage_0259.py
+new file mode 100644
+index 0000000..d99b1ef
+--- /dev/null
++++ b/src/context/scheduler_managed_sql_context_store_usage_0259.py
+@@ -0,0 +1,309 @@
++"""Scheduler-managed SQLContextStore usage.
++
++0259 adapts SQL usage under Scheduler ownership.  It does not create a new SQL
++store and it does not start PostgreSQL.  PostgreSQL lifecycle remains owned by
++OpenRC/host administration.  Scheduler owns the Autodoc runtime object usage:
++``sql.context.write`` and ``sql.context.rehydrate``.
++
++The module is intentionally dependency-injection based.  A real existing
++DbApiSqlContextStore, or another existing compatible SQLContextStore object, is
++provided by the Scheduler-owned runtime bootstrap in a later execution patch.
++This patch validates the capability path and performs controlled execution only
++when an existing store object is passed explicitly.
++
++No RuntimeManager is created.  No Scheduler.run modification is made.  No
++component-specific production CLI becomes the runtime API.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++import json
++from pathlib import Path
++from typing import Any, Callable, Mapping, MutableMapping, Protocol
++import uuid
++
++
++SQL_WRITE_CAPABILITY = "sql.context.write"
++SQL_REHYDRATE_CAPABILITY = "sql.context.rehydrate"
++SQL_COMPONENT_ID = "sql_context_store"
++
++
++class ExistingSqlContextStoreLike(Protocol):
++    """Existing SQLContextStore protocol used by duck typing only."""
++
++    def controlled_write(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
++        ...
++
++
++@dataclass(frozen=True)
++class SchedulerManagedSqlContextWriteRequest:
++    """Controlled SQL context write request routed by Scheduler."""
++
++    intent_id: str
++    text: str
++    text_kind: str = "passage"
++    source_ref: str = "scheduler-managed-sql-context-store-usage-0259"
++    table: str = "context_records"
++    operation: str = "insert_if_absent"
++    capability: str = SQL_WRITE_CAPABILITY
++    component_id: str = SQL_COMPONENT_ID
++    policy_decision_id: str = ""
++    metadata: Mapping[str, Any] = field(default_factory=dict)
++
++    def to_payload(self) -> dict[str, Any]:
++        return {
++            "intent_id": self.intent_id,
++            "text": self.text,
++            "text_kind": self.text_kind,
++            "source_ref": self.source_ref,
++            "table": self.table,
++            "operation": self.operation,
++            "capability": self.capability,
++            "component_id": self.component_id,
++            "policy_decision_id": self.policy_decision_id,
++            "metadata": dict(self.metadata),
++        }
++
++
++@dataclass(frozen=True)
++class SchedulerManagedSqlContextStoreUsageResult:
++    """Result for Scheduler-managed SQLContextStore usage."""
++
++    valid: bool
++    issues: tuple[str, ...]
++    request: SchedulerManagedSqlContextWriteRequest
++    execute: bool
++    dry_run: bool
++    scheduler_owned: bool = True
++    uses_existing_store_object: bool = True
++    starts_postgresql: bool = False
++    creates_sql_store: bool = False
++    creates_runtime_manager: bool = False
++    modifies_scheduler_run: bool = False
++    sql_ref: str = ""
++    store_result: Mapping[str, Any] = field(default_factory=dict)
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "scheduler_managed_sql_context_store_usage": True,
++            "valid": self.valid,
++            "issues": list(self.issues),
++            "execute": self.execute,
++            "dry_run": self.dry_run,
++            "scheduler_owned": self.scheduler_owned,
++            "uses_existing_store_object": self.uses_existing_store_object,
++            "starts_postgresql": self.starts_postgresql,
++            "creates_sql_store": self.creates_sql_store,
++            "creates_runtime_manager": self.creates_runtime_manager,
++            "modifies_scheduler_run": self.modifies_scheduler_run,
++            "sql_ref": self.sql_ref,
++            "request": self.request.to_payload(),
++            "store_result": dict(self.store_result),
++        }
++
++
++def _attachment_payload(bootstrap_payload: Mapping[str, Any]) -> Mapping[str, Any]:
++    attachment = bootstrap_payload.get("attachment", {})
++    return attachment if isinstance(attachment, Mapping) else {}
++
++
++def validate_scheduler_sql_capability_attachment(
++    bootstrap_payload: Mapping[str, Any],
++) -> tuple[str, ...]:
++    """Validate that Scheduler bootstrap exposes SQL capabilities."""
++
++    issues: list[str] = []
++    if not bootstrap_payload.get("scheduler_runtime_bootstrap_registry_attachment", False):
++        issues.append("bootstrap payload must be scheduler_runtime_bootstrap_registry_attachment")
++    if not bootstrap_payload.get("valid", False):
++        issues.append("bootstrap payload must be valid")
++    attachment = _attachment_payload(bootstrap_payload)
++    if attachment.get("owner") != "scheduler":
++        issues.append("attachment owner must be scheduler")
++    if not attachment.get("launcher_bootstrap_only", False):
++        issues.append("launcher must remain bootstrap-only")
++    if not attachment.get("no_cli_per_component", False):
++        issues.append("runtime API must keep no CLI per component")
++    if attachment.get("creates_runtime_manager", False):
++        issues.append("must not create a RuntimeManager")
++    if attachment.get("starts_components", False):
++        issues.append("0259 must not start external services or runtime components")
++    if attachment.get("modifies_scheduler_run", False):
++        issues.append("must not modify Scheduler.run")
++
++    capability_index = attachment.get("capability_index", {})
++    if not isinstance(capability_index, Mapping):
++        issues.append("capability_index must be present")
++        capability_index = {}
++    if capability_index.get(SQL_WRITE_CAPABILITY) != SQL_COMPONENT_ID:
++        issues.append("sql.context.write must resolve to sql_context_store")
++    if capability_index.get(SQL_REHYDRATE_CAPABILITY) != SQL_COMPONENT_ID:
++        issues.append("sql.context.rehydrate must resolve to sql_context_store")
++
++    dependency_index = attachment.get("dependency_index", {})
++    if isinstance(dependency_index, Mapping):
++        if dependency_index.get(SQL_COMPONENT_ID) not in ([], (), None):
++            issues.append("sql_context_store usage must not depend on Qdrant or OpenVINO")
++    else:
++        issues.append("dependency_index must be present")
++    return tuple(issues)
++
++
++def build_scheduler_managed_sql_context_write_request(
++    bootstrap_payload: Mapping[str, Any],
++    *,
++    text: str,
++    intent_id: str = "",
++    policy_decision_id: str = "",
++    metadata: Mapping[str, Any] | None = None,
++) -> SchedulerManagedSqlContextWriteRequest:
++    """Build a controlled SQL write request routed by Scheduler."""
++
++    if not intent_id:
++        intent_id = "intent:sql-context-write:" + uuid.uuid4().hex
++    return SchedulerManagedSqlContextWriteRequest(
++        intent_id=intent_id,
++        text=text,
++        policy_decision_id=policy_decision_id,
++        metadata={
++            "bootstrap_digest": bootstrap_payload.get("registry_payload_digest", ""),
++            **dict(metadata or {}),
++        },
++    )
++
++
++def _extract_sql_ref(result: Mapping[str, Any]) -> str:
++    for key in ("sql_ref", "record_ref", "record_id", "id"):
++        value = result.get(key)
++        if value:
++            return str(value)
++    nested = result.get("record")
++    if isinstance(nested, Mapping):
++        return _extract_sql_ref(nested)
++    return ""
++
++
++def _call_existing_store(store: object, payload: Mapping[str, Any]) -> Mapping[str, Any]:
++    """Call an existing SQLContextStore-like object without knowing its class."""
++
++    controlled_write = getattr(store, "controlled_write", None)
++    if callable(controlled_write):
++        result = controlled_write(payload)
++        return dict(result) if isinstance(result, Mapping) else {"result": result}
++
++    upsert_record = getattr(store, "upsert_record", None)
++    if callable(upsert_record):
++        try:
++            result = upsert_record(payload)
++        except TypeError:
++            result = upsert_record(
++                record_id=payload.get("intent_id"),
++                content=payload.get("text"),
++                metadata=dict(payload.get("metadata", {})),
++            )
++        return dict(result) if isinstance(result, Mapping) else {"result": result}
++
++    raise TypeError("existing SQLContextStore object must expose controlled_write or upsert_record")
++
++
++def run_scheduler_managed_sql_context_store_usage(
++    bootstrap_payload: Mapping[str, Any],
++    *,
++    text: str,
++    execute: bool = False,
++    policy_decision_id: str = "",
++    store: object | None = None,
++    intent_id: str = "",
++    metadata: Mapping[str, Any] | None = None,
++) -> SchedulerManagedSqlContextStoreUsageResult:
++    """Route SQL context write usage through Scheduler-owned capability metadata."""
++
++    request = build_scheduler_managed_sql_context_write_request(
++        bootstrap_payload,
++        text=text,
++        intent_id=intent_id,
++        policy_decision_id=policy_decision_id,
++        metadata=metadata,
++    )
++    issues = list(validate_scheduler_sql_capability_attachment(bootstrap_payload))
++    if execute and not policy_decision_id:
++        issues.append("execute requires policy_decision_id")
++    if execute and store is None:
++        issues.append("execute requires an existing SQLContextStore object")
++    if not text.strip():
++        issues.append("text must not be empty")
++
++    if issues:
++        return SchedulerManagedSqlContextStoreUsageResult(
++            valid=False,
++            issues=tuple(issues),
++            request=request,
++            execute=execute,
++            dry_run=not execute,
++        )
++
++    if not execute:
++        return SchedulerManagedSqlContextStoreUsageResult(
++            valid=True,
++            issues=(),
++            request=request,
++            execute=False,
++            dry_run=True,
++        )
++
++    assert store is not None
++    store_result = _call_existing_store(store, request.to_payload())
++    sql_ref = _extract_sql_ref(store_result)
++    if not sql_ref:
++        return SchedulerManagedSqlContextStoreUsageResult(
++            valid=False,
++            issues=("existing SQLContextStore result must expose sql_ref/record_ref/record_id/id",),
++            request=request,
++            execute=True,
++            dry_run=False,
++            store_result=store_result,
++        )
++
++    return SchedulerManagedSqlContextStoreUsageResult(
++        valid=True,
++        issues=(),
++        request=request,
++        execute=True,
++        dry_run=False,
++        sql_ref=sql_ref,
++        store_result=store_result,
++    )
++
++
++def load_bootstrap_attachment_payload(path: Path) -> dict[str, Any]:
++    """Load the 0258 Scheduler bootstrap attachment report."""
++
++    return json.loads(path.read_text(encoding="utf-8"))
++
++
++def write_scheduler_managed_sql_context_store_usage_report(
++    output: Path,
++    bootstrap_payload: Mapping[str, Any],
++    *,
++    text: str,
++    execute: bool = False,
++    policy_decision_id: str = "",
++) -> dict[str, Any]:
++    """Write a dry-run report for Scheduler-managed SQL usage.
++
++    This report does not execute SQL because no existing store object is passed
++    through the CLI smoke helper.
++    """
++
++    result = run_scheduler_managed_sql_context_store_usage(
++        bootstrap_payload,
++        text=text,
++        execute=execute,
++        policy_decision_id=policy_decision_id,
++        store=None,
++    )
++    payload = result.to_dict()
++    output.parent.mkdir(parents=True, exist_ok=True)
++    output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    return payload
+diff --git a/tests/context/test_scheduler_managed_sql_context_store_usage_0259.py b/tests/context/test_scheduler_managed_sql_context_store_usage_0259.py
+new file mode 100644
+index 0000000..f0bfb78
+--- /dev/null
++++ b/tests/context/test_scheduler_managed_sql_context_store_usage_0259.py
+@@ -0,0 +1,84 @@
++from context.scheduler_managed_sql_context_store_usage_0259 import (
++    run_scheduler_managed_sql_context_store_usage,
++    validate_scheduler_sql_capability_attachment,
++)
++
++
++BOOTSTRAP_PAYLOAD = {
++    "scheduler_runtime_bootstrap_registry_attachment": True,
++    "valid": True,
++    "registry_payload_digest": "sha256:demo",
++    "attachment": {
++        "owner": "scheduler",
++        "launcher_bootstrap_only": True,
++        "eventbus_observation_only": True,
++        "no_cli_per_component": True,
++        "modifies_scheduler_run": False,
++        "instantiates_components": False,
++        "starts_components": False,
++        "creates_runtime_manager": False,
++        "capability_index": {
++            "sql.context.write": "sql_context_store",
++            "sql.context.rehydrate": "sql_context_store",
++        },
++        "dependency_index": {
++            "sql_context_store": [],
++        },
++    },
++}
++
++
++class ExistingStore:
++    def controlled_write(self, payload):
++        return {
++            "sql_ref": "sql:test/" + payload["intent_id"],
++            "payload": dict(payload),
++        }
++
++
++def test_validates_scheduler_sql_capability_attachment() -> None:
++    assert validate_scheduler_sql_capability_attachment(BOOTSTRAP_PAYLOAD) == ()
++
++
++def test_sql_usage_dry_run_is_valid_without_store() -> None:
++    result = run_scheduler_managed_sql_context_store_usage(
++        BOOTSTRAP_PAYLOAD,
++        text="passage: dry run",
++    )
++
++    payload = result.to_dict()
++    assert payload["valid"] is True
++    assert payload["execute"] is False
++    assert payload["dry_run"] is True
++    assert payload["starts_postgresql"] is False
++    assert payload["creates_sql_store"] is False
++    assert payload["creates_runtime_manager"] is False
++    assert payload["modifies_scheduler_run"] is False
++
++
++def test_sql_usage_execute_requires_policy_decision_id() -> None:
++    result = run_scheduler_managed_sql_context_store_usage(
++        BOOTSTRAP_PAYLOAD,
++        text="passage: execute",
++        execute=True,
++        store=ExistingStore(),
++    )
++
++    assert result.valid is False
++    assert "execute requires policy_decision_id" in result.issues
++
++
++def test_sql_usage_execute_calls_existing_store_object() -> None:
++    result = run_scheduler_managed_sql_context_store_usage(
++        BOOTSTRAP_PAYLOAD,
++        text="passage: execute",
++        execute=True,
++        policy_decision_id="policy:0259:test",
++        store=ExistingStore(),
++        intent_id="intent:0259:test",
++    )
++
++    assert result.valid is True
++    assert result.dry_run is False
++    assert result.sql_ref == "sql:test/intent:0259:test"
++    assert result.store_result["payload"]["capability"] == "sql.context.write"
+diff --git a/tests/rules/test_scheduler_managed_sql_context_store_usage_0259_rule.py b/tests/rules/test_scheduler_managed_sql_context_store_usage_0259_rule.py
+new file mode 100644
+index 0000000..4e67854
+--- /dev/null
++++ b/tests/rules/test_scheduler_managed_sql_context_store_usage_0259_rule.py
+@@ -0,0 +1,36 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def test_0259_sql_usage_keeps_scheduler_and_external_service_boundaries() -> None:
++    source = (ROOT / "src/context/scheduler_managed_sql_context_store_usage_0259.py").read_text(
++        encoding="utf-8"
++    )
++
++    assert "Scheduler owns the Autodoc runtime object usage" in source
++    assert "does not start PostgreSQL" in source
++    assert "No RuntimeManager is created" in source
++    assert "No Scheduler.run modification is made" in source
++    assert "sql.context.write" in source
++    assert "sql.context.rehydrate" in source
++    assert "DbApiSqlContextStore" in source
++    assert "subprocess.run" not in source
++    assert "Scheduler.run(" not in source
++    assert "RuntimeManager(" not in source
++    assert "requests." not in source
++
++
++def test_0259_docs_lock_sql_usage_axis() -> None:
++    doc = (ROOT / "doc/architecture/SCHEDULER_MANAGED_SQL_CONTEXT_STORE_USAGE_0259.md").read_text(
++        encoding="utf-8"
++    )
++
++    assert "Scheduler-managed SQLContextStore usage" in doc
++    assert "Scheduler does not start PostgreSQL" in doc
++    assert "Scheduler uses an existing SQLContextStore object" in doc
++    assert "sql.context.write resolves to sql_context_store" in doc
++    assert "execute requires policy_decision_id" in doc
++    assert "no CLI per component" in doc
++    assert "0260 can bind the real DbApiSqlContextStore constructor" in doc
+diff --git a/tests/tools/test_build_scheduler_managed_sql_context_store_usage_0259.py b/tests/tools/test_build_scheduler_managed_sql_context_store_usage_0259.py
+new file mode 100644
+index 0000000..becff0e
+--- /dev/null
++++ b/tests/tools/test_build_scheduler_managed_sql_context_store_usage_0259.py
+@@ -0,0 +1,87 @@
++import json
++import subprocess
++import sys
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++BOOTSTRAP_PAYLOAD = {
++    "scheduler_runtime_bootstrap_registry_attachment": True,
++    "valid": True,
++    "registry_payload_digest": "sha256:demo",
++    "attachment": {
++        "owner": "scheduler",
++        "launcher_bootstrap_only": True,
++        "eventbus_observation_only": True,
++        "no_cli_per_component": True,
++        "modifies_scheduler_run": False,
++        "instantiates_components": False,
++        "starts_components": False,
++        "creates_runtime_manager": False,
++        "capability_index": {
++            "sql.context.write": "sql_context_store",
++            "sql.context.rehydrate": "sql_context_store",
++        },
++        "dependency_index": {
++            "sql_context_store": [],
++        },
++    },
++}
++
++
++def test_sql_usage_tool_dry_run(tmp_path: Path) -> None:
++    bootstrap = tmp_path / "bootstrap.json"
++    output = tmp_path / "usage.json"
++    bootstrap.write_text(json.dumps(BOOTSTRAP_PAYLOAD), encoding="utf-8")
++
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/build_scheduler_managed_sql_context_store_usage_0259.py",
++            "--bootstrap",
++            str(bootstrap),
++            "--output",
++            str(output),
++            "--format",
++            "summary",
++        ],
++        cwd=ROOT,
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    assert "scheduler_managed_sql_context_store_usage_valid=True" in result.stdout
++    payload = json.loads(output.read_text(encoding="utf-8"))
++    assert payload["dry_run"] is True
++    assert payload["starts_postgresql"] is False
++
++
++def test_sql_usage_tool_execute_with_demo_existing_store(tmp_path: Path) -> None:
++    bootstrap = tmp_path / "bootstrap.json"
++    bootstrap.write_text(json.dumps(BOOTSTRAP_PAYLOAD), encoding="utf-8")
++
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/build_scheduler_managed_sql_context_store_usage_0259.py",
++            "--bootstrap",
++            str(bootstrap),
++            "--execute",
++            "--policy-decision-id",
++            "policy:0259:test",
++            "--demo-existing-store",
++            "--format",
++            "summary",
++        ],
++        cwd=ROOT,
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    assert "execute=True" in result.stdout
++    assert "dry_run=False" in result.stdout
++    assert "sql_ref=sql:demo/" in result.stdout
+diff --git a/tools/build_scheduler_managed_sql_context_store_usage_0259.py b/tools/build_scheduler_managed_sql_context_store_usage_0259.py
+new file mode 100755
+index 0000000..3e4abf1
+--- /dev/null
++++ b/tools/build_scheduler_managed_sql_context_store_usage_0259.py
+@@ -0,0 +1,81 @@
++#!/usr/bin/env python3
++"""Build the Scheduler-managed SQLContextStore usage report."""
++
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++SRC_ROOT = ROOT / "src"
++for _path in (str(SRC_ROOT), str(ROOT)):
++    if _path not in sys.path:
++        sys.path.insert(0, _path)
++
++from context.scheduler_managed_sql_context_store_usage_0259 import (  # noqa: E402
++    load_bootstrap_attachment_payload,
++    run_scheduler_managed_sql_context_store_usage,
++)
++
++
++DEFAULT_BOOTSTRAP = ROOT / ".var/reports/scheduler_runtime_bootstrap_registry_attachment_0258.json"
++
++
++class DemoExistingSqlContextStore:
++    """Small smoke-only existing-store stand-in; not a runtime SQL implementation."""
++
++    def controlled_write(self, payload):
++        return {
++            "sql_ref": "sql:demo/" + str(payload["intent_id"]).split(":")[-1],
++            "selected_store_class": "DemoExistingSqlContextStore",
++            "request_table": payload["table"],
++            "request_operation": payload["operation"],
++        }
++
++
++def parse_args() -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--bootstrap", default=str(DEFAULT_BOOTSTRAP))
++    parser.add_argument("--output", default="")
++    parser.add_argument("--text", default="passage: Scheduler-managed SQLContextStore usage smoke")
++    parser.add_argument("--execute", action="store_true")
++    parser.add_argument("--policy-decision-id", default="")
++    parser.add_argument("--demo-existing-store", action="store_true")
++    parser.add_argument("--format", choices=("json", "summary"), default="json")
++    return parser.parse_args()
++
++
++def main() -> int:
++    args = parse_args()
++    bootstrap_payload = load_bootstrap_attachment_payload(Path(args.bootstrap))
++    store = DemoExistingSqlContextStore() if args.demo_existing_store else None
++    result = run_scheduler_managed_sql_context_store_usage(
++        bootstrap_payload,
++        text=args.text,
++        execute=args.execute,
++        policy_decision_id=args.policy_decision_id,
++        store=store,
++    )
++    payload = result.to_dict()
++
++    if args.output:
++        output = Path(args.output)
++        output.parent.mkdir(parents=True, exist_ok=True)
++        output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++
++    if args.format == "summary":
++        print(
++            "scheduler_managed_sql_context_store_usage_valid="
++            f"{payload['valid']} issues={len(payload['issues'])} "
++            f"execute={payload['execute']} dry_run={payload['dry_run']} "
++            f"sql_ref={payload['sql_ref'] or '-'}"
++        )
++    else:
++        print(json.dumps(payload, indent=2, sort_keys=True))
++    return 0 if payload["valid"] else 2
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

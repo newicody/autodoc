@@ -1,0 +1,1707 @@
+diff --git a/src/context/passive_supervisor_visual_read_model.py b/src/context/passive_supervisor_visual_read_model.py
+--- a/src/context/passive_supervisor_visual_read_model.py
++++ b/src/context/passive_supervisor_visual_read_model.py
+@@ -28,6 +28,12 @@
+     "qdrant_ref",
+     "handoff_ref",
+     "pushback_ref",
++    "laboratory_ref",
++    "specialist_ref",
++    "visit_ref",
++    "conversation_ref",
++    "synthesis_ref",
++    "final_ref",
+ )
+ 
+ 
+@@ -43,6 +49,11 @@
+     "QDRANT_PROJECTION": "index",
+     "REHYDRATION": "context",
+     "PUSHBACK": "feedback",
++    "LABORATORY": "laboratory",
++    "SPECIALIST": "laboratory",
++    "DELIBERATION": "laboratory",
++    "SYNTHESIS": "laboratory",
++    "FINAL_ARTIFACT": "data",
+     "UNKNOWN": "unknown",
+ }
+ 
+diff --git a/src/context/passive_supervisor_visual_layout_model.py b/src/context/passive_supervisor_visual_layout_model.py
+--- a/src/context/passive_supervisor_visual_layout_model.py
++++ b/src/context/passive_supervisor_visual_layout_model.py
+@@ -98,16 +98,22 @@
+     for index, item in enumerate(_as_sequence(model.get("edges"))):
+         mapping = _as_mapping(item)
+         source = _as_string(mapping.get("source", "")).strip()
+-        target = _as_string(mapping.get("target", "")).strip()
++        target = _as_string(
++            mapping.get("target", mapping.get("target_ref", ""))
++        ).strip()
+         if not source or not target:
+             continue
+-        edge_id = _as_string(mapping.get("id", f"edge:{index}")).strip() or f"edge:{index}"
++        edge_id = _as_string(
++            mapping.get("id", mapping.get("edge_id", f"edge:{index}"))
++        ).strip() or f"edge:{index}"
+         edges.append(
+             {
+                 "id": edge_id,
+                 "source": source,
+                 "target": target,
+-                "kind": _as_string(mapping.get("kind", "observes")).strip() or "observes",
++                "kind": _as_string(
++                    mapping.get("kind", mapping.get("edge_kind", "observes"))
++                ).strip() or "observes",
+             }
+         )
+     return edges
+diff --git a/src/context/fake_laboratory_closed_local_handoff_0274.py b/src/context/fake_laboratory_closed_local_handoff_0274.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/context/fake_laboratory_closed_local_handoff_0274.py
+@@ -0,0 +1,923 @@
++"""Closed local handoff for fake laboratory deliberation results.
++
++0274-r3 composes existing durable, vector, observation and visual surfaces
++around the converged result produced by 0274-r2.
++
++The module:
++- persists one immutable ``specialist_output`` record through an injected
++  existing SQLContextStore;
++- reuses the 0261 SQL -> OpenVINO/E5 path;
++- reuses the r9 embedding-space compatibility gate;
++- reuses the 0262 embedding -> Qdrant projection path;
++- emits fact-only Events to an injected existing EventBus;
++- reuses the 0266 PassiveSupervisor read-model;
++- reuses the 0236/0237 renderer-neutral visual models;
++- builds a local GitHub publication preview that still requires the existing
++  publication review/mutation gate.
++
++It creates no Scheduler, queue, EventBus, registry, laboratory orchestrator,
++SQL authority, Qdrant authority, renderer or GitHub client.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Mapping, Sequence
++from dataclasses import dataclass, field
++import hashlib
++import json
++from types import MappingProxyType
++from typing import Any, Callable, Protocol
++
++from contracts.event import Event, EventType
++from context.closed_result_frame_eventbus_observation_0265 import (
++    ClosedResultFrameObservationFact,
++)
++from context.fake_laboratory_deliberation_composition_0274 import (
++    FakeLaboratoryDeliberationResult,
++)
++from context.github_project_v2_source_candidate_vector_projection_0272 import (
++    EmbeddingSpaceProfile,
++    attach_profile_to_embedding,
++    validate_embedding_against_profile,
++)
++from context.passive_supervisor_closed_result_frame_observation_0266 import (
++    build_passive_supervisor_closed_frame_observation_report,
++)
++from context.passive_supervisor_visual_layout_model import (
++    build_passive_supervisor_visual_layout_model,
++)
++from context.passive_supervisor_visual_read_model import (
++    build_visual_read_model,
++)
++from context.scheduler_managed_embedding_qdrant_projection_usage_0262 import (
++    SchedulerManagedEmbeddingQdrantProjectionRequest,
++    run_scheduler_managed_embedding_qdrant_projection_usage,
++)
++from context.scheduler_managed_sql_ref_openvino_embedding_usage_0261 import (
++    SchedulerManagedSqlRefOpenVinoEmbeddingRequest,
++    run_scheduler_managed_sql_ref_openvino_embedding_usage,
++)
++from context.sql_context_store import (
++    SqlContextRecord,
++    SqlContextStoreWriteResult,
++    build_sql_context_record,
++)
++
++FAKE_LABORATORY_CLOSED_HANDOFF_COMMAND_SCHEMA = (
++    "missipy.laboratory.closed_local_handoff_command.v1"
++)
++FAKE_LABORATORY_CLOSED_HANDOFF_RESULT_SCHEMA = (
++    "missipy.laboratory.closed_local_handoff_result.v1"
++)
++LABORATORY_GITHUB_PUBLICATION_PREVIEW_SCHEMA = (
++    "missipy.laboratory.github_publication_preview.v1"
++)
++LABORATORY_OBSERVATION_SCHEMA = (
++    "missipy.laboratory.closed_local_observation.v1"
++)
++FAKE_LABORATORY_CLOSED_HANDOFF_VERSION = "0274.r3"
++
++OBSERVATION_SOURCE = "laboratory.closed_local_handoff"
++OBSERVATION_DESTINATION = "observability"
++
++
++class ExistingSqlContextStore(Protocol):
++    """Existing SQL authority surface required by this composition."""
++
++    def initialize_schema(self) -> None:
++        """Initialize the existing schema."""
++
++    def get_record(self, context_ref: str) -> object | None:
++        """Read one durable record."""
++
++    def upsert_record(self, record: SqlContextRecord) -> SqlContextStoreWriteResult:
++        """Persist one record through the existing store."""
++
++
++class ExistingObservationBus(Protocol):
++    """Existing EventBus publish surface; no EventBus is constructed here."""
++
++    async def publish(self, event: Event) -> None:
++        """Publish one immutable observation fact."""
++
++
++EmbeddingCallable = Callable[[str, str, str | None, str], Mapping[str, Any]]
++
++
++class FakeLaboratoryClosedHandoffError(RuntimeError):
++    """Raised when the local closure violates an authority boundary."""
++
++
++@dataclass(frozen=True, slots=True)
++class FakeLaboratoryClosedHandoffCommand:
++    """Explicit effects allowed for one converged fake laboratory result."""
++
++    execute: bool = False
++    policy_decision_id: str = ""
++    vector_execute: bool = False
++    publish_observations: bool = False
++    model_dir: str | None = None
++    device: str = "CPU"
++    frame_ref: str = "laboratory-frame:0274-r3"
++    schema: str = FAKE_LABORATORY_CLOSED_HANDOFF_COMMAND_SCHEMA
++
++    def __post_init__(self) -> None:
++        if self.schema != FAKE_LABORATORY_CLOSED_HANDOFF_COMMAND_SCHEMA:
++            raise FakeLaboratoryClosedHandoffError(
++                "unsupported closed handoff command schema"
++            )
++        if self.execute and not self.policy_decision_id.strip():
++            raise FakeLaboratoryClosedHandoffError(
++                "execute requires policy_decision_id"
++            )
++        if self.vector_execute and not self.execute:
++            raise FakeLaboratoryClosedHandoffError(
++                "vector_execute requires execute"
++            )
++        if self.publish_observations and not self.execute:
++            raise FakeLaboratoryClosedHandoffError(
++                "publish_observations requires execute"
++            )
++        if not self.frame_ref.startswith("laboratory-frame:"):
++            raise FakeLaboratoryClosedHandoffError(
++                "frame_ref must start with laboratory-frame:"
++            )
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": self.schema,
++            "execute": self.execute,
++            "policy_decision_id": self.policy_decision_id,
++            "vector_execute": self.vector_execute,
++            "publish_observations": self.publish_observations,
++            "model_dir": self.model_dir,
++            "device": self.device,
++            "frame_ref": self.frame_ref,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class LaboratoryGitHubPublicationPreview:
++    """Local preview only; it never authorizes a GitHub mutation."""
++
++    preview_ref: str
++    target_ref: str
++    final_ref: str
++    synthesis_ref: str
++    sql_ref: str
++    title: str
++    body: str
++    evidence_refs: tuple[str, ...]
++    status: str = "pending"
++    review_surface: str = "context.github_publication_review"
++    publication_gate_required: bool = True
++    remote_mutation_allowed: bool = False
++    github_mutation_performed: bool = False
++
++    def __post_init__(self) -> None:
++        if not self.preview_ref.startswith("github-preview:"):
++            raise FakeLaboratoryClosedHandoffError(
++                "preview_ref must start with github-preview:"
++            )
++        if not self.sql_ref.startswith("sql:"):
++            raise FakeLaboratoryClosedHandoffError(
++                "preview sql_ref must start with sql:"
++            )
++        if not self.title.strip() or not self.body.strip():
++            raise FakeLaboratoryClosedHandoffError(
++                "preview title and body must be non-empty"
++            )
++        if (
++            not self.publication_gate_required
++            or self.remote_mutation_allowed
++            or self.github_mutation_performed
++        ):
++            raise FakeLaboratoryClosedHandoffError(
++                "GitHub preview must remain local and gated"
++            )
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": LABORATORY_GITHUB_PUBLICATION_PREVIEW_SCHEMA,
++            "preview_ref": self.preview_ref,
++            "target_ref": self.target_ref,
++            "final_ref": self.final_ref,
++            "synthesis_ref": self.synthesis_ref,
++            "sql_ref": self.sql_ref,
++            "title": self.title,
++            "body": self.body,
++            "evidence_refs": list(self.evidence_refs),
++            "status": self.status,
++            "review_surface": self.review_surface,
++            "publication_gate_required": self.publication_gate_required,
++            "remote_mutation_allowed": self.remote_mutation_allowed,
++            "github_mutation_performed": self.github_mutation_performed,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class FakeLaboratoryClosedHandoffResult:
++    """Complete local closure report for one converged fake deliberation."""
++
++    valid: bool
++    issues: tuple[str, ...]
++    command: FakeLaboratoryClosedHandoffCommand
++    sql_record: Mapping[str, Any]
++    sql_write: Mapping[str, Any] = field(default_factory=dict)
++    sql_readback: Mapping[str, Any] = field(default_factory=dict)
++    embedding: Mapping[str, Any] = field(default_factory=dict)
++    compatibility: Mapping[str, Any] = field(default_factory=dict)
++    projection: Mapping[str, Any] = field(default_factory=dict)
++    observation_facts: tuple[Mapping[str, Any], ...] = ()
++    published_event_ids: tuple[str, ...] = ()
++    passive_supervisor: Mapping[str, Any] = field(default_factory=dict)
++    visual_read_model: Mapping[str, Any] = field(default_factory=dict)
++    visual_layout: Mapping[str, Any] = field(default_factory=dict)
++    github_preview: Mapping[str, Any] = field(default_factory=dict)
++    sql_write_performed: bool = False
++    sql_readback_performed: bool = False
++    openvino_call_performed: bool = False
++    qdrant_write_performed: bool = False
++    eventbus_publish_performed: bool = False
++    github_mutation_performed: bool = False
++    existing_scheduler_used_upstream: bool = True
++    scheduler_created: bool = False
++    scheduler_modified: bool = False
++    parallel_orchestrator_created: bool = False
++    parallel_eventbus_created: bool = False
++    parallel_registry_created: bool = False
++    schema: str = FAKE_LABORATORY_CLOSED_HANDOFF_RESULT_SCHEMA
++
++    def __post_init__(self) -> None:
++        if self.schema != FAKE_LABORATORY_CLOSED_HANDOFF_RESULT_SCHEMA:
++            raise FakeLaboratoryClosedHandoffError(
++                "unsupported closed handoff result schema"
++            )
++        forbidden = (
++            self.github_mutation_performed,
++            self.scheduler_created,
++            self.scheduler_modified,
++            self.parallel_orchestrator_created,
++            self.parallel_eventbus_created,
++            self.parallel_registry_created,
++        )
++        if any(forbidden):
++            raise FakeLaboratoryClosedHandoffError(
++                "closed handoff must not claim a parallel authority"
++            )
++        if self.command.execute and self.valid:
++            if not self.sql_write_performed or not self.sql_readback_performed:
++                raise FakeLaboratoryClosedHandoffError(
++                    "successful execute mode requires SQL write and readback"
++                )
++        if self.command.vector_execute and self.valid:
++            if not self.openvino_call_performed or not self.qdrant_write_performed:
++                raise FakeLaboratoryClosedHandoffError(
++                    "successful vector execution requires embedding and projection"
++                )
++        if self.command.publish_observations and self.valid:
++            if not self.eventbus_publish_performed:
++                raise FakeLaboratoryClosedHandoffError(
++                    "successful observation mode requires existing EventBus publish"
++                )
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": self.schema,
++            "valid": self.valid,
++            "issues": list(self.issues),
++            "command": self.command.to_mapping(),
++            "sql_record": dict(self.sql_record),
++            "sql_write": dict(self.sql_write),
++            "sql_readback": dict(self.sql_readback),
++            "embedding": dict(self.embedding),
++            "compatibility": dict(self.compatibility),
++            "projection": dict(self.projection),
++            "observation_facts": [
++                dict(fact) for fact in self.observation_facts
++            ],
++            "published_event_ids": list(self.published_event_ids),
++            "passive_supervisor": dict(self.passive_supervisor),
++            "visual_read_model": dict(self.visual_read_model),
++            "visual_layout": dict(self.visual_layout),
++            "github_preview": dict(self.github_preview),
++            "sql_write_performed": self.sql_write_performed,
++            "sql_readback_performed": self.sql_readback_performed,
++            "openvino_call_performed": self.openvino_call_performed,
++            "qdrant_write_performed": self.qdrant_write_performed,
++            "eventbus_publish_performed": self.eventbus_publish_performed,
++            "github_mutation_performed": self.github_mutation_performed,
++            "existing_scheduler_used_upstream": self.existing_scheduler_used_upstream,
++            "scheduler_created": self.scheduler_created,
++            "scheduler_modified": self.scheduler_modified,
++            "parallel_orchestrator_created": self.parallel_orchestrator_created,
++            "parallel_eventbus_created": self.parallel_eventbus_created,
++            "parallel_registry_created": self.parallel_registry_created,
++            "sql_remains_authority": True,
++            "qdrant_projection_only": True,
++            "eventbus_observation_only": True,
++            "passive_supervisor_observation_only": True,
++            "vispy_passive": True,
++            "publication_gate_required": True,
++        }
++
++
++async def run_fake_laboratory_closed_local_handoff(
++    deliberation: FakeLaboratoryDeliberationResult,
++    command: FakeLaboratoryClosedHandoffCommand,
++    *,
++    store: ExistingSqlContextStore | None = None,
++    profile: EmbeddingSpaceProfile | None = None,
++    embedder: EmbeddingCallable | None = None,
++    qdrant_executor: Any | None = None,
++    event_bus: ExistingObservationBus | None = None,
++) -> FakeLaboratoryClosedHandoffResult:
++    """Close one converged fake deliberation through existing local surfaces."""
++
++    issues = list(_validate_deliberation(deliberation))
++    if command.execute and store is None:
++        issues.append("execute requires an existing SQLContextStore")
++    if command.vector_execute and qdrant_executor is None:
++        issues.append("vector_execute requires an injected Qdrant executor")
++    if command.publish_observations and event_bus is None:
++        issues.append("publish_observations requires an existing EventBus")
++
++    sql_record = _build_sql_record(deliberation) if not issues else None
++    if sql_record is None:
++        return _result(
++            issues=issues,
++            command=command,
++            sql_record={},
++        )
++
++    preview = _build_github_preview(deliberation, sql_record.context_ref)
++    base_facts = _build_observation_facts(
++        deliberation,
++        sql_ref=sql_record.context_ref,
++        vector_state="pending" if command.vector_execute else "not_requested",
++    )
++    passive, read_model, layout = _build_passive_visual_models(
++        deliberation,
++        sql_ref=sql_record.context_ref,
++        facts=base_facts,
++        qdrant_ref="",
++    )
++
++    if issues or not command.execute:
++        return _result(
++            issues=issues,
++            command=command,
++            sql_record=sql_record.to_mapping(),
++            observation_facts=tuple(fact.to_mapping() for fact in base_facts),
++            passive_supervisor=passive,
++            visual_read_model=read_model,
++            visual_layout=layout,
++            github_preview=preview.to_mapping(),
++        )
++
++    assert store is not None
++    store.initialize_schema()
++    existing = store.get_record(sql_record.context_ref)
++    if existing is not None:
++        existing_mapping = _public_mapping(existing)
++        if existing_mapping != sql_record.to_mapping():
++            issues.append(
++                "immutable SQL specialist_output collision for context_ref"
++            )
++            return _result(
++                issues=issues,
++                command=command,
++                sql_record=sql_record.to_mapping(),
++                sql_readback=existing_mapping,
++                observation_facts=tuple(
++                    fact.to_mapping() for fact in base_facts
++                ),
++                passive_supervisor=passive,
++                visual_read_model=read_model,
++                visual_layout=layout,
++                github_preview=preview.to_mapping(),
++            )
++        write_mapping = {
++            "schema": "missipy.sql_context_store.write.v1",
++            "context_ref": sql_record.context_ref,
++            "inserted": False,
++            "replaced": False,
++            "idempotent_replay": True,
++            "record": sql_record.to_mapping(),
++        }
++    else:
++        write_result = store.upsert_record(sql_record)
++        write_mapping = write_result.to_mapping()
++        write_mapping["idempotent_replay"] = False
++
++    readback = store.get_record(sql_record.context_ref)
++    readback_mapping = _public_mapping(readback)
++    if readback_mapping != sql_record.to_mapping():
++        issues.append("SQL readback does not match immutable specialist output")
++
++    embedding_mapping: dict[str, Any] = {}
++    compatibility_mapping: dict[str, Any] = {}
++    projection_mapping: dict[str, Any] = {}
++    openvino_called = False
++    qdrant_written = False
++    qdrant_ref = ""
++
++    if not issues and command.vector_execute:
++        effective_profile = profile or EmbeddingSpaceProfile()
++        embedding_request = SchedulerManagedSqlRefOpenVinoEmbeddingRequest(
++            sql_ref=sql_record.context_ref,
++            role=effective_profile.role,
++            policy_decision_id=command.policy_decision_id,
++            model_dir=command.model_dir,
++            device=command.device,
++        )
++        embedding_result = run_scheduler_managed_sql_ref_openvino_embedding_usage(
++            store,
++            embedding_request,
++            execute=True,
++            embedder=embedder,
++        )
++        embedding_mapping = embedding_result.to_mapping()
++        openvino_called = True
++        if not embedding_result.valid:
++            issues.extend(embedding_result.issues)
++        else:
++            raw_embedding = _mapping(embedding_mapping.get("embedding"))
++            compatibility = validate_embedding_against_profile(
++                raw_embedding,
++                effective_profile,
++                expected_sql_ref=sql_record.context_ref,
++            )
++            compatibility_mapping = compatibility.to_mapping()
++            if not compatibility.compatible:
++                issues.extend(compatibility.issues)
++            else:
++                profiled = attach_profile_to_embedding(
++                    raw_embedding,
++                    effective_profile,
++                )
++                profiled_report = dict(embedding_mapping)
++                profiled_report["embedding"] = profiled
++                projection_result = (
++                    run_scheduler_managed_embedding_qdrant_projection_usage(
++                        profiled_report,
++                        SchedulerManagedEmbeddingQdrantProjectionRequest(
++                            policy_decision_id=command.policy_decision_id,
++                            collection_name=effective_profile.collection_name,
++                            vector_dimension=effective_profile.dimension,
++                        ),
++                        execute=True,
++                        executor=qdrant_executor,
++                    )
++                )
++                projection_mapping = projection_result.to_mapping()
++                if not projection_result.valid:
++                    issues.extend(projection_result.issues)
++                write_result = _mapping(
++                    projection_mapping.get("write_result")
++                )
++                qdrant_written = write_result.get("acknowledged") is True
++                if not qdrant_written:
++                    issues.append("Qdrant projection was not acknowledged")
++                else:
++                    qdrant_ref = (
++                        "qdrant:"
++                        + effective_profile.collection_name
++                        + ":"
++                        + _digest(sql_record.context_ref)
++                    )
++
++    facts = _build_observation_facts(
++        deliberation,
++        sql_ref=sql_record.context_ref,
++        vector_state=(
++            "projected"
++            if qdrant_written
++            else "failed"
++            if command.vector_execute and issues
++            else "not_requested"
++        ),
++        qdrant_ref=qdrant_ref,
++    )
++
++    published_event_ids: tuple[str, ...] = ()
++    if not issues and command.publish_observations:
++        assert event_bus is not None
++        published: list[str] = []
++        for fact in facts:
++            event = _fact_to_event(fact)
++            await event_bus.publish(event)
++            published.append(event.id)
++        published_event_ids = tuple(published)
++
++    passive, read_model, layout = _build_passive_visual_models(
++        deliberation,
++        sql_ref=sql_record.context_ref,
++        facts=facts,
++        qdrant_ref=qdrant_ref,
++    )
++
++    return _result(
++        issues=issues,
++        command=command,
++        sql_record=sql_record.to_mapping(),
++        sql_write=write_mapping,
++        sql_readback=readback_mapping,
++        embedding=embedding_mapping,
++        compatibility=compatibility_mapping,
++        projection=projection_mapping,
++        observation_facts=tuple(fact.to_mapping() for fact in facts),
++        published_event_ids=published_event_ids,
++        passive_supervisor=passive,
++        visual_read_model=read_model,
++        visual_layout=layout,
++        github_preview=preview.to_mapping(),
++        sql_write_performed=not issues,
++        sql_readback_performed=not issues,
++        openvino_call_performed=openvino_called,
++        qdrant_write_performed=qdrant_written,
++        eventbus_publish_performed=bool(published_event_ids),
++    )
++
++
++def _validate_deliberation(
++    deliberation: FakeLaboratoryDeliberationResult,
++) -> tuple[str, ...]:
++    issues: list[str] = []
++    if not isinstance(deliberation, FakeLaboratoryDeliberationResult):
++        return ("deliberation must be FakeLaboratoryDeliberationResult",)
++    if not deliberation.publication_ready:
++        issues.append("deliberation must be locally publication-ready")
++    if deliberation.final_artifact is None:
++        issues.append("deliberation must expose FinalArtifactEnvelope")
++    if deliberation.final_packet is None:
++        issues.append("deliberation must expose FinalSynthesisPacket")
++    if deliberation.github_mutation_performed:
++        issues.append("upstream deliberation must not mutate GitHub")
++    if deliberation.scheduler_created:
++        issues.append("upstream deliberation must not create Scheduler")
++    return tuple(issues)
++
++
++def _build_sql_record(
++    deliberation: FakeLaboratoryDeliberationResult,
++) -> SqlContextRecord:
++    final = deliberation.final_artifact
++    assert final is not None
++    identity = (
++        f"{final.final_ref}\0{final.synthesis_ref}\0"
++        f"{deliberation.command.context_generation}"
++    )
++    return build_sql_context_record(
++        kind="specialist_output",
++        identity=identity,
++        title=final.title,
++        body=final.body,
++        parent_ref=deliberation.command.orientation.sql_context_ref,
++        metadata=(
++            ("artifact_ref", final.artifact_ref),
++            ("final_ref", final.final_ref),
++            ("laboratory_ref", "laboratory:local-fake"),
++            (
++                "publication_gate_required",
++                "true",
++            ),
++            ("real_backend_used", "false"),
++            ("source_candidate_ref", deliberation.command.source_candidate_ref),
++            ("synthesis_ref", final.synthesis_ref),
++            ("target_ref", final.target_ref),
++        ),
++    )
++
++
++def _build_github_preview(
++    deliberation: FakeLaboratoryDeliberationResult,
++    sql_ref: str,
++) -> LaboratoryGitHubPublicationPreview:
++    final = deliberation.final_artifact
++    assert final is not None
++    identity = (
++        f"{final.final_ref}\0{sql_ref}\0{final.target_ref}\0{final.body}"
++    )
++    return LaboratoryGitHubPublicationPreview(
++        preview_ref=f"github-preview:laboratory:{_digest(identity)}",
++        target_ref=final.target_ref,
++        final_ref=final.final_ref,
++        synthesis_ref=final.synthesis_ref,
++        sql_ref=sql_ref,
++        title=final.title,
++        body=final.body,
++        evidence_refs=final.evidence_refs,
++    )
++
++
++def _build_observation_facts(
++    deliberation: FakeLaboratoryDeliberationResult,
++    *,
++    sql_ref: str,
++    vector_state: str,
++    qdrant_ref: str = "",
++) -> tuple[ClosedResultFrameObservationFact, ...]:
++    final = deliberation.final_artifact
++    assert final is not None
++    base = f"event-fact:0274-r3:{_digest(final.final_ref)}"
++    facts = [
++        ClosedResultFrameObservationFact(
++            fact_ref=f"{base}:deliberation",
++            fact_kind="laboratory.deliberation.completed",
++            payload={
++                "frame_ref": deliberation.command.orientation.orientation_ref,
++                "sql_ref": sql_ref,
++                "laboratory_ref": "laboratory:local-fake",
++                "round_ref": deliberation.round.round_ref,
++                "synthesis_ref": final.synthesis_ref,
++                "specialist_count": len(deliberation.receipts),
++                "publication_ready": deliberation.publication_ready,
++            },
++        ),
++        ClosedResultFrameObservationFact(
++            fact_ref=f"{base}:sql",
++            fact_kind="laboratory.specialist_output.persisted",
++            payload={
++                "frame_ref": deliberation.command.orientation.orientation_ref,
++                "sql_ref": sql_ref,
++                "final_ref": final.final_ref,
++                "sql_remains_authority": True,
++            },
++        ),
++        ClosedResultFrameObservationFact(
++            fact_ref=f"{base}:vector",
++            fact_kind="laboratory.vector_projection.state",
++            payload={
++                "frame_ref": deliberation.command.orientation.orientation_ref,
++                "sql_ref": sql_ref,
++                "qdrant_ref": qdrant_ref,
++                "vector_state": vector_state,
++                "qdrant_projection_only": True,
++            },
++        ),
++        ClosedResultFrameObservationFact(
++            fact_ref=f"{base}:github",
++            fact_kind="laboratory.github_preview.pending",
++            payload={
++                "frame_ref": deliberation.command.orientation.orientation_ref,
++                "sql_ref": sql_ref,
++                "target_ref": final.target_ref,
++                "publication_gate_required": True,
++                "github_mutation_performed": False,
++            },
++        ),
++    ]
++    return tuple(facts)
++
++
++def _fact_to_event(fact: ClosedResultFrameObservationFact) -> Event:
++    return Event(
++        type=EventType.LABORATORY_VISIT_RESULT,
++        source=OBSERVATION_SOURCE,
++        dest=OBSERVATION_DESTINATION,
++        payload=fact.to_mapping(),
++        priority=0,
++        correlation_id=fact.fact_ref,
++        request=None,
++        metadata=MappingProxyType(
++            {
++                "schema": LABORATORY_OBSERVATION_SCHEMA,
++                "observation_only": True,
++                "command": False,
++                "fact_kind": fact.fact_kind,
++            }
++        ),
++    )
++
++
++def _build_passive_visual_models(
++    deliberation: FakeLaboratoryDeliberationResult,
++    *,
++    sql_ref: str,
++    facts: Sequence[ClosedResultFrameObservationFact],
++    qdrant_ref: str,
++) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
++    observation_report = {
++        "valid": True,
++        "eventbus_observation_only": True,
++        "events_are_facts_not_commands": True,
++        "executes_runtime": False,
++        "starts_postgresql": False,
++        "starts_openvino": False,
++        "starts_qdrant": False,
++        "modifies_scheduler_run": False,
++        "facts": [fact.to_mapping() for fact in facts],
++    }
++    passive = build_passive_supervisor_closed_frame_observation_report(
++        observation_report,
++        source_observation_ref=(
++            "laboratory-observation:"
++            + _digest(deliberation.command.orientation.orientation_ref)
++        ),
++    ).to_mapping()
++    snapshot = _build_visual_snapshot(
++        deliberation,
++        sql_ref=sql_ref,
++        qdrant_ref=qdrant_ref,
++        fact_count=len(facts),
++    )
++    visual = build_visual_read_model(
++        snapshot,
++        layout_kind="laboratory-cellular",
++    ).to_dict()
++    layout = build_passive_supervisor_visual_layout_model(visual)
++    return dict(passive), dict(visual), dict(layout)
++
++
++def _build_visual_snapshot(
++    deliberation: FakeLaboratoryDeliberationResult,
++    *,
++    sql_ref: str,
++    qdrant_ref: str,
++    fact_count: int,
++) -> dict[str, Any]:
++    final = deliberation.final_artifact
++    assert final is not None
++    cells: list[dict[str, Any]] = [
++        {
++            "cell_id": "laboratory:local-fake",
++            "cell_kind": "LABORATORY",
++            "state": "completed",
++            "health": "healthy",
++            "last_event": "laboratory.deliberation.completed",
++            "payload": {
++                "laboratory_ref": "laboratory:local-fake",
++                "sql_ref": sql_ref,
++            },
++        }
++    ]
++    for receipt in deliberation.receipts:
++        result = receipt.execution.result
++        cells.append(
++            {
++                "cell_id": result.specialist_ref,
++                "cell_kind": "SPECIALIST",
++                "state": result.status,
++                "health": (
++                    "healthy" if result.status == "completed" else "degraded"
++                ),
++                "last_event": "laboratory.specialist.result",
++                "payload": {
++                    "laboratory_ref": result.laboratory_ref,
++                    "specialist_ref": result.specialist_ref,
++                    "visit_ref": result.visit_ref,
++                    "sql_ref": sql_ref,
++                },
++            }
++        )
++    cells.extend(
++        (
++            {
++                "cell_id": deliberation.round.round_ref,
++                "cell_kind": "DELIBERATION",
++                "state": deliberation.round.convergence_state,
++                "health": "healthy",
++                "last_event": "laboratory.round.completed",
++                "payload": {
++                    "laboratory_ref": "laboratory:local-fake",
++                    "sql_ref": sql_ref,
++                },
++            },
++            {
++                "cell_id": final.synthesis_ref,
++                "cell_kind": "SYNTHESIS",
++                "state": "ready",
++                "health": "healthy",
++                "last_event": "laboratory.synthesis.completed",
++                "payload": {
++                    "synthesis_ref": final.synthesis_ref,
++                    "sql_ref": sql_ref,
++                },
++            },
++            {
++                "cell_id": final.final_ref,
++                "cell_kind": "FINAL_ARTIFACT",
++                "state": "pending_review",
++                "health": "healthy",
++                "last_event": "laboratory.github_preview.pending",
++                "payload": {
++                    "artifact_ref": final.artifact_ref,
++                    "final_ref": final.final_ref,
++                    "sql_ref": sql_ref,
++                },
++            },
++            {
++                "cell_id": sql_ref,
++                "cell_kind": "SQL_STORE",
++                "state": "authoritative",
++                "health": "healthy",
++                "last_event": "laboratory.specialist_output.persisted",
++                "payload": {"sql_ref": sql_ref},
++            },
++        )
++    )
++    if qdrant_ref:
++        cells.append(
++            {
++                "cell_id": qdrant_ref,
++                "cell_kind": "QDRANT_PROJECTION",
++                "state": "projected",
++                "health": "healthy",
++                "last_event": "laboratory.vector_projection.state",
++                "payload": {
++                    "qdrant_ref": qdrant_ref,
++                    "sql_ref": sql_ref,
++                },
++            }
++        )
++    return {
++        "generated_at": "",
++        "event_count": fact_count,
++        "cell_count": len(cells),
++        "blocked_count": 0,
++        "failed_count": 0,
++        "stale_count": 0,
++        "cells": cells,
++    }
++
++
++def _public_mapping(value: object | None) -> dict[str, Any]:
++    if value is None:
++        return {}
++    if isinstance(value, Mapping):
++        return dict(value)
++    if hasattr(value, "to_mapping") and callable(value.to_mapping):
++        mapped = value.to_mapping()
++        if isinstance(mapped, Mapping):
++            return dict(mapped)
++    return {}
++
++
++def _result(
++    *,
++    issues: Sequence[str],
++    command: FakeLaboratoryClosedHandoffCommand,
++    sql_record: Mapping[str, Any],
++    sql_write: Mapping[str, Any] | None = None,
++    sql_readback: Mapping[str, Any] | None = None,
++    embedding: Mapping[str, Any] | None = None,
++    compatibility: Mapping[str, Any] | None = None,
++    projection: Mapping[str, Any] | None = None,
++    observation_facts: tuple[Mapping[str, Any], ...] = (),
++    published_event_ids: tuple[str, ...] = (),
++    passive_supervisor: Mapping[str, Any] | None = None,
++    visual_read_model: Mapping[str, Any] | None = None,
++    visual_layout: Mapping[str, Any] | None = None,
++    github_preview: Mapping[str, Any] | None = None,
++    sql_write_performed: bool = False,
++    sql_readback_performed: bool = False,
++    openvino_call_performed: bool = False,
++    qdrant_write_performed: bool = False,
++    eventbus_publish_performed: bool = False,
++) -> FakeLaboratoryClosedHandoffResult:
++    normalized = tuple(dict.fromkeys(str(item) for item in issues if str(item)))
++    return FakeLaboratoryClosedHandoffResult(
++        valid=not normalized,
++        issues=normalized,
++        command=command,
++        sql_record=dict(sql_record),
++        sql_write=dict(sql_write or {}),
++        sql_readback=dict(sql_readback or {}),
++        embedding=dict(embedding or {}),
++        compatibility=dict(compatibility or {}),
++        projection=dict(projection or {}),
++        observation_facts=observation_facts,
++        published_event_ids=published_event_ids,
++        passive_supervisor=dict(passive_supervisor or {}),
++        visual_read_model=dict(visual_read_model or {}),
++        visual_layout=dict(visual_layout or {}),
++        github_preview=dict(github_preview or {}),
++        sql_write_performed=sql_write_performed,
++        sql_readback_performed=sql_readback_performed,
++        openvino_call_performed=openvino_call_performed,
++        qdrant_write_performed=qdrant_write_performed,
++        eventbus_publish_performed=eventbus_publish_performed,
++    )
++
++
++def _mapping(value: object) -> Mapping[str, Any]:
++    return value if isinstance(value, Mapping) else {}
++
++
++def _digest(value: str) -> str:
++    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
++
++
++__all__ = (
++    "FAKE_LABORATORY_CLOSED_HANDOFF_COMMAND_SCHEMA",
++    "FAKE_LABORATORY_CLOSED_HANDOFF_RESULT_SCHEMA",
++    "FAKE_LABORATORY_CLOSED_HANDOFF_VERSION",
++    "LABORATORY_GITHUB_PUBLICATION_PREVIEW_SCHEMA",
++    "LABORATORY_OBSERVATION_SCHEMA",
++    "FakeLaboratoryClosedHandoffCommand",
++    "FakeLaboratoryClosedHandoffError",
++    "FakeLaboratoryClosedHandoffResult",
++    "LaboratoryGitHubPublicationPreview",
++    "run_fake_laboratory_closed_local_handoff",
++)
+diff --git a/tests/context/test_fake_laboratory_closed_local_handoff_0274.py b/tests/context/test_fake_laboratory_closed_local_handoff_0274.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/context/test_fake_laboratory_closed_local_handoff_0274.py
+@@ -0,0 +1,291 @@
++import asyncio
++import json
++
++import pytest
++
++from contracts.event import EventType
++
++from context.fake_laboratory_closed_local_handoff_0274 import (
++    FakeLaboratoryClosedHandoffCommand,
++    run_fake_laboratory_closed_local_handoff,
++)
++from context.fake_laboratory_deliberation_composition_0274 import (
++    FAKE_LABORATORY_DELIBERATION_COMMAND_SCHEMA,
++    FakeLaboratoryDeliberationCommand,
++    run_fake_laboratory_deliberation,
++)
++from context.github_project_v2_source_candidate_vector_projection_0272 import (
++    EmbeddingSpaceProfile,
++)
++from context.laboratory_framework_contract_0273 import (
++    LaboratoryResourceBudget,
++)
++from context.scheduler_laboratory_visit_binding_0274 import (
++    register_laboratory_visit_handler,
++)
++from context.scheduler_managed_embedding_qdrant_projection_usage_0262 import (
++    DemoQdrantProjectionExecutor,
++)
++from context.scheduler_managed_sql_ref_openvino_embedding_usage_0261 import (
++    build_embedding_mapping,
++)
++from context.server_oriented_deliberation_cycle import ServerOrientation
++from context.sql_context_store import SQLiteSqlContextStore
++from kernel.dispatcher import Dispatcher
++from kernel.event_bus import EventBus
++from kernel.queue import PriorityQueue
++from kernel.registry import Registry
++from kernel.scheduler import Scheduler
++
++
++def orientation() -> ServerOrientation:
++    return ServerOrientation(
++        orientation_ref="orientation:laboratory-r3",
++        artifact_ref="artifact:github-request:r3",
++        source_ref="artifact:source-candidate:r3",
++        sql_context_ref="sql:github_artifact:r3-parent",
++        title="Fermeture locale laboratoire",
++        intent="Persister, projeter et observer le résultat local.",
++        requested_specialist_refs=(
++            "specialist:technical",
++            "specialist:validator",
++        ),
++        requested_document_kinds=("analysis",),
++        do_directives=("Conserver les preuves.",),
++        avoid_directives=("Ne pas publier sans gate.",),
++        context_refs=("ctx:project:r3",),
++    )
++
++
++def deliberation_command(
++    *,
++    scenarios: tuple[tuple[str, str], ...] = (),
++) -> FakeLaboratoryDeliberationCommand:
++    return FakeLaboratoryDeliberationCommand(
++        schema=FAKE_LABORATORY_DELIBERATION_COMMAND_SCHEMA,
++        orientation=orientation(),
++        artifact_ref="artifact:github-request:r3",
++        source_candidate_ref="source-candidate:projectv2:r3",
++        target_ref="github:issue:newicody/ideas/43",
++        context_generation=4,
++        resource_budget=LaboratoryResourceBudget(
++            max_duration_ms=2_000,
++            max_context_refs=16,
++            max_evidence_refs=16,
++            max_followup_requests=8,
++        ),
++        scenario_by_specialist=scenarios,
++    )
++
++
++async def build_deliberation(
++    *,
++    scenarios: tuple[tuple[str, str], ...] = (),
++):
++    event_bus = EventBus()
++    dispatcher = Dispatcher(event_bus)
++    register_laboratory_visit_handler(dispatcher)
++    scheduler = Scheduler(
++        queue=PriorityQueue(),
++        dispatcher=dispatcher,
++        event_bus=event_bus,
++        registry=Registry(),
++        context_interval=60.0,
++    )
++    run_task = asyncio.create_task(scheduler.run())
++    try:
++        return await run_fake_laboratory_deliberation(
++            scheduler,
++            deliberation_command(scenarios=scenarios),
++            timeout_per_visit=1.0,
++        )
++    finally:
++        await scheduler.shutdown()
++        await asyncio.wait_for(run_task, timeout=1.0)
++
++
++def profile() -> EmbeddingSpaceProfile:
++    return EmbeddingSpaceProfile(
++        backend_ref="openvino:model:multilingual-e5-small",
++        model_ref="openvino.embedding.e5-small",
++        model_revision="local-test",
++        tokenizer_ref="transformers.multilingual-e5-small",
++        collection_name="laboratory_outputs_e5_384",
++    )
++
++
++def embedder(text, sql_ref, model_dir, device):
++    vector = [0.0] * 384
++    vector[0] = 1.0
++    return build_embedding_mapping(
++        sql_ref=sql_ref,
++        role="passage",
++        text=text,
++        vector=vector,
++        backend_ref="openvino:model:multilingual-e5-small",
++        model="openvino.embedding.e5-small",
++        tokenizer="transformers.multilingual-e5-small",
++        model_path=model_dir or "",
++        device=device,
++    )
++
++
++def test_dry_run_builds_local_preview_and_visual_models_without_effects() -> None:
++    deliberation = asyncio.run(build_deliberation())
++    result = asyncio.run(
++        run_fake_laboratory_closed_local_handoff(
++            deliberation,
++            FakeLaboratoryClosedHandoffCommand(),
++        )
++    )
++
++    assert result.valid is True
++    assert result.sql_record["kind"] == "specialist_output"
++    assert result.sql_write_performed is False
++    assert result.qdrant_write_performed is False
++    assert result.eventbus_publish_performed is False
++    assert result.github_preview["publication_gate_required"] is True
++    assert result.github_preview["remote_mutation_allowed"] is False
++    assert result.passive_supervisor["valid"] is True
++    assert result.visual_read_model["node_count"] >= 7
++    assert result.visual_layout["node_count"] >= 7
++    json.dumps(result.to_mapping(), sort_keys=True)
++
++
++def test_execute_persists_projects_observes_and_keeps_github_closed() -> None:
++    deliberation = asyncio.run(build_deliberation())
++    store = SQLiteSqlContextStore()
++    event_bus = EventBus()
++    observed = event_bus.subscribe(EventType.LABORATORY_VISIT_RESULT)
++
++    result = asyncio.run(
++        run_fake_laboratory_closed_local_handoff(
++            deliberation,
++            FakeLaboratoryClosedHandoffCommand(
++                execute=True,
++                policy_decision_id="policy:0274:r3:test",
++                vector_execute=True,
++                publish_observations=True,
++            ),
++            store=store,
++            profile=profile(),
++            embedder=embedder,
++            qdrant_executor=DemoQdrantProjectionExecutor(),
++            event_bus=event_bus,
++        )
++    )
++
++    assert result.valid is True
++    assert result.sql_write_performed is True
++    assert result.sql_readback_performed is True
++    assert result.openvino_call_performed is True
++    assert result.qdrant_write_performed is True
++    assert result.eventbus_publish_performed is True
++    assert len(result.published_event_ids) == 4
++    assert observed.qsize() == 4
++    assert result.github_mutation_performed is False
++    assert result.github_preview["status"] == "pending"
++    assert result.visual_read_model["authority_boundary"]["writes_sql"] is False
++    assert result.visual_layout["authority_boundary"]["writes_qdrant"] is False
++    assert any(
++        node["zone"] == "laboratory"
++        for node in result.visual_read_model["nodes"]
++    )
++
++
++def test_replay_is_idempotent_and_does_not_replace_record() -> None:
++    deliberation = asyncio.run(build_deliberation())
++    store = SQLiteSqlContextStore()
++    command = FakeLaboratoryClosedHandoffCommand(
++        execute=True,
++        policy_decision_id="policy:0274:r3:replay",
++    )
++
++    first = asyncio.run(
++        run_fake_laboratory_closed_local_handoff(
++            deliberation,
++            command,
++            store=store,
++        )
++    )
++    second = asyncio.run(
++        run_fake_laboratory_closed_local_handoff(
++            deliberation,
++            command,
++            store=store,
++        )
++    )
++
++    assert first.valid is True
++    assert first.sql_write["inserted"] is True
++    assert second.valid is True
++    assert second.sql_write["idempotent_replay"] is True
++    assert second.sql_write["replaced"] is False
++    assert first.sql_record == second.sql_record
++
++
++def test_non_converged_deliberation_is_refused_before_sql() -> None:
++    deliberation = asyncio.run(
++        build_deliberation(
++            scenarios=(("specialist:technical", "needs_context"),)
++        )
++    )
++    result = asyncio.run(
++        run_fake_laboratory_closed_local_handoff(
++            deliberation,
++            FakeLaboratoryClosedHandoffCommand(
++                execute=True,
++                policy_decision_id="policy:0274:r3:blocked",
++            ),
++            store=SQLiteSqlContextStore(),
++        )
++    )
++
++    assert result.valid is False
++    assert "deliberation must be locally publication-ready" in result.issues
++    assert result.sql_write_performed is False
++    assert result.qdrant_write_performed is False
++
++
++def test_incompatible_embedding_blocks_qdrant_write() -> None:
++    deliberation = asyncio.run(build_deliberation())
++
++    def incompatible(text, sql_ref, model_dir, device):
++        vector = [0.0] * 384
++        vector[0] = 1.0
++        return build_embedding_mapping(
++            sql_ref=sql_ref,
++            role="passage",
++            text=text,
++            vector=vector,
++            model="other.embedding.model",
++            tokenizer="other.tokenizer",
++            device=device,
++        )
++
++    result = asyncio.run(
++        run_fake_laboratory_closed_local_handoff(
++            deliberation,
++            FakeLaboratoryClosedHandoffCommand(
++                execute=True,
++                policy_decision_id="policy:0274:r3:incompatible",
++                vector_execute=True,
++            ),
++            store=SQLiteSqlContextStore(),
++            profile=profile(),
++            embedder=incompatible,
++            qdrant_executor=DemoQdrantProjectionExecutor(),
++        )
++    )
++
++    assert result.valid is False
++    assert result.openvino_call_performed is True
++    assert result.qdrant_write_performed is False
++    assert any("model" in issue for issue in result.issues)
++
++
++def test_command_rejects_effects_without_execute() -> None:
++    with pytest.raises(Exception, match="vector_execute requires execute"):
++        FakeLaboratoryClosedHandoffCommand(vector_execute=True)
++    with pytest.raises(Exception, match="publish_observations requires execute"):
++        FakeLaboratoryClosedHandoffCommand(publish_observations=True)
+diff --git a/tests/rules/test_fake_laboratory_closed_local_handoff_0274_rule.py b/tests/rules/test_fake_laboratory_closed_local_handoff_0274_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_fake_laboratory_closed_local_handoff_0274_rule.py
+@@ -0,0 +1,130 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++SOURCE = ROOT / "src/context/fake_laboratory_closed_local_handoff_0274.py"
++READ_MODEL = ROOT / "src/context/passive_supervisor_visual_read_model.py"
++LAYOUT = ROOT / "src/context/passive_supervisor_visual_layout_model.py"
++ARCH = ROOT / "doc/architecture/FAKE_LABORATORY_CLOSED_LOCAL_HANDOFF_0274.md"
++GRAPH = ROOT / "doc/docs/architecture/runtime/274_r3_fake_laboratory_closed_local_handoff.dot"
++MANIFEST = ROOT / "doc/manifests/MANIFEST_0274_R3_FAKE_LABORATORY_CLOSED_LOCAL_HANDOFF_CHANGED_FILES.md"
++REPORT = ROOT / "PHASE0274_R3_FAKE_LABORATORY_CLOSED_LOCAL_HANDOFF_TEST_REPORT.md"
++
++
++def test_handoff_reuses_existing_sql_vector_and_observation_surfaces() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    for marker in (
++        "build_sql_context_record",
++        "run_scheduler_managed_sql_ref_openvino_embedding_usage",
++        "EmbeddingSpaceProfile",
++        "validate_embedding_against_profile",
++        "attach_profile_to_embedding",
++        "run_scheduler_managed_embedding_qdrant_projection_usage",
++        "ClosedResultFrameObservationFact",
++        "build_passive_supervisor_closed_frame_observation_report",
++        "build_visual_read_model",
++        "build_passive_supervisor_visual_layout_model",
++        "context.github_publication_review",
++    ):
++        assert marker in text
++
++
++def test_handoff_creates_no_scheduler_or_parallel_authority() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    for forbidden in (
++        "Scheduler(",
++        "PriorityQueue(",
++        "EventBus(",
++        "Registry(",
++        "LaboratoryManager",
++        "LaboratoryOrchestrator",
++        "create_task(scheduler.run",
++        "await scheduler.run(",
++        "import vispy",
++        "import requests",
++        "import httpx",
++    ):
++        assert forbidden not in text
++    for marker in (
++        "scheduler_created: bool = False",
++        "scheduler_modified: bool = False",
++        "parallel_orchestrator_created: bool = False",
++        "parallel_eventbus_created: bool = False",
++        "parallel_registry_created: bool = False",
++        "github_mutation_performed: bool = False",
++    ):
++        assert marker in text
++
++
++def test_eventbus_facts_are_observation_only() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    assert "EventType.LABORATORY_VISIT_RESULT" in text
++    assert "request=None" in text
++    assert '"observation_only": True' in text
++    assert '"command": False' in text
++    assert "event_bus.publish(event)" in text
++
++
++def test_visual_models_gain_laboratory_refs_and_zone() -> None:
++    read_model = READ_MODEL.read_text(encoding="utf-8")
++    layout = LAYOUT.read_text(encoding="utf-8")
++    for marker in (
++        '"laboratory_ref"',
++        '"specialist_ref"',
++        '"visit_ref"',
++        '"synthesis_ref"',
++        '"final_ref"',
++        '"LABORATORY": "laboratory"',
++        '"SPECIALIST": "laboratory"',
++        '"DELIBERATION": "laboratory"',
++        '"SYNTHESIS": "laboratory"',
++    ):
++        assert marker in read_model
++    assert 'mapping.get("target_ref"' in layout
++    assert 'mapping.get("edge_kind"' in layout
++    assert 'mapping.get("edge_id"' in layout
++
++
++def test_documentation_keeps_github_and_visual_paths_gated() -> None:
++    architecture = ARCH.read_text(encoding="utf-8")
++    graph = GRAPH.read_text(encoding="utf-8")
++    for marker in (
++        "one existing Scheduler",
++        "SQL remains durable authority",
++        "Qdrant remains projection-only",
++        "EventBus remains observation-only",
++        "PassiveSupervisor",
++        "VisPy",
++        "publication gate",
++        "0274-r4",
++        "recall",
++    ):
++        assert marker in architecture
++    for marker in (
++        "Deliberation -> SQL",
++        "SQL -> E5",
++        "E5 -> Profile",
++        "Profile -> Qdrant",
++        "Deliberation -> Facts",
++        "Facts -> PassiveSupervisor",
++        "PassiveSupervisor -> Visual",
++        "Preview -> PublicationGate",
++    ):
++        assert marker in graph
++
++
++def test_manifest_and_report_are_clean() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    report = REPORT.read_text(encoding="utf-8")
++    for marker in ("__pycache__", ".pyc", ".pyo", ".svg"):
++        assert marker not in manifest
++    for marker in (
++        "scheduler_created: false",
++        "scheduler_modified: false",
++        "parallel_orchestrator_created: false",
++        "external_dependencies_added: false",
++        "sql_remains_authority: true",
++        "qdrant_projection_only: true",
++        "github_mutation_performed: false",
++    ):
++        assert marker in report
+diff --git a/doc/architecture/FAKE_LABORATORY_CLOSED_LOCAL_HANDOFF_0274.md b/doc/architecture/FAKE_LABORATORY_CLOSED_LOCAL_HANDOFF_0274.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/FAKE_LABORATORY_CLOSED_LOCAL_HANDOFF_0274.md
+@@ -0,0 +1,123 @@
++# Fake laboratory closed local handoff — 0274-r3
++
++## Purpose
++
++0274-r3 closes the converged fake laboratory result through existing local
++surfaces:
++
++```text
++FakeLaboratoryDeliberationResult
++-> existing SQLContextStore
++-> existing 0261 OpenVINO/E5 path
++-> existing r9 embedding compatibility gate
++-> existing 0262 Qdrant projection
++-> fact-only EventBus events
++-> existing PassiveSupervisor read model
++-> existing visual read/layout models
++-> local GitHub publication preview
++```
++
++There is **one existing Scheduler** upstream. r3 receives the completed r2
++result and does not create or run a Scheduler.
++
++## Durable authority
++
++SQL remains durable authority.
++
++The final `FinalArtifactEnvelope` becomes one deterministic
++`specialist_output` record. Before writing, r3 checks the existing record:
++
++- absent: insert through the existing store;
++- identical: idempotent replay;
++- different under the same `sql_ref`: refuse the immutable collision.
++
++The laboratory provider does not own the store.
++
++## Vector path
++
++The vector path reuses:
++
++```text
++0261 SQL readback -> OpenVINO/E5 passage embedding
++r9 EmbeddingSpaceProfile compatibility gate
++0262 Qdrant projection carrying payload.sql_ref
++```
++
++Qdrant remains projection-only. An incompatible model, tokenizer, role,
++dimension, normalization or profile blocks the write before Qdrant.
++
++0274-r3 does not add recall. **0274-r4** will reuse the existing 0263 recall and
++SQL rehydration path for the laboratory output, then close a laboratory-specific
++ResultFrame.
++
++## Observation and visualization
++
++EventBus remains observation-only.
++
++Four immutable facts are produced:
++
++- deliberation completed;
++- specialist output persisted;
++- vector projection state;
++- GitHub preview pending.
++
++When publishing is enabled, they use the injected existing EventBus with no
++Request and `command=false`.
++
++The existing PassiveSupervisor consumes a compatible fact report. The existing
++renderer-neutral visual read and layout models then display laboratory,
++specialist, deliberation, synthesis, final artifact, SQL and Qdrant cells.
++
++VisPy remains passive and is not imported by the handoff.
++
++The visual models are extended only to understand laboratory refs/zones and the
++existing read-model edge keys (`edge_id`, `edge_kind`, `target_ref`).
++
++## GitHub boundary
++
++The preview is local:
++
++```text
++status = pending
++review_surface = context.github_publication_review
++publication_gate_required = true
++remote_mutation_allowed = false
++github_mutation_performed = false
++```
++
++It does not replace the existing publication review or publication gate.
++
++## Authority summary
++
++```text
++Scheduler                 existing upstream authority
++SQL                       durable authority
++OpenVINO/E5               embedding only
++Qdrant                    projection only
++EventBus                  observation only
++PassiveSupervisor         passive read model
++Cell Lens / VisPy         passive visualization
++GitHub                    local preview only
++```
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++live_path_status: transition
++live_path_uses_real_backend: false
++context_contract_version: missipy.laboratory.v1
++context_contract_changed: false
++external_dependencies_added: false
++scheduler_created: false
++scheduler_modified: false
++parallel_orchestrator_created: false
++parallel_eventbus_created: false
++parallel_registry_created: false
++sql_remains_authority: true
++qdrant_projection_only: true
++eventbus_observation_only: true
++github_mutation_performed: false
++network_added: false
++```
+diff --git a/doc/docs/architecture/runtime/274_r3_fake_laboratory_closed_local_handoff.dot b/doc/docs/architecture/runtime/274_r3_fake_laboratory_closed_local_handoff.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/274_r3_fake_laboratory_closed_local_handoff.dot
+@@ -0,0 +1,33 @@
++digraph FakeLaboratoryClosedLocalHandoff0274R3 {
++  rankdir=LR;
++  node [shape=box];
++
++  Deliberation [label="converged r2 deliberation"];
++  SQL [label="existing SQLContextStore authority"];
++  E5 [label="existing 0261 OpenVINO/E5"];
++  Profile [label="r9 EmbeddingSpaceProfile gate"];
++  Qdrant [label="existing 0262 Qdrant projection"];
++  Facts [label="fact-only EventBus observations"];
++  PassiveSupervisor [label="existing PassiveSupervisor"];
++  Visual [label="Cell Lens read/layout -> VisPy"];
++  Preview [label="local GitHub preview"];
++  PublicationGate [label="existing publication gate"];
++  GitHub [label="future remote mutation"];
++
++  Deliberation -> SQL;
++  SQL -> E5;
++  E5 -> Profile;
++  Profile -> Qdrant;
++  Deliberation -> Facts;
++  SQL -> Facts;
++  Qdrant -> Facts;
++  Facts -> PassiveSupervisor;
++  PassiveSupervisor -> Visual;
++  Deliberation -> Preview;
++  SQL -> Preview;
++  Preview -> PublicationGate;
++  PublicationGate -> GitHub [style=dashed, label="not executed in r3"];
++
++  Rejected [shape=note, label="No Scheduler / no orchestrator / no parallel bus / no GitHub client"];
++  Deliberation -> Rejected [style=dotted, arrowhead=none];
++}
+diff --git a/doc/manifests/MANIFEST_0274_R3_FAKE_LABORATORY_CLOSED_LOCAL_HANDOFF_CHANGED_FILES.md b/doc/manifests/MANIFEST_0274_R3_FAKE_LABORATORY_CLOSED_LOCAL_HANDOFF_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0274_R3_FAKE_LABORATORY_CLOSED_LOCAL_HANDOFF_CHANGED_FILES.md
+@@ -0,0 +1,18 @@
++# Manifest — 0274-r3 fake laboratory closed local handoff
++
++Changed files:
++
++- `PHASE0274_R3_FAKE_LABORATORY_CLOSED_LOCAL_HANDOFF_TEST_REPORT.md`
++- `doc/CHANGELOG_0274_R3_FAKE_LABORATORY_CLOSED_LOCAL_HANDOFF.md`
++- `doc/architecture/FAKE_LABORATORY_CLOSED_LOCAL_HANDOFF_0274.md`
++- `doc/docs/architecture/runtime/274_r3_fake_laboratory_closed_local_handoff.dot`
++- `doc/manifests/MANIFEST_0274_R3_FAKE_LABORATORY_CLOSED_LOCAL_HANDOFF_CHANGED_FILES.md`
++- `doc/releases/0274-r3-fake-laboratory-closed-local-handoff.md`
++- `src/context/fake_laboratory_closed_local_handoff_0274.py`
++- `src/context/passive_supervisor_visual_layout_model.py`
++- `src/context/passive_supervisor_visual_read_model.py`
++- `tests/context/test_fake_laboratory_closed_local_handoff_0274.py`
++- `tests/rules/test_fake_laboratory_closed_local_handoff_0274_rule.py`
++
++No Scheduler, queue, EventBus, registry, SQL store, Qdrant adapter, GitHub
++adapter or renderer implementation is created.
+diff --git a/doc/CHANGELOG_0274_R3_FAKE_LABORATORY_CLOSED_LOCAL_HANDOFF.md b/doc/CHANGELOG_0274_R3_FAKE_LABORATORY_CLOSED_LOCAL_HANDOFF.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0274_R3_FAKE_LABORATORY_CLOSED_LOCAL_HANDOFF.md
+@@ -0,0 +1,21 @@
++# Changelog — 0274-r3 fake laboratory closed local handoff
++
++## Added
++
++- deterministic `specialist_output` SQL record from the r2 final artifact;
++- immutable collision and idempotent replay checks;
++- composition of existing 0261, r9 compatibility and 0262 vector surfaces;
++- fact-only laboratory observation events;
++- existing PassiveSupervisor and visual read/layout composition;
++- local gated GitHub publication preview;
++- laboratory zones and refs in the existing visual read model;
++- compatibility for existing read-model edge keys in the layout model;
++- architecture and executable regression tests.
++
++## Not added
++
++- no Scheduler or laboratory orchestrator;
++- no parallel EventBus or registry;
++- no new SQL/Qdrant authority;
++- no GitHub mutation;
++- no network or dependency.
+diff --git a/doc/releases/0274-r3-fake-laboratory-closed-local-handoff.md b/doc/releases/0274-r3-fake-laboratory-closed-local-handoff.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/releases/0274-r3-fake-laboratory-closed-local-handoff.md
+@@ -0,0 +1,11 @@
++# 0274-r3 — Fake laboratory closed local handoff
++
++The converged fake laboratory result can now become durable SQL context, be
++embedded and projected through the controlled E5/Qdrant path, produce passive
++observation facts and appear in the renderer-neutral Cell Lens model.
++
++A local GitHub preview is built, but remote mutation remains closed behind the
++existing publication gate.
++
++0274-r4 will add recall, SQL rehydration and a laboratory-specific closed
++ResultFrame.
+diff --git a/PHASE0274_R3_FAKE_LABORATORY_CLOSED_LOCAL_HANDOFF_TEST_REPORT.md b/PHASE0274_R3_FAKE_LABORATORY_CLOSED_LOCAL_HANDOFF_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0274_R3_FAKE_LABORATORY_CLOSED_LOCAL_HANDOFF_TEST_REPORT.md
+@@ -0,0 +1,46 @@
++# Phase 0274-r3 test report — fake laboratory closed local handoff
++
++## Validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. python -m pytest -q tests/rules
++PYTHONPATH=src:. python -m pytest -q \
++  tests/context/test_fake_laboratory_closed_local_handoff_0274.py
++PYTHONPATH=src:. python -m pytest -q
++```
++
++## Covered behavior
++
++- dry-run builds SQL, passive, visual and GitHub preview material without effects;
++- execute persists and reads back the immutable specialist output;
++- controlled E5 compatibility and Qdrant projection succeed with injected fakes;
++- fact-only events publish through an existing EventBus;
++- PassiveSupervisor and visual models remain read-only;
++- replay is idempotent and never replaces the record;
++- non-converged deliberation is blocked before SQL;
++- incompatible embeddings are blocked before Qdrant;
++- GitHub mutation remains closed.
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++live_path_status: transition
++live_path_uses_real_backend: false
++context_contract_version: missipy.laboratory.v1
++context_contract_changed: false
++external_dependencies_added: false
++scheduler_created: false
++scheduler_modified: false
++parallel_orchestrator_created: false
++parallel_eventbus_created: false
++parallel_registry_created: false
++sql_remains_authority: true
++qdrant_projection_only: true
++eventbus_observation_only: true
++provider_active: true
++github_mutation_performed: false
++network_added: false
++```

@@ -1,0 +1,1274 @@
+diff --git a/doc/architecture/GITHUB_RESEARCH_KANBAN_OPERATOR_MODEL_0275_R6.md b/doc/architecture/GITHUB_RESEARCH_KANBAN_OPERATOR_MODEL_0275_R6.md
+index 8ae3fe1..f606d04 100644
+--- a/doc/architecture/GITHUB_RESEARCH_KANBAN_OPERATOR_MODEL_0275_R6.md
++++ b/doc/architecture/GITHUB_RESEARCH_KANBAN_OPERATOR_MODEL_0275_R6.md
+@@ -23,7 +23,7 @@
+ ```text
+ ligne facultative = Thème
+ carte              = ticket de recherche durable
+-colonne            = Étape et intention opérateur
++colonne            = Status et intention opérateur
+ cycle              = nouvelle exécution du même ticket
+ lien #issue        = autre recherche disponible comme contexte
+ case cochée        = exclusion explicite du prochain cycle
+@@ -68,9 +68,9 @@
+ 
+ Une recherche peut rester sans thème.
+ 
+-### Étape
+-
+-Le champ Project `Étape` forme les colonnes du Board.
++### Status
++
++Le champ Project `Status` forme les colonnes du Board.
+ 
+ Valeurs retenues :
+ 
+@@ -220,7 +220,7 @@
+ Le modèle minimal contient uniquement :
+ 
+ ```text
+-Étape
++Status
+ Thème
+ ```
+ 
+@@ -247,7 +247,7 @@
+ ```text
+ Nom         : Recherches
+ Disposition : Board
+-Colonnes    : Étape
++Colonnes    : Status
+ Groupement  : Thème
+ ```
+ 
+@@ -271,7 +271,7 @@
+ ```
+ 
+ - `Recherches` : Board principal, groupé par `Thème` ;
+-- `Résultats` : table filtrée sur `Étape = Terminé` ;
++- `Résultats` : table filtrée sur `Status = Terminé` ;
+ - `Sans thème` : vue sans groupement ou filtrée sur thème vide ;
+ - `Historique` : table incluant `Terminé` et `Drop`.
+ 
+@@ -337,7 +337,7 @@
+ 0275-r7  bundle du dépôt newicody/projects : formulaire + workflow contrôlé
+ 0275-r8  contrat autoritatif enrichi : cycles, liens, médias, exclusions
+ 0275-r9  collecteur lecture seule : issue, commentaires, refs et pièces jointes
+-0275-r10 détecteur idempotent des transitions Étape
++0275-r10 détecteur idempotent des transitions Status
+ 0275-r11 déclenchement contrôlé, corrélation du run et récupération des artefacts
+ 0275-r12 wrapper OpenRC réutilisant les surfaces existantes
+ 0275-r13 restitution locale minimale et preview GitHub
+diff --git a/doc/runbooks/INSTALL_GITHUB_RESEARCH_KANBAN_0275_R6.md b/doc/runbooks/INSTALL_GITHUB_RESEARCH_KANBAN_0275_R6.md
+index 3b6b2a0..c6a4671 100644
+--- a/doc/runbooks/INSTALL_GITHUB_RESEARCH_KANBAN_0275_R6.md
++++ b/doc/runbooks/INSTALL_GITHUB_RESEARCH_KANBAN_0275_R6.md
+@@ -38,7 +38,7 @@
+ 
+ Créer ou renommer deux champs personnalisés seulement.
+ 
+-### Champ `Étape`
++### Champ `Status`
+ 
+ Type :
+ 
+@@ -78,7 +78,7 @@
+ ```text
+ Nom         : Recherches
+ Disposition : Board
+-Colonnes    : Étape
++Colonnes    : Status
+ Groupement  : Thème
+ ```
+ 
+@@ -97,7 +97,7 @@
+ 
+ ```text
+ Disposition : Table
+-Filtre      : Étape = Terminé
++Filtre      : Status = Terminé
+ ```
+ 
+ ### `Sans thème`
+@@ -109,7 +109,7 @@
+ 
+ ```text
+ Disposition : Table
+-Filtre      : Étape = Terminé OU Étape = Drop
++Filtre      : Status = Terminé OU Étape = Drop
+ ```
+ 
+ ## 6. Configurer l'ajout automatique
+@@ -124,7 +124,7 @@
+ Une nouvelle issue doit être ajoutée au Project sans lancer immédiatement une
+ recherche.
+ 
+-Définir sa valeur initiale `Étape` à une valeur non déclenchante si GitHub
++Définir sa valeur initiale `Status` à une valeur non déclenchante si GitHub
+ l'exige. Tant que le champ ne propose pas de colonne Brouillon, laisser
+ l'élément sans valeur puis le déplacer manuellement vers `Recherche`,
+ `Développement` ou `Production` au moment voulu.
+@@ -189,7 +189,7 @@
+ ```text
+ repository_management = newicody/projects
+ development_repository = newicody/autodoc
+-project_has_field_Etape = true
++project_has_field_Status = true
+ project_has_optional_field_Theme = true
+ board_columns_match_contract = true
+ board_can_group_by_theme = true
+diff --git a/tests/rules/test_github_research_kanban_operator_model_0275_r6_rule.py b/tests/rules/test_github_research_kanban_operator_model_0275_r6_rule.py
+index 4dca787..6448682 100644
+--- a/tests/rules/test_github_research_kanban_operator_model_0275_r6_rule.py
++++ b/tests/rules/test_github_research_kanban_operator_model_0275_r6_rule.py
+@@ -18,7 +18,7 @@
+     required = (
+         "ligne facultative = Thème",
+         "carte              = ticket de recherche durable",
+-        "colonne            = Étape et intention opérateur",
++        "colonne            = Status et intention opérateur",
+         "cycle              = nouvelle exécution du même ticket",
+         "Recherche",
+         "En cours",
+diff --git a/templates/github/projects-repository/.github/ISSUE_TEMPLATE/research.yml b/templates/github/projects-repository/.github/ISSUE_TEMPLATE/research.yml
+new file mode 100644
+index 0000000..51a9c22
+--- /dev/null
++++ b/templates/github/projects-repository/.github/ISSUE_TEMPLATE/research.yml
+@@ -0,0 +1,152 @@
++name: Nouvelle recherche
++description: Créer une recherche durable, relançable sur le même ticket.
++title: "[Recherche] "
++labels: []
++body:
++  - type: markdown
++    attributes:
++      value: |
++        Ce ticket conserve la question d'origine et l'historique de ses cycles.
++        Les références peuvent être ajoutées une par ligne. Les documents et
++        médias peuvent être déposés dans les zones de texte compatibles.
++
++  - type: textarea
++    id: original_question
++    attributes:
++      label: Question d'origine
++      description: Question stable à laquelle les cycles successifs restent rattachés.
++      placeholder: Quelle question doit être étudiée ?
++    validations:
++      required: true
++
++  - type: textarea
++    id: expected_delivery
++    attributes:
++      label: Résultat ou livrable recherché
++      description: Forme, profondeur et critères attendus.
++      placeholder: Synthèse, comparaison, dossier, proposition, code, plan...
++    validations:
++      required: true
++
++  - type: textarea
++    id: initial_parameters
++    attributes:
++      label: Contexte et paramètres actuels
++      description: Contraintes, hypothèses, limites, format et paramètres modifiables.
++      placeholder: |
++        Niveau de détail :
++        Contraintes :
++        Hypothèses :
++        Format attendu :
++
++  - type: textarea
++    id: cycle_refinement
++    attributes:
++      label: Affinage pour le prochain cycle
++      description: Précisions nouvelles, corrections ou changement de paramètres.
++      placeholder: Ce qui doit être approfondi ou modifié lors du prochain cycle.
++
++  - type: textarea
++    id: search_tickets
++    attributes:
++      label: "Chercher sur : tickets et recherches"
++      description: Ajouter une référence GitHub par ligne, par exemple #12 ou une URL.
++      placeholder: |
++        #12
++        https://github.com/newicody/projects/issues/24
++
++  - type: textarea
++    id: search_repositories
++    attributes:
++      label: "Chercher sur : dépôts"
++      description: Ajouter un dépôt ou une URL par ligne.
++      placeholder: |
++        newicody/autodoc
++        https://github.com/example/project
++
++  - type: textarea
++    id: search_documents
++    attributes:
++      label: "Chercher sur : documents, médias et liens"
++      description: Déposer des fichiers ou ajouter une URL par ligne.
++      placeholder: |
++        Déposer ici des documents ou médias.
++        https://example.org/source.pdf
++
++  - type: textarea
++    id: search_themes
++    attributes:
++      label: "Chercher sur : thèmes"
++      description: Ajouter un thème, un ticket de thème ou une référence par ligne.
++      placeholder: |
++        Chalouf
++        #30
++        Architecture réseau
++
++  - type: dropdown
++    id: search_scope
++    attributes:
++      label: Portée de la recherche
++      options:
++        - Cette recherche seulement
++        - Thème principal
++        - Plusieurs thèmes sélectionnés
++        - Sélection explicite uniquement
++    validations:
++      required: true
++
++  - type: dropdown
++    id: context_mode
++    attributes:
++      label: Niveau de contexte du prochain cycle
++      options:
++        - Complet
++        - Condensé
++        - Minimal
++    validations:
++      required: true
++
++  - type: checkboxes
++    id: next_cycle_exclusions
++    attributes:
++      label: Éléments à exclure du prochain cycle
++      description: Ces choix ne suppriment rien de l'historique.
++      options:
++        - label: Exclure le résultat du cycle précédent
++        - label: Exclure les anciens commentaires
++        - label: Exclure les anciennes pièces jointes
++        - label: Exclure les recherches liées
++        - label: Exclure les dépôts liés
++        - label: Exclure les documents et médias liés
++        - label: Exclure les résultats d'inférence externe
++
++  - type: textarea
++    id: precise_exclusions
++    attributes:
++      label: Exclusions précises
++      description: Références exactes de cycles, tickets, commentaires ou fichiers à écarter.
++      placeholder: Une référence par ligne.
++
++  - type: checkboxes
++    id: external_inference
++    attributes:
++      label: Inférence externe
++      options:
++        - label: Lancer également une inférence sur un moteur externe
++
++  - type: textarea
++    id: external_inference_details
++    attributes:
++      label: Précisions pour l'inférence externe
++      description: Objectif, contraintes ou préférence de moteur, sans secret.
++      placeholder: Ne jamais placer de token ou de secret dans ce champ.
++
++  - type: textarea
++    id: hierarchy_links
++    attributes:
++      label: Origine et liens hiérarchiques
++      description: Événement, recherche ou thème parent à conserver comme provenance.
++      placeholder: |
++        Recherche d'origine :
++        Événement précédent :
++        Thème principal :
+diff --git a/templates/github/projects-repository/.github/ISSUE_TEMPLATE/theme.yml b/templates/github/projects-repository/.github/ISSUE_TEMPLATE/theme.yml
+new file mode 100644
+index 0000000..180be55
+--- /dev/null
++++ b/templates/github/projects-repository/.github/ISSUE_TEMPLATE/theme.yml
+@@ -0,0 +1,80 @@
++name: Nouveau thème de recherche
++description: Créer une boîte thématique facultative regroupant plusieurs recherches.
++title: "[Thème] "
++labels: []
++body:
++  - type: markdown
++    attributes:
++      value: |
++        Un thème est une boîte humaine et une source de contexte. Il ne choisit
++        aucun laboratoire et n'impose aucune route interne au serveur.
++
++  - type: input
++    id: theme_name
++    attributes:
++      label: Nom du thème
++      placeholder: Chalouf
++    validations:
++      required: true
++
++  - type: textarea
++    id: theme_definition
++    attributes:
++      label: Définition et périmètre
++      description: Définir ce qui appartient ou non à ce thème.
++    validations:
++      required: true
++
++  - type: textarea
++    id: theme_question
++    attributes:
++      label: Recherche spécifique sur ce thème
++      description: Question transversale à lancer lorsque le ticket de thème est utilisé.
++      placeholder: Question facultative couvrant le thème entier.
++
++  - type: textarea
++    id: member_researches
++    attributes:
++      label: Tickets de recherche englobés
++      description: Ajouter une référence ou une URL par ligne.
++      placeholder: |
++        #12
++        #18
++        https://github.com/newicody/projects/issues/24
++
++  - type: textarea
++    id: related_themes
++    attributes:
++      label: Thèmes liés
++      description: Autres thèmes pouvant être sélectionnés dans un événement transversal.
++      placeholder: Un nom ou une référence par ligne.
++
++  - type: textarea
++    id: theme_repositories
++    attributes:
++      label: Dépôts de référence du thème
++      placeholder: Un dépôt ou une URL par ligne.
++
++  - type: textarea
++    id: theme_documents
++    attributes:
++      label: Documents et médias de référence
++      description: Déposer des fichiers ou ajouter des URL.
++
++  - type: dropdown
++    id: default_context_mode
++    attributes:
++      label: Contexte par défaut
++      options:
++        - Complet
++        - Condensé
++        - Minimal
++    validations:
++      required: true
++
++  - type: checkboxes
++    id: external_inference
++    attributes:
++      label: Inférence externe
++      options:
++        - label: Autoriser la demande d'une inférence externe pour ce thème
+diff --git a/templates/github/projects-repository/.github/ISSUE_TEMPLATE/transversal-event.yml b/templates/github/projects-repository/.github/ISSUE_TEMPLATE/transversal-event.yml
+new file mode 100644
+index 0000000..6ccac14
+--- /dev/null
++++ b/templates/github/projects-repository/.github/ISSUE_TEMPLATE/transversal-event.yml
+@@ -0,0 +1,97 @@
++name: Nouvelle recherche transversale liée
++description: Créer un événement indépendant à partir de plusieurs recherches ou thèmes.
++title: "[Événement lié] "
++labels: []
++body:
++  - type: markdown
++    attributes:
++      value: |
++        Cet événement devient une recherche indépendante. Il conserve cependant
++        les références hiérarchiques de ses recherches, thèmes et événements sources.
++
++  - type: textarea
++    id: event_objective
++    attributes:
++      label: Question ou objectif de l'événement
++      placeholder: Quelle recherche indépendante doit être menée ?
++    validations:
++      required: true
++
++  - type: textarea
++    id: origin_research
++    attributes:
++      label: Recherche d'origine
++      description: Ticket principal ayant conduit à cet événement.
++      placeholder: "#12"
++    validations:
++      required: true
++
++  - type: textarea
++    id: selected_themes
++    attributes:
++      label: Thèmes sélectionnés
++      description: Ajouter un thème, un ticket de thème ou une URL par ligne.
++      placeholder: |
++        Chalouf
++        #30
++        Architecture réseau
++    validations:
++      required: true
++
++  - type: textarea
++    id: selected_researches
++    attributes:
++      label: Tickets et recherches sélectionnés
++      placeholder: Une référence ou une URL par ligne.
++
++  - type: textarea
++    id: selected_repositories
++    attributes:
++      label: Dépôts sélectionnés
++      placeholder: Un dépôt ou une URL par ligne.
++
++  - type: textarea
++    id: selected_documents
++    attributes:
++      label: Documents, médias et liens sélectionnés
++      description: Déposer des fichiers ou ajouter des URL.
++
++  - type: textarea
++    id: parent_event
++    attributes:
++      label: Événement parent ou précédent
++      description: Référence facultative conservant la filiation entre événements.
++
++  - type: dropdown
++    id: context_mode
++    attributes:
++      label: Niveau de contexte
++      options:
++        - Complet
++        - Condensé
++        - Minimal
++    validations:
++      required: true
++
++  - type: checkboxes
++    id: next_cycle_exclusions
++    attributes:
++      label: Éléments à exclure de cet événement
++      options:
++        - label: Exclure les résultats antérieurs des recherches sélectionnées
++        - label: Exclure les commentaires anciens
++        - label: Exclure les pièces jointes anciennes
++        - label: Exclure les résultats d'inférence externe antérieurs
++
++  - type: checkboxes
++    id: external_inference
++    attributes:
++      label: Inférence externe
++      options:
++        - label: Lancer également une inférence sur un moteur externe
++
++  - type: textarea
++    id: external_inference_details
++    attributes:
++      label: Précisions pour l'inférence externe
++      placeholder: Ne jamais placer de token ou de secret dans ce champ.
+diff --git a/templates/github/projects-repository/.github/ISSUE_TEMPLATE/config.yml b/templates/github/projects-repository/.github/ISSUE_TEMPLATE/config.yml
+new file mode 100644
+index 0000000..64eb98d
+--- /dev/null
++++ b/templates/github/projects-repository/.github/ISSUE_TEMPLATE/config.yml
+@@ -0,0 +1,2 @@
++blank_issues_enabled: true
++contact_links: []
+diff --git a/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml b/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml
+new file mode 100644
+index 0000000..13b9115
+--- /dev/null
++++ b/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml
+@@ -0,0 +1,126 @@
++name: Autodoc controlled research request
++
++on:
++  workflow_dispatch:
++    inputs:
++      issue_number:
++        description: Numéro de l'issue à traiter
++        required: true
++        type: string
++      requested_status:
++        description: Intention correspondant à la colonne Status
++        required: true
++        type: choice
++        options:
++          - Recherche
++          - Développement
++          - Production
++      request_mode:
++        description: Nature du cycle
++        required: true
++        type: choice
++        options:
++          - initial
++          - continuation
++          - transversal
++      parent_event_ref:
++        description: Événement parent ou précédent, si applicable
++        required: false
++        type: string
++
++permissions:
++  contents: read
++  issues: read
++  actions: read
++
++jobs:
++  build-dual-artifacts:
++    runs-on: ubuntu-latest
++
++    steps:
++      - name: Checkout Autodoc runtime
++        uses: actions/checkout@v6
++        with:
++          repository: newicody/autodoc
++          path: autodoc-runtime
++
++      - name: Set up Python
++        uses: actions/setup-python@v6
++        with:
++          python-version: "3.13"
++
++      - name: Prepare output directory
++        run: mkdir -p out
++
++      - name: Read selected issue
++        env:
++          GH_TOKEN: ${{ github.token }}
++          ISSUE_NUMBER: ${{ inputs.issue_number }}
++        run: >
++          gh api
++          "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}"
++          > out/issue.json
++
++      - name: Build controlled issue event
++        env:
++          AUTODOC_ISSUE_JSON: out/issue.json
++          AUTODOC_EVENT_OUTPUT: out/autodoc_issue_event.json
++          AUTODOC_REQUESTED_STATUS: ${{ inputs.requested_status }}
++          AUTODOC_REQUEST_MODE: ${{ inputs.request_mode }}
++          AUTODOC_PARENT_EVENT_REF: ${{ inputs.parent_event_ref }}
++        run: >
++          python
++          autodoc-runtime/templates/github/projects-repository/scripts/build_workflow_dispatch_issue_event.py
++
++      - name: Build authoritative request
++        env:
++          GITHUB_EVENT_PATH: ${{ github.workspace }}/out/autodoc_issue_event.json
++          AUTODOC_OUTPUT: out/authoritative_request.json
++        run: >
++          python
++          autodoc-runtime/templates/github/scripts/build_autodoc_authoritative_request.py
++
++      - name: Install Copilot CLI
++        if: ${{ vars.AUTODOC_COPILOT_ADVISORY_ENABLED == 'true' }}
++        run: npm install --global @github/copilot
++
++      - name: Build optional Copilot advisory
++        if: ${{ vars.AUTODOC_COPILOT_ADVISORY_ENABLED == 'true' }}
++        env:
++          COPILOT_GITHUB_TOKEN: ${{ secrets.AUTODOC_COPILOT_TOKEN }}
++          AUTODOC_REQUEST: out/authoritative_request.json
++          AUTODOC_ADVISORY: out/copilot_advisory.json
++        run: >
++          python
++          autodoc-runtime/templates/github/scripts/run_autodoc_copilot_advisory.py
++
++      - name: Build linking manifest
++        env:
++          AUTODOC_REQUEST: out/authoritative_request.json
++          AUTODOC_ADVISORY: out/copilot_advisory.json
++          AUTODOC_MANIFEST: out/dual_artifact_manifest.json
++        run: >
++          python
++          autodoc-runtime/templates/github/scripts/build_autodoc_dual_manifest.py
++
++      - name: Upload authoritative request
++        uses: actions/upload-artifact@v7
++        with:
++          name: autodoc-authoritative-request
++          path: out/authoritative_request.json
++          if-no-files-found: error
++
++      - name: Upload optional Copilot advisory
++        if: ${{ hashFiles('out/copilot_advisory.json') != '' }}
++        uses: actions/upload-artifact@v7
++        with:
++          name: autodoc-copilot-advisory
++          path: out/copilot_advisory.json
++          if-no-files-found: error
++
++      - name: Upload manifest
++        uses: actions/upload-artifact@v7
++        with:
++          name: autodoc-dual-artifact-manifest
++          path: out/dual_artifact_manifest.json
++          if-no-files-found: error
+diff --git a/templates/github/projects-repository/scripts/build_workflow_dispatch_issue_event.py b/templates/github/projects-repository/scripts/build_workflow_dispatch_issue_event.py
+new file mode 100644
+index 0000000..20a1623
+--- /dev/null
++++ b/templates/github/projects-repository/scripts/build_workflow_dispatch_issue_event.py
+@@ -0,0 +1,71 @@
++#!/usr/bin/env python3
++"""Build a synthetic GitHub issue event for a controlled workflow_dispatch run."""
++
++from __future__ import annotations
++
++from pathlib import Path
++import json
++import os
++from typing import Any, Mapping
++
++
++def _load_mapping(path: Path) -> Mapping[str, Any]:
++    payload = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(payload, dict):
++        raise ValueError("issue payload must be a JSON object")
++    return payload
++
++
++def build_event(
++    issue: Mapping[str, Any],
++    *,
++    repository: str,
++    actor: str,
++    requested_status: str,
++    request_mode: str,
++    parent_event_ref: str,
++) -> dict[str, Any]:
++    number = int(issue.get("number") or 0)
++    if number <= 0:
++        raise ValueError("issue number must be positive")
++    if requested_status not in {"Recherche", "Développement", "Production"}:
++        raise ValueError("unsupported requested_status")
++    if request_mode not in {"initial", "continuation", "transversal"}:
++        raise ValueError("unsupported request_mode")
++    return {
++        "action": "workflow_dispatch",
++        "issue": dict(issue),
++        "repository": {"full_name": repository},
++        "sender": {"login": actor},
++        "autodoc_dispatch": {
++            "issue_number": number,
++            "requested_status": requested_status,
++            "request_mode": request_mode,
++            "parent_event_ref": parent_event_ref,
++        },
++    }
++
++
++def main() -> int:
++    issue_path = Path(os.environ["AUTODOC_ISSUE_JSON"])
++    output_path = Path(
++        os.environ.get("AUTODOC_EVENT_OUTPUT", "out/autodoc_issue_event.json")
++    )
++    event = build_event(
++        _load_mapping(issue_path),
++        repository=os.environ["GITHUB_REPOSITORY"],
++        actor=os.environ.get("GITHUB_ACTOR", ""),
++        requested_status=os.environ["AUTODOC_REQUESTED_STATUS"],
++        request_mode=os.environ["AUTODOC_REQUEST_MODE"],
++        parent_event_ref=os.environ.get("AUTODOC_PARENT_EVENT_REF", ""),
++    )
++    output_path.parent.mkdir(parents=True, exist_ok=True)
++    output_path.write_text(
++        json.dumps(event, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
++        encoding="utf-8",
++    )
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/templates/github/projects-repository/PROJECT_BOARD_TEMPLATE.md b/templates/github/projects-repository/PROJECT_BOARD_TEMPLATE.md
+new file mode 100644
+index 0000000..d1a467a
+--- /dev/null
++++ b/templates/github/projects-repository/PROJECT_BOARD_TEMPLATE.md
+@@ -0,0 +1,78 @@
++# Modèle de Project — dépôt `newicody/projects`
++
++## Champs
++
++### `Status`
++
++Utiliser le champ GitHub par défaut et remplacer ses options par :
++
++```text
++Recherche
++En cours
++Terminé
++Développement
++Production
++Drop
++```
++
++### `Thème`
++
++Champ facultatif utilisé pour les groupes horizontaux :
++
++```text
++Chalouf
++Architecture réseau
++Modèles d'inférence
++Documentation
++```
++
++Ajouter les valeurs au fil des recherches. Ne pas créer de taxonomie serveur.
++
++## Vue `Recherches`
++
++```text
++Layout       : Board
++Column field : Status
++Group by     : Thème
++```
++
++Le groupe horizontal est la boîte visuelle. Un ticket créé avec
++`Nouveau thème de recherche` peut servir de boîte durable contenant les
++références de plusieurs tickets du même thème.
++
++## Vue `Thèmes`
++
++```text
++Layout : Table
++```
++
++Afficher les tickets dont le titre commence par `[Thème]`. Cette vue permet de
++maintenir les boîtes thématiques et leurs listes de recherches.
++
++## Vue `Événements liés`
++
++```text
++Layout : Table
++```
++
++Afficher les tickets dont le titre commence par `[Événement lié]`. Chaque
++événement est indépendant, tout en conservant ses références de provenance.
++
++## Recherches sans thème
++
++Laisser le champ `Thème` vide. Elles restent visibles dans le groupe sans valeur
++ou dans une vue non groupée.
++
++## Déclenchement
++
++Cette phase n'observe pas encore automatiquement les changements du Project.
++Le workflow contrôlé est lancé manuellement ou par API avec :
++
++```text
++issue_number
++requested_status
++request_mode
++parent_event_ref
++```
++
++Le détecteur idempotent de transitions `Status` est réservé à 0275-r10.
+diff --git a/templates/github/projects-repository/README.md b/templates/github/projects-repository/README.md
+new file mode 100644
+index 0000000..836cd3a
+--- /dev/null
++++ b/templates/github/projects-repository/README.md
+@@ -0,0 +1,17 @@
++# Bundle GitHub pour `newicody/projects`
++
++Ce répertoire est copié dans le dépôt privé de gestion.
++
++Il contient :
++
++```text
++.github/ISSUE_TEMPLATE/research.yml
++.github/ISSUE_TEMPLATE/theme.yml
++.github/ISSUE_TEMPLATE/transversal-event.yml
++.github/ISSUE_TEMPLATE/config.yml
++.github/workflows/autodoc-controlled-research.yml
++PROJECT_BOARD_TEMPLATE.md
++```
++
++Le workflow est query/read-only. Il ne modifie ni les issues, ni le Project,
++ni les champs `Status` ou `Thème`.
+diff --git a/tests/tools/test_github_projects_controlled_dispatch_event_0275_r7.py b/tests/tools/test_github_projects_controlled_dispatch_event_0275_r7.py
+new file mode 100644
+index 0000000..a95a707
+--- /dev/null
++++ b/tests/tools/test_github_projects_controlled_dispatch_event_0275_r7.py
+@@ -0,0 +1,63 @@
++from pathlib import Path
++import importlib.util
++
++
++ROOT = Path(__file__).resolve().parents[2]
++SCRIPT = (
++    ROOT
++    / "templates/github/projects-repository/scripts/"
++    "build_workflow_dispatch_issue_event.py"
++)
++
++
++def _load_module():
++    spec = importlib.util.spec_from_file_location("dispatch_event_0275_r7", SCRIPT)
++    assert spec is not None
++    assert spec.loader is not None
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
++    return module
++
++
++def test_build_controlled_dispatch_event_preserves_hierarchy() -> None:
++    module = _load_module()
++    event = module.build_event(
++        {
++            "number": 42,
++            "title": "Recherche transversale",
++            "body": "Thèmes: #10, #11",
++        },
++        repository="newicody/projects",
++        actor="newicody",
++        requested_status="Recherche",
++        request_mode="transversal",
++        parent_event_ref="event:41",
++    )
++
++    assert event["issue"]["number"] == 42
++    assert event["repository"]["full_name"] == "newicody/projects"
++    assert event["sender"]["login"] == "newicody"
++    assert event["autodoc_dispatch"] == {
++        "issue_number": 42,
++        "requested_status": "Recherche",
++        "request_mode": "transversal",
++        "parent_event_ref": "event:41",
++    }
++
++
++def test_build_controlled_dispatch_event_rejects_unsupported_status() -> None:
++    module = _load_module()
++
++    try:
++        module.build_event(
++            {"number": 42},
++            repository="newicody/projects",
++            actor="newicody",
++            requested_status="En cours",
++            request_mode="initial",
++            parent_event_ref="",
++        )
++    except ValueError as exc:
++        assert str(exc) == "unsupported requested_status"
++    else:
++        raise AssertionError("unsupported status accepted")
+diff --git a/tests/rules/test_github_projects_research_theme_event_templates_0275_r7_rule.py b/tests/rules/test_github_projects_research_theme_event_templates_0275_r7_rule.py
+new file mode 100644
+index 0000000..f6c777b
+--- /dev/null
++++ b/tests/rules/test_github_projects_research_theme_event_templates_0275_r7_rule.py
+@@ -0,0 +1,69 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++BUNDLE = ROOT / "templates/github/projects-repository"
++RESEARCH = BUNDLE / ".github/ISSUE_TEMPLATE/research.yml"
++THEME = BUNDLE / ".github/ISSUE_TEMPLATE/theme.yml"
++EVENT = BUNDLE / ".github/ISSUE_TEMPLATE/transversal-event.yml"
++WORKFLOW = BUNDLE / ".github/workflows/autodoc-controlled-research.yml"
++BOARD = BUNDLE / "PROJECT_BOARD_TEMPLATE.md"
++R6_MODEL = ROOT / "doc/architecture/GITHUB_RESEARCH_KANBAN_OPERATOR_MODEL_0275_R6.md"
++
++
++def test_0275_r7_uses_default_status_field_and_optional_theme_rows() -> None:
++    model = R6_MODEL.read_text(encoding="utf-8")
++    board = BOARD.read_text(encoding="utf-8")
++
++    assert "colonne            = Status et intention opérateur" in model
++    assert "Status\nThème" in model
++    assert "Column field : Status" in board
++    assert "Group by     : Thème" in board
++    assert "Les tickets sans thème" in board
++
++
++def test_0275_r7_research_form_exposes_refinement_sources_and_exclusions() -> None:
++    text = RESEARCH.read_text(encoding="utf-8")
++
++    required = (
++        "Affinage pour le prochain cycle",
++        "Chercher sur : tickets et recherches",
++        "Chercher sur : dépôts",
++        "Chercher sur : documents, médias et liens",
++        "Chercher sur : thèmes",
++        "Plusieurs thèmes sélectionnés",
++        "Exclure les recherches liées",
++        "Lancer également une inférence sur un moteur externe",
++        "Origine et liens hiérarchiques",
++    )
++    for phrase in required:
++        assert phrase in text
++
++
++def test_0275_r7_theme_and_transversal_event_keep_hierarchy_without_server_taxonomy() -> None:
++    theme = THEME.read_text(encoding="utf-8")
++    event = EVENT.read_text(encoding="utf-8")
++
++    assert "Tickets de recherche englobés" in theme
++    assert "Recherche spécifique sur ce thème" in theme
++    assert "ne choisit\n        aucun laboratoire" in theme
++    assert "Recherche d'origine" in event
++    assert "Thèmes sélectionnés" in event
++    assert "Événement parent ou précédent" in event
++    assert "devient une recherche indépendante" in event
++
++
++def test_0275_r7_workflow_is_explicit_read_only_and_not_issue_triggered() -> None:
++    text = WORKFLOW.read_text(encoding="utf-8")
++    trigger_block = text.split("permissions:", 1)[0]
++
++    assert "workflow_dispatch:" in trigger_block
++    assert "\n  issues:" not in trigger_block
++    assert "requested_status:" in text
++    assert "request_mode:" in text
++    assert "parent_event_ref:" in text
++    assert "issues: read" in text
++    assert "contents: read" in text
++    assert "write" not in text
++    assert "AUTODOC_GITHUB_TOKEN" not in text
++    assert "AUTODOC_PROJECT_TOKEN" not in text
+diff --git a/doc/runbooks/INSTALL_GITHUB_PROJECTS_RESEARCH_TEMPLATES_0275_R7.md b/doc/runbooks/INSTALL_GITHUB_PROJECTS_RESEARCH_TEMPLATES_0275_R7.md
+new file mode 100644
+index 0000000..b0215ba
+--- /dev/null
++++ b/doc/runbooks/INSTALL_GITHUB_PROJECTS_RESEARCH_TEMPLATES_0275_R7.md
+@@ -0,0 +1,191 @@
++# Installer les formulaires et le workflow de `newicody/projects` — 0275-r7
++
++## Préconditions
++
++- 0275-r6 validé ;
++- dépôt local `/home/eric/projet/git/projects` cloné depuis
++  `git@github.com:newicody/projects.git` ;
++- champ Project par défaut nommé `Status` ;
++- champ facultatif `Thème` ;
++- aucune clé ou token dans Git.
++
++## 1. Copier le bundle
++
++Depuis le dépôt Autodoc :
++
++```bash
++cd /home/eric/projet/git/projects
++
++mkdir -p .github/ISSUE_TEMPLATE .github/workflows
++
++cp /home/eric/projet/git/autodoc/templates/github/projects-repository/.github/ISSUE_TEMPLATE/*.yml \
++  .github/ISSUE_TEMPLATE/
++
++cp /home/eric/projet/git/autodoc/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml \
++  .github/workflows/
++
++cp /home/eric/projet/git/autodoc/templates/github/projects-repository/PROJECT_BOARD_TEMPLATE.md \
++  PROJECT_BOARD_TEMPLATE.md
++```
++
++## 2. Vérifier les fichiers
++
++```bash
++find .github -maxdepth 3 -type f -print
++git diff --check
++git status --short
++```
++
++Attendu :
++
++```text
++.github/ISSUE_TEMPLATE/config.yml
++.github/ISSUE_TEMPLATE/research.yml
++.github/ISSUE_TEMPLATE/theme.yml
++.github/ISSUE_TEMPLATE/transversal-event.yml
++.github/workflows/autodoc-controlled-research.yml
++PROJECT_BOARD_TEMPLATE.md
++```
++
++## 3. Retirer l'ancien workflow automatique
++
++Si le dépôt contient encore un workflow réagissant à `issues.opened` ou
++`issues.edited`, le supprimer ou le désactiver avant le test.
++
++Le workflow canonique 0275-r7 ne contient que :
++
++```text
++workflow_dispatch
++```
++
++## 4. Configurer Copilot désactivé
++
++Dans le dépôt `newicody/projects` :
++
++```text
++Settings
++→ Secrets and variables
++→ Actions
++→ Variables
++```
++
++Créer ou conserver :
++
++```text
++AUTODOC_COPILOT_ADVISORY_ENABLED = false
++```
++
++Aucun secret n'est requis pour le premier test.
++
++## 5. Commit et push
++
++```bash
++git add .github PROJECT_BOARD_TEMPLATE.md
++git commit -m "install autodoc research issue templates"
++git push origin master
++```
++
++## 6. Vérifier les formulaires
++
++Dans GitHub :
++
++```text
++newicody/projects
++→ Issues
++→ New issue
++```
++
++Les trois choix doivent apparaître :
++
++```text
++Nouvelle recherche
++Nouveau thème de recherche
++Nouvelle recherche transversale liée
++```
++
++Créer une recherche de test et vérifier son auto-ajout au Project.
++
++## 7. Configurer la vue
++
++Dans le Project :
++
++```text
++Layout       : Board
++Column field : Status
++Group by     : Thème
++```
++
++Options `Status` :
++
++```text
++Recherche
++En cours
++Terminé
++Développement
++Production
++Drop
++```
++
++Les tickets sans thème restent sans groupement thématique imposé.
++
++## 8. Premier test contrôlé du workflow
++
++Ouvrir :
++
++```text
++newicody/projects
++→ Actions
++→ Autodoc controlled research request
++→ Run workflow
++```
++
++Entrer :
++
++```text
++issue_number     = numéro de l'issue de test
++requested_status = Recherche
++request_mode     = initial
++parent_event_ref = vide
++```
++
++Le run doit produire :
++
++```text
++autodoc-authoritative-request
++autodoc-dual-artifact-manifest
++```
++
++Aucune issue ni carte Project ne doit être modifiée.
++
++## 9. Test d'une recherche transversale
++
++Créer une issue avec `Nouvelle recherche transversale liée`, en ajoutant :
++
++- une recherche d'origine ;
++- plusieurs thèmes ;
++- plusieurs tickets si nécessaire ;
++- un événement parent facultatif.
++
++Lancer ensuite le workflow avec :
++
++```text
++requested_status = Recherche
++request_mode     = transversal
++parent_event_ref = référence de l'événement parent, si elle existe
++```
++
++L'issue créée reste indépendante. Ses références dans le corps conservent sa
++trace hiérarchique.
++
++## 10. Limites de 0275-r7
++
++Cette phase ne fournit pas encore :
++
++- l'extraction typée des champs des formulaires ;
++- le contrat enrichi cycles/thèmes/documents ;
++- la lecture des commentaires ;
++- le watcher automatique du champ `Status` ;
++- le service OpenRC ;
++- la mutation distante du Project.
++
++Ces capacités restent séquencées dans 0275-r8 à 0275-r12.
+diff --git a/doc/CHANGELOG_0275_R7_GITHUB_PROJECTS_RESEARCH_THEME_EVENT_TEMPLATES.md b/doc/CHANGELOG_0275_R7_GITHUB_PROJECTS_RESEARCH_THEME_EVENT_TEMPLATES.md
+new file mode 100644
+index 0000000..d125e8c
+--- /dev/null
++++ b/doc/CHANGELOG_0275_R7_GITHUB_PROJECTS_RESEARCH_THEME_EVENT_TEMPLATES.md
+@@ -0,0 +1,26 @@
++# Changelog — 0275-r7 GitHub Projects research/theme/event templates
++
++## Added
++
++- installable `Nouvelle recherche` issue form;
++- installable theme-container issue form;
++- installable independent transversal-event issue form;
++- controlled read-only `workflow_dispatch` workflow;
++- stdlib helper building an issue-shaped dispatch event;
++- Project Board template using the default `Status` field and optional `Thème`;
++- installation runbook for `newicody/projects`;
++- focused tool and rule tests.
++
++## Changed
++
++- 0275-r6 documentation and rule expectations now use the operator-selected
++  default GitHub field name `Status` instead of `Étape`.
++
++## Boundaries
++
++- no watcher;
++- no automatic Project transition handling;
++- no GitHub write permission;
++- no OpenRC service;
++- no Scheduler modification;
++- no non-stdlib dependency.
+diff --git a/doc/manifests/MANIFEST_0275_R7_GITHUB_PROJECTS_RESEARCH_THEME_EVENT_TEMPLATES_CHANGED_FILES.md b/doc/manifests/MANIFEST_0275_R7_GITHUB_PROJECTS_RESEARCH_THEME_EVENT_TEMPLATES_CHANGED_FILES.md
+new file mode 100644
+index 0000000..684be49
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0275_R7_GITHUB_PROJECTS_RESEARCH_THEME_EVENT_TEMPLATES_CHANGED_FILES.md
+@@ -0,0 +1,25 @@
++# Manifest — 0275-r7 GitHub Projects research/theme/event templates
++
++Modified:
++
++- `doc/architecture/GITHUB_RESEARCH_KANBAN_OPERATOR_MODEL_0275_R6.md`
++- `doc/runbooks/INSTALL_GITHUB_RESEARCH_KANBAN_0275_R6.md`
++- `tests/rules/test_github_research_kanban_operator_model_0275_r6_rule.py`
++
++Added:
++
++- `templates/github/projects-repository/.github/ISSUE_TEMPLATE/research.yml`
++- `templates/github/projects-repository/.github/ISSUE_TEMPLATE/theme.yml`
++- `templates/github/projects-repository/.github/ISSUE_TEMPLATE/transversal-event.yml`
++- `templates/github/projects-repository/.github/ISSUE_TEMPLATE/config.yml`
++- `templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml`
++- `templates/github/projects-repository/scripts/build_workflow_dispatch_issue_event.py`
++- `templates/github/projects-repository/PROJECT_BOARD_TEMPLATE.md`
++- `templates/github/projects-repository/README.md`
++- `tests/tools/test_github_projects_controlled_dispatch_event_0275_r7.py`
++- `tests/rules/test_github_projects_research_theme_event_templates_0275_r7_rule.py`
++- `doc/runbooks/INSTALL_GITHUB_PROJECTS_RESEARCH_TEMPLATES_0275_R7.md`
++- `doc/CHANGELOG_0275_R7_GITHUB_PROJECTS_RESEARCH_THEME_EVENT_TEMPLATES.md`
++- `doc/manifests/MANIFEST_0275_R7_GITHUB_PROJECTS_RESEARCH_THEME_EVENT_TEMPLATES_CHANGED_FILES.md`
++- `doc/releases/0275-r7-github-projects-research-theme-event-templates.md`
++- `PHASE0275_R7_GITHUB_PROJECTS_RESEARCH_THEME_EVENT_TEMPLATES_TEST_REPORT.md`
+diff --git a/doc/releases/0275-r7-github-projects-research-theme-event-templates.md b/doc/releases/0275-r7-github-projects-research-theme-event-templates.md
+new file mode 100644
+index 0000000..27b622d
+--- /dev/null
++++ b/doc/releases/0275-r7-github-projects-research-theme-event-templates.md
+@@ -0,0 +1,11 @@
++# 0275-r7 — GitHub Projects research/theme/event templates
++
++This phase provides an installable bundle for the private management repository
++`newicody/projects`.
++
++The bundle supports durable research tickets, optional theme containers,
++cross-theme independent events, source selection, media drop zones, next-cycle
++context exclusions and optional external-inference intent.
++
++The workflow is explicit and read-only. Automatic `Status` transition detection
++remains deferred to 0275-r10.
+diff --git a/PHASE0275_R7_GITHUB_PROJECTS_RESEARCH_THEME_EVENT_TEMPLATES_TEST_REPORT.md b/PHASE0275_R7_GITHUB_PROJECTS_RESEARCH_THEME_EVENT_TEMPLATES_TEST_REPORT.md
+new file mode 100644
+index 0000000..bc9f669
+--- /dev/null
++++ b/PHASE0275_R7_GITHUB_PROJECTS_RESEARCH_THEME_EVENT_TEMPLATES_TEST_REPORT.md
+@@ -0,0 +1,43 @@
++# Phase 0275-r7 test report — GitHub Projects templates
++
++## Validated predecessor
++
++```text
++0275-r6 full suite: 2692 passed, 1 skipped
++```
++
++## Scope
++
++- templates and controlled workflow;
++- one stdlib event-construction helper;
++- documentation and tests;
++- no production Scheduler path.
++
++## Tests
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++
++PYTHONPATH=src:. python -m pytest -q \
++  tests/tools/test_github_projects_controlled_dispatch_event_0275_r7.py \
++  tests/rules/test_github_projects_research_theme_event_templates_0275_r7_rule.py \
++  tests/rules/test_github_research_kanban_operator_model_0275_r6_rule.py
++
++PYTHONPATH=src:. python -m pytest -q tests/rules
++
++PYTHONPATH=src:. python -m pytest -q
++```
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++reuse_audit: existing GitHub artifact builders and query-only boundaries reused
++non_stdlib_dependencies_added: false
++scheduler_modified: false
++scheduler_run_modified: false
++github_write_permission_added: false
++project_mutation_added: false
++openrc_service_added: false
++```

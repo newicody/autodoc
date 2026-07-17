@@ -1,0 +1,1865 @@
+diff --git a/doc/architecture/PHASE0287_R7_R8_R3_QDRANT_CANONICAL_PROFILE_REPORT.md b/doc/architecture/PHASE0287_R7_R8_R3_QDRANT_CANONICAL_PROFILE_REPORT.md
+new file mode 100644
+index 0000000..c5e9c8f
+--- /dev/null
++++ b/doc/architecture/PHASE0287_R7_R8_R3_QDRANT_CANONICAL_PROFILE_REPORT.md
+@@ -0,0 +1,46 @@
++# Phase 0287-r7-r8-r3 — Qdrant canonical profile report
++
++## Status
++
++Implemented as an inspection-only contract.
++
++## Reuse audit
++
++The patch reuses:
++
++- `missipy.embedding_space_profile.v1` from the existing ProjectV2 E5
++  projection path;
++- `missipy.context.vector_projection_metadata.v1` from r8-r2 SQL authority;
++- the existing Scheduler-managed OpenVINO/E5 and Qdrant execution surfaces.
++
++It does not create a second Qdrant executor, a second embedding path or a new
++memory authority.
++
++## Delivered contracts
++
++- named vector profile;
++- payload index profile;
++- collection profile;
++- point projection envelope;
++- model migration plan;
++- deterministic inspection report.
++
++## Locked decisions
++
++- SQL remains the authority.
++- Qdrant is reconstructible.
++- no raw authoritative content enters payloads.
++- payload indexes are defined before ingestion.
++- one collection per task is forbidden.
++- named vectors share a point only when identity and payload are compatible.
++- collection alias swap is used for incompatible or independently validated
++  migrations.
++- no qdrant-client dependency is introduced.
++- no Qdrant write is performed.
++- ControlProxy is unchanged.
++
++## Verification
++
++The focused tests cover named-vector construction, mandatory payload indexes,
++reference-only point payloads, SQL/profile compatibility, raw-content refusal,
++named-vector migration, alias migration and deterministic reports.
+diff --git a/doc/architecture/QDRANT_CANONICAL_PROFILE_0287_R7_R8_R3.dot b/doc/architecture/QDRANT_CANONICAL_PROFILE_0287_R7_R8_R3.dot
+new file mode 100644
+index 0000000..13d10e8
+--- /dev/null
++++ b/doc/architecture/QDRANT_CANONICAL_PROFILE_0287_R7_R8_R3.dot
+@@ -0,0 +1,19 @@
++digraph qdrant_canonical_profile_0287_r7_r8_r3 {
++  rankdir=LR;
++  node [shape=box];
++
++  sql [label="SQL authority\ncontext revisions + digests"];
++  openvino [label="OpenVINO / E5\nlocal embeddings"];
++  profile [label="Qdrant collection profile\nnamed vectors + payload indexes"];
++  qdrant [label="Qdrant projection\nreferences + vectors"];
++  recall [label="r8-r4 retrieval\nfilters + fusion + grouping"];
++  hydrate [label="SQL rehydration"];
++
++  sql -> openvino [label="source_ref + digest"];
++  openvino -> profile [label="embedding profile"];
++  sql -> profile [label="projection metadata"];
++  profile -> qdrant [label="future controlled write"];
++  qdrant -> recall [label="reference candidates"];
++  recall -> hydrate [label="sql_ref"];
++  hydrate -> sql [label="authoritative content"];
++}
+diff --git a/doc/architecture/QDRANT_CANONICAL_PROFILE_0287_R7_R8_R3.md b/doc/architecture/QDRANT_CANONICAL_PROFILE_0287_R7_R8_R3.md
+new file mode 100644
+index 0000000..0c493fe
+--- /dev/null
++++ b/doc/architecture/QDRANT_CANONICAL_PROFILE_0287_R7_R8_R3.md
+@@ -0,0 +1,79 @@
++# Qdrant canonical profile — 0287-r7-r8-r3
++
++## Decision
++
++SQL remains the authority for identities, context revisions, relations, content
++digests, artefacts and projection provenance. Qdrant is reconstructible and
++contains vectors plus a small reference payload. There is no raw authoritative
++content in the Qdrant payload.
++
++This patch adds no qdrant-client dependency and performs no Qdrant write.
++ControlProxy is unchanged and remains responsible for route transport, not
++knowledge ownership.
++
++## Collection strategy
++
++A bounded collection is selected by compatible point identity and payload
++shape. Payload partitioning is used for projects, branches, revisions,
++conversations, specialists and laboratories. One collection per task, Issue,
++specialist or context revision is forbidden.
++
++Named vectors are used when the same authoritative object and payload need
++more than one representation. The initial target is:
++
++- `dense_e5_v1` for the existing 384-dimensional normalized E5 space;
++- a later sparse lexical vector for exact identifiers and rare terms;
++- a later multivector only after measured late-interaction benchmarks.
++
++The roadmap target for r8-r4 is dense E5 + sparse retrieval, fusion, grouping
++and SQL rehydration. This patch only describes the vector spaces.
++
++## Canonical payload
++
++The point payload contains references and filters:
++
++- `sql_ref` and `source_ref`;
++- `source_content_digest`;
++- `context_revision_ref` and `branch_ref`;
++- `project_ref` and `conversation_ref`;
++- `artifact_kind` and `contribution_kind`;
++- `specialist_ref` and `laboratory_ref`;
++- `security_scope`;
++- `valid` and `superseded_by`;
++- `projection_ref`.
++
++It does not contain source text, file bytes, local paths, model objects or raw
++vector values. SQL metadata is used to reconstruct or validate the point.
++
++## Index policy
++
++All fields used for scope filtering receive explicit payload indexes. The
++policy requires payload indexes before ingestion so that filtered vector indexes can be
++constructed with the expected topology.
++
++`project_ref` is the tenant key and `security_scope` is the principal/scope
++key. Branch and context revision filters prevent retrieval from unrelated or
++superseded knowledge branches.
++
++## Model migration
++
++Two migration strategies are versioned:
++
++1. **named-vector backfill** when the same collection, point identity and
++   payload remain compatible;
++2. **collection alias swap** when the payload, scaling boundary, collection
++   topology or independent validation requires a separate collection.
++
++Both strategies require re-embedding, background backfill, validation and
++operator approval. The source projection is not deleted automatically.
++
++## Boundaries
++
++- SQL remains the authority.
++- Qdrant is reconstructible.
++- OpenVINO remains the local embedding producer.
++- no raw authoritative content is stored in Qdrant payloads;
++- no qdrant-client dependency is added;
++- no Qdrant write or collection mutation is performed;
++- Scheduler and ControlProxy are unchanged;
++- hybrid search belongs to r8-r4.
+diff --git a/doc/changelog/0287-r7-r8-r3-qdrant-canonical-profile.md b/doc/changelog/0287-r7-r8-r3-qdrant-canonical-profile.md
+new file mode 100644
+index 0000000..731ae68
+--- /dev/null
++++ b/doc/changelog/0287-r7-r8-r3-qdrant-canonical-profile.md
+@@ -0,0 +1,10 @@
++# 0287-r7-r8-r3 — Qdrant canonical profile
++
++- add immutable named-vector, payload-index and collection profiles;
++- bridge the existing E5 embedding-space profile into a named vector;
++- bridge r8-r2 SQL vector metadata into a reference-only Qdrant point;
++- require branch, revision, project, conversation and security filters;
++- forbid raw content, vectors and local paths in Qdrant payloads;
++- forbid one collection per task;
++- define named-vector backfill and collection-alias migration plans;
++- add no qdrant-client dependency and perform no remote mutation.
+diff --git a/manifest.json b/manifest.json
+new file mode 100644
+index 0000000..8970f50
+--- /dev/null
++++ b/manifest.json
+@@ -0,0 +1,15 @@
++{
++  "patch": "0287-r7-r8-r3-qdrant-canonical-profile",
++  "phase": "0287-r7-r8-r3",
++  "depends_on": [
++    "0287-r7-r8-r1-extensible-multitask-specialist-model",
++    "0287-r7-r8-r2-context-revision-sql-authority"
++  ],
++  "runtime_changes": false,
++  "remote_mutation": false,
++  "qdrant_client_dependency": false,
++  "qdrant_write_performed": false,
++  "sql_remains_authority": true,
++  "control_proxy_modified": false,
++  "next": "0287-r7-r8-r4-hybrid-retrieval-sql-rehydration"
++}
+diff --git a/src/context/__pycache__/qdrant_canonical_profile_0287.cpython-313.pyc b/src/context/__pycache__/qdrant_canonical_profile_0287.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..3a64703dcc0e9e54f2e40ebbcff6673b2aa3434d
+GIT binary patch
+literal 34394
+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
+YbOe9#en{Vdten~XGaNotz|0x{A8#|`8UO$Q
+
+literal 0
+HcmV?d00001
+
+diff --git a/src/context/qdrant_canonical_profile_0287.py b/src/context/qdrant_canonical_profile_0287.py
+new file mode 100644
+index 0000000..c6d8b0b
+--- /dev/null
++++ b/src/context/qdrant_canonical_profile_0287.py
+@@ -0,0 +1,712 @@
++"""Canonical Qdrant projection profile for semantic context revisions.
++
++Phase 0287-r7-r8-r3 does not execute Qdrant operations.  It defines the
++immutable profile that connects SQL-authoritative context objects and vector
++projection metadata to reconstructible Qdrant points, named-vector spaces,
++payload indexes and model-migration plans.
++
++SQL remains the authority.  Qdrant stores projections and reference payloads.
++The ControlProxy, Scheduler, EventBus, OpenVINO and qdrant-client are not
++imported or invoked here.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Mapping, Sequence
++from dataclasses import dataclass, field
++from types import MappingProxyType
++from typing import Any, Literal, Protocol
++import hashlib
++import json
++import re
++
++QDRANT_CANONICAL_PROFILE_VERSION = "0287.r7.r8.r3"
++QDRANT_NAMED_VECTOR_SCHEMA = "missipy.qdrant.named_vector_profile.v1"
++QDRANT_PAYLOAD_INDEX_SCHEMA = "missipy.qdrant.payload_index_profile.v1"
++QDRANT_COLLECTION_PROFILE_SCHEMA = "missipy.qdrant.collection_profile.v1"
++QDRANT_POINT_PROJECTION_SCHEMA = "missipy.qdrant.point_projection.v1"
++QDRANT_MODEL_MIGRATION_SCHEMA = "missipy.qdrant.model_migration_plan.v1"
++QDRANT_PROFILE_REPORT_SCHEMA = "missipy.qdrant.canonical_profile_report.v1"
++
++VECTOR_PROJECTION_METADATA_SCHEMA = (
++    "missipy.context.vector_projection_metadata.v1"
++)
++EMBEDDING_SPACE_PROFILE_SCHEMA = "missipy.embedding_space_profile.v1"
++
++VectorKind = Literal["dense", "sparse", "multivector"]
++DistanceMetric = Literal["Cosine", "Dot", "Euclid", "Manhattan"]
++PayloadIndexKind = Literal[
++    "keyword",
++    "integer",
++    "float",
++    "bool",
++    "datetime",
++    "uuid",
++    "text",
++    "geo",
++]
++MigrationStrategy = Literal["named_vector", "alias_swap"]
++
++_VECTOR_KINDS = frozenset({"dense", "sparse", "multivector"})
++_DISTANCE_METRICS = frozenset({"Cosine", "Dot", "Euclid", "Manhattan"})
++_PAYLOAD_INDEX_KINDS = frozenset(
++    {"keyword", "integer", "float", "bool", "datetime", "uuid", "text", "geo"}
++)
++_MIGRATION_STRATEGIES = frozenset({"named_vector", "alias_swap"})
++_TYPED_REF_RE = re.compile(r"^[a-z][a-z0-9-]*:[^\s].*$")
++_IDENTIFIER_RE = re.compile(r"^[a-z][a-z0-9_.-]*$")
++_COLLECTION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
++_SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
++
++CANONICAL_PAYLOAD_INDEXES: tuple[tuple[str, PayloadIndexKind], ...] = (
++    ("sql_ref", "keyword"),
++    ("source_ref", "keyword"),
++    ("source_content_digest", "keyword"),
++    ("context_revision_ref", "keyword"),
++    ("branch_ref", "keyword"),
++    ("project_ref", "keyword"),
++    ("conversation_ref", "keyword"),
++    ("artifact_kind", "keyword"),
++    ("contribution_kind", "keyword"),
++    ("specialist_ref", "keyword"),
++    ("laboratory_ref", "keyword"),
++    ("security_scope", "keyword"),
++    ("valid", "bool"),
++    ("superseded_by", "keyword"),
++)
++
++
++class QdrantCanonicalProfileError(ValueError):
++    """Raised when a Qdrant projection contract is inconsistent."""
++
++
++class _ToMapping(Protocol):
++    def to_mapping(self) -> Mapping[str, Any]: ...
++
++
++def _mapping(value: Mapping[str, Any] | _ToMapping) -> dict[str, Any]:
++    if isinstance(value, Mapping):
++        return dict(value)
++    to_mapping = getattr(value, "to_mapping", None)
++    if not callable(to_mapping):
++        raise QdrantCanonicalProfileError("value must be a mapping or expose to_mapping()")
++    result = to_mapping()
++    if not isinstance(result, Mapping):
++        raise QdrantCanonicalProfileError("to_mapping() must return a mapping")
++    return dict(result)
++
++
++def _require_text(name: str, value: object) -> str:
++    if not isinstance(value, str) or not value.strip():
++        raise QdrantCanonicalProfileError(f"{name} must be a non-empty string")
++    return value
++
++
++def _require_typed_ref(name: str, value: object, *, optional: bool = False) -> str:
++    if optional and value in (None, ""):
++        return ""
++    text = _require_text(name, value)
++    if _TYPED_REF_RE.fullmatch(text) is None:
++        raise QdrantCanonicalProfileError(f"{name} must be a typed reference")
++    return text
++
++
++def _require_identifier(name: str, value: object) -> str:
++    text = _require_text(name, value)
++    if _IDENTIFIER_RE.fullmatch(text) is None:
++        raise QdrantCanonicalProfileError(f"{name} must be a stable identifier")
++    return text
++
++
++def _require_collection_name(name: str, value: object) -> str:
++    text = _require_text(name, value)
++    if _COLLECTION_RE.fullmatch(text) is None:
++        raise QdrantCanonicalProfileError(f"{name} must be a safe Qdrant name")
++    return text
++
++
++def _require_sha256(name: str, value: object) -> str:
++    text = _require_text(name, value)
++    if _SHA256_RE.fullmatch(text) is None:
++        raise QdrantCanonicalProfileError(f"{name} must use sha256:<64 lowercase hex>")
++    return text
++
++
++def _freeze_json(value: Any) -> Any:
++    if isinstance(value, Mapping):
++        return MappingProxyType({str(key): _freeze_json(item) for key, item in value.items()})
++    if isinstance(value, (list, tuple)):
++        return tuple(_freeze_json(item) for item in value)
++    if isinstance(value, (str, int, float, bool, type(None))):
++        return value
++    raise QdrantCanonicalProfileError("metadata must contain JSON-compatible values")
++
++
++def _thaw_json(value: Any) -> Any:
++    if isinstance(value, Mapping):
++        return {str(key): _thaw_json(item) for key, item in value.items()}
++    if isinstance(value, tuple):
++        return [_thaw_json(item) for item in value]
++    return value
++
++
++def _stable_digest(payload: Mapping[str, Any]) -> str:
++    encoded = json.dumps(
++        payload,
++        sort_keys=True,
++        ensure_ascii=False,
++        separators=(",", ":"),
++    ).encode("utf-8")
++    return "sha256:" + hashlib.sha256(encoded).hexdigest()
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantNamedVectorProfile:
++    """One named vector space attached to a shared Qdrant point identity."""
++
++    schema: str
++    vector_name: str
++    vector_kind: VectorKind
++    embedding_profile_ref: str
++    model_ref: str
++    model_revision: str
++    dimension: int | None
++    distance: DistanceMetric | None
++    normalized: bool | None
++    model_artifact_digest: str = ""
++    hnsw_enabled: bool = True
++    metadata: Mapping[str, Any] = field(default_factory=dict)
++
++    def __post_init__(self) -> None:
++        if self.schema != QDRANT_NAMED_VECTOR_SCHEMA:
++            raise QdrantCanonicalProfileError("unsupported named vector schema")
++        _require_identifier("vector_name", self.vector_name)
++        if self.vector_kind not in _VECTOR_KINDS:
++            raise QdrantCanonicalProfileError("unsupported vector_kind")
++        _require_typed_ref("embedding_profile_ref", self.embedding_profile_ref)
++        _require_typed_ref("model_ref", self.model_ref)
++        _require_text("model_revision", self.model_revision)
++        if self.vector_kind == "sparse":
++            if self.dimension is not None or self.distance is not None:
++                raise QdrantCanonicalProfileError(
++                    "sparse vectors must not declare fixed dimension or distance"
++                )
++            if self.normalized is not None:
++                raise QdrantCanonicalProfileError(
++                    "sparse vectors must not declare dense normalization"
++                )
++        else:
++            if not isinstance(self.dimension, int) or isinstance(self.dimension, bool):
++                raise QdrantCanonicalProfileError("dense/multivector dimension must be int")
++            if self.dimension <= 0:
++                raise QdrantCanonicalProfileError("dimension must be > 0")
++            if self.distance not in _DISTANCE_METRICS:
++                raise QdrantCanonicalProfileError("unsupported distance metric")
++            if not isinstance(self.normalized, bool):
++                raise QdrantCanonicalProfileError("normalized must be a boolean")
++        if self.model_artifact_digest:
++            _require_sha256("model_artifact_digest", self.model_artifact_digest)
++        if not isinstance(self.hnsw_enabled, bool):
++            raise QdrantCanonicalProfileError("hnsw_enabled must be a boolean")
++        object.__setattr__(self, "metadata", _freeze_json(self.metadata))
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "vector_name": self.vector_name,
++            "vector_kind": self.vector_kind,
++            "embedding_profile_ref": self.embedding_profile_ref,
++            "model_ref": self.model_ref,
++            "model_revision": self.model_revision,
++            "dimension": self.dimension,
++            "distance": self.distance,
++            "normalized": self.normalized,
++            "model_artifact_digest": self.model_artifact_digest,
++            "hnsw_enabled": self.hnsw_enabled,
++            "metadata": _thaw_json(self.metadata),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantPayloadIndexProfile:
++    """One indexed payload field used for authority and scope filtering."""
++
++    schema: str
++    field_name: str
++    index_kind: PayloadIndexKind
++    required: bool = True
++    tenant_key: bool = False
++    principal_key: bool = False
++
++    def __post_init__(self) -> None:
++        if self.schema != QDRANT_PAYLOAD_INDEX_SCHEMA:
++            raise QdrantCanonicalProfileError("unsupported payload index schema")
++        _require_identifier("field_name", self.field_name)
++        if self.index_kind not in _PAYLOAD_INDEX_KINDS:
++            raise QdrantCanonicalProfileError("unsupported payload index kind")
++        for name in ("required", "tenant_key", "principal_key"):
++            if not isinstance(getattr(self, name), bool):
++                raise QdrantCanonicalProfileError(f"{name} must be a boolean")
++        if self.tenant_key and self.index_kind != "keyword":
++            raise QdrantCanonicalProfileError("tenant_key must use a keyword index")
++        if self.principal_key and self.index_kind != "keyword":
++            raise QdrantCanonicalProfileError("principal_key must use a keyword index")
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "field_name": self.field_name,
++            "index_kind": self.index_kind,
++            "required": self.required,
++            "tenant_key": self.tenant_key,
++            "principal_key": self.principal_key,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantCollectionProfile:
++    """A bounded collection profile sharing one point/payload identity."""
++
++    schema: str
++    profile_ref: str
++    collection_name: str
++    collection_alias: str
++    point_identity_field: str
++    authority_ref_field: str
++    named_vectors: tuple[QdrantNamedVectorProfile, ...]
++    payload_indexes: tuple[QdrantPayloadIndexProfile, ...]
++    multitenancy_mode: Literal["payload_partitioning"] = "payload_partitioning"
++    create_indexes_before_ingest: bool = True
++    raw_content_in_payload_allowed: bool = False
++    vectors_reconstructible: bool = True
++    one_collection_per_task_allowed: bool = False
++    metadata: Mapping[str, Any] = field(default_factory=dict)
++
++    def __post_init__(self) -> None:
++        if self.schema != QDRANT_COLLECTION_PROFILE_SCHEMA:
++            raise QdrantCanonicalProfileError("unsupported collection profile schema")
++        _require_typed_ref("profile_ref", self.profile_ref)
++        _require_collection_name("collection_name", self.collection_name)
++        _require_collection_name("collection_alias", self.collection_alias)
++        _require_identifier("point_identity_field", self.point_identity_field)
++        _require_identifier("authority_ref_field", self.authority_ref_field)
++        if self.multitenancy_mode != "payload_partitioning":
++            raise QdrantCanonicalProfileError("only payload_partitioning is supported")
++        if not self.named_vectors:
++            raise QdrantCanonicalProfileError("at least one named vector is required")
++        vector_names = [item.vector_name for item in self.named_vectors]
++        if len(vector_names) != len(set(vector_names)):
++            raise QdrantCanonicalProfileError("named vector names must be unique")
++        field_names = [item.field_name for item in self.payload_indexes]
++        if len(field_names) != len(set(field_names)):
++            raise QdrantCanonicalProfileError("payload index names must be unique")
++        canonical = {name: kind for name, kind in CANONICAL_PAYLOAD_INDEXES}
++        observed = {item.field_name: item.index_kind for item in self.payload_indexes}
++        missing = sorted(name for name in canonical if name not in observed)
++        mismatched = sorted(
++            name for name, kind in canonical.items() if observed.get(name) not in (None, kind)
++        )
++        if missing:
++            raise QdrantCanonicalProfileError(
++                "missing canonical payload indexes: " + ", ".join(missing)
++            )
++        if mismatched:
++            raise QdrantCanonicalProfileError(
++                "canonical payload index type mismatch: " + ", ".join(mismatched)
++            )
++        booleans = (
++            "create_indexes_before_ingest",
++            "raw_content_in_payload_allowed",
++            "vectors_reconstructible",
++            "one_collection_per_task_allowed",
++        )
++        for name in booleans:
++            if not isinstance(getattr(self, name), bool):
++                raise QdrantCanonicalProfileError(f"{name} must be a boolean")
++        if not self.create_indexes_before_ingest:
++            raise QdrantCanonicalProfileError(
++                "payload indexes must be created before first ingestion"
++            )
++        if self.raw_content_in_payload_allowed:
++            raise QdrantCanonicalProfileError("raw authoritative content is forbidden")
++        if not self.vectors_reconstructible:
++            raise QdrantCanonicalProfileError("Qdrant vectors must be reconstructible")
++        if self.one_collection_per_task_allowed:
++            raise QdrantCanonicalProfileError("one collection per task is forbidden")
++        object.__setattr__(self, "metadata", _freeze_json(self.metadata))
++
++    def vector(self, vector_name: str) -> QdrantNamedVectorProfile:
++        for item in self.named_vectors:
++            if item.vector_name == vector_name:
++                return item
++        raise QdrantCanonicalProfileError(f"unknown named vector: {vector_name}")
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "profile_ref": self.profile_ref,
++            "collection_name": self.collection_name,
++            "collection_alias": self.collection_alias,
++            "point_identity_field": self.point_identity_field,
++            "authority_ref_field": self.authority_ref_field,
++            "named_vectors": [item.to_mapping() for item in self.named_vectors],
++            "payload_indexes": [item.to_mapping() for item in self.payload_indexes],
++            "multitenancy_mode": self.multitenancy_mode,
++            "create_indexes_before_ingest": self.create_indexes_before_ingest,
++            "raw_content_in_payload_allowed": self.raw_content_in_payload_allowed,
++            "vectors_reconstructible": self.vectors_reconstructible,
++            "one_collection_per_task_allowed": self.one_collection_per_task_allowed,
++            "metadata": _thaw_json(self.metadata),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantPointProjection:
++    """Reference-only Qdrant point payload validated against SQL metadata."""
++
++    schema: str
++    point_id: str
++    collection_profile_ref: str
++    vector_name: str
++    source_ref: str
++    source_content_digest: str
++    projection_ref: str
++    context_revision_ref: str
++    branch_ref: str
++    project_ref: str
++    conversation_ref: str
++    artifact_kind: str
++    contribution_kind: str
++    specialist_ref: str = ""
++    laboratory_ref: str = ""
++    security_scope: str = "scope:default"
++    valid: bool = True
++    superseded_by: str = ""
++    metadata: Mapping[str, Any] = field(default_factory=dict)
++
++    def __post_init__(self) -> None:
++        if self.schema != QDRANT_POINT_PROJECTION_SCHEMA:
++            raise QdrantCanonicalProfileError("unsupported point projection schema")
++        _require_text("point_id", self.point_id)
++        for name in (
++            "collection_profile_ref",
++            "source_ref",
++            "projection_ref",
++            "context_revision_ref",
++            "branch_ref",
++            "project_ref",
++            "conversation_ref",
++            "security_scope",
++        ):
++            _require_typed_ref(name, getattr(self, name))
++        _require_sha256("source_content_digest", self.source_content_digest)
++        _require_identifier("vector_name", self.vector_name)
++        _require_identifier("artifact_kind", self.artifact_kind)
++        _require_identifier("contribution_kind", self.contribution_kind)
++        for name in ("specialist_ref", "laboratory_ref", "superseded_by"):
++            _require_typed_ref(name, getattr(self, name), optional=True)
++        if not isinstance(self.valid, bool):
++            raise QdrantCanonicalProfileError("valid must be a boolean")
++        if self.valid and self.superseded_by:
++            raise QdrantCanonicalProfileError(
++                "a valid point must not declare superseded_by"
++            )
++        object.__setattr__(self, "metadata", _freeze_json(self.metadata))
++
++    def qdrant_payload(self) -> dict[str, Any]:
++        payload = {
++            "sql_ref": self.source_ref,
++            "source_ref": self.source_ref,
++            "source_content_digest": self.source_content_digest,
++            "context_revision_ref": self.context_revision_ref,
++            "branch_ref": self.branch_ref,
++            "project_ref": self.project_ref,
++            "conversation_ref": self.conversation_ref,
++            "artifact_kind": self.artifact_kind,
++            "contribution_kind": self.contribution_kind,
++            "specialist_ref": self.specialist_ref,
++            "laboratory_ref": self.laboratory_ref,
++            "security_scope": self.security_scope,
++            "valid": self.valid,
++            "superseded_by": self.superseded_by,
++            "projection_ref": self.projection_ref,
++        }
++        payload.update(_thaw_json(self.metadata))
++        forbidden = {"content", "body", "text", "vector", "embedding", "local_path"}
++        collisions = sorted(forbidden.intersection(payload))
++        if collisions:
++            raise QdrantCanonicalProfileError(
++                "raw or runtime payload fields are forbidden: " + ", ".join(collisions)
++            )
++        return payload
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "point_id": self.point_id,
++            "collection_profile_ref": self.collection_profile_ref,
++            "vector_name": self.vector_name,
++            "payload": self.qdrant_payload(),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantModelMigrationPlan:
++    """A no-mutation plan for changing an embedding model or vector space."""
++
++    schema: str
++    migration_ref: str
++    strategy: MigrationStrategy
++    source_collection_profile_ref: str
++    target_collection_profile_ref: str
++    source_vector_name: str
++    target_vector_name: str
++    source_model_ref: str
++    target_model_ref: str
++    reembed_required: bool
++    background_backfill_required: bool
++    validation_required: bool
++    operator_approval_required: bool
++    alias_swap_required: bool
++    delete_source_after_validation: bool = False
++
++    def __post_init__(self) -> None:
++        if self.schema != QDRANT_MODEL_MIGRATION_SCHEMA:
++            raise QdrantCanonicalProfileError("unsupported migration schema")
++        _require_typed_ref("migration_ref", self.migration_ref)
++        if self.strategy not in _MIGRATION_STRATEGIES:
++            raise QdrantCanonicalProfileError("unsupported migration strategy")
++        for name in (
++            "source_collection_profile_ref",
++            "target_collection_profile_ref",
++            "source_model_ref",
++            "target_model_ref",
++        ):
++            _require_typed_ref(name, getattr(self, name))
++        _require_identifier("source_vector_name", self.source_vector_name)
++        _require_identifier("target_vector_name", self.target_vector_name)
++        for name in (
++            "reembed_required",
++            "background_backfill_required",
++            "validation_required",
++            "operator_approval_required",
++            "alias_swap_required",
++            "delete_source_after_validation",
++        ):
++            if not isinstance(getattr(self, name), bool):
++                raise QdrantCanonicalProfileError(f"{name} must be a boolean")
++        if not self.reembed_required:
++            raise QdrantCanonicalProfileError("model migration requires re-embedding")
++        if not self.background_backfill_required:
++            raise QdrantCanonicalProfileError("migration requires background backfill")
++        if not self.validation_required or not self.operator_approval_required:
++            raise QdrantCanonicalProfileError(
++                "migration requires validation and operator approval"
++            )
++        if self.strategy == "named_vector" and self.alias_swap_required:
++            raise QdrantCanonicalProfileError(
++                "named-vector migration must not require an alias swap"
++            )
++        if self.strategy == "alias_swap" and not self.alias_swap_required:
++            raise QdrantCanonicalProfileError(
++                "alias-swap migration must require an alias swap"
++            )
++        if self.delete_source_after_validation:
++            raise QdrantCanonicalProfileError(
++                "source deletion is not part of the initial migration plan"
++            )
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "migration_ref": self.migration_ref,
++            "strategy": self.strategy,
++            "source_collection_profile_ref": self.source_collection_profile_ref,
++            "target_collection_profile_ref": self.target_collection_profile_ref,
++            "source_vector_name": self.source_vector_name,
++            "target_vector_name": self.target_vector_name,
++            "source_model_ref": self.source_model_ref,
++            "target_model_ref": self.target_model_ref,
++            "reembed_required": self.reembed_required,
++            "background_backfill_required": self.background_backfill_required,
++            "validation_required": self.validation_required,
++            "operator_approval_required": self.operator_approval_required,
++            "alias_swap_required": self.alias_swap_required,
++            "delete_source_after_validation": self.delete_source_after_validation,
++        }
++
++
++def build_canonical_payload_indexes() -> tuple[QdrantPayloadIndexProfile, ...]:
++    """Return the minimum payload indexes required before ingestion."""
++
++    result = []
++    for field_name, index_kind in CANONICAL_PAYLOAD_INDEXES:
++        result.append(
++            QdrantPayloadIndexProfile(
++                schema=QDRANT_PAYLOAD_INDEX_SCHEMA,
++                field_name=field_name,
++                index_kind=index_kind,
++                tenant_key=field_name == "project_ref",
++                principal_key=field_name == "security_scope",
++            )
++        )
++    return tuple(result)
++
++
++def build_named_vector_from_embedding_profile(
++    profile: Mapping[str, Any] | _ToMapping,
++    *,
++    vector_name: str,
++    vector_kind: VectorKind = "dense",
++) -> QdrantNamedVectorProfile:
++    """Bridge the historical embedding-space profile into a named vector."""
++
++    payload = _mapping(profile)
++    if payload.get("schema") != EMBEDDING_SPACE_PROFILE_SCHEMA:
++        raise QdrantCanonicalProfileError("unsupported embedding space profile")
++    distance = payload.get("distance")
++    return QdrantNamedVectorProfile(
++        schema=QDRANT_NAMED_VECTOR_SCHEMA,
++        vector_name=vector_name,
++        vector_kind=vector_kind,
++        embedding_profile_ref=_require_typed_ref("profile_ref", payload.get("profile_ref")),
++        model_ref=_require_typed_ref("model_ref", payload.get("model_ref")),
++        model_revision=_require_text("model_revision", payload.get("model_revision")),
++        dimension=payload.get("dimension") if vector_kind != "sparse" else None,
++        distance=distance if vector_kind != "sparse" else None,
++        normalized=payload.get("normalized") if vector_kind != "sparse" else None,
++        model_artifact_digest=str(payload.get("model_artifact_digest", "")),
++        hnsw_enabled=vector_kind != "sparse",
++        metadata={
++            "backend_ref": payload.get("backend_ref", ""),
++            "tokenizer_ref": payload.get("tokenizer_ref", ""),
++            "role": payload.get("role", ""),
++        },
++    )
++
++
++def build_point_projection_from_sql_metadata(
++    projection: Mapping[str, Any] | _ToMapping,
++    *,
++    collection: QdrantCollectionProfile,
++    context_revision_ref: str,
++    branch_ref: str,
++    project_ref: str,
++    conversation_ref: str,
++    artifact_kind: str,
++    contribution_kind: str,
++    specialist_ref: str = "",
++    laboratory_ref: str = "",
++    security_scope: str = "scope:default",
++    valid: bool = True,
++    superseded_by: str = "",
++) -> QdrantPointProjection:
++    """Create a reference-only point from SQL projection metadata."""
++
++    payload = _mapping(projection)
++    if payload.get("schema") != VECTOR_PROJECTION_METADATA_SCHEMA:
++        raise QdrantCanonicalProfileError("unsupported SQL vector projection metadata")
++    if payload.get("collection_name") != collection.collection_name:
++        raise QdrantCanonicalProfileError("SQL projection collection does not match profile")
++    vector_name = _require_identifier("vector_name", payload.get("vector_name"))
++    vector = collection.vector(vector_name)
++    if payload.get("embedding_profile_ref") != vector.embedding_profile_ref:
++        raise QdrantCanonicalProfileError("embedding profile does not match named vector")
++    if payload.get("model_ref") != vector.model_ref:
++        raise QdrantCanonicalProfileError("model_ref does not match named vector")
++    if payload.get("model_revision") != vector.model_revision:
++        raise QdrantCanonicalProfileError("model_revision does not match named vector")
++    if payload.get("dimension") != vector.dimension:
++        raise QdrantCanonicalProfileError("dimension does not match named vector")
++    if payload.get("normalized") != vector.normalized:
++        raise QdrantCanonicalProfileError("normalization does not match named vector")
++    return QdrantPointProjection(
++        schema=QDRANT_POINT_PROJECTION_SCHEMA,
++        point_id=_require_text("point_id", payload.get("point_id")),
++        collection_profile_ref=collection.profile_ref,
++        vector_name=vector_name,
++        source_ref=_require_typed_ref("source_ref", payload.get("source_ref")),
++        source_content_digest=_require_sha256(
++            "source_content_digest", payload.get("source_content_digest")
++        ),
++        projection_ref=_require_typed_ref("projection_ref", payload.get("projection_ref")),
++        context_revision_ref=context_revision_ref,
++        branch_ref=branch_ref,
++        project_ref=project_ref,
++        conversation_ref=conversation_ref,
++        artifact_kind=artifact_kind,
++        contribution_kind=contribution_kind,
++        specialist_ref=specialist_ref,
++        laboratory_ref=laboratory_ref,
++        security_scope=security_scope,
++        valid=valid,
++        superseded_by=superseded_by,
++        metadata={
++            "projection_state": payload.get("projection_state"),
++            "projected_at": payload.get("projected_at"),
++        },
++    )
++
++
++def choose_model_migration_strategy(
++    source: QdrantCollectionProfile,
++    target: QdrantCollectionProfile,
++    *,
++    source_vector_name: str,
++    target_vector_name: str,
++    migration_ref: str,
++) -> QdrantModelMigrationPlan:
++    """Select named-vector backfill or collection-alias swap deterministically."""
++
++    source_vector = source.vector(source_vector_name)
++    target_vector = target.vector(target_vector_name)
++    shared_identity = (
++        source.collection_name == target.collection_name
++        and source.point_identity_field == target.point_identity_field
++        and source.authority_ref_field == target.authority_ref_field
++    )
++    strategy: MigrationStrategy = "named_vector" if shared_identity else "alias_swap"
++    return QdrantModelMigrationPlan(
++        schema=QDRANT_MODEL_MIGRATION_SCHEMA,
++        migration_ref=migration_ref,
++        strategy=strategy,
++        source_collection_profile_ref=source.profile_ref,
++        target_collection_profile_ref=target.profile_ref,
++        source_vector_name=source_vector.vector_name,
++        target_vector_name=target_vector.vector_name,
++        source_model_ref=source_vector.model_ref,
++        target_model_ref=target_vector.model_ref,
++        reembed_required=True,
++        background_backfill_required=True,
++        validation_required=True,
++        operator_approval_required=True,
++        alias_swap_required=strategy == "alias_swap",
++    )
++
++
++def build_canonical_profile_report(
++    collection: QdrantCollectionProfile,
++    *,
++    migration_plans: Sequence[QdrantModelMigrationPlan] = (),
++) -> dict[str, Any]:
++    """Return a deterministic, inspection-only report for rules and tooling."""
++
++    report = {
++        "schema": QDRANT_PROFILE_REPORT_SCHEMA,
++        "version": QDRANT_CANONICAL_PROFILE_VERSION,
++        "collection_profile": collection.to_mapping(),
++        "migration_plans": [item.to_mapping() for item in migration_plans],
++        "boundaries": {
++            "sql_remains_authority": True,
++            "qdrant_is_reconstructible_projection": True,
++            "raw_authoritative_content_in_payload": False,
++            "qdrant_client_imported": False,
++            "qdrant_write_performed": False,
++            "openvino_call_performed": False,
++            "scheduler_modified": False,
++            "control_proxy_modified": False,
++            "one_collection_per_task": False,
++        },
++    }
++    report["profile_digest"] = _stable_digest(report)
++    return report
+diff --git a/tests/context/__pycache__/test_qdrant_canonical_profile_0287_r7_r8_r3.cpython-313-pytest-9.0.2.pyc b/tests/context/__pycache__/test_qdrant_canonical_profile_0287_r7_r8_r3.cpython-313-pytest-9.0.2.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..c0b7a2118666f4faba119f5d35e792573a129640
+GIT binary patch
+literal 20338
+zcmeHPYit|Yb)F%I6v-hek$S%$eynLrvLwrrC9mViw(MAI%U+MTb)qILC5~k7Ql$0{
+zWv`WNt2W!lo1pc!i?lA<AB(nWZ6tmDD7r}dBgwCz{X>d!G?=PDfwpM#&(1n9V4y(H
+zxp(Hyh@xNJxCK&=sKaybJ@+y9+~;@C<tL#~K!E4BcVB*UqFWID6&=>&WsLYqmnaC|
+z6cj-bUlXQ8B6cC~dd)@L^jn(pXs#|{%1f%u5FhbDi2F7FRDcAgWFk)mNpLDeLQ`Q9
+zo~kC*Q#GV!DncStQ4*c1CACv^q;9I7)K4{#hN(u<IMqa&AT5bBD<0CKc$F%}*Y8rA
+z6@QEHru3$Zv?>AWD=R@I)bHsK%KwxWC2Y#JfoyfZsI)3Ircb-lrbLh@9l%8?*9lxL
+z<+^~Yqg*#|^_1%Yu7Ps9fNP}OZs3|Iw`b86YyUA;S4=eIWHy`2C-doCR-2Ah8y%D9
+zPfVUVb$0qpLb*6`ax!u8(uLD!&rK$jlb@SBKVfvee(KW1^i1O9g>&a7PtKgZFkLRu
+zZc3cLaBA{g;{4e&mnNu~nLvvfJUwxK@>JptNaMmKEAb99?Ba#9kOkyCWoBW<?KZ_7
+zA?GJ&CQePvOjt>@zMdk<Z2n|2o6Dx>lbMSow~)@LlZ51m(P#$dG8uIqU)c;bnpnVe
+za!F0S0YN!ph19c<i@9_*4}Nd5ct+>kN;;ED%v;$cmXp^rxnwGl&Zg9NRL$tvA;1cf
+zAnJ0C<c$~$&ti^=t2E2R0?92U)TKE!l}cw96U!`yv5$!^V-e8PECUnQ-p(YJ)O<3P
+z%qNY``761crY4qhDHXiai-amRq2+;57q73L(XJ$i4v&l{Kjp&{n){T`qcAP&xO%ux
+zTS{g!hB$b~W%$_(5Ou-u5%p?X169ql{w)YDV8Zb476kE=6foZuX00&j^l{-5gp@yu
+zOK~5@nD8iW5701l*ti%L4oQk9F2qIFZ52OsKj@~j5*0=1P=9E*5DQPQM!9PGOx27V
+z;`onYxDgDoZ?!eItY)vKv$=6D*KfVnYG*$8mYPkks$_g=C6iBQK*1}?OrIrSNK0xm
+zJM-f;NX_t`%xUSYYE&&JH7&WQ8r8{_d@hxnPt51CdG(!qEM$1K`77#D(vZ!fK)YHn
+z<hkTLWRpS%X~1%^>IFBeL?gt@K_gTx=W<vSBaqDzsDCJ6%J8SsOKKMD-0-E+T0WVb
+zR}G2eGEk6t-gOe#bd7qZsU*p#7n1Y&L@K?gYWbL(VEq{$Z8?+98$mV{oH~1EQkfz3
+z5Tc<fy1I-v4lZT$2eIuQWR090A%_lP7de=RbhLx!3sYC(ZQ8Y+ozCo214Bnf69hg-
+z668?-@^vG+vm22C$g&mlejUh~@Ndxpz4^fHvwwNv&V`RpelJq$J^8(fV(;m~fivHG
+z`-e?G3=|p_y>VEt@6cO%^yYEBwpnjz(d(P^x;DM0S#Ry#>h8PW8V-8z31N@-6G&7r
+z<P=n#notiXt`3qe@OjkC3e8)L`9ghH2k&?c+3fgOl~iA(5#o>oNP2+qHjfQfhJV`T
+zzXS}ld2Dy|ndR;Ma#Rt=TydE0##~v?EXHCI=Hw^{aVhRr+zPgN&#*Y_w<HdmjN%>h
+zL2Iv?rfRw)5)3dJ%GzH7RGq%68a_5ArBg-~jziGu?)XSI#Gs|8?_tz9nhZ3sq-NAv
+zvD9onoxh$~NUNEYQ44uo$r1E`bWG2Xb9~f{>atNb<{>qh8>*II{SbU*f}=ysON(Bq
+zRt+z!b`5K#i$3Hau!ao%%bFR;3GnHIe{B-Tn(&}T2#;?0T0Z)G(RV_x>%8xAhrMg3
+zANYjeuC3~W;G;LaqBjrf?XT!<d-TTk57Jvrqot;?`w>4j5x>Vv1|cOf3WVzwb%<|3
+z^*RE~_OVQH&6;Btj#{WS9Hl_NJ~mDb2uiTO8uS&Ke$-&k4CA>uoFn=MVR(7eXtg-z
+z$-`FL_%OvAr!^Y&4U$?Y45>rX4rGQkW}lU?;bkpgwQgu&Xrymov~O@^W?*2Pe!dW^
+zrj5V|+eM<IO+d@7ka?Bz^(IeC2lE;mIE;E;C~NvdX{N>9SekuEUO|E_lXaCb;EWna
+zW-w;uRU>HnzyzDj8$N56jJXIld&6svN2m}D713q20y`yg5&W?MXqX2M8i(|jA-&<?
+zR`)A<_i?>`kKWRbV*-o}jXf|X=ye@>+itz7U$1Mp-&up2uQ4^xl@2KhRq#)h9)+@0
+z?##SPinKcmFtJG(b^DWx%<|4X{y9O&^<WL*llm_~nDsGU5H8V`v*lvnJ<zD)u3-@;
+zLOYdV*I_ds#WNeUVqC&bRrd4<RvC{%ND2m5M}F9>%bp&1hr{NuWtB1s)087tv@8lZ
+zov|*6P$v7GDocx29*Xz5%HO%IBo)hV*OHY7e~*@Ju`8BrXKZ*M=+OP{KG0#-jomu#
+z9uTQZnyt6$!tus9sh2%aKay1%>su8S;h4A_g*MYvCJxT5s04Da$3123<-6P7;7RR8
+zzFhzF(@Gq*TTyFqk5#KM*fLFdm5>sSdreJMJ%^^MthB6erm3t5+S&u!f>u=ifVQeX
+zm9}bLYU>4QtF2sDv~NW|mA0ZUwe^Cu)lpGfwWzIg&Uy1$#=$x|Z`Qxm)r-*8q7ZAC
+zCPSbux>~*?K5`v9c1K+8-?MM|`cO;@eA#5Wj&&h75YzhEb~x~E*D>Zd9Mi}IrhqH0
+zJ8r`bVn~LN3_l9P&RQjT8hs?Dq34L<p}V)3xO(Ub8JSzQw*cs|b2}W<?zqVtnBOk|
+z!Q>8a%VU(~F-lj{ki*~;a^TzVZRrziz7TWZi80x3eOtttJEGxAYY=tl2~q9+KSWMz
+zv|`|`VgP;OTMZ!TMuPQe1U|cb9XIHSBrzheA<y9EZ<);JmX?zQR^AYtzzuyqoz)C)
+zCI=Fl(Uj1x<W>MRL(#-yCO4PNFciU`(2@%(dK=*hsu%zt7-UzQSU_YVpHSaf&Lp!G
+z&*J-LR07)(#IR_%Er|K3+6@_tz?3}bbR1$1mgr%pW7H`&><k%kI*w?#{$$(6E_2Ip
+zfY!y%t;?JWHKJ<tB`uVX5QzSH_}5g}+pP&(p%K_tmV9lu`|i74xTn156@t;5$KF3y
+zkVZDzMvC&treuEBrI8!Qz>j+{<}P^Kens1b0msUOH)yKd6Qp-02%#luM3*C*a(hv3
+zFG%}7YNVtn@7t8j&$_g)Ah&ZTW9~}(uqdWT(RM)qmo8y?T!=H^O|xt*%B=;d=axoE
+zQSRB4%+I>iQ;=J^lQDOt9?a4dDcUXw;L;^bj|*`Iydle*$KO9*koMlXLP=5HyD6EU
+zb!qR7<J`rVyWj`;nG!|Yg#o5;2~*=ToB?n8hHXW;tsw3GNMc0Zy(yWWb!m4&ZsShI
+z+?94?j;2V_c0mA_E@66Hh%+0~ZVEhX+kS?i{n72`7hpT~Y}-#85xvAWoREt7^f)$g
+zh*XTZTtb&Hi<k_3?2Q=1Fz8lCfUPH>tz$koJfVLULJKkZR`;p71)rE($ij8wklSpv
+zRUT{Os)Uv5G5^l|7lm%2SFkpBDX66dSC`NU@6;tsUpVIO6c)tCODqaZB39#=##SRs
+zX$^4Q#V&qo03)*p#<uw@tI;x;a4wlLy!oW|Rsu#Z`pp0rf;a>j2XaRsxa(eR%w^Rs
+z8@K9OR!J8|SZ&;yWFH31#QbF#9eEWKJ%;2nNRA`<ED)m;5_f=N2}nG_N|VXtuBj;)
+zZTa+Ic-fp_cu6v?sT#o@WH~A)($U!ox16D4r~LvjJG{M;CNOI9YO)Sh5=nrzVdS1m
+zr!-a!JDNtm0@<bDU;7r2O5^GSuMnuY+5YwRjmDwE`1z85ddt_jReMNp>P5_^eZSs)
+zK<|p_t=+d`dRxa&B7T41p<4)C5Fa!+V=5*8j1_ZmN6f9ZqouZEdhftbY6C2OTrBu!
+z9yVe^cm30k9ztSq;AS3ai1vP`;e_n|{;tjwZSEh)ffLPDKWGb_*k4t-yZ$H4Jx}hg
+zHt5TnIN(P%c!(WuERaPssX{jfGzn)n`jnvqh$eAN;1b7$ENR4PlmJ~7%YY{FR2(=#
+zaF%08m$228Jr&R-JHN_1^U7$F9SiZxvZoA93Oe4Yvb2pRg`TVYh$h)3saSrymMk>D
+z8gP<;12|$=EZNT3fF=Ph!O^5@rN)6KVOyh*Bi#zv&{NPPJU}UXtag@#BLyXb0DRV~
+zM00!NF4}^wS?`p}ZF{H3wV*1P6lyQe+3m(r-iq}Q_gc00R7sa5snqqmOw8?PTuWIm
+zAUOnTqTZ|t@&9*CC=I!VxaTNLpgFrGzzFToRppk@7{`{-bXonMv;?L3x%w(1*H7uI
+zHVSC9XNp|gu`0JsjvYeZY*t##R_6ojj<&eZ#1H+m&)zrvRtvViO{8~GX@6PII555N
+zdhU2x&;J|s3>Z-7^rKqq@X|717$<|a=Nwr2%wHK_N~W`qn#@DH@vM3+J)cWm?=#P=
+zAJst`S5=}>=wKX{;45n1piyO}42Bf+P;#|VTUO`Oa6+x+$1}OBY9D|Nnd@49wLX)a
+z%Ypq&j$CH}6wZkGjex!SG%ypi%z)J^v$Oza!3eMtQXUO8@KlyM;85Hy6ZHvk6AA=1
+zj0mPj(sL_lrIesvVY`4dM%XSFy2&L_3z-38c<2E;!8I6(BSE-<d;tmW9LOXPfP<n4
+z2MxwF2V@4eHvnA?lFKOe>p;wU%I0I@BQF?=b)~Zqv%!kVd?;9S2oNqXSfN%>aKw5O
+zBSTt;R-I5AAWGzmnDzt)2WU-#=~VtoEKDNke-Q~Dy|XO}eT6x6;(D0i@}8(j7LY6=
+zxq>7O#0Z=AAyy#*<To+wEhHHvOGvUveg}vX?ip}8hMaKEFj)p!4aa#4^RZB$KDu*p
+z8emb(3-%_U4nVWOY$lP*X09igI({FL_*G2nU55JvhqrvS-w18hc6@kDZy(ZY_vv;0
+zdh<cOp%X1m8VB^o{`>WE$h$UquSp0-Zoc~ds|9Inqjjt(k8MikXI&b*@hbRn560XD
+z@59`$XuB}rRUW{Y4Vo(V1nHd#LTE`E)5Eo!;hti+rxf13c1D+@A3$LM9vUxnk26}7
+z$2TSOvkv|U5TSF!!I!8!7vl{0Lz0EsSW(_zkWLo*PcmARPi{))XC3_I{mi-H;7e4V
+zi*W}0b-At}?YecQDDT>o%+I>C>ju;rx;AW<2ZP_OGu&0&=HlKZX_qe7B1Sb@hEd%(
+z!T_cXz@ki+BTnFVYm~bHt#Y`yH-)7Daoc<AS~(g8%0uL71F$BO<>(Ul-MYqI08BYt
+z+#7^;;z76sqj=EAz&JOUd~r`L>l7D4thP-`C4&S&g80S~H=ZUE1ZEEGi91jsD|O4V
+z1vjTkpb{SRBs_+rE%LM>4w2oE56L6>WhB3XWDN;+KJsfwz6vB(MczXmM>+BvNWO;T
+z29o!Yd>sf_5z!H86+OO;1P1~(RN*KU6X{Um#50EIs9>9rB$ieHC#NWn6G?FzHjzJs
+zq<#<nH3bMj7vbh_EJ63`+O>A35Ns<-?OXn84qQx?{I6~K2J~R<R%6eH@9NzndSkEN
+zG^DqKZOSgaV=o6T&WW4;*M8)G?U9B!+@0nL02<`LMDuoV0mogc`+oq&se4<`iU}du
+zsGN=BF?&fRG$1PBv2fO*{YyA{mp#xrum<S^o7HO8IslA7M6&F$TF3LDbG$VG_I4Ul
+zB!`d;A;Ec%oI>)%mO(xM5yQ`bCO8s;xv3i?A@pW6*pvP?3neTpIg4Zp$>)$fv1yTM
+z6v1{1EfL?I&DR%@D{F4wL?MyRW;<INNnT@Sp<qOn#;FGv8DR26jfpLLIm`Bmd<04T
+z8T@NFi$Y5ac5hYp>5*2wb6l_M)@ysWI(F-g2P@1+(bikDg-Gmvdo|8T54vnb?BfF^
+z|7qP9+Vr&*eQg`Q4g}54K-)Y0BmZgE_P!gLsB?e6E-=xvz3pKOp>6NIs_kvh(mk{%
+z5oG9NwL--+CS^t2>d~~`718W|%#(G+U6sbA+#!2hqQJzdeP+7PWGLm2ONds--F7PW
+z##E7QeEVl)D8-=)tCY`VD8*yJHb}MsqDvLwr?}hNM1s9D--JIy`TuVWrSR$mGr#d5
+zY9IHQ+h^}{nBQ=y$a-^g`#cP7rUDoSCRsH(EnZdDUcL)+AhulkJjSq&wU@}{(Vw4I
+z;&|uE?TH&VDN$2XKBZQva{wLnR;@YGs%+Bs7@#BT26*iZXsg9a$^Hgy)uXn+n8WVd
+z&!Vda+P52D>gomQs*;(MTWR_fx@vx@s~4dw09{(9otGGf9!0j_&*{55ME(G}+~e;x
+z48^2!%ljUPKv!U^QGO>0Z~R;xgyg_BCu-V)J8nZ5(R`9Ds(I^b6uoQ`;<3vB4+%{}
+z2yQ#d@D3yBTxZ{Tvh|F0OKO|-4EaS&^-D++Ku(ii0tyKoeS$3wz2=b6t|gbDob)gg
+zO@(Zuni+slPCOw#TqL4+QzE$x`-rPxB~vjOFtf)!2*JUatx#zV%%O80NeT%r^eVz7
+zKI?tq>IL4**j`|x<?*G61?Ub652#T`<PK(031)#4AA#a0<Za+8f+zzFM1c!1&fU=p
+zoF8wqnz1jlk-vtd{vMNSa<OyXrf+<4?eta%F6MOW(LH*kPOm$7-|wN<GlD|!fbI+9
+zr*$8G8us6py+QBVse54|Sab8}`$r4X=tc|d;9*m4e%7VY8%M#9doboMcn@>GqV2+f
+zqdb5y8#Gn!3DP?ggwT>Ss>{{P*k}K(>4F3V(2q^Y{H#m+(SXPH0RArcK{-snqV2)}
+zQ@Df)aT(5lH)OXd?*c5OAoYH<!ie0vDVd*jskeYQiR}aYU8xsyH2sRU3j(-w3De_3
+zoB?l|<$en44Bbu@BqZ|CreuEBr6CIG*gg<+R~o`BO~0b;f&eaE!lbwmXEvmvoe&4#
+zYWyi|IGo$uCvP?2LX>C6W}^zWB6yDe*v$qkMFP2#afvP*<JJ;Bg^LmFqx7k~JyvAA
+zn56_S4?7l)A$!wY`Q+Vthog`(y@z4v!q42zY~c&ec=<-bDjVHi*s*GCX^V5l!jopl
+zn^czO+l!}4^7{+?^xCW7xvXtrkJpjt<4CLWi5p*pZeQZlh2sn?94jn0L0b{j7Azc}
+zPghZ@tJ;^kdJ(#U#Yo*W`6JLe`C}xw>@cF`HxXey@+TNNj091h)keNbz%>S)+WK%V
+zCf~vY0`^?TPE5Xy5$O!JeWstGGd=kZ1jmAoiT2M?{u$?3@)sD}M`ug&S3Dy+RnobU
+z9!o4^0G%LljIvG{*k!aBogP!^1$v;6-!Vrz-sW#0auNQuZa_@X{%PmD2!>8DHOgK(
+zHNyN?HZ@|9JvCAT)P1+kf!*h=b7gj)IL+9GpunTqCk)pPvrp570j4mRciuY3WjI5v
+zKKYz<;G=v&LLwj7l+4e%bb!t>whsi|l@4HzreD!^K>(L7VNzU(GaJ%@of8BgPz;M&
+zg<<e969h~h?6EJhZJ!*hK_~0F9HoQ*A!~q5{SyrSk`=#_@f8?QiE%d!{t(wO_`4l@
+zWsaR%>EK|#WAL|g;i!&NKF&>=tg_L;-;Pyz%HXkJ@COUepLwY&Pf1TJ6^{j_g8Q+i
+zfrUix$x0?d<e80F@9)q+WekHGY*?B^gedEV-v{t{AQ8on6bzgKxvLauxM9^HHE*&@
+z%coK+XKElP$9;5iU$ph>C{g8l=a|(~CHd3`NEtJ4+K!a@pQ9cghrghC)7N-y)R?sq
+zd089KHli<UgSL%YtcTpfr3wqQtWT-S-G-%P!0KPQzvDgVI@DqPQ(O77_XnSq$5Yef
+zrFp8PY^A9*^h?x)F!&t3Drm*FzRl~O(5tdO=vm)}MNi{2U6=qyKn*nDa+77CF$5+S
+zo`p2g@?f<BS4*-fFtp&8j<y+E;Podo;s6tr+)6f;Bx(3fntJvl4QMZ;CHT)Ru!WA5
+z9omDKNCl?xTaborK4LVOCKlJ=cN$c*2FH6eYU(r|i-EmLE`w)c?_9?pph?5eI;7}N
+z0O0TMnD_fvtIQvuSv}{tfCZPM*p)6|%qv}BO~Sl@F}<K<{cydB<h5(*{FT7F`w&6F
+zD@uWP0dl&D1^o~SwJ$-eCML6GTQ&MV<BH7)*jdCv?1cDlF+LuQQ;frD9CC=6l>9D+
+z(WM+7;xY>pT;4g2N=DcU4-fjR6(0R&%e*7jp)sv1{QVO`PxC-gV3kB|fT$%28o;O2
+zyh@hRSuj*e&y(*%g8vTx+5@)gi?n^%zBaWL+<$w#6dYNb+zK7IJyi;guASE9n)l&$
+zN(=j}OD$+1V!9Y}cbi{vn~O>ONNV}uG>-)m4j1=^q#>^l;Eqd2p%bnzjTWTi9}hDk
+zLkY~!x^%pNpbI)T9DE6-xfEx>+fEhWnj-~i;^Rq1<cUqm{H#k81sQBE(7EB@ODN5y
+zI0N1<EY(7!8|*>~(veNMuPFBcb2|;BAotx)m$3Xt?qW&tL%rbw6Y?c0!ui{2&e9h%
+zV=zykbRi2J0Qa?q8!$cg8!|rtC*X9rHYCWipU|LOBlkPNxgLvy5rxNzx!^8`nqMJV
+zLz;%0AhEqhAdy&D0UtGyAh;MdeAYETiZ&X}33dsjpLK6AUh5|+9W4w$_cE$XKh`T(
+zF`Yd)fPevAzd6F#mp@=cp}his<cI#O5c`oATwu}5i0s_lk4{`3vl}P4@MWj!xTqp@
+z2tbsAnQl<T^a48jkqjU?f#f0*g5)bm&}54mXV7zViaZkBX3<_p-a&2<$w457?^PJ}
+zRx;{m$UlM;Ppvf^H14@YQT%72=RXADJ>jdNhf<B`dMIoo_tAN8w-D%9^Xk>R)`D;Y
+zu=mv;Di4Kf(R**7(6k4CXr!(Ye_y0==zgeP^!`hv?w$v}L9(XyUKMgap*nick6b`#
+zXuc;S7ZjrPKSlX_1HvoA4~2;6eX!3b?s?GAA_g9e*NU$^=nVna6%{)l?2n3v9_){Z
+My*~w!G5Tiz4K8i7S^xk5
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/context/__pycache__/test_qdrant_canonical_profile_0287_r7_r8_r3.cpython-313.pyc b/tests/context/__pycache__/test_qdrant_canonical_profile_0287_r7_r8_r3.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..c6613ffd202f499e275e979712c3c95e646f1420
+GIT binary patch
+literal 8618
+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
+TAi`fd8VK`4zkw-}?5X}2f7Vn_
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/context/test_qdrant_canonical_profile_0287_r7_r8_r3.py b/tests/context/test_qdrant_canonical_profile_0287_r7_r8_r3.py
+new file mode 100644
+index 0000000..5ae8868
+--- /dev/null
++++ b/tests/context/test_qdrant_canonical_profile_0287_r7_r8_r3.py
+@@ -0,0 +1,237 @@
++from __future__ import annotations
++
++import pytest
++
++from context.qdrant_canonical_profile_0287 import (
++    EMBEDDING_SPACE_PROFILE_SCHEMA,
++    QDRANT_COLLECTION_PROFILE_SCHEMA,
++    QDRANT_MODEL_MIGRATION_SCHEMA,
++    QDRANT_NAMED_VECTOR_SCHEMA,
++    QDRANT_POINT_PROJECTION_SCHEMA,
++    VECTOR_PROJECTION_METADATA_SCHEMA,
++    QdrantCanonicalProfileError,
++    QdrantCollectionProfile,
++    QdrantNamedVectorProfile,
++    QdrantPointProjection,
++    build_canonical_payload_indexes,
++    build_canonical_profile_report,
++    build_named_vector_from_embedding_profile,
++    build_point_projection_from_sql_metadata,
++    choose_model_migration_strategy,
++)
++
++DIGEST = "sha256:" + "a" * 64
++MODEL_DIGEST = "sha256:" + "b" * 64
++
++
++def _embedding_profile(*, model_ref: str = "model:e5-small", revision: str = "1"):
++    return {
++        "schema": EMBEDDING_SPACE_PROFILE_SCHEMA,
++        "profile_ref": f"embedding-profile:{model_ref.split(':', 1)[1]}-{revision}",
++        "backend_ref": "openvino:embedding.e5-small",
++        "model_ref": model_ref,
++        "model_revision": revision,
++        "tokenizer_ref": "tokenizer:multilingual-e5-small",
++        "pooling": "mean",
++        "normalized": True,
++        "dimension": 384,
++        "distance": "Cosine",
++        "role": "passage",
++        "collection_name": "autodoc_context",
++        "model_artifact_digest": MODEL_DIGEST,
++    }
++
++
++def _collection(
++    *,
++    vector_name: str = "dense_e5_v1",
++    model_ref: str = "model:e5-small",
++    revision: str = "1",
++    collection_name: str = "autodoc_context",
++    profile_ref: str = "qdrant-profile:context-v1",
++):
++    vector = build_named_vector_from_embedding_profile(
++        _embedding_profile(model_ref=model_ref, revision=revision),
++        vector_name=vector_name,
++    )
++    return QdrantCollectionProfile(
++        schema=QDRANT_COLLECTION_PROFILE_SCHEMA,
++        profile_ref=profile_ref,
++        collection_name=collection_name,
++        collection_alias="autodoc_context_active",
++        point_identity_field="point_id",
++        authority_ref_field="sql_ref",
++        named_vectors=(vector,),
++        payload_indexes=build_canonical_payload_indexes(),
++    )
++
++
++def _projection(*, vector_name: str = "dense_e5_v1"):
++    return {
++        "schema": VECTOR_PROJECTION_METADATA_SCHEMA,
++        "projection_ref": "projection:object-1-e5",
++        "source_ref": "context-object:object-1",
++        "source_content_digest": DIGEST,
++        "embedding_profile_ref": "embedding-profile:e5-small-1",
++        "model_ref": "model:e5-small",
++        "model_revision": "1",
++        "dimension": 384,
++        "normalized": True,
++        "vector_name": vector_name,
++        "collection_name": "autodoc_context",
++        "point_id": "object-1",
++        "projection_state": "active",
++        "projected_at": "2026-07-16T00:00:00Z",
++        "metadata": {},
++    }
++
++
++def test_embedding_profile_becomes_named_vector() -> None:
++    vector = build_named_vector_from_embedding_profile(
++        _embedding_profile(), vector_name="dense_e5_v1"
++    )
++    assert vector.schema == QDRANT_NAMED_VECTOR_SCHEMA
++    assert vector.vector_kind == "dense"
++    assert vector.dimension == 384
++    assert vector.distance == "Cosine"
++    assert vector.normalized is True
++
++
++def test_collection_requires_canonical_indexes_and_forbids_task_collections() -> None:
++    vector = build_named_vector_from_embedding_profile(
++        _embedding_profile(), vector_name="dense_e5_v1"
++    )
++    with pytest.raises(QdrantCanonicalProfileError, match="missing canonical"):
++        QdrantCollectionProfile(
++            schema=QDRANT_COLLECTION_PROFILE_SCHEMA,
++            profile_ref="qdrant-profile:bad",
++            collection_name="task_1",
++            collection_alias="task_active",
++            point_identity_field="point_id",
++            authority_ref_field="sql_ref",
++            named_vectors=(vector,),
++            payload_indexes=(),
++        )
++    with pytest.raises(QdrantCanonicalProfileError, match="one collection per task"):
++        QdrantCollectionProfile(
++            schema=QDRANT_COLLECTION_PROFILE_SCHEMA,
++            profile_ref="qdrant-profile:bad-task",
++            collection_name="task_1",
++            collection_alias="task_active",
++            point_identity_field="point_id",
++            authority_ref_field="sql_ref",
++            named_vectors=(vector,),
++            payload_indexes=build_canonical_payload_indexes(),
++            one_collection_per_task_allowed=True,
++        )
++
++
++def test_sql_metadata_builds_reference_only_point() -> None:
++    point = build_point_projection_from_sql_metadata(
++        _projection(),
++        collection=_collection(),
++        context_revision_ref="context-revision:r1",
++        branch_ref="context-branch:main",
++        project_ref="project:newicody-autodoc",
++        conversation_ref="conversation:issue-1",
++        artifact_kind="context",
++        contribution_kind="source",
++        specialist_ref="specialist:love-analyst",
++        laboratory_ref="laboratory:love-local",
++    )
++    assert point.schema == QDRANT_POINT_PROJECTION_SCHEMA
++    payload = point.qdrant_payload()
++    assert payload["sql_ref"] == "context-object:object-1"
++    assert payload["context_revision_ref"] == "context-revision:r1"
++    assert "content" not in payload
++    assert "vector" not in payload
++    assert "local_path" not in payload
++
++
++def test_projection_must_match_collection_named_vector() -> None:
++    payload = _projection()
++    payload["model_revision"] = "2"
++    with pytest.raises(QdrantCanonicalProfileError, match="model_revision"):
++        build_point_projection_from_sql_metadata(
++            payload,
++            collection=_collection(),
++            context_revision_ref="context-revision:r1",
++            branch_ref="context-branch:main",
++            project_ref="project:newicody-autodoc",
++            conversation_ref="conversation:issue-1",
++            artifact_kind="context",
++            contribution_kind="source",
++        )
++
++
++def test_raw_content_is_rejected_from_payload_metadata() -> None:
++    point = QdrantPointProjection(
++        schema=QDRANT_POINT_PROJECTION_SCHEMA,
++        point_id="object-1",
++        collection_profile_ref="qdrant-profile:context-v1",
++        vector_name="dense_e5_v1",
++        source_ref="context-object:object-1",
++        source_content_digest=DIGEST,
++        projection_ref="projection:object-1-e5",
++        context_revision_ref="context-revision:r1",
++        branch_ref="context-branch:main",
++        project_ref="project:newicody-autodoc",
++        conversation_ref="conversation:issue-1",
++        artifact_kind="context",
++        contribution_kind="source",
++        metadata={"content": "forbidden"},
++    )
++    with pytest.raises(QdrantCanonicalProfileError, match="forbidden"):
++        point.qdrant_payload()
++
++
++def test_same_collection_uses_named_vector_migration() -> None:
++    source = _collection()
++    target = _collection(
++        vector_name="dense_e5_v2",
++        model_ref="model:e5-small-v2",
++        revision="2",
++        profile_ref="qdrant-profile:context-v2",
++    )
++    plan = choose_model_migration_strategy(
++        source,
++        target,
++        source_vector_name="dense_e5_v1",
++        target_vector_name="dense_e5_v2",
++        migration_ref="migration:e5-v1-v2",
++    )
++    assert plan.schema == QDRANT_MODEL_MIGRATION_SCHEMA
++    assert plan.strategy == "named_vector"
++    assert plan.alias_swap_required is False
++    assert plan.operator_approval_required is True
++
++
++def test_different_collection_uses_alias_swap() -> None:
++    source = _collection()
++    target = _collection(
++        vector_name="dense_e5_v2",
++        model_ref="model:e5-small-v2",
++        revision="2",
++        collection_name="autodoc_context_v2",
++        profile_ref="qdrant-profile:context-v2",
++    )
++    plan = choose_model_migration_strategy(
++        source,
++        target,
++        source_vector_name="dense_e5_v1",
++        target_vector_name="dense_e5_v2",
++        migration_ref="migration:e5-alias-swap",
++    )
++    assert plan.strategy == "alias_swap"
++    assert plan.alias_swap_required is True
++
++
++def test_profile_report_is_inspection_only_and_deterministic() -> None:
++    collection = _collection()
++    first = build_canonical_profile_report(collection)
++    second = build_canonical_profile_report(collection)
++    assert first == second
++    assert first["boundaries"]["sql_remains_authority"] is True
++    assert first["boundaries"]["qdrant_write_performed"] is False
++    assert first["boundaries"]["control_proxy_modified"] is False
++    assert first["profile_digest"].startswith("sha256:")
+diff --git a/tests/rules/__pycache__/test_qdrant_canonical_profile_0287_r7_r8_r3_rule.cpython-313-pytest-9.0.2.pyc b/tests/rules/__pycache__/test_qdrant_canonical_profile_0287_r7_r8_r3_rule.cpython-313-pytest-9.0.2.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..19636ddec1cf1fb768afe03aeefc5170bdf9dc4c
+GIT binary patch
+literal 9679
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/rules/__pycache__/test_qdrant_canonical_profile_0287_r7_r8_r3_rule.cpython-313.pyc b/tests/rules/__pycache__/test_qdrant_canonical_profile_0287_r7_r8_r3_rule.cpython-313.pyc
+new file mode 100644
+index 0000000000000000000000000000000000000000..bc6856d488cb1cbb50f1d065413a618f2e71811f
+GIT binary patch
+literal 3066
+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
+Me>Af6W%rH#0ymu^82|tP
+
+literal 0
+HcmV?d00001
+
+diff --git a/tests/rules/test_qdrant_canonical_profile_0287_r7_r8_r3_rule.py b/tests/rules/test_qdrant_canonical_profile_0287_r7_r8_r3_rule.py
+new file mode 100644
+index 0000000..02bf542
+--- /dev/null
++++ b/tests/rules/test_qdrant_canonical_profile_0287_r7_r8_r3_rule.py
+@@ -0,0 +1,56 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src/context/qdrant_canonical_profile_0287.py"
++REPORT = ROOT / "doc/architecture/PHASE0287_R7_R8_R3_QDRANT_CANONICAL_PROFILE_REPORT.md"
++ARCH = ROOT / "doc/architecture/QDRANT_CANONICAL_PROFILE_0287_R7_R8_R3.md"
++DOT = ROOT / "doc/architecture/QDRANT_CANONICAL_PROFILE_0287_R7_R8_R3.dot"
++CHANGELOG = ROOT / "doc/changelog/0287-r7-r8-r3-qdrant-canonical-profile.md"
++
++
++def test_r8_r3_files_and_contract_markers_are_present() -> None:
++    for path in (MODULE, REPORT, ARCH, DOT, CHANGELOG):
++        assert path.is_file(), path
++    source = MODULE.read_text(encoding="utf-8")
++    for marker in (
++        "missipy.qdrant.named_vector_profile.v1",
++        "missipy.qdrant.payload_index_profile.v1",
++        "missipy.qdrant.collection_profile.v1",
++        "missipy.qdrant.point_projection.v1",
++        "missipy.qdrant.model_migration_plan.v1",
++        "missipy.context.vector_projection_metadata.v1",
++        "missipy.embedding_space_profile.v1",
++    ):
++        assert marker in source
++
++
++def test_r8_r3_keeps_qdrant_as_reconstructible_projection() -> None:
++    text = (REPORT.read_text(encoding="utf-8") + ARCH.read_text(encoding="utf-8"))
++    for marker in (
++        "SQL remains the authority",
++        "Qdrant is reconstructible",
++        "no raw authoritative content",
++        "no qdrant-client dependency",
++        "no Qdrant write",
++        "ControlProxy is unchanged",
++        "one collection per task is forbidden",
++    ):
++        assert marker in text
++
++
++def test_r8_r3_documents_named_vector_and_alias_migrations() -> None:
++    text = ARCH.read_text(encoding="utf-8")
++    assert "named-vector backfill" in text
++    assert "collection alias swap" in text
++    assert "payload indexes before ingestion" in text
++    assert "dense E5 + sparse" in text
++    assert "r8-r4" in text
++
++
++def test_r8_r3_has_no_runtime_qdrant_dependency() -> None:
++    source = MODULE.read_text(encoding="utf-8")
++    assert "import qdrant_client" not in source
++    assert "from qdrant_client" not in source
++    assert "upsert(" not in source
++    assert "create_collection(" not in source
++    assert "update_collection_aliases(" not in source

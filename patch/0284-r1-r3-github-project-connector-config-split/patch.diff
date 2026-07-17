@@ -1,0 +1,655 @@
+diff --git a/PHASE0284_R1_R3_GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_REPORT.md b/PHASE0284_R1_R3_GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_REPORT.md
+new file mode 100644
+index 0000000..95d83c4
+--- /dev/null
++++ b/PHASE0284_R1_R3_GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_REPORT.md
+@@ -0,0 +1,39 @@
++# Phase 0284-r1-r3 — GitHub project connector configuration split
++
++## Result
++
++The ProjectV2 query-only configuration and the outbound Projects workflow
++dispatch configuration are now separate. The default dispatch adapter points to
++the dedicated safe example. Stale `newicody/autodoc-ideas` example references
++are replaced by `newicody/projects`.
++
++The Projects bundle now includes a cumulative installation guide that records
++the copy workflow, GitHub Actions settings, local connector setup and current
++limitations.
++
++## Boundaries
++
++```text
++scheduler_modified: false
++new_project_mode_added_to_autodoc: false
++active_projects_workflow_added_to_autodoc_root: false
++query_only_config_contains_workflow_dispatch: false
++dispatch_example_safe_by_default: true
++projects_installation_readme_added: true
++sql_write_allowed: false
++qdrant_write_allowed: false
++```
++
++## Code rule review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: configuration and documentation boundary correction only
++live_path_status: n/a
++live_path_uses_real_backend: n/a
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++external_library_added: false
++```
+diff --git a/config/github_project_push_frame.example.ini b/config/github_project_push_frame.example.ini
+index 06b3b5c..109b741 100644
+--- a/config/github_project_push_frame.example.ini
++++ b/config/github_project_push_frame.example.ini
+@@ -3,16 +3,16 @@ token_env = GITHUB_TOKEN
+ api_url = https://api.github.com
+ 
+ [project]
+-url = https://github.com/users/newicody/projects/2
++url = https://github.com/users/newicody/projects/3
+ owner = newicody
+-number = 2
++number = 3
+ kind = user_project_v2
+ 
+ [artifact_source]
+-repositories = newicody/autodoc-ideas
+-workflow_name = autodoc-ticket-artifact.yml
+-artifact_name_prefix = autodoc-ticket-artifact-
+-trigger_source = github_action_on_ticket_event
++repositories = newicody/projects
++workflow_name = autodoc-controlled-research.yml
++artifact_name_prefix = autodoc-
++trigger_source = github_action_dispatch
+ 
+ [scan]
+ mode = fcron
+@@ -26,7 +26,7 @@ fcron_table_path = .var/fcron/autodoc-github-artifact-scan.fcrontab
+ 
+ [safety]
+ development_repository = newicody/autodoc
+-allowed_repositories = newicody/autodoc-ideas
++allowed_repositories = newicody/projects
+ read_only_scan = true
+ allow_workflow_dispatch = false
+ allow_remote_mutation = false
+diff --git a/config/github_project_v2_query_only.example.ini b/config/github_project_v2_query_only.example.ini
+index 4286c82..af037a8 100644
+--- a/config/github_project_v2_query_only.example.ini
++++ b/config/github_project_v2_query_only.example.ini
+@@ -3,24 +3,23 @@ token_env = GITHUB_TOKEN
+ api_url = https://api.github.com
+ 
+ [project]
+-url = https://github.com/users/newicody/projects/2
++url = https://github.com/users/newicody/projects/3
+ owner = newicody
+-number = 2
++number = 3
+ id = PVT_kwHOA3ouXM4Ba3Ar
+ view_number_hint = 2
+ kind = user_project_v2
+ source_mode = project_v2_query_only_snapshot
+ 
+ # Kept only so the existing 0165 ConfigObj-style loader remains reusable.
+-# The Actions artifact path is secondary and is not contacted by the snapshot CLI.
++# The Actions artifact path is optional and is not contacted by the snapshot CLI.
+ [artifact_source]
+-# Optional repository-Issue/Actions bridge only. The ProjectV2-native path does
+-# not contact this repository. Replace it only when intentionally enabling and
+-# checking the secondary bridge; keep the three repository values identical.
+-repositories = newicody/autodoc-ideas
+-workflow_name = autodoc-ticket-artifact.yml
+-artifact_name_prefix = autodoc-ticket-artifact-
+-trigger_source = github_action_on_ticket_event
++# Optional read-only artifact bridge for the external newicody/projects repository.
++# The query-only snapshot path does not contact this repository.
++repositories = newicody/projects
++workflow_name = autodoc-controlled-research.yml
++artifact_name_prefix = autodoc-
++trigger_source = github_action_dispatch
+ 
+ [scan]
+ mode = fcron
+@@ -41,7 +40,7 @@ max_pages = 20
+ 
+ [safety]
+ development_repository = newicody/autodoc
+-allowed_repositories = newicody/autodoc-ideas
++allowed_repositories = newicody/projects
+ read_only_scan = true
+ query_only = true
+ graphql_mutation_allowed = false
+@@ -59,12 +58,12 @@ history_mode = append_only
+ [deployment_readiness]
+ # Query-only readiness. ProjectV2 is mandatory; the repository-Issue Actions
+ # bridge is optional and checked only with --check-actions-bridge.
+-workflow_repository = newicody/autodoc-ideas
+-workflow_name = autodoc-ticket-artifact.yml
+-workflow_path = .github/workflows/autodoc-ticket-artifact.yml
+-workflow_template_path = templates/github/autodoc-ticket-artifact.yml
+-builder_path = scripts/build_autodoc_ticket_artifact.py
+-builder_template_path = templates/github/scripts/build_autodoc_ticket_artifact.py
++workflow_repository = newicody/projects
++workflow_name = autodoc-controlled-research.yml
++workflow_path = .github/workflows/autodoc-controlled-research.yml
++workflow_template_path = templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml
++builder_path = scripts/run_workflow_dispatch_authoritative_request.py
++builder_template_path = templates/github/projects-repository/scripts/run_workflow_dispatch_authoritative_request.py
+ snapshot_tool_path = tools/run_github_project_v2_query_only_snapshot_0272.py
+ change_detection_tool_path = tools/detect_github_project_v2_snapshot_changes_0272.py
+ report_dir = .var/reports
+@@ -79,20 +78,7 @@ include_removed = true
+ include_baseline = false
+ 
+ [candidate_gate]
+-# Project-native operator gate.  It reads r6 handoff batches and writes only
++# Local operator gate. It reads r6 handoff batches and writes only
+ # immutable local decision records.  SQL/Qdrant remain closed until r8.
+ handoff_dir = .var/github/project_v2/handoffs
+ decision_dir = .var/github/project_v2/decisions
+-[workflow_dispatch]
+-repository = newicody/projects
+-workflow_name = autodoc-controlled-research.yml
+-ref = master
+-token_env = GITHUB_TOKEN
+-api_url = https://api.github.com
+-target_status = En cours
+-change_set_dir = .var/github/project_v2/changes
+-state_path = .var/github/project_v2/state/en_cours_dispatch_0275_r8.json
+-report_path = .var/reports/github_project_v2_en_cours_dispatch_0275_r8.json
+-max_dispatches = 10
+-allow_workflow_dispatch = true
+-allow_remote_mutation = true
+diff --git a/config/github_projects_workflow_dispatch.example.ini b/config/github_projects_workflow_dispatch.example.ini
+new file mode 100644
+index 0000000..965cca0
+--- /dev/null
++++ b/config/github_projects_workflow_dispatch.example.ini
+@@ -0,0 +1,17 @@
++[workflow_dispatch]
++# Outbound connector only: dispatch the workflow owned by newicody/projects.
++repository = newicody/projects
++workflow_name = autodoc-controlled-research.yml
++ref = master
++token_env = GITHUB_TOKEN
++api_url = https://api.github.com
++target_status = En cours
++change_set_dir = .var/github/project_v2/changes
++state_path = .var/github/project_v2/state/en_cours_dispatch_0275_r8.json
++report_path = .var/reports/github_project_v2_en_cours_dispatch_0275_r8.json
++max_dispatches = 10
++
++# Safe example defaults. Enable both gates only in the local .var/config copy,
++# together with --execute and a non-empty policy decision id.
++allow_workflow_dispatch = false
++allow_remote_mutation = false
+diff --git a/doc/CHANGELOG_0284_R1_R3_GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT.md b/doc/CHANGELOG_0284_R1_R3_GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT.md
+new file mode 100644
+index 0000000..7db87ab
+--- /dev/null
++++ b/doc/CHANGELOG_0284_R1_R3_GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT.md
+@@ -0,0 +1,9 @@
++# Changelog — 0284-r1-r3
++
++- separated ProjectV2 query-only and Projects workflow-dispatch examples;
++- changed the dispatch CLI default to the dedicated outbound config;
++- retained safe `false` defaults for both remote-dispatch gates;
++- aligned stale example repository references with `newicody/projects`;
++- added the cumulative `projects-repository/INSTALLATION.md`;
++- documented the Autodoc / Projects ownership boundary;
++- added executable rule coverage for the split and installation guide.
+diff --git a/doc/architecture/GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_0284.dot b/doc/architecture/GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_0284.dot
+new file mode 100644
+index 0000000..115b04a
+--- /dev/null
++++ b/doc/architecture/GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_0284.dot
+@@ -0,0 +1,14 @@
++digraph github_project_connector_config_split_0284 {
++  rankdir=LR;
++  node [shape=box];
++
++  projectv2 [label="ProjectV2 #3"];
++  query [label="query-only config\nno remote mutation"];
++  local [label="local snapshots + change sets"];
++  dispatch [label="dispatch config\nexplicit double gate"];
++  workflow [label="newicody/projects\nworkflow_dispatch"];
++  bundle [label="projects-repository bundle\nINSTALLATION.md"];
++
++  projectv2 -> query -> local -> dispatch -> workflow;
++  bundle -> workflow [style=dashed, label="copied into repository"];
++}
+diff --git a/doc/architecture/GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_0284.md b/doc/architecture/GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_0284.md
+new file mode 100644
+index 0000000..ecfa56a
+--- /dev/null
++++ b/doc/architecture/GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_0284.md
+@@ -0,0 +1,26 @@
++# Séparation des configurations GitHub — 0284-r1-r3
++
++## Décision
++
++Autodoc conserve deux connecteurs explicites et distincts :
++
++```text
++entrée : ProjectV2 GraphQL query-only
++sortie : workflow_dispatch borné vers newicody/projects
++```
++
++Le fichier query-only ne porte plus de section autorisant une mutation distante.
++Le dispatch dispose de sa propre configuration, sûre par défaut, et nécessite
++toujours `--execute`, un `policy_decision_id` et deux verrous locaux.
++
++Le bundle `templates/github/projects-repository/` reste une source à copier. Son
++`INSTALLATION.md` est le guide cumulatif de déploiement du dépôt Projects.
++
++## Frontières conservées
++
++- aucun workflow Project actif à la racine d'Autodoc ;
++- aucun changement du Scheduler ;
++- aucun accès SQL, OpenVINO ou Qdrant ;
++- aucune valeur de token sérialisée ;
++- la lecture et le dispatch restent deux responsabilités séparées ;
++- `newicody/projects` reste propriétaire des Issues, vues et Actions de projet.
+diff --git a/doc/manifests/MANIFEST_0284_R1_R3_GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT.md b/doc/manifests/MANIFEST_0284_R1_R3_GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT.md
+new file mode 100644
+index 0000000..75212bf
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0284_R1_R3_GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT.md
+@@ -0,0 +1,19 @@
++# Manifest — 0284-r1-r3
++
++## Modified
++
++- `config/github_project_v2_query_only.example.ini`
++- `config/github_project_push_frame.example.ini`
++- `tools/dispatch_github_project_v2_en_cours_transitions_0275_r8.py`
++- `templates/github/projects-repository/README.md`
++
++## Added
++
++- `config/github_projects_workflow_dispatch.example.ini`
++- `templates/github/projects-repository/INSTALLATION.md`
++- `PHASE0284_R1_R3_GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_REPORT.md`
++- `doc/CHANGELOG_0284_R1_R3_GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT.md`
++- `doc/architecture/GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_0284.md`
++- `doc/architecture/GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_0284.dot`
++- `doc/manifests/MANIFEST_0284_R1_R3_GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT.md`
++- `tests/rules/test_github_project_connector_config_split_0284_rule.py`
+diff --git a/templates/github/projects-repository/INSTALLATION.md b/templates/github/projects-repository/INSTALLATION.md
+new file mode 100644
+index 0000000..315944e
+--- /dev/null
++++ b/templates/github/projects-repository/INSTALLATION.md
+@@ -0,0 +1,205 @@
++# Installation cumulative de `newicody/projects`
++
++Ce document est le mode opératoire cumulatif du bundle GitHub fourni par
++Autodoc. Il doit être mis à jour chaque fois que la copie, les Actions, les
++variables, les secrets, les vues ou les contrats du dépôt Projects évoluent.
++
++Version du guide : `0284-r1-r3`.
++
++## Frontière
++
++```text
++newicody/autodoc
++  ├── moteur local, connecteurs et bundle source
++  └── templates/github/projects-repository/
++                         │ copie contrôlée
++                         ▼
++newicody/projects
++  ├── Issues et ProjectV2
++  ├── formulaires
++  ├── workflows Actions
++  └── artefacts et avis Copilot consultatifs
++```
++
++Le dépôt Projects n'embarque ni Scheduler, ni SQL, ni OpenVINO, ni Qdrant.
++Autodoc ne doit pas activer à sa racine les workflows contenus dans ce bundle.
++
++## 1. Préparer le dépôt local Projects
++
++```bash
++cd /home/eric/projet/git
++git clone git@github.com:newicody/projects.git projects
++```
++
++Pour une copie déjà présente :
++
++```bash
++git -C /home/eric/projet/git/projects status --short
++git -C /home/eric/projet/git/projects pull --ff-only
++```
++
++## 2. Simuler puis copier le bundle
++
++```bash
++SRC=/home/eric/projet/git/autodoc/templates/github/projects-repository
++DST=/home/eric/projet/git/projects
++
++rsync -aivn \
++  --exclude README.md \
++  "$SRC"/ \
++  "$DST"/
++```
++
++Après contrôle du dry-run :
++
++```bash
++rsync -aiv \
++  --exclude README.md \
++  "$SRC"/ \
++  "$DST"/
++
++cp "$SRC/README.md" "$DST/AUTODOC_PROJECTS_BUNDLE.md"
++```
++
++Ne pas utiliser `--delete` : le dépôt Projects peut contenir des éléments qui
++ne proviennent pas du bundle Autodoc.
++
++## 3. Contrôler les fichiers copiés
++
++```bash
++git -C "$DST" status --short
++git -C "$DST" diff -- \
++  .github \
++  scripts \
++  INSTALLATION.md \
++  PROJECT_BOARD_TEMPLATE.md \
++  RESULT_UPDATE_PRESENTATION_CONTRACT.md \
++  AUTODOC_PROJECTS_BUNDLE.md
++```
++
++Le workflow actif attendu est :
++
++```text
++newicody/projects/.github/workflows/autodoc-controlled-research.yml
++```
++
++La copie conservée sous
++`newicody/autodoc/templates/github/projects-repository/` n'est pas active dans
++Autodoc.
++
++## 4. Configurer GitHub Actions dans `newicody/projects`
++
++Dans `Settings → Actions → General`, autoriser les Actions GitHub utilisées par
++le workflow :
++
++```text
++actions/checkout@v6
++actions/setup-python@v6
++actions/cache@v4
++actions/upload-artifact@v7
++```
++
++La politique peut rester restrictive en autorisant précisément ces Actions.
++Une phase ultérieure pourra les verrouiller par SHA complet.
++
++Créer la variable de dépôt :
++
++```text
++AUTODOC_COPILOT_ADVISORY_ENABLED=true
++```
++
++Le workflow utilise le `GITHUB_TOKEN` éphémère pour l'accès Copilot prévu. Ne
++pas enregistrer de token Copilot durable dans le dépôt.
++
++À cette version, le workflow produit des artefacts mais ne publie pas encore le
++résumé Copilot dans l'Issue et ne réconcilie pas encore les vues ProjectV2. Ces
++fonctions seront ajoutées au bundle par une phase ultérieure et ce guide sera
++alors complété.
++
++## 5. Configurer les connecteurs locaux Autodoc
++
++La lecture ProjectV2 et l'écriture `workflow_dispatch` utilisent désormais des
++fichiers séparés :
++
++```bash
++cd /home/eric/projet/git/autodoc
++mkdir -p .var/config
++
++cp config/github_project_v2_query_only.example.ini \
++  .var/config/github_project_v2_query_only.ini
++
++cp config/github_projects_workflow_dispatch.example.ini \
++  .var/config/github_projects_workflow_dispatch.ini
++```
++
++Dans la copie query-only, vérifier :
++
++```text
++project.owner = newicody
++project.number = 3
++project.id = PVT_kwHOA3ouXM4Ba3Ar
++safety.query_only = true
++safety.graphql_mutation_allowed = false
++safety.allow_workflow_dispatch = false
++safety.allow_remote_mutation = false
++```
++
++Dans la copie dispatch, conserver les deux verrous à `false` pendant les tests
++sans effet. Les passer explicitement à `true` uniquement pour une exécution
++acceptée :
++
++```text
++allow_workflow_dispatch = true
++allow_remote_mutation = true
++```
++
++Le token reste dans l'environnement :
++
++```bash
++export GITHUB_TOKEN='...'
++```
++
++Aucune valeur de secret ne doit être écrite dans un fichier versionné.
++
++## 6. Vérifier sans mutation
++
++```bash
++PYTHONPATH=src:. python \
++  tools/run_github_project_system_deployment_readiness_0272.py \
++  --config .var/config/github_project_v2_query_only.ini \
++  --format summary
++```
++
++Puis vérifier le plan de dispatch sans `--execute` :
++
++```bash
++PYTHONPATH=src:. python \
++  tools/dispatch_github_project_v2_en_cours_transitions_0275_r8.py \
++  --config .var/config/github_projects_workflow_dispatch.ini \
++  --format json
++```
++
++## 7. Exécuter un dispatch accepté
++
++Après validation du change set et activation locale des deux verrous :
++
++```bash
++PYTHONPATH=src:. python \
++  tools/dispatch_github_project_v2_en_cours_transitions_0275_r8.py \
++  --config .var/config/github_projects_workflow_dispatch.ini \
++  --execute \
++  --policy-decision-id policy:0284:projects-workflow-dispatch \
++  --format json
++```
++
++Le dispatch cible exclusivement :
++
++```text
++newicody/projects/.github/workflows/autodoc-controlled-research.yml
++```
++
++## Historique du guide
++
++| Phase | Évolution |
++|---|---|
++| `0284-r1-r3` | Création du guide cumulatif et séparation query-only / dispatch. |
+diff --git a/templates/github/projects-repository/README.md b/templates/github/projects-repository/README.md
+index 729bf46..410b2ca 100644
+--- a/templates/github/projects-repository/README.md
++++ b/templates/github/projects-repository/README.md
+@@ -1,8 +1,13 @@
+ # Bundle GitHub pour `newicody/projects`
+ 
+-Ce répertoire est copié dans le dépôt privé de gestion.
++Ce répertoire est la source du bundle copié dans le dépôt privé de gestion. Les
++fichiers situés ici ne constituent pas un mode projet actif dans Autodoc.
+ 
+-Il contient :
++Le mode opératoire cumulatif est conservé dans [`INSTALLATION.md`](INSTALLATION.md).
++Il doit être mis à jour avec chaque évolution utile de la copie, des Actions,
++des variables, des secrets ou des vues.
++
++Le bundle contient actuellement :
+ 
+ ```text
+ .github/ISSUE_TEMPLATE/research.yml
+@@ -10,6 +15,9 @@ Il contient :
+ .github/ISSUE_TEMPLATE/theme.yml
+ .github/ISSUE_TEMPLATE/config.yml
+ .github/workflows/autodoc-controlled-research.yml
++scripts/build_workflow_dispatch_issue_event.py
++scripts/run_workflow_dispatch_authoritative_request.py
++INSTALLATION.md
+ PROJECT_BOARD_TEMPLATE.md
+ RESULT_UPDATE_PRESENTATION_CONTRACT.md
+ ```
+@@ -17,20 +25,20 @@ RESULT_UPDATE_PRESENTATION_CONTRACT.md
+ `transversal-event.yml` est retiré : une recherche peut déjà référencer
+ plusieurs groupes, tickets, résultats, dépôts, chemins, pièces jointes et URL.
+ 
+-Le workflow ne modifie encore ni les issues, ni le Project. Il produit la
++Le workflow ne modifie encore ni les Issues ni le Project. Il produit la
+ demande autoritative, l'avis Copilot facultatif et leur manifeste.
+ 
+ Le déclencheur automatique reste côté serveur local :
+ 
+ ```text
+ ProjectV2 query-only → diff local → transition vers En cours
+-→ workflow_dispatch explicite
++→ workflow_dispatch explicite dans newicody/projects
+ ```
+ 
+ Pour activer Copilot dans `newicody/projects` :
+ 
+ ```text
+-AUTODOC_COPILOT_ADVISORY_ENABLED = true
++AUTODOC_COPILOT_ADVISORY_ENABLED=true
+ ```
+ 
+ Aucun secret Copilot durable n'est attendu.
+diff --git a/tests/rules/test_github_project_connector_config_split_0284_rule.py b/tests/rules/test_github_project_connector_config_split_0284_rule.py
+new file mode 100644
+index 0000000..87f6fd1
+--- /dev/null
++++ b/tests/rules/test_github_project_connector_config_split_0284_rule.py
+@@ -0,0 +1,76 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++QUERY_CONFIG = ROOT / "config/github_project_v2_query_only.example.ini"
++DISPATCH_CONFIG = ROOT / "config/github_projects_workflow_dispatch.example.ini"
++PUSH_FRAME_CONFIG = ROOT / "config/github_project_push_frame.example.ini"
++DISPATCH_TOOL = (
++    ROOT / "tools/dispatch_github_project_v2_en_cours_transitions_0275_r8.py"
++)
++BUNDLE_README = ROOT / "templates/github/projects-repository/README.md"
++INSTALLATION = ROOT / "templates/github/projects-repository/INSTALLATION.md"
++REPORT = ROOT / "PHASE0284_R1_R3_GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_REPORT.md"
++
++
++def test_query_only_and_dispatch_configs_are_separate() -> None:
++    query = QUERY_CONFIG.read_text(encoding="utf-8")
++    dispatch = DISPATCH_CONFIG.read_text(encoding="utf-8")
++
++    assert "[workflow_dispatch]" not in query
++    assert "query_only = true" in query
++    assert "graphql_mutation_allowed = false" in query
++    assert dispatch.startswith("[workflow_dispatch]\n")
++    assert "repository = newicody/projects" in dispatch
++    assert "allow_workflow_dispatch = false" in dispatch
++    assert "allow_remote_mutation = false" in dispatch
++
++
++def test_dispatch_cli_defaults_to_outbound_config() -> None:
++    tool = DISPATCH_TOOL.read_text(encoding="utf-8")
++
++    assert (
++        '_DEFAULT_CONFIG = Path("config/github_projects_workflow_dispatch.example.ini")'
++        in tool
++    )
++    assert (
++        '_DEFAULT_CONFIG = Path("config/github_project_v2_query_only.example.ini")'
++        not in tool
++    )
++
++
++def test_examples_no_longer_reference_retired_repository() -> None:
++    combined = "\n".join(
++        (
++            QUERY_CONFIG.read_text(encoding="utf-8"),
++            PUSH_FRAME_CONFIG.read_text(encoding="utf-8"),
++            DISPATCH_CONFIG.read_text(encoding="utf-8"),
++        )
++    )
++
++    assert "newicody/autodoc-ideas" not in combined
++    assert "https://github.com/users/newicody/projects/3" in combined
++
++
++def test_projects_bundle_has_cumulative_installation_guide() -> None:
++    readme = BUNDLE_README.read_text(encoding="utf-8")
++    installation = INSTALLATION.read_text(encoding="utf-8")
++
++    assert "INSTALLATION.md" in readme
++    assert "mode opératoire cumulatif" in installation
++    assert "templates/github/projects-repository" in installation
++    assert "/home/eric/projet/git/projects" in installation
++    assert "rsync -aivn" in installation
++    assert "Ne pas utiliser `--delete`" in installation
++    assert "github_projects_workflow_dispatch.ini" in installation
++    assert "AUTODOC_COPILOT_ADVISORY_ENABLED=true" in installation
++
++
++def test_phase_declares_no_runtime_or_scheduler_change() -> None:
++    report = REPORT.read_text(encoding="utf-8")
++
++    assert "scheduler_modified: false" in report
++    assert "new_project_mode_added_to_autodoc: false" in report
++    assert "active_projects_workflow_added_to_autodoc_root: false" in report
++    assert "live_path_status: n/a" in report
++    assert "external_library_added: false" in report
+diff --git a/tools/dispatch_github_project_v2_en_cours_transitions_0275_r8.py b/tools/dispatch_github_project_v2_en_cours_transitions_0275_r8.py
+--- a/tools/dispatch_github_project_v2_en_cours_transitions_0275_r8.py
++++ b/tools/dispatch_github_project_v2_en_cours_transitions_0275_r8.py
+@@ -29,7 +29,7 @@ from context.github_project_v2_en_cours_dispatch_0275_r8 import (  # noqa: E402
+     empty_dispatch_state,
+ )
+ 
+-_DEFAULT_CONFIG = Path("config/github_project_v2_query_only.example.ini")
++_DEFAULT_CONFIG = Path("config/github_projects_workflow_dispatch.example.ini")
+ 
+ 
+ class GitHubWorkflowDispatchError(RuntimeError):
+diff --git a/tests/rules/test_github_project_v2_query_only_snapshot_0272_rule.py b/tests/rules/test_github_project_v2_query_only_snapshot_0272_rule.py
+--- a/tests/rules/test_github_project_v2_query_only_snapshot_0272_rule.py
++++ b/tests/rules/test_github_project_v2_query_only_snapshot_0272_rule.py
+@@ -17,7 +17,7 @@ def test_0272_r3_uses_real_project_identity() -> None:
+     config = CONFIG.read_text(encoding="utf-8")
+     for phrase in (
+         "owner = newicody",
+-        "number = 2",
++        "number = 3",
+         "id = PVT_kwHOA3ouXM4Ba3Ar",
+         "view_number_hint = 2",
+         "source_mode = project_v2_query_only_snapshot",

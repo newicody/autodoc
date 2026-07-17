@@ -1,0 +1,1811 @@
+diff --git a/PHASE0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL_REPORT.md b/PHASE0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL_REPORT.md
+new file mode 100644
+index 0000000..dc76755
+--- /dev/null
++++ b/PHASE0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL_REPORT.md
+@@ -0,0 +1,45 @@
++# Phase 0287-r7-r15-r3-r10 — Qdrant named collection control
++
++## Result
++
++The installed runtime can now plan, inspect and explicitly create one physical
++hybrid Qdrant collection with:
++
++- dense vector `dense_e5_v1`, dimension 384, Cosine;
++- sparse vector `sparse_lexical_v1`;
++- the canonical SQL-reference payload indexes created before ingestion.
++
++The plan is deterministic and digest-addressed. Execution requires an approved
++operator decision, an explicit mutation environment gate and an exact confirmed
++plan digest.
++
++## Compatibility
++
++Legacy manual configurations without explicit dense/sparse vector names keep the
++previous unnamed-vector read-only readiness behavior. Named mode is enabled only
++when both vector-name keys are present.
++
++## Safety boundaries
++
++- no collection deletion;
++- no payload-index deletion;
++- no alias mutation or alias swap;
++- no point upsert;
++- no Scheduler, OpenVINO or PostgreSQL construction;
++- no secret serialization;
++- SQL remains the durable authority.
++
++The physical collection is `autodoc_context_e5_384_hybrid_v1`. Alias activation
++for `autodoc_context_hybrid_current` is deliberately deferred until projection
++and readback are validated.
++
++## Validation
++
++- isolated tests: 7 passed;
++- legacy unnamed readiness compatibility checked;
++- Python compilation checked.
++
++## Next unit
++
++The next unit implements named dense+sparse projection into the validated
++physical collection while keeping point payloads reference-only.
+diff --git a/config/love_installed_runtime.example.ini b/config/love_installed_runtime.example.ini
+index bc4c2e0..36b0988 100644
+--- a/config/love_installed_runtime.example.ini
++++ b/config/love_installed_runtime.example.ini
+@@ -48,10 +48,17 @@ backend_ref = qdrant:local
+ url = http://127.0.0.1:6333
+ grpc_port = 6334
+ api_key_env =
+-# Stable alias pointing at the versioned physical E5-384 collection.
++# Legacy/current logical target retained for compatibility.
+ collection = autodoc_context_current
+-# Empty means the collection uses its single unnamed dense vector.
++# Canonical physical hybrid collection created by the controlled r10 path.
++physical_collection = autodoc_context_e5_384_hybrid_v1
++# Alias activation is deferred until the collection is validated.
++collection_alias = autodoc_context_hybrid_current
++# Legacy unnamed/single-vector selector remains empty.
+ vector_name =
++# Canonical named vector spaces.
++dense_vector_name = dense_e5_v1
++sparse_vector_name = sparse_lexical_v1
+ dimension = 384
+ distance = Cosine
+ timeout_seconds = 5
+diff --git a/doc/CHANGELOG_0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL.md b/doc/CHANGELOG_0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL.md
+new file mode 100644
+index 0000000..3f8ff2d
+--- /dev/null
++++ b/doc/CHANGELOG_0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL.md
+@@ -0,0 +1,10 @@
++# Changelog 0287-r7-r15-r3-r10
++
++- Extended manual runtime configuration with physical collection, deferred alias,
++  dense vector name and sparse vector name.
++- Preserved legacy unnamed-vector readiness when the new names are absent.
++- Added named dense+sparse Qdrant readiness validation.
++- Added a dedicated qdrant-client collection-admin I/O membrane.
++- Added preview-first collection planning with a stable digest.
++- Added controlled physical collection and canonical payload-index creation.
++- Explicitly excluded deletion, alias mutation and point writes.
+diff --git a/doc/architecture/QDRANT_NAMED_COLLECTION_CONTROL_0287_R7_R15_R3_R10.dot b/doc/architecture/QDRANT_NAMED_COLLECTION_CONTROL_0287_R7_R15_R3_R10.dot
+new file mode 100644
+index 0000000..e619af4
+--- /dev/null
++++ b/doc/architecture/QDRANT_NAMED_COLLECTION_CONTROL_0287_R7_R15_R3_R10.dot
+@@ -0,0 +1,21 @@
++digraph qdrant_named_collection_control_0287_r7_r15_r3_r10 {
++  rankdir=LR;
++  config [label="Manual runtime config"];
++  plan [label="Canonical plan + digest"];
++  gate [label="Operator + env + digest gate"];
++  admin [label="qdrant-client admin membrane"];
++  physical [label="autodoc_context_e5_384_hybrid_v1"];
++  dense [label="dense_e5_v1\n384 / Cosine"];
++  sparse [label="sparse_lexical_v1"];
++  indexes [label="Canonical SQL-ref payload indexes"];
++  alias [label="Alias activation deferred"];
++
++  config -> plan;
++  plan -> admin [label="read-only preview"];
++  gate -> admin [label="controlled execute"];
++  admin -> physical;
++  physical -> dense;
++  physical -> sparse;
++  physical -> indexes;
++  physical -> alias [style=dashed, label="not mutated"];
++}
+diff --git a/doc/architecture/QDRANT_NAMED_COLLECTION_CONTROL_0287_R7_R15_R3_R10.md b/doc/architecture/QDRANT_NAMED_COLLECTION_CONTROL_0287_R7_R15_R3_R10.md
+new file mode 100644
+index 0000000..c509f87
+--- /dev/null
++++ b/doc/architecture/QDRANT_NAMED_COLLECTION_CONTROL_0287_R7_R15_R3_R10.md
+@@ -0,0 +1,27 @@
++# Qdrant named collection control
++
++```text
++love_installed_runtime.ini
++        |
++        v
++canonical collection plan + digest
++        |
++        +---- preview/readback ----> Qdrant get_collection
++        |
++        +---- approved execute ----> create physical collection
++                                     create canonical payload indexes
++                                     exact readback
++```
++
++Canonical shape:
++
++```text
++physical collection: autodoc_context_e5_384_hybrid_v1
++dense vector:        dense_e5_v1 / 384 / Cosine
++sparse vector:       sparse_lexical_v1
++deferred alias:      autodoc_context_hybrid_current
++payload:             SQL/provenance references only
++```
++
++The alias is not created or switched in this phase. The existing
++`autodoc_context_current` target is not deleted or modified.
+diff --git a/doc/manifests/MANIFEST_0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL.md b/doc/manifests/MANIFEST_0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL.md
+new file mode 100644
+index 0000000..1348e1d
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL.md
+@@ -0,0 +1,31 @@
++# Manifest 0287-r7-r15-r3-r10
++
++## Modified
++
++- `config/love_installed_runtime.example.ini`
++- `src/context/love_manual_runtime_configuration_0287.py`
++- `src/context/love_manual_runtime_readiness_0287.py`
++
++## Added
++
++- `src/context/love_qdrant_named_collection_control_0287.py`
++- `src/inference/qdrant_client_named_collection_admin_0287.py`
++- `tools/control_love_qdrant_named_collection_0287.py`
++- `tests/context/test_love_qdrant_named_collection_control_0287_r7_r15_r3_r10.py`
++- `tests/context/test_qdrant_client_named_collection_admin_0287_r7_r15_r3_r10.py`
++- `tests/rules/test_love_qdrant_named_collection_control_0287_r7_r15_r3_r10_rule.py`
++- `PHASE0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL_REPORT.md`
++- `doc/CHANGELOG_0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL.md`
++- `doc/architecture/QDRANT_NAMED_COLLECTION_CONTROL_0287_R7_R15_R3_R10.md`
++- `doc/architecture/QDRANT_NAMED_COLLECTION_CONTROL_0287_R7_R15_R3_R10.dot`
++- `doc/manifests/MANIFEST_0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL.md`
++
++## Locked boundaries
++
++- existing Qdrant projection/query executor remains unchanged;
++- new module is limited to collection lifecycle I/O;
++- creation is digest-confirmed and operator-authorized;
++- no delete operation;
++- no alias mutation;
++- no point write;
++- SQL remains authoritative.
+diff --git a/src/context/love_manual_runtime_configuration_0287.py b/src/context/love_manual_runtime_configuration_0287.py
+index 6409339..acc2327 100644
+--- a/src/context/love_manual_runtime_configuration_0287.py
++++ b/src/context/love_manual_runtime_configuration_0287.py
+@@ -134,7 +134,12 @@ class QdrantRuntimeSettings:
+     grpc_port: int
+     api_key_env: str
+     collection: str
++    physical_collection: str
++    collection_alias: str
+     vector_name: str
++    dense_vector_name: str
++    sparse_vector_name: str
++    named_vectors_enabled: bool
+     dimension: int
+     distance: str
+     timeout_seconds: float = 5.0
+@@ -148,10 +153,28 @@ class QdrantRuntimeSettings:
+             raise ManualRuntimeConfigurationError(
+                 "qdrant grpc_port and timeout must be positive"
+             )
+-        if not self.collection.strip():
++        for name in ("collection", "physical_collection", "collection_alias"):
++            if not getattr(self, name).strip():
++                raise ManualRuntimeConfigurationError(
++                    f"qdrant {name} must be non-empty"
++                )
++        if not isinstance(self.named_vectors_enabled, bool):
+             raise ManualRuntimeConfigurationError(
+-                "qdrant collection or alias must be non-empty"
++                "qdrant named_vectors_enabled must be boolean"
+             )
++        if self.named_vectors_enabled:
++            if not self.dense_vector_name.strip() or not self.sparse_vector_name.strip():
++                raise ManualRuntimeConfigurationError(
++                    "qdrant named dense and sparse vector names are required"
++                )
++            if self.dense_vector_name == self.sparse_vector_name:
++                raise ManualRuntimeConfigurationError(
++                    "qdrant dense and sparse vector names must differ"
++                )
++            if self.vector_name and self.vector_name != self.dense_vector_name:
++                raise ManualRuntimeConfigurationError(
++                    "legacy qdrant vector_name must be empty or match dense_vector_name"
++                )
+         if self.dimension != 384:
+             raise ManualRuntimeConfigurationError(
+                 "qdrant collection must use E5 dimension 384"
+@@ -172,7 +195,12 @@ class QdrantRuntimeSettings:
+                 ),
+                 "secret_value_serialized": False,
+                 "collection": self.collection,
++                "physical_collection": self.physical_collection,
++                "collection_alias": self.collection_alias,
+                 "vector_name": self.vector_name,
++                "dense_vector_name": self.dense_vector_name,
++                "sparse_vector_name": self.sparse_vector_name,
++                "named_vectors_enabled": self.named_vectors_enabled,
+                 "dimension": self.dimension,
+                 "distance": "Cosine",
+                 "timeout_seconds": self.timeout_seconds,
+@@ -339,12 +367,40 @@ def load_manual_installed_runtime_settings(
+             fallback=5,
+         ),
+     )
++    collection = _required(parser, "qdrant", "collection")
++    vector_name = parser.get("qdrant", "vector_name", fallback="").strip()
++    has_dense_name = parser.has_option("qdrant", "dense_vector_name")
++    has_sparse_name = parser.has_option("qdrant", "sparse_vector_name")
++    if has_dense_name != has_sparse_name:
++        raise ManualRuntimeConfigurationError(
++            "qdrant dense_vector_name and sparse_vector_name must be configured together"
++        )
++    named_vectors_enabled = has_dense_name and has_sparse_name
++    dense_vector_name = parser.get(
++        "qdrant",
++        "dense_vector_name",
++        fallback=vector_name or "dense_e5_v1",
++    ).strip()
++    sparse_vector_name = parser.get(
++        "qdrant",
++        "sparse_vector_name",
++        fallback="sparse_lexical_v1",
++    ).strip()
+     qdrant = QdrantRuntimeSettings(
+         url=_required(parser, "qdrant", "url").rstrip("/"),
+         grpc_port=_positive_int(parser, "qdrant", "grpc_port", fallback=6334),
+         api_key_env=parser.get("qdrant", "api_key_env", fallback="").strip(),
+-        collection=_required(parser, "qdrant", "collection"),
+-        vector_name=parser.get("qdrant", "vector_name", fallback="").strip(),
++        collection=collection,
++        physical_collection=parser.get(
++            "qdrant", "physical_collection", fallback=collection
++        ).strip(),
++        collection_alias=parser.get(
++            "qdrant", "collection_alias", fallback=collection
++        ).strip(),
++        vector_name=vector_name,
++        dense_vector_name=dense_vector_name,
++        sparse_vector_name=sparse_vector_name,
++        named_vectors_enabled=named_vectors_enabled,
+         dimension=_positive_int(parser, "qdrant", "dimension", fallback=384),
+         distance=parser.get("qdrant", "distance", fallback="Cosine").strip(),
+         timeout_seconds=_positive_float(
+diff --git a/src/context/love_manual_runtime_readiness_0287.py b/src/context/love_manual_runtime_readiness_0287.py
+index cc04e94..1857b0a 100644
+--- a/src/context/love_manual_runtime_readiness_0287.py
++++ b/src/context/love_manual_runtime_readiness_0287.py
+@@ -238,6 +238,11 @@ def inspect_qdrant_readiness(
+     health_status = 0
+     collection_status = 0
+     payload: Mapping[str, Any] = {}
++    collection_name = (
++        cfg.physical_collection
++        if cfg.named_vectors_enabled
++        else cfg.collection
++    )
+     try:
+         health_status, health_body, _ = loader(
+             _qdrant_request(settings, "/readyz"),
+@@ -248,7 +253,7 @@ def inspect_qdrant_readiness(
+         collection_status, collection_body, _ = loader(
+             _qdrant_request(
+                 settings,
+-                "/collections/" + quote(cfg.collection, safe=""),
++                "/collections/" + quote(collection_name, safe=""),
+             ),
+             timeout=cfg.timeout_seconds,
+         )
+@@ -258,25 +263,50 @@ def inspect_qdrant_readiness(
+     except (HTTPError, URLError, OSError, TimeoutError, ValueError) as exc:
+         issues.append(f"Qdrant read-only readiness failed: {_safe_error(exc)}")
+ 
+-    vectors = payload.get("config", {})
+-    if isinstance(vectors, Mapping):
+-        vectors = vectors.get("params", {})
+-    if isinstance(vectors, Mapping):
+-        vectors = vectors.get("vectors", {})
++    config = payload.get("config", {}) if isinstance(payload, Mapping) else {}
++    params = config.get("params", {}) if isinstance(config, Mapping) else {}
++    vectors = params.get("vectors", {}) if isinstance(params, Mapping) else {}
++    sparse_vectors = (
++        params.get("sparse_vectors", {})
++        if isinstance(params, Mapping)
++        else {}
++    )
+     if not isinstance(vectors, Mapping):
+         vectors = {}
+-
+-    if cfg.vector_name:
++    if not isinstance(sparse_vectors, Mapping):
++        sparse_vectors = {}
++
++    dense_config: Mapping[str, Any]
++    sparse_config: Mapping[str, Any]
++    dense_present = True
++    sparse_present = False
++    if cfg.named_vectors_enabled:
++        dense_present = cfg.dense_vector_name in vectors
++        sparse_present = cfg.sparse_vector_name in sparse_vectors
++        selected_dense = vectors.get(cfg.dense_vector_name)
++        selected_sparse = sparse_vectors.get(cfg.sparse_vector_name)
++        dense_config = (
++            selected_dense if isinstance(selected_dense, Mapping) else {}
++        )
++        sparse_config = (
++            selected_sparse if isinstance(selected_sparse, Mapping) else {}
++        )
++    elif cfg.vector_name:
++        dense_present = cfg.vector_name in vectors
+         selected = vectors.get(cfg.vector_name)
+-        vector_config = selected if isinstance(selected, Mapping) else {}
++        dense_config = selected if isinstance(selected, Mapping) else {}
++        sparse_config = {}
+     else:
+-        vector_config = vectors
+-    size = vector_config.get("size") if isinstance(vector_config, Mapping) else None
++        dense_config = vectors
++        sparse_config = {}
++
++    size = dense_config.get("size") if isinstance(dense_config, Mapping) else None
+     distance = (
+-        vector_config.get("distance") if isinstance(vector_config, Mapping) else None
++        dense_config.get("distance")
++        if isinstance(dense_config, Mapping)
++        else None
+     )
+     status = payload.get("status") if isinstance(payload, Mapping) else None
+-
+     if not issues:
+         if collection_status != 200:
+             issues.append("Qdrant collection readback did not return HTTP 200")
+@@ -286,6 +316,10 @@ def inspect_qdrant_readiness(
+             issues.append("Qdrant vector dimension differs from 384")
+         if str(distance or "").casefold() != cfg.distance.casefold():
+             issues.append("Qdrant distance differs from Cosine")
++        if cfg.named_vectors_enabled and not dense_present:
++            issues.append("Qdrant named dense vector is missing")
++        if cfg.named_vectors_enabled and not sparse_present:
++            issues.append("Qdrant named sparse vector is missing")
+ 
+     return BackendReadiness(
+         backend="qdrant",
+@@ -295,9 +329,15 @@ def inspect_qdrant_readiness(
+             "url": cfg.url,
+             "grpc_port": cfg.grpc_port,
+             "collection": cfg.collection,
++            "physical_collection": collection_name,
++            "collection_alias": cfg.collection_alias,
+             "vector_name": cfg.vector_name,
++            "dense_vector_name": cfg.dense_vector_name,
++            "sparse_vector_name": cfg.sparse_vector_name,
++            "named_vectors_enabled": cfg.named_vectors_enabled,
+             "dimension": size,
+             "distance": distance,
++            "sparse_configured": sparse_present,
+             "status": status,
+             "points_count": payload.get("points_count"),
+             "readyz_http_status": health_status,
+@@ -312,7 +352,6 @@ def inspect_qdrant_readiness(
+         },
+     )
+ 
+-
+ def _default_openvino_inspector(
+     settings: ManualInstalledRuntimeSettings,
+     compile_model: bool,
+diff --git a/src/context/love_qdrant_named_collection_control_0287.py b/src/context/love_qdrant_named_collection_control_0287.py
+new file mode 100644
+index 0000000..dfcb964
+--- /dev/null
++++ b/src/context/love_qdrant_named_collection_control_0287.py
+@@ -0,0 +1,411 @@
++"""Controlled plan/readiness/creation for the installed hybrid Qdrant collection.
++
++The module composes the canonical profile and an injected qdrant-client admin
++port. It never imports qdrant-client, deletes resources or mutates aliases.
++Creation is preview-first and requires an exact plan digest plus operator policy.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++import hashlib
++import json
++from types import MappingProxyType
++from typing import Mapping, Protocol
++
++from context.love_manual_runtime_configuration_0287 import (
++    ManualInstalledRuntimeSettings,
++)
++from context.qdrant_canonical_profile_0287 import (
++    QDRANT_COLLECTION_PROFILE_SCHEMA,
++    QDRANT_NAMED_VECTOR_SCHEMA,
++    QdrantCollectionProfile,
++    QdrantNamedVectorProfile,
++    build_canonical_payload_indexes,
++)
++from inference.qdrant_client_named_collection_admin_0287 import (
++    QdrantNamedCollectionShape,
++)
++
++
++LOVE_QDRANT_NAMED_COLLECTION_PLAN_SCHEMA = (
++    "missipy.love.qdrant_named_collection_plan.v1"
++)
++LOVE_QDRANT_NAMED_COLLECTION_READINESS_SCHEMA = (
++    "missipy.love.qdrant_named_collection_readiness.v1"
++)
++LOVE_QDRANT_NAMED_COLLECTION_EXECUTION_SCHEMA = (
++    "missipy.love.qdrant_named_collection_execution.v1"
++)
++
++
++class LoveQdrantNamedCollectionControlError(RuntimeError):
++    """Fail-closed control-path error."""
++
++
++class QdrantNamedCollectionAdminPort(Protocol):
++    def read_collection(
++        self,
++        collection_name: str,
++    ) -> QdrantNamedCollectionShape: ...
++
++    def create_named_collection(
++        self,
++        *,
++        collection_name: str,
++        dense_vector_name: str,
++        dense_dimension: int,
++        dense_distance: str,
++        sparse_vector_name: str,
++    ) -> None: ...
++
++    def create_payload_index(
++        self,
++        *,
++        collection_name: str,
++        field_name: str,
++        index_kind: str,
++    ) -> None: ...
++
++
++@dataclass(frozen=True, slots=True)
++class LoveQdrantNamedCollectionPlan:
++    schema: str
++    profile: QdrantCollectionProfile
++    plan_digest: str
++
++    def __post_init__(self) -> None:
++        if self.schema != LOVE_QDRANT_NAMED_COLLECTION_PLAN_SCHEMA:
++            raise LoveQdrantNamedCollectionControlError(
++                "unsupported named collection plan schema"
++            )
++        expected = _plan_digest(self.profile)
++        if self.plan_digest != expected:
++            raise LoveQdrantNamedCollectionControlError(
++                "plan_digest differs from canonical profile"
++            )
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": self.schema,
++            "plan_digest": self.plan_digest,
++            "profile": self.profile.to_mapping(),
++            "boundaries": {
++                "preview_first": True,
++                "delete_allowed": False,
++                "alias_mutation_allowed": False,
++                "point_write_performed": False,
++                "sql_remains_authority": True,
++            },
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class LoveQdrantNamedCollectionReadiness:
++    schema: str
++    valid: bool
++    issues: tuple[str, ...]
++    shape: QdrantNamedCollectionShape
++    missing_payload_indexes: tuple[str, ...]
++    plan_digest: str
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": self.schema,
++            "valid": self.valid,
++            "issues": list(self.issues),
++            "shape": self.shape.to_mapping(),
++            "missing_payload_indexes": list(self.missing_payload_indexes),
++            "plan_digest": self.plan_digest,
++            "boundaries": {
++                "read_only": True,
++                "collection_write_performed": False,
++                "payload_index_write_performed": False,
++                "alias_mutated": False,
++                "delete_performed": False,
++            },
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class LoveQdrantNamedCollectionMutationGate:
++    policy_decision_id: str
++    operator_decision: str
++    allow_create: bool
++    confirm_plan_digest: str
++
++    def __post_init__(self) -> None:
++        if not self.policy_decision_id.startswith("policy:"):
++            raise LoveQdrantNamedCollectionControlError(
++                "policy_decision_id must be typed"
++            )
++        if self.operator_decision not in {"approve", "reject"}:
++            raise LoveQdrantNamedCollectionControlError(
++                "operator_decision must be approve or reject"
++            )
++
++
++@dataclass(frozen=True, slots=True)
++class LoveQdrantNamedCollectionExecution:
++    schema: str
++    valid: bool
++    created_collection: bool
++    created_payload_indexes: tuple[str, ...]
++    readiness: LoveQdrantNamedCollectionReadiness
++    policy_decision_id: str
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": self.schema,
++            "valid": self.valid,
++            "created_collection": self.created_collection,
++            "created_payload_indexes": list(self.created_payload_indexes),
++            "readiness": self.readiness.to_mapping(),
++            "policy_decision_id": self.policy_decision_id,
++            "boundaries": {
++                "point_write_performed": False,
++                "alias_mutated": False,
++                "delete_performed": False,
++                "destructive_mutation_performed": False,
++                "sql_remains_authority": True,
++            },
++        }
++
++
++def build_love_qdrant_named_collection_plan(
++    settings: ManualInstalledRuntimeSettings,
++) -> LoveQdrantNamedCollectionPlan:
++    """Build the canonical physical collection plan from local settings."""
++
++    cfg = settings.qdrant
++    if not cfg.named_vectors_enabled:
++        raise LoveQdrantNamedCollectionControlError(
++            "named Qdrant vectors must be explicitly configured"
++        )
++    dense = QdrantNamedVectorProfile(
++        schema=QDRANT_NAMED_VECTOR_SCHEMA,
++        vector_name=cfg.dense_vector_name,
++        vector_kind="dense",
++        embedding_profile_ref="embedding-profile:multilingual-e5-small-passage",
++        model_ref=settings.model_ref,
++        model_revision=settings.model_revision,
++        dimension=cfg.dimension,
++        distance="Cosine",
++        normalized=True,
++        metadata={
++            "backend_ref": settings.embedding_backend_ref,
++            "role": "passage",
++        },
++    )
++    sparse = QdrantNamedVectorProfile(
++        schema=QDRANT_NAMED_VECTOR_SCHEMA,
++        vector_name=cfg.sparse_vector_name,
++        vector_kind="sparse",
++        embedding_profile_ref="embedding-profile:sparse-lexical-v1",
++        model_ref="model:sparse-lexical-v1",
++        model_revision="v1",
++        dimension=None,
++        distance=None,
++        normalized=None,
++        hnsw_enabled=False,
++        metadata={
++            "backend_ref": "sparse:lexical-v1",
++            "role": "passage",
++        },
++    )
++    profile = QdrantCollectionProfile(
++        schema=QDRANT_COLLECTION_PROFILE_SCHEMA,
++        profile_ref="qdrant-profile:love-hybrid-v1",
++        collection_name=cfg.physical_collection,
++        collection_alias=cfg.collection_alias,
++        point_identity_field="point_id",
++        authority_ref_field="sql_ref",
++        named_vectors=(dense, sparse),
++        payload_indexes=build_canonical_payload_indexes(),
++        metadata={
++            "legacy_collection": cfg.collection,
++            "alias_activation_deferred": True,
++        },
++    )
++    return LoveQdrantNamedCollectionPlan(
++        schema=LOVE_QDRANT_NAMED_COLLECTION_PLAN_SCHEMA,
++        profile=profile,
++        plan_digest=_plan_digest(profile),
++    )
++
++
++def inspect_love_qdrant_named_collection(
++    admin: QdrantNamedCollectionAdminPort,
++    plan: LoveQdrantNamedCollectionPlan,
++) -> LoveQdrantNamedCollectionReadiness:
++    """Read the physical collection and compare it with the locked profile."""
++
++    shape = admin.read_collection(plan.profile.collection_name)
++    issues: list[str] = []
++    dense = next(
++        item
++        for item in plan.profile.named_vectors
++        if item.vector_kind == "dense"
++    )
++    sparse = next(
++        item
++        for item in plan.profile.named_vectors
++        if item.vector_kind == "sparse"
++    )
++    if not shape.exists:
++        issues.append("physical Qdrant collection is missing")
++    else:
++        observed_dense = shape.dense_vectors.get(dense.vector_name)
++        if observed_dense is None:
++            issues.append("canonical named dense vector is missing")
++        else:
++            if int(observed_dense.get("size") or 0) != dense.dimension:
++                issues.append("canonical dense vector dimension mismatch")
++            if (
++                str(observed_dense.get("distance") or "").casefold()
++                != str(dense.distance).casefold()
++            ):
++                issues.append("canonical dense vector distance mismatch")
++        if sparse.vector_name not in shape.sparse_vectors:
++            issues.append("canonical named sparse vector is missing")
++        if shape.status and shape.status != "green":
++            issues.append("physical Qdrant collection status is not green")
++
++    expected_indexes = {
++        item.field_name: item.index_kind
++        for item in plan.profile.payload_indexes
++    }
++    missing_indexes: list[str] = []
++    for field_name, index_kind in expected_indexes.items():
++        observed = shape.payload_indexes.get(field_name, "")
++        if not observed:
++            missing_indexes.append(field_name)
++        elif observed.casefold() != index_kind.casefold():
++            issues.append(
++                f"payload index type mismatch for {field_name}"
++            )
++    if missing_indexes:
++        issues.append("canonical payload indexes are incomplete")
++
++    return LoveQdrantNamedCollectionReadiness(
++        schema=LOVE_QDRANT_NAMED_COLLECTION_READINESS_SCHEMA,
++        valid=not issues,
++        issues=tuple(issues),
++        shape=shape,
++        missing_payload_indexes=tuple(sorted(missing_indexes)),
++        plan_digest=plan.plan_digest,
++    )
++
++
++def execute_love_qdrant_named_collection_plan(
++    admin: QdrantNamedCollectionAdminPort,
++    plan: LoveQdrantNamedCollectionPlan,
++    gate: LoveQdrantNamedCollectionMutationGate,
++) -> LoveQdrantNamedCollectionExecution:
++    """Create only missing additive resources, then require exact readback."""
++
++    if gate.operator_decision != "approve":
++        raise LoveQdrantNamedCollectionControlError(
++            "operator decision did not approve collection creation"
++        )
++    if not gate.allow_create:
++        raise LoveQdrantNamedCollectionControlError(
++            "collection mutation is not allowed"
++        )
++    if gate.confirm_plan_digest != plan.plan_digest:
++        raise LoveQdrantNamedCollectionControlError(
++            "confirm-plan-digest mismatch"
++        )
++
++    initial = inspect_love_qdrant_named_collection(admin, plan)
++    created_collection = False
++    created_indexes: list[str] = []
++    dense = next(
++        item
++        for item in plan.profile.named_vectors
++        if item.vector_kind == "dense"
++    )
++    sparse = next(
++        item
++        for item in plan.profile.named_vectors
++        if item.vector_kind == "sparse"
++    )
++
++    if initial.shape.exists:
++        structural_issues = tuple(
++            issue
++            for issue in initial.issues
++            if "payload index" not in issue
++        )
++        if structural_issues:
++            raise LoveQdrantNamedCollectionControlError(
++                "existing physical collection has incompatible structure: "
++                + "; ".join(structural_issues)
++            )
++    else:
++        admin.create_named_collection(
++            collection_name=plan.profile.collection_name,
++            dense_vector_name=dense.vector_name,
++            dense_dimension=int(dense.dimension or 0),
++            dense_distance=str(dense.distance),
++            sparse_vector_name=sparse.vector_name,
++        )
++        created_collection = True
++
++    current = inspect_love_qdrant_named_collection(admin, plan)
++    expected_indexes = {
++        item.field_name: item.index_kind
++        for item in plan.profile.payload_indexes
++    }
++    for field_name in current.missing_payload_indexes:
++        admin.create_payload_index(
++            collection_name=plan.profile.collection_name,
++            field_name=field_name,
++            index_kind=expected_indexes[field_name],
++        )
++        created_indexes.append(field_name)
++
++    final = inspect_love_qdrant_named_collection(admin, plan)
++    if not final.valid:
++        raise LoveQdrantNamedCollectionControlError(
++            "Qdrant collection readback is not canonical: "
++            + "; ".join(final.issues)
++        )
++    return LoveQdrantNamedCollectionExecution(
++        schema=LOVE_QDRANT_NAMED_COLLECTION_EXECUTION_SCHEMA,
++        valid=True,
++        created_collection=created_collection,
++        created_payload_indexes=tuple(sorted(created_indexes)),
++        readiness=final,
++        policy_decision_id=gate.policy_decision_id,
++    )
++
++
++def _plan_digest(profile: QdrantCollectionProfile) -> str:
++    payload = {
++        "schema": LOVE_QDRANT_NAMED_COLLECTION_PLAN_SCHEMA,
++        "profile": profile.to_mapping(),
++    }
++    encoded = json.dumps(
++        payload,
++        sort_keys=True,
++        separators=(",", ":"),
++        ensure_ascii=False,
++    ).encode("utf-8")
++    return "sha256:" + hashlib.sha256(encoded).hexdigest()
++
++
++__all__ = (
++    "LOVE_QDRANT_NAMED_COLLECTION_EXECUTION_SCHEMA",
++    "LOVE_QDRANT_NAMED_COLLECTION_PLAN_SCHEMA",
++    "LOVE_QDRANT_NAMED_COLLECTION_READINESS_SCHEMA",
++    "LoveQdrantNamedCollectionControlError",
++    "LoveQdrantNamedCollectionExecution",
++    "LoveQdrantNamedCollectionMutationGate",
++    "LoveQdrantNamedCollectionPlan",
++    "LoveQdrantNamedCollectionReadiness",
++    "QdrantNamedCollectionAdminPort",
++    "build_love_qdrant_named_collection_plan",
++    "execute_love_qdrant_named_collection_plan",
++    "inspect_love_qdrant_named_collection",
++)
+diff --git a/src/inference/qdrant_client_named_collection_admin_0287.py b/src/inference/qdrant_client_named_collection_admin_0287.py
+new file mode 100644
+index 0000000..da8cd6b
+--- /dev/null
++++ b/src/inference/qdrant_client_named_collection_admin_0287.py
+@@ -0,0 +1,377 @@
++"""Controlled qdrant-client admin membrane for one named hybrid collection.
++
++This I/O adapter exists because the projection/query executor deliberately does
++not own collection lifecycle. It reuses the same connection/gate shape and may
++share the same injected SDK client with the future tool-bounded composer.
++
++The adapter can read, create and add payload indexes. It never deletes a
++collection, vector, payload index or alias, and it never mutates aliases.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass
++from importlib import import_module
++import math
++from types import MappingProxyType
++from typing import Any, Callable, Mapping
++
++
++QDRANT_NAMED_COLLECTION_SHAPE_SCHEMA = (
++    "missipy.qdrant.named_collection_shape.v1"
++)
++
++
++class QdrantNamedCollectionAdminError(RuntimeError):
++    """Fail-closed collection lifecycle error."""
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantNamedCollectionShape:
++    """Normalized collection readback without vectors or point payloads."""
++
++    schema: str
++    collection_name: str
++    exists: bool
++    status: str
++    points_count: int
++    dense_vectors: Mapping[str, Mapping[str, object]]
++    sparse_vectors: tuple[str, ...]
++    payload_indexes: Mapping[str, str]
++
++    def __post_init__(self) -> None:
++        if self.schema != QDRANT_NAMED_COLLECTION_SHAPE_SCHEMA:
++            raise QdrantNamedCollectionAdminError(
++                "unsupported named collection shape schema"
++            )
++        if not self.collection_name.strip():
++            raise QdrantNamedCollectionAdminError(
++                "collection_name must be non-empty"
++            )
++        if self.points_count < 0:
++            raise QdrantNamedCollectionAdminError(
++                "points_count must be >= 0"
++            )
++        dense = {
++            str(name): MappingProxyType(dict(config))
++            for name, config in self.dense_vectors.items()
++        }
++        object.__setattr__(self, "dense_vectors", MappingProxyType(dense))
++        object.__setattr__(
++            self,
++            "sparse_vectors",
++            tuple(sorted(str(name) for name in self.sparse_vectors)),
++        )
++        object.__setattr__(
++            self,
++            "payload_indexes",
++            MappingProxyType(
++                {
++                    str(name): str(kind)
++                    for name, kind in self.payload_indexes.items()
++                }
++            ),
++        )
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": self.schema,
++            "collection_name": self.collection_name,
++            "exists": self.exists,
++            "status": self.status,
++            "points_count": self.points_count,
++            "dense_vectors": {
++                name: dict(config)
++                for name, config in self.dense_vectors.items()
++            },
++            "sparse_vectors": list(self.sparse_vectors),
++            "payload_indexes": dict(self.payload_indexes),
++            "boundaries": {
++                "vectors_serialized": False,
++                "point_payloads_serialized": False,
++                "delete_performed": False,
++                "alias_mutated": False,
++            },
++        }
++
++
++class QdrantClientNamedCollectionAdmin:
++    """Bounded admin surface around an injected qdrant-client instance."""
++
++    def __init__(
++        self,
++        *,
++        client: Any,
++        models_module: Any,
++        config: Any,
++        gate: Any,
++    ) -> None:
++        self._client = client
++        self._models = models_module
++        self._config = config
++        self._gate = gate
++
++    def read_collection(self, collection_name: str) -> QdrantNamedCollectionShape:
++        """Read and normalize collection configuration only."""
++
++        _require_name("collection_name", collection_name)
++        try:
++            response = self._client.get_collection(collection_name)
++        except Exception as exc:
++            if _is_not_found(exc):
++                return QdrantNamedCollectionShape(
++                    schema=QDRANT_NAMED_COLLECTION_SHAPE_SCHEMA,
++                    collection_name=collection_name,
++                    exists=False,
++                    status="missing",
++                    points_count=0,
++                    dense_vectors={},
++                    sparse_vectors=(),
++                    payload_indexes={},
++                )
++            raise QdrantNamedCollectionAdminError(
++                f"read_collection failed: {_safe_error(exc)}"
++            ) from exc
++        payload = _plain(response)
++        config = _mapping(payload.get("config"))
++        params = _mapping(config.get("params"))
++        dense_vectors = _dense_vector_shapes(params.get("vectors"))
++        sparse_vectors = _named_keys(params.get("sparse_vectors"))
++        payload_schema = _payload_schema(payload.get("payload_schema"))
++        status = _enum_text(payload.get("status"))
++        points_count = int(payload.get("points_count") or 0)
++        return QdrantNamedCollectionShape(
++            schema=QDRANT_NAMED_COLLECTION_SHAPE_SCHEMA,
++            collection_name=collection_name,
++            exists=True,
++            status=status,
++            points_count=points_count,
++            dense_vectors=dense_vectors,
++            sparse_vectors=sparse_vectors,
++            payload_indexes=payload_schema,
++        )
++
++    def create_named_collection(
++        self,
++        *,
++        collection_name: str,
++        dense_vector_name: str,
++        dense_dimension: int,
++        dense_distance: str,
++        sparse_vector_name: str,
++    ) -> None:
++        """Create one physical dense+sparse collection; never overwrite."""
++
++        self._require_write("create_collection")
++        for name, value in (
++            ("collection_name", collection_name),
++            ("dense_vector_name", dense_vector_name),
++            ("sparse_vector_name", sparse_vector_name),
++        ):
++            _require_name(name, value)
++        if dense_dimension != 384:
++            raise QdrantNamedCollectionAdminError(
++                "dense_dimension must be exactly 384"
++            )
++        distance = _distance_model(self._models, dense_distance)
++        try:
++            response = self._client.create_collection(
++                collection_name=collection_name,
++                vectors_config={
++                    dense_vector_name: self._models.VectorParams(
++                        size=dense_dimension,
++                        distance=distance,
++                    )
++                },
++                sparse_vectors_config={
++                    sparse_vector_name: self._models.SparseVectorParams()
++                },
++            )
++        except Exception as exc:
++            raise QdrantNamedCollectionAdminError(
++                f"create_collection failed: {_safe_error(exc)}"
++            ) from exc
++        if response is False:
++            raise QdrantNamedCollectionAdminError(
++                "Qdrant did not acknowledge collection creation"
++            )
++
++    def create_payload_index(
++        self,
++        *,
++        collection_name: str,
++        field_name: str,
++        index_kind: str,
++    ) -> None:
++        """Create one missing canonical payload index."""
++
++        self._require_write("create_payload_index")
++        _require_name("collection_name", collection_name)
++        _require_name("field_name", field_name)
++        schema = _payload_schema_model(self._models, index_kind)
++        try:
++            response = self._client.create_payload_index(
++                collection_name=collection_name,
++                field_name=field_name,
++                field_schema=schema,
++                wait=bool(getattr(self._config, "wait_for_write", True)),
++            )
++        except Exception as exc:
++            raise QdrantNamedCollectionAdminError(
++                f"create_payload_index failed: {_safe_error(exc)}"
++            ) from exc
++        if response is False:
++            raise QdrantNamedCollectionAdminError(
++                f"Qdrant did not acknowledge payload index {field_name}"
++            )
++
++    def close(self) -> None:
++        close = getattr(self._client, "close", None)
++        if callable(close):
++            close()
++
++    def _require_write(self, operation: str) -> None:
++        if not bool(getattr(self._gate, "allow_write", False)):
++            raise QdrantNamedCollectionAdminError(
++                f"{operation}: effect gate does not allow writes"
++            )
++
++
++def build_qdrant_client_named_collection_admin(
++    config: Any,
++    gate: Any,
++    *,
++    api_key: str | None = None,
++    client_factory: Callable[..., Any] | None = None,
++    models_module: Any | None = None,
++) -> QdrantClientNamedCollectionAdmin:
++    """Build the admin at the qdrant-client I/O boundary."""
++
++    factory = client_factory
++    models = models_module
++    if factory is None:
++        package = import_module("qdrant_client")
++        factory = getattr(package, "QdrantClient")
++    if models is None:
++        models = import_module("qdrant_client.models")
++    kwargs: dict[str, object] = {
++        "url": getattr(config, "url"),
++        "timeout": getattr(config, "timeout_seconds"),
++        "prefer_grpc": bool(getattr(config, "prefer_grpc", False)),
++        "check_compatibility": bool(
++            getattr(config, "check_compatibility", True)
++        ),
++    }
++    if kwargs["prefer_grpc"]:
++        kwargs["grpc_port"] = int(getattr(config, "grpc_port"))
++    if api_key:
++        kwargs["api_key"] = api_key
++    client = factory(**kwargs)
++    return QdrantClientNamedCollectionAdmin(
++        client=client,
++        models_module=models,
++        config=config,
++        gate=gate,
++    )
++
++
++def _dense_vector_shapes(value: object) -> dict[str, dict[str, object]]:
++    mapping = _mapping(value)
++    result: dict[str, dict[str, object]] = {}
++    for name, raw in mapping.items():
++        config = _mapping(raw)
++        if "size" not in config:
++            continue
++        result[str(name)] = {
++            "size": int(config.get("size") or 0),
++            "distance": _enum_text(config.get("distance")),
++        }
++    return result
++
++
++def _named_keys(value: object) -> tuple[str, ...]:
++    return tuple(sorted(str(name) for name in _mapping(value)))
++
++
++def _payload_schema(value: object) -> dict[str, str]:
++    result: dict[str, str] = {}
++    for name, raw in _mapping(value).items():
++        config = _mapping(raw)
++        kind = config.get("data_type", raw)
++        result[str(name)] = _enum_text(kind)
++    return result
++
++
++def _mapping(value: object) -> Mapping[str, Any]:
++    plain = _plain(value)
++    return plain if isinstance(plain, Mapping) else {}
++
++
++def _plain(value: object) -> Any:
++    if isinstance(value, Mapping):
++        return {str(key): _plain(item) for key, item in value.items()}
++    if isinstance(value, (tuple, list)):
++        return [_plain(item) for item in value]
++    model_dump = getattr(value, "model_dump", None)
++    if callable(model_dump):
++        return _plain(model_dump())
++    dict_method = getattr(value, "dict", None)
++    if callable(dict_method):
++        return _plain(dict_method())
++    if hasattr(value, "__dict__"):
++        return {
++            str(key): _plain(item)
++            for key, item in vars(value).items()
++            if not str(key).startswith("_")
++        }
++    return value
++
++
++def _enum_text(value: object) -> str:
++    raw = getattr(value, "value", value)
++    return str(raw or "")
++
++
++def _distance_model(models: Any, distance: str) -> object:
++    name = distance.strip().upper()
++    member = getattr(getattr(models, "Distance"), name, None)
++    if member is None:
++        raise QdrantNamedCollectionAdminError(
++            f"unsupported Qdrant distance: {distance}"
++        )
++    return member
++
++
++def _payload_schema_model(models: Any, index_kind: str) -> object:
++    name = index_kind.strip().upper()
++    member = getattr(getattr(models, "PayloadSchemaType"), name, None)
++    if member is None:
++        raise QdrantNamedCollectionAdminError(
++            f"unsupported payload index kind: {index_kind}"
++        )
++    return member
++
++
++def _is_not_found(exc: BaseException) -> bool:
++    code = getattr(exc, "status_code", None)
++    if code == 404:
++        return True
++    return "not found" in str(exc).casefold()
++
++
++def _safe_error(exc: BaseException) -> str:
++    return (str(exc).strip() or type(exc).__name__).replace("\n", " ")[:300]
++
++
++def _require_name(name: str, value: str) -> None:
++    if not isinstance(value, str) or not value.strip():
++        raise QdrantNamedCollectionAdminError(f"{name} must be non-empty")
++
++
++__all__ = (
++    "QDRANT_NAMED_COLLECTION_SHAPE_SCHEMA",
++    "QdrantClientNamedCollectionAdmin",
++    "QdrantNamedCollectionAdminError",
++    "QdrantNamedCollectionShape",
++    "build_qdrant_client_named_collection_admin",
++)
+diff --git a/tests/context/test_love_qdrant_named_collection_control_0287_r7_r15_r3_r10.py b/tests/context/test_love_qdrant_named_collection_control_0287_r7_r15_r3_r10.py
+new file mode 100644
+index 0000000..e879bfb
+--- /dev/null
++++ b/tests/context/test_love_qdrant_named_collection_control_0287_r7_r15_r3_r10.py
+@@ -0,0 +1,247 @@
++from __future__ import annotations
++
++from pathlib import Path
++import json
++
++import pytest
++
++from context.love_manual_runtime_configuration_0287 import (
++    load_manual_installed_runtime_settings,
++)
++from context.love_manual_runtime_readiness_0287 import inspect_qdrant_readiness
++from context.love_qdrant_named_collection_control_0287 import (
++    LoveQdrantNamedCollectionControlError,
++    LoveQdrantNamedCollectionMutationGate,
++    build_love_qdrant_named_collection_plan,
++    execute_love_qdrant_named_collection_plan,
++    inspect_love_qdrant_named_collection,
++)
++from inference.qdrant_client_named_collection_admin_0287 import (
++    QDRANT_NAMED_COLLECTION_SHAPE_SCHEMA,
++    QdrantNamedCollectionShape,
++)
++
++
++def _settings(tmp_path: Path):
++    path = tmp_path / "runtime.ini"
++    path.write_text(
++        """
++[manual-runtime]
++schema = missipy.love.manual_installed_runtime_configuration.v1
++
++[runtime]
++runtime_ref = runtime:love-installed
++
++[scheduler]
++scheduler_ref = scheduler:main
++lifecycle = externally-managed
++
++[sql]
++authority_ref = sql-authority:context-revisions
++base_revision_ref = context-revision:love-base
++
++[projection]
++backend_ref = projection:context-revision-sql-authority
++
++[embedding]
++backend_ref = openvino:multilingual-e5-small
++model_ref = model:multilingual-e5-small
++model_revision = installed
++
++[qdrant]
++backend_ref = qdrant:local
++url = http://127.0.0.1:6333
++grpc_port = 6334
++collection = autodoc_context_current
++physical_collection = autodoc_context_e5_384_hybrid_v1
++collection_alias = autodoc_context_hybrid_current
++vector_name =
++dense_vector_name = dense_e5_v1
++sparse_vector_name = sparse_lexical_v1
++dimension = 384
++distance = Cosine
++
++[postgresql]
++host = 127.0.0.1
++port = 5432
++database = autodoc
++user = autodoc
++password_env = AUTODOC_POSTGRES_PASSWORD
++sslmode = disable
++schema = autodoc
++
++[openvino]
++model_dir = /models/e5
++model_xml = /models/e5/openvino_model.xml
++device = CPU
++dimension = 384
++query_prefix = query:
++passage_prefix = passage:
++""".strip()
++        + "\n",
++        encoding="utf-8",
++    )
++    return load_manual_installed_runtime_settings(path)
++
++
++class _Admin:
++    def __init__(self) -> None:
++        self.created = False
++        self.indexes: dict[str, str] = {}
++        self.create_calls = 0
++
++    def read_collection(self, collection_name: str) -> QdrantNamedCollectionShape:
++        if not self.created:
++            return QdrantNamedCollectionShape(
++                schema=QDRANT_NAMED_COLLECTION_SHAPE_SCHEMA,
++                collection_name=collection_name,
++                exists=False,
++                status="missing",
++                points_count=0,
++                dense_vectors={},
++                sparse_vectors=(),
++                payload_indexes={},
++            )
++        return QdrantNamedCollectionShape(
++            schema=QDRANT_NAMED_COLLECTION_SHAPE_SCHEMA,
++            collection_name=collection_name,
++            exists=True,
++            status="green",
++            points_count=0,
++            dense_vectors={
++                "dense_e5_v1": {
++                    "size": 384,
++                    "distance": "Cosine",
++                }
++            },
++            sparse_vectors=("sparse_lexical_v1",),
++            payload_indexes=self.indexes,
++        )
++
++    def create_named_collection(self, **kwargs) -> None:
++        assert kwargs["collection_name"] == "autodoc_context_e5_384_hybrid_v1"
++        assert kwargs["dense_vector_name"] == "dense_e5_v1"
++        assert kwargs["dense_dimension"] == 384
++        assert kwargs["dense_distance"] == "Cosine"
++        assert kwargs["sparse_vector_name"] == "sparse_lexical_v1"
++        self.created = True
++        self.create_calls += 1
++
++    def create_payload_index(
++        self,
++        *,
++        collection_name: str,
++        field_name: str,
++        index_kind: str,
++    ) -> None:
++        assert collection_name == "autodoc_context_e5_384_hybrid_v1"
++        self.indexes[field_name] = index_kind
++
++
++def test_named_settings_build_canonical_dense_sparse_plan(tmp_path: Path) -> None:
++    settings = _settings(tmp_path)
++    assert settings.qdrant.named_vectors_enabled is True
++    assert settings.qdrant.physical_collection == (
++        "autodoc_context_e5_384_hybrid_v1"
++    )
++    plan = build_love_qdrant_named_collection_plan(settings)
++    assert plan.plan_digest.startswith("sha256:")
++    assert tuple(
++        vector.vector_name for vector in plan.profile.named_vectors
++    ) == ("dense_e5_v1", "sparse_lexical_v1")
++    assert plan.profile.collection_alias == "autodoc_context_hybrid_current"
++
++
++def test_preview_reports_missing_collection_without_write(tmp_path: Path) -> None:
++    plan = build_love_qdrant_named_collection_plan(_settings(tmp_path))
++    admin = _Admin()
++    readiness = inspect_love_qdrant_named_collection(admin, plan)
++    assert readiness.valid is False
++    assert "physical Qdrant collection is missing" in readiness.issues
++    assert admin.create_calls == 0
++
++
++def test_execute_creates_collection_indexes_and_exact_readback(
++    tmp_path: Path,
++) -> None:
++    plan = build_love_qdrant_named_collection_plan(_settings(tmp_path))
++    admin = _Admin()
++    result = execute_love_qdrant_named_collection_plan(
++        admin,
++        plan,
++        LoveQdrantNamedCollectionMutationGate(
++            policy_decision_id="policy:qdrant-r10",
++            operator_decision="approve",
++            allow_create=True,
++            confirm_plan_digest=plan.plan_digest,
++        ),
++    )
++    assert result.valid is True
++    assert result.created_collection is True
++    assert admin.create_calls == 1
++    assert len(result.created_payload_indexes) == 14
++    assert result.readiness.valid is True
++    payload = result.to_mapping()
++    assert payload["boundaries"]["alias_mutated"] is False
++    assert payload["boundaries"]["delete_performed"] is False
++
++
++def test_execute_rejects_digest_mismatch_without_write(tmp_path: Path) -> None:
++    plan = build_love_qdrant_named_collection_plan(_settings(tmp_path))
++    admin = _Admin()
++    with pytest.raises(
++        LoveQdrantNamedCollectionControlError,
++        match="confirm-plan-digest mismatch",
++    ):
++        execute_love_qdrant_named_collection_plan(
++            admin,
++            plan,
++            LoveQdrantNamedCollectionMutationGate(
++                policy_decision_id="policy:qdrant-r10",
++                operator_decision="approve",
++                allow_create=True,
++                confirm_plan_digest="sha256:" + "0" * 64,
++            ),
++        )
++    assert admin.create_calls == 0
++
++def test_manual_readiness_validates_both_named_vector_spaces(
++    tmp_path: Path,
++) -> None:
++    settings = _settings(tmp_path)
++
++    def loader(request, *, timeout):
++        del timeout
++        if request.full_url.endswith("/readyz"):
++            return 200, b"all shards are ready", {}
++        assert request.full_url.endswith(
++            "/collections/autodoc_context_e5_384_hybrid_v1"
++        )
++        body = {
++            "result": {
++                "status": "green",
++                "points_count": 0,
++                "config": {
++                    "params": {
++                        "vectors": {
++                            "dense_e5_v1": {
++                                "size": 384,
++                                "distance": "Cosine",
++                            }
++                        },
++                        "sparse_vectors": {
++                            "sparse_lexical_v1": {},
++                        },
++                    }
++                },
++            }
++        }
++        return 200, json.dumps(body).encode("utf-8"), {}
++
++    readiness = inspect_qdrant_readiness(settings, loader=loader)
++    assert readiness.valid is True
++    evidence = readiness.to_mapping()["evidence"]
++    assert evidence["dense_vector_name"] == "dense_e5_v1"
++    assert evidence["sparse_vector_name"] == "sparse_lexical_v1"
++    assert evidence["sparse_configured"] is True
++
+diff --git a/tests/context/test_qdrant_client_named_collection_admin_0287_r7_r15_r3_r10.py b/tests/context/test_qdrant_client_named_collection_admin_0287_r7_r15_r3_r10.py
+new file mode 100644
+index 0000000..17eb70f
+--- /dev/null
++++ b/tests/context/test_qdrant_client_named_collection_admin_0287_r7_r15_r3_r10.py
+@@ -0,0 +1,118 @@
++from __future__ import annotations
++
++from dataclasses import dataclass
++
++from inference.qdrant_client_named_collection_admin_0287 import (
++    QdrantClientNamedCollectionAdmin,
++)
++
++
++class _Distance:
++    COSINE = "Cosine"
++
++
++class _PayloadSchemaType:
++    KEYWORD = "keyword"
++    BOOL = "bool"
++
++
++@dataclass
++class _VectorParams:
++    size: int
++    distance: object
++
++
++class _SparseVectorParams:
++    pass
++
++
++class _Models:
++    Distance = _Distance
++    PayloadSchemaType = _PayloadSchemaType
++    VectorParams = _VectorParams
++    SparseVectorParams = _SparseVectorParams
++
++
++@dataclass
++class _Config:
++    wait_for_write: bool = True
++
++
++@dataclass
++class _Gate:
++    allow_write: bool = True
++
++
++class _NotFound(Exception):
++    status_code = 404
++
++
++class _Client:
++    def __init__(self) -> None:
++        self.created = None
++        self.indexes = []
++
++    def get_collection(self, collection_name):
++        if self.created is None:
++            raise _NotFound("not found")
++        return {
++            "status": "green",
++            "points_count": 0,
++            "config": {
++                "params": {
++                    "vectors": {
++                        "dense_e5_v1": {
++                            "size": 384,
++                            "distance": "Cosine",
++                        }
++                    },
++                    "sparse_vectors": {
++                        "sparse_lexical_v1": {},
++                    },
++                }
++            },
++            "payload_schema": {
++                name: {"data_type": kind}
++                for name, kind in self.indexes
++            },
++        }
++
++    def create_collection(self, **kwargs):
++        self.created = kwargs
++        return True
++
++    def create_payload_index(self, **kwargs):
++        self.indexes.append(
++            (kwargs["field_name"], kwargs["field_schema"])
++        )
++        return True
++
++
++def test_sdk_admin_creates_and_reads_named_collection() -> None:
++    client = _Client()
++    admin = QdrantClientNamedCollectionAdmin(
++        client=client,
++        models_module=_Models,
++        config=_Config(),
++        gate=_Gate(),
++    )
++    missing = admin.read_collection("autodoc_context_e5_384_hybrid_v1")
++    assert missing.exists is False
++    admin.create_named_collection(
++        collection_name="autodoc_context_e5_384_hybrid_v1",
++        dense_vector_name="dense_e5_v1",
++        dense_dimension=384,
++        dense_distance="Cosine",
++        sparse_vector_name="sparse_lexical_v1",
++    )
++    admin.create_payload_index(
++        collection_name="autodoc_context_e5_384_hybrid_v1",
++        field_name="sql_ref",
++        index_kind="keyword",
++    )
++    shape = admin.read_collection("autodoc_context_e5_384_hybrid_v1")
++    assert shape.exists is True
++    assert shape.dense_vectors["dense_e5_v1"]["size"] == 384
++    assert shape.sparse_vectors == ("sparse_lexical_v1",)
++    assert shape.payload_indexes["sql_ref"] == "keyword"
++    assert "vectors" not in shape.to_mapping()
+diff --git a/tests/rules/test_love_qdrant_named_collection_control_0287_r7_r15_r3_r10_rule.py b/tests/rules/test_love_qdrant_named_collection_control_0287_r7_r15_r3_r10_rule.py
+new file mode 100644
+index 0000000..e09a736
+--- /dev/null
++++ b/tests/rules/test_love_qdrant_named_collection_control_0287_r7_r15_r3_r10_rule.py
+@@ -0,0 +1,56 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++CONTROL = ROOT / "src/context/love_qdrant_named_collection_control_0287.py"
++ADMIN = ROOT / "src/inference/qdrant_client_named_collection_admin_0287.py"
++CONFIG = ROOT / "config/love_installed_runtime.example.ini"
++TOOL = ROOT / "tools/control_love_qdrant_named_collection_0287.py"
++
++
++def test_r10_keeps_collection_creation_additive_and_preview_first() -> None:
++    control = CONTROL.read_text(encoding="utf-8")
++    admin = ADMIN.read_text(encoding="utf-8")
++    config = CONFIG.read_text(encoding="utf-8")
++    tool = TOOL.read_text(encoding="utf-8")
++
++    for marker in (
++        "physical_collection = autodoc_context_e5_384_hybrid_v1",
++        "collection_alias = autodoc_context_hybrid_current",
++        "dense_vector_name = dense_e5_v1",
++        "sparse_vector_name = sparse_lexical_v1",
++    ):
++        assert marker in config
++
++    for marker in (
++        "confirm-plan-digest mismatch",
++        "operator_decision",
++        "allow_create",
++        "alias_mutated",
++        "delete_performed",
++        "build_canonical_payload_indexes",
++    ):
++        assert marker in control
++
++    for marker in (
++        "create_collection",
++        "create_payload_index",
++        "SparseVectorParams",
++        "VectorParams",
++        "get_collection",
++    ):
++        assert marker in admin
++
++    for forbidden in (
++        "delete_collection",
++        "delete_payload_index",
++        "update_collection_aliases",
++        "delete_alias",
++    ):
++        assert forbidden not in control
++        assert forbidden not in admin
++        assert forbidden not in tool
++
++    assert "AUTODOC_QDRANT_COLLECTION_MUTATION_ALLOWED" in tool
++    assert "Scheduler(" not in control
++    assert "Scheduler(" not in admin
+diff --git a/tools/control_love_qdrant_named_collection_0287.py b/tools/control_love_qdrant_named_collection_0287.py
+new file mode 100644
+index 0000000..066780b
+--- /dev/null
++++ b/tools/control_love_qdrant_named_collection_0287.py
+@@ -0,0 +1,151 @@
++#!/usr/bin/env python3
++"""Preview or execute controlled creation of the hybrid Qdrant collection."""
++
++from __future__ import annotations
++
++import argparse
++import json
++import os
++from pathlib import Path
++import sys
++from typing import Sequence
++
++
++ROOT = Path(__file__).resolve().parents[1]
++SRC = ROOT / "src"
++if str(SRC) not in sys.path:
++    sys.path.insert(0, str(SRC))
++
++from context.love_manual_runtime_configuration_0287 import (  # noqa: E402
++    load_manual_installed_runtime_settings,
++)
++from context.love_qdrant_named_collection_control_0287 import (  # noqa: E402
++    LoveQdrantNamedCollectionMutationGate,
++    build_love_qdrant_named_collection_plan,
++    execute_love_qdrant_named_collection_plan,
++    inspect_love_qdrant_named_collection,
++)
++from inference.qdrant_client_named_collection_admin_0287 import (  # noqa: E402
++    build_qdrant_client_named_collection_admin,
++)
++from inference.qdrant_client_projection_executor import (  # noqa: E402
++    QdrantClientConnectionConfig,
++    QdrantClientEffectGate,
++)
++
++
++MUTATION_ENV = "AUTODOC_QDRANT_COLLECTION_MUTATION_ALLOWED"
++
++
++def build_parser() -> argparse.ArgumentParser:
++    parser = argparse.ArgumentParser(
++        description=(
++            "Preview or create the canonical named dense+sparse Qdrant "
++            "collection without deleting or switching aliases."
++        )
++    )
++    parser.add_argument(
++        "--config",
++        default=".var/config/love_installed_runtime.ini",
++    )
++    parser.add_argument(
++        "--policy-decision-id",
++        default="policy:qdrant-named-collection-preview",
++    )
++    parser.add_argument(
++        "--operator-decision",
++        choices=("approve", "reject"),
++        default="reject",
++    )
++    parser.add_argument("--execute", action="store_true")
++    parser.add_argument("--confirm-plan-digest", default="")
++    parser.add_argument("--format", choices=("json", "summary"), default="json")
++    return parser
++
++
++def _truthy(value: str) -> bool:
++    return value.strip().casefold() in {"1", "true", "yes", "on"}
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = build_parser().parse_args(argv)
++    settings = load_manual_installed_runtime_settings(args.config)
++    plan = build_love_qdrant_named_collection_plan(settings)
++    qdrant = settings.qdrant
++    mutation_allowed = _truthy(os.environ.get(MUTATION_ENV, ""))
++    connection = QdrantClientConnectionConfig(
++        url=qdrant.url,
++        timeout_seconds=qdrant.timeout_seconds,
++        grpc_port=qdrant.grpc_port,
++        prefer_grpc=False,
++        wait_for_write=True,
++        check_compatibility=True,
++    )
++    effect_gate = QdrantClientEffectGate(
++        policy_decision_id=args.policy_decision_id,
++        allow_write=bool(args.execute and mutation_allowed),
++        allow_search=False,
++    )
++    api_key = (
++        os.environ.get(qdrant.api_key_env, "")
++        if qdrant.api_key_env
++        else ""
++    )
++    admin = build_qdrant_client_named_collection_admin(
++        connection,
++        effect_gate,
++        api_key=api_key or None,
++    )
++    try:
++        readiness = inspect_love_qdrant_named_collection(admin, plan)
++        execution = None
++        if args.execute:
++            gate = LoveQdrantNamedCollectionMutationGate(
++                policy_decision_id=args.policy_decision_id,
++                operator_decision=args.operator_decision,
++                allow_create=mutation_allowed,
++                confirm_plan_digest=args.confirm_plan_digest,
++            )
++            execution = execute_love_qdrant_named_collection_plan(
++                admin,
++                plan,
++                gate,
++            )
++        payload = {
++            "plan": plan.to_mapping(),
++            "readiness": readiness.to_mapping(),
++            "execution": (
++                execution.to_mapping() if execution is not None else None
++            ),
++            "boundaries": {
++                "execute_requested": bool(args.execute),
++                "mutation_environment_allowed": mutation_allowed,
++                "api_key_serialized": False,
++                "point_write_performed": False,
++                "alias_mutated": False,
++                "delete_performed": False,
++            },
++        }
++    finally:
++        admin.close()
++
++    if args.format == "json":
++        print(json.dumps(payload, indent=2, sort_keys=True))
++    else:
++        print(
++            " ".join(
++                (
++                    f"plan_digest={plan.plan_digest}",
++                    f"ready={readiness.valid}",
++                    f"execute={bool(args.execute)}",
++                    f"created={bool(execution and execution.created_collection)}",
++                    "alias_mutated=False",
++                    "delete_performed=False",
++                )
++            )
++        )
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

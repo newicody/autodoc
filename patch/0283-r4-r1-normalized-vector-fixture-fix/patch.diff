@@ -1,0 +1,167 @@
+diff --git a/PHASE0283_R4_R1_NORMALIZED_VECTOR_FIXTURE_FIX_REPORT.md b/PHASE0283_R4_R1_NORMALIZED_VECTOR_FIXTURE_FIX_REPORT.md
+new file mode 100644
+index 0000000..c791c92
+--- /dev/null
++++ b/PHASE0283_R4_R1_NORMALIZED_VECTOR_FIXTURE_FIX_REPORT.md
+@@ -0,0 +1,32 @@
++# Phase 0283-r4-r1 report — normalized vector fixture fix
++
++## Diagnosis
++
++The 0283-r4 runtime correctly delegates vector validation to the existing
++Qdrant projection adapter. The test fixture declared `normalized=true` while
++supplying 384 zero values. Its actual L2 norm was therefore zero and the
++existing adapter correctly rejected it.
++
++The fixture now supplies one unit component followed by 383 zero components:
++
++```text
++[1.0] + [0.0] * 383
++```
++
++Its dimension remains 384 and its L2 norm is exactly one.
++
++## Impact
++
++```text
++runtime_source_modified: false
++fixture_only_fix: true
++projection_binding_logic_modified: false
++qdrant_write_performed: false
++qdrant_search_performed: false
++scheduler_modified: false
++projects_repository_change_required: false
++external_dependencies_added: false
++```
++
++No production validation is weakened and no exception is added around the
++normalization guard.
+diff --git a/doc/CHANGELOG_0283_R4_R1_NORMALIZED_VECTOR_FIXTURE_FIX.md b/doc/CHANGELOG_0283_R4_R1_NORMALIZED_VECTOR_FIXTURE_FIX.md
+new file mode 100644
+index 0000000..b08c625
+--- /dev/null
++++ b/doc/CHANGELOG_0283_R4_R1_NORMALIZED_VECTOR_FIXTURE_FIX.md
+@@ -0,0 +1,17 @@
++# Changelog 0283-r4-r1 — normalized vector fixture fix
++
++- Replaced the invalid all-zero projection fixture with a real unit vector.
++- Preserved dimension 384 and the existing `normalized=true` expectation.
++- Added a rule preventing the all-zero fixture from returning.
++- Kept the runtime normalization guard unchanged.
++
++```text
++runtime_source_modified: false
++fixture_only_fix: true
++projection_binding_logic_modified: false
++qdrant_write_performed: false
++qdrant_search_performed: false
++scheduler_modified: false
++projects_repository_change_required: false
++external_dependencies_added: false
++```
+diff --git a/doc/manifests/MANIFEST_0283_R4_R1_NORMALIZED_VECTOR_FIXTURE_FIX.md b/doc/manifests/MANIFEST_0283_R4_R1_NORMALIZED_VECTOR_FIXTURE_FIX.md
+new file mode 100644
+index 0000000..42b3b4d
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0283_R4_R1_NORMALIZED_VECTOR_FIXTURE_FIX.md
+@@ -0,0 +1,31 @@
++# Manifest 0283-r4-r1 — normalized vector fixture fix
++
++## Modified
++
++```text
++tests/context/test_scheduler_managed_qdrant_projection_binding_0283.py
++```
++
++## Added
++
++```text
++tests/rules/test_qdrant_projection_normalized_vector_fixture_fix_0283_rule.py
++doc/manifests/MANIFEST_0283_R4_R1_NORMALIZED_VECTOR_FIXTURE_FIX.md
++doc/CHANGELOG_0283_R4_R1_NORMALIZED_VECTOR_FIXTURE_FIX.md
++PHASE0283_R4_R1_NORMALIZED_VECTOR_FIXTURE_FIX_REPORT.md
++```
++
++## Boundaries
++
++```text
++Repo autodoc: OUI
++Repo projects: NON
++runtime_source_modified: false
++fixture_only_fix: true
++projection_binding_logic_modified: false
++qdrant_write_performed: false
++qdrant_search_performed: false
++scheduler_modified: false
++projects_repository_change_required: false
++external_dependencies_added: false
++```
+diff --git a/tests/context/test_scheduler_managed_qdrant_projection_binding_0283.py b/tests/context/test_scheduler_managed_qdrant_projection_binding_0283.py
+index d1250ef..0fa9956 100644
+--- a/tests/context/test_scheduler_managed_qdrant_projection_binding_0283.py
++++ b/tests/context/test_scheduler_managed_qdrant_projection_binding_0283.py
+@@ -39,7 +39,7 @@ def _embedding_report() -> dict[str, Any]:
+             "sql_ref": "sql:context:15",
+             "embedding_ref": "embedding:e5:15",
+             "source_ref": "ctx-fragment:sql:context:15",
+-            "vector": [0.0] * 384,
++            "vector": [1.0] + [0.0] * 383,
+             "dimension": 384,
+             "normalized": True,
+             "backend_ref": "openvino:model:multilingual-e5-small",
+diff --git a/tests/rules/test_qdrant_projection_normalized_vector_fixture_fix_0283_rule.py b/tests/rules/test_qdrant_projection_normalized_vector_fixture_fix_0283_rule.py
+new file mode 100644
+index 0000000..157af4d
+--- /dev/null
++++ b/tests/rules/test_qdrant_projection_normalized_vector_fixture_fix_0283_rule.py
+@@ -0,0 +1,50 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TEST = (
++    ROOT
++    / "tests/context/"
++    "test_scheduler_managed_qdrant_projection_binding_0283.py"
++)
++REPORT = (
++    ROOT
++    / "PHASE0283_R4_R1_NORMALIZED_VECTOR_FIXTURE_FIX_REPORT.md"
++)
++MANIFEST = (
++    ROOT
++    / "doc/manifests/"
++    "MANIFEST_0283_R4_R1_NORMALIZED_VECTOR_FIXTURE_FIX.md"
++)
++CHANGELOG = (
++    ROOT
++    / "doc/"
++    "CHANGELOG_0283_R4_R1_NORMALIZED_VECTOR_FIXTURE_FIX.md"
++)
++
++
++def test_projection_fixture_is_a_real_unit_vector() -> None:
++    source = TEST.read_text(encoding="utf-8")
++
++    assert '"vector": [1.0] + [0.0] * 383,' in source
++    assert '"vector": [0.0] * 384,' not in source
++    assert '"normalized": True,' in source
++
++
++def test_fix_is_test_only_and_documents_runtime_unchanged() -> None:
++    combined = "\n".join(
++        path.read_text(encoding="utf-8")
++        for path in (REPORT, MANIFEST, CHANGELOG)
++    )
++
++    for required in (
++        "runtime_source_modified: false",
++        "fixture_only_fix: true",
++        "projection_binding_logic_modified: false",
++        "qdrant_write_performed: false",
++        "qdrant_search_performed: false",
++        "scheduler_modified: false",
++        "projects_repository_change_required: false",
++        "external_dependencies_added: false",
++    ):
++        assert required in combined

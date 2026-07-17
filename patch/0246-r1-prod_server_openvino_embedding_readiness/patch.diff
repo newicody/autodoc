@@ -1,0 +1,683 @@
+diff --git a/PHASE0246_PROD_SERVER_OPENVINO_EMBEDDING_READINESS_TEST_REPORT.md b/PHASE0246_PROD_SERVER_OPENVINO_EMBEDDING_READINESS_TEST_REPORT.md
+new file mode 100644
+index 0000000..a8a912a
+--- /dev/null
++++ b/PHASE0246_PROD_SERVER_OPENVINO_EMBEDDING_READINESS_TEST_REPORT.md
+@@ -0,0 +1,25 @@
++# Phase 0246 test report - OpenVINO embedding readiness
++
++## Expected validation
++
++```text
++python -m compileall -q src tests tools
++python -m pytest -q tests/context/test_prod_server_openvino_embedding_readiness_0246.py
++python -m pytest -q tests/tools/test_run_prod_server_openvino_embedding_readiness_0246.py
++python -m pytest -q tests/rules/test_prod_server_openvino_embedding_readiness_0246_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
++
++## Direct smoke
++
++```text
++PYTHONPATH=src:. python tools/run_prod_server_openvino_embedding_readiness_0246.py --check-only --format summary
++PYTHONPATH=src:. python tools/run_prod_server_openvino_embedding_readiness_0246.py --format summary
++```
++
++## Boundary
++
++This patch checks readiness only. It does not import OpenVINO, import
++Transformers, read model files, load a model, run inference, write PostgreSQL,
++write Qdrant, publish events, call GitHub, or add non-stdlib dependencies.
+diff --git a/doc/CHANGELOG_0246_PROD_SERVER_OPENVINO_EMBEDDING_READINESS.md b/doc/CHANGELOG_0246_PROD_SERVER_OPENVINO_EMBEDDING_READINESS.md
+new file mode 100644
+index 0000000..978ec8e
+--- /dev/null
++++ b/doc/CHANGELOG_0246_PROD_SERVER_OPENVINO_EMBEDDING_READINESS.md
+@@ -0,0 +1,9 @@
++# Changelog 0246 - OpenVINO embedding readiness
++
++## r1
++
++Added explicit OpenVINO embedding readiness for the production server path.
++
++The patch locks the multilingual-e5-small shape used before Qdrant projection:
++384 dimensions, normalized vectors, mean pooling, cosine distance, and E5 query
++and passage prefixes.
+diff --git a/doc/architecture/PROD_SERVER_OPENVINO_EMBEDDING_READINESS_0246.md b/doc/architecture/PROD_SERVER_OPENVINO_EMBEDDING_READINESS_0246.md
+new file mode 100644
+index 0000000..66c6392
+--- /dev/null
++++ b/doc/architecture/PROD_SERVER_OPENVINO_EMBEDDING_READINESS_0246.md
+@@ -0,0 +1,47 @@
++# OpenVINO embedding readiness - 0246
++
++## Intent
++
++This patch restores OpenVINO as an explicit production-server readiness step.
++
++OpenVINO is the local embedding producer. Qdrant is only the projection/recall
++index that consumes those vectors.
++
++```text
++SQL durable text
++  -> OpenVINO multilingual-e5-small embedding
++  -> Qdrant projection
++  -> Qdrant recall
++  -> SQL rehydrate
++```
++
++No model is loaded in this phase.
++
++## Locked embedding shape
++
++The initial readiness surface uses:
++
++```text
++model_id = openvino.embedding.e5-small
++model = multilingual-e5-small
++dimension = 384
++normalized = true
++pooling = mean
++qdrant_distance = cosine
++query_prefix = query:
++passage_prefix = passage:
++```
++
++`query:` is for search/input queries. `passage:` is for indexed corpus passages.
++
++## Boundary
++
++0246 is readiness-only. It does not import OpenVINO, import Transformers, read
++model files, load the model, run inference, write PostgreSQL, write Qdrant,
++publish EventBus events, or call GitHub.
++
++## Next step
++
++Qdrant comes after OpenVINO. 0247 should validate that the Qdrant collection is
++aligned with this embedding shape: dimension 384, cosine distance, normalized
++vectors, and `sql_ref` payload for SQL rehydration.
+diff --git a/doc/code-rules/0246_prod_server_openvino_embedding_readiness_rule.md b/doc/code-rules/0246_prod_server_openvino_embedding_readiness_rule.md
+new file mode 100644
+index 0000000..9008eb3
+--- /dev/null
++++ b/doc/code-rules/0246_prod_server_openvino_embedding_readiness_rule.md
+@@ -0,0 +1,30 @@
++# Code rule 0246 - OpenVINO embedding readiness
++
++Patch 0246 may validate OpenVINO embedding readiness only.
++
++Required:
++
++```text
++OpenVINO is explicit before Qdrant projection
++multilingual-e5-small shape is locked
++dimension = 384
++normalized = true
++distance = cosine
++query prefix = query:
++passage prefix = passage:
++```
++
++Forbidden in this phase:
++
++```text
++importing OpenVINO
++importing Transformers
++reading model files
++loading a model
++running inference
++writing PostgreSQL
++creating/upserting Qdrant collections or points
++publishing EventBus events
++calling GitHub API
++adding non-stdlib dependencies
++```
+diff --git a/doc/docs/architecture/runtime/246_prod_server_openvino_embedding_readiness.dot b/doc/docs/architecture/runtime/246_prod_server_openvino_embedding_readiness.dot
+new file mode 100644
+index 0000000..72f975b
+--- /dev/null
++++ b/doc/docs/architecture/runtime/246_prod_server_openvino_embedding_readiness.dot
+@@ -0,0 +1,12 @@
++digraph prod_server_openvino_embedding_readiness_0246 {
++  rankdir=LR;
++
++  sql [label="SQL durable text"];
++  openvino [label="OpenVINO e5-small readiness"];
++  qdrant [label="0247 Qdrant readiness"];
++  inference [label="model not loaded"];
++
++  sql -> openvino;
++  openvino -> qdrant;
++  openvino -> inference [style=dashed];
++}
+diff --git a/doc/examples/autodoc_openvino_embedding_e5_small_0246.ini b/doc/examples/autodoc_openvino_embedding_e5_small_0246.ini
+new file mode 100644
+index 0000000..e251ec1
+--- /dev/null
++++ b/doc/examples/autodoc_openvino_embedding_e5_small_0246.ini
+@@ -0,0 +1,13 @@
++[openvino.embedding.e5_small]
++model_id = openvino.embedding.e5-small
++model_dir = /home/eric/model/openvino/multilingual-e5-small
++model_xml = openvino_model.xml
++tokenizer = transformers.multilingual-e5-small
++device = CPU
++candidate_devices = CPU, GPU
++dimension = 384
++normalized = true
++pooling = mean
++qdrant_distance = cosine
++query_prefix = query:
++passage_prefix = passage:
+diff --git a/doc/manifests/MANIFEST_0246_PROD_SERVER_OPENVINO_EMBEDDING_READINESS_CHANGED_FILES.md b/doc/manifests/MANIFEST_0246_PROD_SERVER_OPENVINO_EMBEDDING_READINESS_CHANGED_FILES.md
+new file mode 100644
+index 0000000..916a488
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0246_PROD_SERVER_OPENVINO_EMBEDDING_READINESS_CHANGED_FILES.md
+@@ -0,0 +1,14 @@
++# Manifest 0246 - OpenVINO embedding readiness
++
++- `src/context/prod_server_openvino_embedding_readiness_0246.py`
++- `tools/run_prod_server_openvino_embedding_readiness_0246.py`
++- `doc/examples/autodoc_openvino_embedding_e5_small_0246.ini`
++- `tests/context/test_prod_server_openvino_embedding_readiness_0246.py`
++- `tests/tools/test_run_prod_server_openvino_embedding_readiness_0246.py`
++- `tests/rules/test_prod_server_openvino_embedding_readiness_0246_rule.py`
++- `doc/architecture/PROD_SERVER_OPENVINO_EMBEDDING_READINESS_0246.md`
++- `doc/code-rules/0246_prod_server_openvino_embedding_readiness_rule.md`
++- `doc/docs/architecture/runtime/246_prod_server_openvino_embedding_readiness.dot`
++- `doc/CHANGELOG_0246_PROD_SERVER_OPENVINO_EMBEDDING_READINESS.md`
++- `doc/manifests/MANIFEST_0246_PROD_SERVER_OPENVINO_EMBEDDING_READINESS_CHANGED_FILES.md`
++- `PHASE0246_PROD_SERVER_OPENVINO_EMBEDDING_READINESS_TEST_REPORT.md`
+diff --git a/src/context/prod_server_openvino_embedding_readiness_0246.py b/src/context/prod_server_openvino_embedding_readiness_0246.py
+new file mode 100644
+index 0000000..c1d5b86
+--- /dev/null
++++ b/src/context/prod_server_openvino_embedding_readiness_0246.py
+@@ -0,0 +1,209 @@
++"""OpenVINO embedding readiness for phase 0246.
++
++This module validates the production server embedding configuration for the
++OpenVINO multilingual-e5-small path. It is stdlib-only and does not import
++OpenVINO, load a model, tokenize text, run inference, or read model files.
++"""
++
++from __future__ import annotations
++
++import configparser
++import json
++from dataclasses import asdict, dataclass
++from pathlib import Path
++from typing import Any
++
++
++OPENVINO_EMBEDDING_READINESS_VERSION = "0246.r1"
++
++
++OPENVINO_EMBEDDING_READINESS_BOUNDARY: dict[str, bool] = {
++    "readiness_only": True,
++    "imports_openvino": False,
++    "imports_transformers": False,
++    "loads_model": False,
++    "runs_inference": False,
++    "reads_model_files": False,
++    "writes_postgresql": False,
++    "writes_qdrant": False,
++    "publishes_events": False,
++    "calls_github_api": False,
++    "requires_non_stdlib_for_readiness": False,
++}
++
++
++REQUIRED_SECTION = "openvino.embedding.e5_small"
++REQUIRED_MODEL_ID = "openvino.embedding.e5-small"
++REQUIRED_TOKENIZER = "transformers.multilingual-e5-small"
++REQUIRED_DIMENSION = 384
++REQUIRED_POOLING = "mean"
++REQUIRED_DISTANCE = "cosine"
++REQUIRED_QUERY_PREFIX = "query:"
++REQUIRED_PASSAGE_PREFIX = "passage:"
++
++
++@dataclass(frozen=True)
++class OpenVINOEmbeddingIssue:
++    """One issue in the OpenVINO embedding readiness input."""
++
++    section: str
++    field: str
++    message: str
++
++
++@dataclass(frozen=True)
++class OpenVINOEmbeddingSpec:
++    """OpenVINO embedding shape expected by the production server."""
++
++    model_id: str
++    model_dir: str
++    model_xml: str
++    model_path: str
++    tokenizer: str
++    device: str
++    candidate_devices: tuple[str, ...]
++    dimension: int
++    normalized: bool
++    pooling: str
++    qdrant_distance: str
++    query_prefix: str
++    passage_prefix: str
++
++
++@dataclass(frozen=True)
++class OpenVINOEmbeddingReadinessReport:
++    """JSON-compatible OpenVINO embedding readiness report."""
++
++    version: str
++    config_path: str
++    ready: bool
++    embedding: OpenVINOEmbeddingSpec | None
++    issues: tuple[OpenVINOEmbeddingIssue, ...]
++
++
++def _split_csv(value: str) -> tuple[str, ...]:
++    return tuple(item.strip() for item in value.split(",") if item.strip())
++
++
++def load_embedding_ini(path: Path) -> configparser.ConfigParser:
++    """Load the OpenVINO embedding INI with a stdlib parser."""
++
++    parser = configparser.ConfigParser()
++    parser.optionxform = str
++    with path.open("r", encoding="utf-8") as handle:
++        parser.read_file(handle)
++    return parser
++
++
++def build_openvino_embedding_readiness(config_path: Path) -> OpenVINOEmbeddingReadinessReport:
++    """Build OpenVINO embedding readiness from an INI file."""
++
++    parser = load_embedding_ini(config_path)
++    issues: list[OpenVINOEmbeddingIssue] = []
++
++    if not parser.has_section(REQUIRED_SECTION):
++        return OpenVINOEmbeddingReadinessReport(
++            version=OPENVINO_EMBEDDING_READINESS_VERSION,
++            config_path=str(config_path),
++            ready=False,
++            embedding=None,
++            issues=(OpenVINOEmbeddingIssue(REQUIRED_SECTION, "*", "missing required section"),),
++        )
++
++    section = REQUIRED_SECTION
++    required_keys = (
++        "model_id",
++        "model_dir",
++        "model_xml",
++        "tokenizer",
++        "device",
++        "candidate_devices",
++        "dimension",
++        "normalized",
++        "pooling",
++        "qdrant_distance",
++        "query_prefix",
++        "passage_prefix",
++    )
++    for key in required_keys:
++        if not parser.has_option(section, key):
++            issues.append(OpenVINOEmbeddingIssue(section, key, "missing required key"))
++
++    model_id = parser.get(section, "model_id", fallback="")
++    model_dir = parser.get(section, "model_dir", fallback="")
++    model_xml = parser.get(section, "model_xml", fallback="")
++    tokenizer = parser.get(section, "tokenizer", fallback="")
++    device = parser.get(section, "device", fallback="")
++    candidate_devices = _split_csv(parser.get(section, "candidate_devices", fallback=""))
++    dimension = parser.getint(section, "dimension", fallback=0)
++    normalized = parser.getboolean(section, "normalized", fallback=False)
++    pooling = parser.get(section, "pooling", fallback="")
++    qdrant_distance = parser.get(section, "qdrant_distance", fallback="")
++    query_prefix = parser.get(section, "query_prefix", fallback="")
++    passage_prefix = parser.get(section, "passage_prefix", fallback="")
++
++    if model_id != REQUIRED_MODEL_ID:
++        issues.append(OpenVINOEmbeddingIssue(section, "model_id", f"must be {REQUIRED_MODEL_ID}"))
++    if tokenizer != REQUIRED_TOKENIZER:
++        issues.append(OpenVINOEmbeddingIssue(section, "tokenizer", f"must be {REQUIRED_TOKENIZER}"))
++    if dimension != REQUIRED_DIMENSION:
++        issues.append(OpenVINOEmbeddingIssue(section, "dimension", f"must be {REQUIRED_DIMENSION}"))
++    if not normalized:
++        issues.append(OpenVINOEmbeddingIssue(section, "normalized", "must be true"))
++    if pooling != REQUIRED_POOLING:
++        issues.append(OpenVINOEmbeddingIssue(section, "pooling", f"must be {REQUIRED_POOLING}"))
++    if qdrant_distance != REQUIRED_DISTANCE:
++        issues.append(OpenVINOEmbeddingIssue(section, "qdrant_distance", f"must be {REQUIRED_DISTANCE}"))
++    if query_prefix != REQUIRED_QUERY_PREFIX:
++        issues.append(OpenVINOEmbeddingIssue(section, "query_prefix", f"must be {REQUIRED_QUERY_PREFIX}"))
++    if passage_prefix != REQUIRED_PASSAGE_PREFIX:
++        issues.append(OpenVINOEmbeddingIssue(section, "passage_prefix", f"must be {REQUIRED_PASSAGE_PREFIX}"))
++    if device and candidate_devices and device not in candidate_devices:
++        issues.append(OpenVINOEmbeddingIssue(section, "device", "must be listed in candidate_devices"))
++    if model_xml and not model_xml.endswith(".xml"):
++        issues.append(OpenVINOEmbeddingIssue(section, "model_xml", "must point to an OpenVINO XML file"))
++
++    model_path = str(Path(model_dir) / model_xml) if model_dir and model_xml else ""
++    embedding = OpenVINOEmbeddingSpec(
++        model_id=model_id,
++        model_dir=model_dir,
++        model_xml=model_xml,
++        model_path=model_path,
++        tokenizer=tokenizer,
++        device=device,
++        candidate_devices=candidate_devices,
++        dimension=dimension,
++        normalized=normalized,
++        pooling=pooling,
++        qdrant_distance=qdrant_distance,
++        query_prefix=query_prefix,
++        passage_prefix=passage_prefix,
++    )
++
++    return OpenVINOEmbeddingReadinessReport(
++        version=OPENVINO_EMBEDDING_READINESS_VERSION,
++        config_path=str(config_path),
++        ready=not issues,
++        embedding=embedding,
++        issues=tuple(issues),
++    )
++
++
++def openvino_embedding_readiness_to_dict(report: OpenVINOEmbeddingReadinessReport) -> dict[str, Any]:
++    """Convert an OpenVINO embedding readiness report to JSON-compatible data."""
++
++    return asdict(report)
++
++
++def write_openvino_embedding_readiness_report(*, config_path: Path, output_path: Path) -> dict[str, Any]:
++    """Build and write the OpenVINO embedding readiness report."""
++
++    report = build_openvino_embedding_readiness(config_path)
++    payload = {
++        "production_server_openvino_embedding_readiness_written": True,
++        "openvino_embedding_readiness": openvino_embedding_readiness_to_dict(report),
++        "boundary": dict(OPENVINO_EMBEDDING_READINESS_BOUNDARY),
++    }
++    output_path.parent.mkdir(parents=True, exist_ok=True)
++    output_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + chr(10), encoding="utf-8")
++    return payload
+diff --git a/tests/context/test_prod_server_openvino_embedding_readiness_0246.py b/tests/context/test_prod_server_openvino_embedding_readiness_0246.py
+new file mode 100644
+index 0000000..9cbcffa
+--- /dev/null
++++ b/tests/context/test_prod_server_openvino_embedding_readiness_0246.py
+@@ -0,0 +1,69 @@
++from pathlib import Path
++
++from context.prod_server_openvino_embedding_readiness_0246 import (
++    OPENVINO_EMBEDDING_READINESS_BOUNDARY,
++    build_openvino_embedding_readiness,
++    write_openvino_embedding_readiness_report,
++)
++
++
++ROOT = Path(__file__).resolve().parents[2]
++CONFIG = ROOT / "doc/examples/autodoc_openvino_embedding_e5_small_0246.ini"
++
++
++def test_openvino_embedding_boundary_is_readiness_only() -> None:
++    assert OPENVINO_EMBEDDING_READINESS_BOUNDARY == {
++        "readiness_only": True,
++        "imports_openvino": False,
++        "imports_transformers": False,
++        "loads_model": False,
++        "runs_inference": False,
++        "reads_model_files": False,
++        "writes_postgresql": False,
++        "writes_qdrant": False,
++        "publishes_events": False,
++        "calls_github_api": False,
++        "requires_non_stdlib_for_readiness": False,
++    }
++
++
++def test_example_openvino_embedding_is_ready() -> None:
++    report = build_openvino_embedding_readiness(CONFIG)
++
++    assert report.ready is True
++    assert report.issues == ()
++    assert report.embedding is not None
++    assert report.embedding.dimension == 384
++    assert report.embedding.normalized is True
++    assert report.embedding.qdrant_distance == "cosine"
++    assert report.embedding.query_prefix == "query:"
++    assert report.embedding.passage_prefix == "passage:"
++
++
++def test_wrong_dimension_is_reported(tmp_path: Path) -> None:
++    config = tmp_path / "bad_openvino.ini"
++    config.write_text(CONFIG.read_text(encoding="utf-8").replace("dimension = 384", "dimension = 768"), encoding="utf-8")
++
++    report = build_openvino_embedding_readiness(config)
++
++    assert report.ready is False
++    assert any(issue.field == "dimension" and "384" in issue.message for issue in report.issues)
++
++
++def test_device_must_be_candidate(tmp_path: Path) -> None:
++    config = tmp_path / "bad_device.ini"
++    config.write_text(CONFIG.read_text(encoding="utf-8").replace("device = CPU", "device = NPU"), encoding="utf-8")
++
++    report = build_openvino_embedding_readiness(config)
++
++    assert report.ready is False
++    assert any(issue.field == "device" for issue in report.issues)
++
++
++def test_write_openvino_embedding_readiness_report(tmp_path: Path) -> None:
++    output = tmp_path / "openvino_embedding_readiness.json"
++    payload = write_openvino_embedding_readiness_report(config_path=CONFIG, output_path=output)
++
++    assert payload["production_server_openvino_embedding_readiness_written"] is True
++    assert payload["openvino_embedding_readiness"]["ready"] is True
++    assert output.exists()
+diff --git a/tests/rules/test_prod_server_openvino_embedding_readiness_0246_rule.py b/tests/rules/test_prod_server_openvino_embedding_readiness_0246_rule.py
+new file mode 100644
+index 0000000..00cc794
+--- /dev/null
++++ b/tests/rules/test_prod_server_openvino_embedding_readiness_0246_rule.py
+@@ -0,0 +1,50 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def test_0246_openvino_readiness_does_not_import_or_run_inference() -> None:
++    source = (ROOT / "src/context/prod_server_openvino_embedding_readiness_0246.py").read_text(
++        encoding="utf-8"
++    )
++    lowered = source.lower()
++
++    assert "readiness_only" in source
++    assert "imports_openvino" in source
++    assert "imports_transformers" in source
++    assert "loads_model" in source
++    assert "runs_inference" in source
++    assert "reads_model_files" in source
++    assert "writes_qdrant" in source
++    assert "import openvino" not in lowered
++    assert "import transformers" not in lowered
++    assert "core.compile_model" not in lowered
++    assert ".infer(" not in lowered
++    assert "subprocess.run" not in source
++    assert "requests." not in lowered
++
++
++def test_0246_example_locks_e5_small_shape() -> None:
++    example = (ROOT / "doc/examples/autodoc_openvino_embedding_e5_small_0246.ini").read_text(
++        encoding="utf-8"
++    )
++
++    assert "model_id = openvino.embedding.e5-small" in example
++    assert "model_xml = openvino_model.xml" in example
++    assert "dimension = 384" in example
++    assert "normalized = true" in example
++    assert "qdrant_distance = cosine" in example
++    assert "query_prefix = query:" in example
++    assert "passage_prefix = passage:" in example
++
++
++def test_0246_docs_lock_openvino_boundary() -> None:
++    doc = (ROOT / "doc/architecture/PROD_SERVER_OPENVINO_EMBEDDING_READINESS_0246.md").read_text(
++        encoding="utf-8"
++    )
++
++    assert "OpenVINO embedding readiness" in doc
++    assert "No model is loaded" in doc
++    assert "multilingual-e5-small" in doc
++    assert "Qdrant comes after OpenVINO" in doc
+diff --git a/tests/tools/test_run_prod_server_openvino_embedding_readiness_0246.py b/tests/tools/test_run_prod_server_openvino_embedding_readiness_0246.py
+new file mode 100644
+index 0000000..70faaa7
+--- /dev/null
++++ b/tests/tools/test_run_prod_server_openvino_embedding_readiness_0246.py
+@@ -0,0 +1,53 @@
++import subprocess
++import sys
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++CONFIG = "doc/examples/autodoc_openvino_embedding_e5_small_0246.ini"
++
++
++def test_openvino_embedding_readiness_tool_check_only_summary() -> None:
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/run_prod_server_openvino_embedding_readiness_0246.py",
++            "--config",
++            CONFIG,
++            "--check-only",
++            "--format",
++            "summary",
++        ],
++        cwd=ROOT,
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    assert "production_server_openvino_embedding_ready=True" in result.stdout
++    assert "issues=0" in result.stdout
++    assert "dimension=384" in result.stdout
++
++
++def test_openvino_embedding_readiness_tool_writes_report(tmp_path: Path) -> None:
++    output = tmp_path / "prod_server_openvino_embedding_readiness_0246.json"
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/run_prod_server_openvino_embedding_readiness_0246.py",
++            "--config",
++            CONFIG,
++            "--output",
++            str(output),
++            "--format",
++            "summary",
++        ],
++        cwd=ROOT,
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    assert "production_server_openvino_embedding_readiness_written=True" in result.stdout
++    assert "ready=True" in result.stdout
++    assert output.exists()
+diff --git a/tools/run_prod_server_openvino_embedding_readiness_0246.py b/tools/run_prod_server_openvino_embedding_readiness_0246.py
+new file mode 100755
+index 0000000..a652bb4
+--- /dev/null
++++ b/tools/run_prod_server_openvino_embedding_readiness_0246.py
+@@ -0,0 +1,80 @@
++#!/usr/bin/env python3
++"""Check phase 0246 OpenVINO embedding readiness."""
++
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++
++REPO_ROOT = Path(__file__).resolve().parents[1]
++SRC_ROOT = REPO_ROOT / "src"
++for _path in (str(SRC_ROOT), str(REPO_ROOT)):
++    if _path not in sys.path:
++        sys.path.insert(0, _path)
++
++from context.prod_server_openvino_embedding_readiness_0246 import (  # noqa: E402
++    OPENVINO_EMBEDDING_READINESS_BOUNDARY,
++    build_openvino_embedding_readiness,
++    openvino_embedding_readiness_to_dict,
++    write_openvino_embedding_readiness_report,
++)
++
++
++def parse_args() -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--config", default="doc/examples/autodoc_openvino_embedding_e5_small_0246.ini")
++    parser.add_argument(
++        "--output",
++        default=".var/reports/prod_server_openvino_embedding_readiness_0246.json",
++    )
++    parser.add_argument("--check-only", action="store_true")
++    parser.add_argument("--format", choices=("json", "summary"), default="json")
++    return parser.parse_args()
++
++
++def main() -> int:
++    args = parse_args()
++    config_path = Path(args.config)
++    output_path = Path(args.output)
++
++    if args.check_only:
++        report = build_openvino_embedding_readiness(config_path)
++        payload = {
++            "production_server_openvino_embedding_ready": report.ready,
++            "openvino_embedding_readiness": openvino_embedding_readiness_to_dict(report),
++            "boundary": dict(OPENVINO_EMBEDDING_READINESS_BOUNDARY),
++        }
++    else:
++        payload = write_openvino_embedding_readiness_report(config_path=config_path, output_path=output_path)
++        report = build_openvino_embedding_readiness(config_path)
++
++    if args.format == "summary":
++        issue_count = len(report.issues)
++        if report.embedding is None:
++            details = "model=missing dimension=0 device=missing"
++        else:
++            details = (
++                f"model={report.embedding.model_id} "
++                f"dimension={report.embedding.dimension} "
++                f"device={report.embedding.device}"
++            )
++        if args.check_only:
++            print(
++                "production_server_openvino_embedding_ready="
++                f"{str(report.ready)} issues={issue_count} {details}"
++            )
++        else:
++            print(
++                "production_server_openvino_embedding_readiness_written=True "
++                f"ready={str(report.ready)} issues={issue_count} output={output_path}"
++            )
++    else:
++        print(json.dumps(payload, indent=2, sort_keys=True))
++
++    return 0 if report.ready else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

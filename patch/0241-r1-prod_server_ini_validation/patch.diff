@@ -1,0 +1,815 @@
+diff --git a/PHASE0241_PROD_SERVER_INI_VALIDATION_TEST_REPORT.md b/PHASE0241_PROD_SERVER_INI_VALIDATION_TEST_REPORT.md
+new file mode 100644
+index 0000000..97fbf87
+--- /dev/null
++++ b/PHASE0241_PROD_SERVER_INI_VALIDATION_TEST_REPORT.md
+@@ -0,0 +1,25 @@
++# Phase 0241 test report - production server INI validation
++
++## Expected validation
++
++```text
++python -m compileall -q src tests tools
++python -m pytest -q tests/context/test_prod_server_ini_validation_0241.py
++python -m pytest -q tests/tools/test_run_prod_server_ini_validation_0241.py
++python -m pytest -q tests/rules/test_prod_server_ini_validation_0241_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
++
++## Direct smoke
++
++```text
++PYTHONPATH=src:. python tools/run_prod_server_ini_validation_0241.py --check-only --format summary
++PYTHONPATH=src:. python tools/run_prod_server_ini_validation_0241.py --format summary
++```
++
++## Boundary
++
++This patch validates a local INI file only. It does not start OpenRC, create
++Scheduler/EventBus, publish events, call GitHub, publish to GitHub, execute
++PostgreSQL DDL/DML, create Qdrant collections, or add non-stdlib dependencies.
+diff --git a/doc/CHANGELOG_0241_PROD_SERVER_INI_VALIDATION.md b/doc/CHANGELOG_0241_PROD_SERVER_INI_VALIDATION.md
+new file mode 100644
+index 0000000..1bd1b21
+--- /dev/null
++++ b/doc/CHANGELOG_0241_PROD_SERVER_INI_VALIDATION.md
+@@ -0,0 +1,9 @@
++# Changelog 0241 - production server INI validation
++
++## r1
++
++Added stdlib-only validation for the initial production server INI file.
++
++The validation covers OpenRC launcher fields, component factories, PostgreSQL
++sections, Qdrant collection shape, GitHub artifact exchange settings, and
++EventBus attribute allowlists.
+diff --git a/doc/architecture/PROD_SERVER_INI_VALIDATION_0241.md b/doc/architecture/PROD_SERVER_INI_VALIDATION_0241.md
+new file mode 100644
+index 0000000..4c9e764
+--- /dev/null
++++ b/doc/architecture/PROD_SERVER_INI_VALIDATION_0241.md
+@@ -0,0 +1,68 @@
++# Production server INI validation - 0241
++
++## Intent
++
++This patch adds production server INI validation for the initial server
++configuration defined in phase 0240.
++
++The INI layout is ConfigObj-compatible, but this patch uses stdlib
++`configparser` so no non-stdlib dependency is introduced.
++
++No runtime service is started.
++
++## Validated areas
++
++```text
++server paths
++OpenRC launcher command/configtest
++component factories
++PostgreSQL connection and table sections
++Qdrant connection and collection shape
++GitHub artifact exchange settings
++EventBus attribute allowlist
++```
++
++## GitHub boundary
++
++GitHub remains artifact exchange. The required initial settings are:
++
++```text
++token_env = GITHUB_TOKEN
++mode = artifact_exchange
++publish_enabled_by_default = false
++publication_review_required = true
++```
++
++The scan-once entrypoint is recorded, but this patch does not call GitHub and
++does not write SQL or Qdrant during validation.
++
++## Qdrant boundary
++
++The initial collection section must keep:
++
++```text
++vector_dimension = 384
++distance = cosine
++required_payload includes sql_ref
++```
++
++Qdrant is still projection/recall only. SQL remains the durable authority.
++
++## EventBus attributes
++
++The required event attribute list must include:
++
++```text
++schema_version, event_type, trace_id, component, phase
++```
++
++Optional attributes may include `sql_ref`, `qdrant_ref`, `github_ref`, and
++`project_push_frame_ref`. Sensitive optional attributes are listed separately in
++`optional_redacted`.
++
++## Boundary
++
++This phase only validates a local INI file and can write a JSON validation
++report. It does not start OpenRC, create Scheduler/EventBus, publish events,
++call GitHub, publish to GitHub, execute PostgreSQL DDL/DML, or create Qdrant
++collections.
+diff --git a/doc/code-rules/0241_prod_server_ini_validation_rule.md b/doc/code-rules/0241_prod_server_ini_validation_rule.md
+new file mode 100644
+index 0000000..5bc1b8d
+--- /dev/null
++++ b/doc/code-rules/0241_prod_server_ini_validation_rule.md
+@@ -0,0 +1,28 @@
++# Code rule 0241 - production server INI validation
++
++Patch 0241 may validate the initial production server INI only.
++
++Required:
++
++```text
++ConfigObj-compatible INI layout
++stdlib parser in this phase
++GitHub token_env = GITHUB_TOKEN
++GitHub publication disabled by default
++GitHub publication review required
++Qdrant payload includes sql_ref
++EventBus required attributes include schema_version/event_type/trace_id/component/phase
++```
++
++Forbidden in this phase:
++
++```text
++non-stdlib dependency
++starting OpenRC
++creating Scheduler/EventBus instances
++publishing EventBus events
++calling GitHub API
++publishing to GitHub
++executing PostgreSQL DDL/DML
++creating/upserting Qdrant collections or points
++```
+diff --git a/doc/docs/architecture/runtime/241_prod_server_ini_validation.dot b/doc/docs/architecture/runtime/241_prod_server_ini_validation.dot
+new file mode 100644
+index 0000000..3d55b01
+--- /dev/null
++++ b/doc/docs/architecture/runtime/241_prod_server_ini_validation.dot
+@@ -0,0 +1,14 @@
++digraph prod_server_ini_validation_0241 {
++  rankdir=LR;
++
++  ini [label="prod server INI"];
++  validator [label="0241 validator"];
++  report [label="validation report"];
++  requirements [label="0240 requirements"];
++  runtime [label="runtime not started"];
++
++  requirements -> validator;
++  ini -> validator;
++  validator -> report;
++  validator -> runtime [style=dashed];
++}
+diff --git a/doc/examples/autodoc_prod_server_initial_0241.ini b/doc/examples/autodoc_prod_server_initial_0241.ini
+new file mode 100644
+index 0000000..fa0ee02
+--- /dev/null
++++ b/doc/examples/autodoc_prod_server_initial_0241.ini
+@@ -0,0 +1,102 @@
++[server]
++name = autodoc-prod
++state_dir = /srv/autodoc/state
++run_dir = /run/autodoc
++log_dir = /var/log/autodoc
++
++[openrc]
++service_name = autodoc
++command = /usr/bin/python -m autodoc.launcher --config /etc/autodoc/autodoc.ini
++configtest = /usr/bin/python -m autodoc.launcher --config /etc/autodoc/autodoc.ini --configtest
++
++[component.scheduler]
++factory = autodoc.scheduler:create_scheduler
++phase = D02_scheduler_eventbus_bootstrap
++enabled = true
++
++[component.eventbus]
++factory = autodoc.eventbus:create_eventbus
++phase = D02_scheduler_eventbus_bootstrap
++enabled = true
++
++[component.sql_context_store]
++factory = autodoc.sql:create_context_store
++phase = D04_sql_durable_authority
++enabled = true
++
++[component.qdrant_projection]
++factory = autodoc.qdrant:create_projection_client
++phase = D05_qdrant_projection_recall
++enabled = true
++
++[component.github_artifact_exchange]
++factory = autodoc.github:create_artifact_exchange
++phase = D09_github_artifact_exchange
++enabled = true
++
++[component.passive_supervisor_sink]
++factory = autodoc.supervision:create_passive_supervisor_sink
++phase = D08_passive_observability
++enabled = true
++
++[postgresql.connection]
++host = 127.0.0.1
++port = 5432
++database = autodoc
++user = autodoc
++
++[postgresql.table.context_records]
++primary_key = id
++columns = id, kind, payload_json, content_hash, created_at
++jsonb_columns = payload_json
++required_indexes = content_hash, kind
++
++[postgresql.table.event_journal]
++primary_key = id
++columns = id, trace_id, event_type, event_json, created_at
++jsonb_columns = event_json
++required_indexes = trace_id, event_type
++
++[postgresql.table.result_frames]
++primary_key = id
++columns = id, intent_id, result_json, created_at
++jsonb_columns = result_json
++required_indexes = intent_id
++
++[postgresql.table.github_project_push_frames]
++primary_key = id
++columns = id, github_ref, frame_json, publication_review_required, created_at
++jsonb_columns = frame_json
++required_indexes = github_ref
++
++[qdrant.connection]
++url = http://127.0.0.1:6333
++
++[qdrant.collection.autodoc_context_e5_small]
++collection = autodoc_context_e5_small
++vector_dimension = 384
++distance = cosine
++normalized_vectors = true
++required_payload = sql_ref, model_id, embedding_version, content_hash
++optional_payload = source_ref, artifact_ref, github_ref, text_kind, created_at
++
++[github]
++enabled = true
++mode = artifact_exchange
++token_env = GITHUB_TOKEN
++
++[github.repositories]
++allowlist = newicody/autodoc-ideas
++
++[github.artifacts]
++scan_once_entrypoint = /usr/bin/python -m autodoc.github.scan_once --config /etc/autodoc/autodoc.ini
++project_push_frame_required = true
++
++[github.publication]
++publish_enabled_by_default = false
++publication_review_required = true
++
++[eventbus.attributes]
++required = schema_version, event_type, trace_id, component, phase
++optional = intent_id, result_id, sql_ref, qdrant_ref, github_ref, project_push_frame_ref, payload_hash, priority
++optional_redacted = secret
+diff --git a/doc/manifests/MANIFEST_0241_PROD_SERVER_INI_VALIDATION_CHANGED_FILES.md b/doc/manifests/MANIFEST_0241_PROD_SERVER_INI_VALIDATION_CHANGED_FILES.md
+new file mode 100644
+index 0000000..c928e70
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0241_PROD_SERVER_INI_VALIDATION_CHANGED_FILES.md
+@@ -0,0 +1,14 @@
++# Manifest 0241 - production server INI validation
++
++- `src/context/prod_server_ini_validation_0241.py`
++- `tools/run_prod_server_ini_validation_0241.py`
++- `doc/examples/autodoc_prod_server_initial_0241.ini`
++- `tests/context/test_prod_server_ini_validation_0241.py`
++- `tests/tools/test_run_prod_server_ini_validation_0241.py`
++- `tests/rules/test_prod_server_ini_validation_0241_rule.py`
++- `doc/architecture/PROD_SERVER_INI_VALIDATION_0241.md`
++- `doc/code-rules/0241_prod_server_ini_validation_rule.md`
++- `doc/docs/architecture/runtime/241_prod_server_ini_validation.dot`
++- `doc/CHANGELOG_0241_PROD_SERVER_INI_VALIDATION.md`
++- `doc/manifests/MANIFEST_0241_PROD_SERVER_INI_VALIDATION_CHANGED_FILES.md`
++- `PHASE0241_PROD_SERVER_INI_VALIDATION_TEST_REPORT.md`
+diff --git a/src/context/prod_server_ini_validation_0241.py b/src/context/prod_server_ini_validation_0241.py
+new file mode 100644
+index 0000000..3827b2f
+--- /dev/null
++++ b/src/context/prod_server_ini_validation_0241.py
+@@ -0,0 +1,220 @@
++"""Production server INI validation for phase 0241.
++
++The validator checks that an initial production server INI file provides the
++sections and key values required by phase 0240. The parser intentionally uses
++stdlib ``configparser`` while preserving a ConfigObj-compatible layout for a
++future parser swap.
++
++This module does not start services, instantiate runtime components, publish
++EventBus events, call GitHub, or mutate PostgreSQL/Qdrant.
++"""
++
++from __future__ import annotations
++
++import configparser
++import json
++from dataclasses import asdict, dataclass
++from pathlib import Path
++from typing import Any
++
++from context.prod_server_initial_config_requirements_0240 import (
++    production_server_initial_configuration,
++)
++
++
++INI_VALIDATION_VERSION = "0241.r1"
++
++
++INI_VALIDATION_BOUNDARY: dict[str, bool] = {
++    "validation_only": True,
++    "configobj_compatible_layout": True,
++    "imports_configobj": False,
++    "starts_openrc": False,
++    "creates_scheduler": False,
++    "creates_eventbus": False,
++    "writes_postgresql": False,
++    "writes_qdrant": False,
++    "calls_github_api": False,
++    "publishes_github": False,
++    "publishes_events": False,
++    "requires_non_stdlib": False,
++}
++
++
++@dataclass(frozen=True)
++class IniValidationIssue:
++    """One validation issue found in a production server INI file."""
++
++    section: str
++    key: str
++    message: str
++
++
++@dataclass(frozen=True)
++class IniValidationResult:
++    """JSON-compatible validation result."""
++
++    version: str
++    config_path: str
++    valid: bool
++    checked_sections: tuple[str, ...]
++    issues: tuple[IniValidationIssue, ...]
++
++
++REQUIRED_SECTION_KEYS: dict[str, tuple[str, ...]] = {
++    "server": ("name", "state_dir", "run_dir", "log_dir"),
++    "openrc": ("service_name", "command", "configtest"),
++    "postgresql.connection": ("host", "port", "database", "user"),
++    "qdrant.connection": ("url",),
++    "qdrant.collection.autodoc_context_e5_small": (
++        "collection",
++        "vector_dimension",
++        "distance",
++        "normalized_vectors",
++        "required_payload",
++    ),
++    "github": ("enabled", "mode", "token_env"),
++    "github.repositories": ("allowlist",),
++    "github.artifacts": ("scan_once_entrypoint", "project_push_frame_required"),
++    "github.publication": ("publish_enabled_by_default", "publication_review_required"),
++    "eventbus.attributes": ("required", "optional_redacted"),
++}
++
++
++REQUIRED_COMPONENT_KEYS: tuple[str, ...] = ("factory", "phase", "enabled")
++
++
++def _split_csv(value: str) -> tuple[str, ...]:
++    return tuple(item.strip() for item in value.split(",") if item.strip())
++
++
++def load_ini(path: Path) -> configparser.ConfigParser:
++    """Load a ConfigObj-compatible INI file with a stdlib parser."""
++
++    parser = configparser.ConfigParser()
++    parser.optionxform = str
++    with path.open("r", encoding="utf-8") as handle:
++        parser.read_file(handle)
++    return parser
++
++
++def validate_ini_parser(parser: configparser.ConfigParser, *, config_path: Path) -> IniValidationResult:
++    """Validate a parsed production server INI file."""
++
++    requirements = production_server_initial_configuration()
++    issues: list[IniValidationIssue] = []
++
++    for section in requirements.ini_sections:
++        if not parser.has_section(section):
++            issues.append(IniValidationIssue(section, "*", "missing required section"))
++
++    for section, required_keys in REQUIRED_SECTION_KEYS.items():
++        if not parser.has_section(section):
++            continue
++        for key in required_keys:
++            if not parser.has_option(section, key):
++                issues.append(IniValidationIssue(section, key, "missing required key"))
++
++    component_sections = tuple(
++        section for section in requirements.ini_sections if section.startswith("component.")
++    )
++    for section in component_sections:
++        if not parser.has_section(section):
++            continue
++        for key in REQUIRED_COMPONENT_KEYS:
++            if not parser.has_option(section, key):
++                issues.append(IniValidationIssue(section, key, "missing component key"))
++
++    if parser.has_section("github"):
++        token_env = parser.get("github", "token_env", fallback="")
++        mode = parser.get("github", "mode", fallback="")
++        if token_env != requirements.github_integration.token_env:
++            issues.append(IniValidationIssue("github", "token_env", "must be GITHUB_TOKEN"))
++        if mode != requirements.github_integration.mode:
++            issues.append(IniValidationIssue("github", "mode", "must be artifact_exchange"))
++
++    if parser.has_section("github.repositories"):
++        allowlist = _split_csv(parser.get("github.repositories", "allowlist", fallback=""))
++        if not allowlist:
++            issues.append(IniValidationIssue("github.repositories", "allowlist", "must not be empty"))
++
++    if parser.has_section("github.publication"):
++        publish_enabled = parser.getboolean(
++            "github.publication",
++            "publish_enabled_by_default",
++            fallback=True,
++        )
++        review_required = parser.getboolean(
++            "github.publication",
++            "publication_review_required",
++            fallback=False,
++        )
++        if publish_enabled:
++            issues.append(
++                IniValidationIssue(
++                    "github.publication",
++                    "publish_enabled_by_default",
++                    "must be false initially",
++                )
++            )
++        if not review_required:
++            issues.append(
++                IniValidationIssue(
++                    "github.publication",
++                    "publication_review_required",
++                    "must be true",
++                )
++            )
++
++    if parser.has_section("qdrant.collection.autodoc_context_e5_small"):
++        section = "qdrant.collection.autodoc_context_e5_small"
++        dimension = parser.getint(section, "vector_dimension", fallback=0)
++        distance = parser.get(section, "distance", fallback="")
++        payload = _split_csv(parser.get(section, "required_payload", fallback=""))
++        if dimension != 384:
++            issues.append(IniValidationIssue(section, "vector_dimension", "must be 384"))
++        if distance != "cosine":
++            issues.append(IniValidationIssue(section, "distance", "must be cosine"))
++        if "sql_ref" not in payload:
++            issues.append(IniValidationIssue(section, "required_payload", "must include sql_ref"))
++
++    if parser.has_section("eventbus.attributes"):
++        required = set(_split_csv(parser.get("eventbus.attributes", "required", fallback="")))
++        for name in ("schema_version", "event_type", "trace_id", "component", "phase"):
++            if name not in required:
++                issues.append(IniValidationIssue("eventbus.attributes", "required", f"must include {name}"))
++
++    return IniValidationResult(
++        version=INI_VALIDATION_VERSION,
++        config_path=str(config_path),
++        valid=not issues,
++        checked_sections=tuple(requirements.ini_sections),
++        issues=tuple(issues),
++    )
++
++
++def validate_ini_file(path: Path) -> IniValidationResult:
++    """Load and validate a production server INI file."""
++
++    parser = load_ini(path)
++    return validate_ini_parser(parser, config_path=path)
++
++
++def validation_to_dict(result: IniValidationResult) -> dict[str, Any]:
++    """Convert a validation result to JSON-compatible data."""
++
++    return asdict(result)
++
++
++def write_ini_validation_report(*, config_path: Path, output_path: Path) -> dict[str, Any]:
++    """Validate an INI file and write a JSON report."""
++
++    result = validate_ini_file(config_path)
++    payload = {
++        "production_server_ini_validation_written": True,
++        "validation": validation_to_dict(result),
++        "boundary": dict(INI_VALIDATION_BOUNDARY),
++    }
++    output_path.parent.mkdir(parents=True, exist_ok=True)
++    output_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + chr(10), encoding="utf-8")
++    return payload
+diff --git a/tests/context/test_prod_server_ini_validation_0241.py b/tests/context/test_prod_server_ini_validation_0241.py
+new file mode 100644
+index 0000000..8996505
+--- /dev/null
++++ b/tests/context/test_prod_server_ini_validation_0241.py
+@@ -0,0 +1,87 @@
++from pathlib import Path
++
++from context.prod_server_ini_validation_0241 import (
++    INI_VALIDATION_BOUNDARY,
++    load_ini,
++    validate_ini_file,
++    validate_ini_parser,
++    write_ini_validation_report,
++)
++
++
++ROOT = Path(__file__).resolve().parents[2]
++EXAMPLE = ROOT / "doc/examples/autodoc_prod_server_initial_0241.ini"
++
++
++def test_ini_validation_boundary_is_read_only() -> None:
++    assert INI_VALIDATION_BOUNDARY == {
++        "validation_only": True,
++        "configobj_compatible_layout": True,
++        "imports_configobj": False,
++        "starts_openrc": False,
++        "creates_scheduler": False,
++        "creates_eventbus": False,
++        "writes_postgresql": False,
++        "writes_qdrant": False,
++        "calls_github_api": False,
++        "publishes_github": False,
++        "publishes_events": False,
++        "requires_non_stdlib": False,
++    }
++
++
++def test_example_ini_validates() -> None:
++    result = validate_ini_file(EXAMPLE)
++
++    assert result.valid is True
++    assert result.issues == ()
++    assert "github.publication" in result.checked_sections
++
++
++def test_missing_required_section_is_reported(tmp_path: Path) -> None:
++    config = tmp_path / "bad.ini"
++    config.write_text("[server]\nname = autodoc-prod\n", encoding="utf-8")
++
++    result = validate_ini_file(config)
++
++    assert result.valid is False
++    assert any(issue.message == "missing required section" for issue in result.issues)
++
++
++def test_github_publication_must_be_reviewed_and_disabled() -> None:
++    parser = load_ini(EXAMPLE)
++    parser.set("github.publication", "publish_enabled_by_default", "true")
++    parser.set("github.publication", "publication_review_required", "false")
++
++    result = validate_ini_parser(parser, config_path=EXAMPLE)
++
++    messages = {(issue.section, issue.key, issue.message) for issue in result.issues}
++    assert ("github.publication", "publish_enabled_by_default", "must be false initially") in messages
++    assert ("github.publication", "publication_review_required", "must be true") in messages
++
++
++def test_qdrant_payload_must_include_sql_ref() -> None:
++    parser = load_ini(EXAMPLE)
++    parser.set(
++        "qdrant.collection.autodoc_context_e5_small",
++        "required_payload",
++        "model_id, embedding_version, content_hash",
++    )
++
++    result = validate_ini_parser(parser, config_path=EXAMPLE)
++
++    assert any(
++        issue.section == "qdrant.collection.autodoc_context_e5_small"
++        and issue.key == "required_payload"
++        and issue.message == "must include sql_ref"
++        for issue in result.issues
++    )
++
++
++def test_write_ini_validation_report(tmp_path: Path) -> None:
++    output = tmp_path / "report.json"
++    payload = write_ini_validation_report(config_path=EXAMPLE, output_path=output)
++
++    assert payload["production_server_ini_validation_written"] is True
++    assert payload["validation"]["valid"] is True
++    assert output.exists()
+diff --git a/tests/rules/test_prod_server_ini_validation_0241_rule.py b/tests/rules/test_prod_server_ini_validation_0241_rule.py
+new file mode 100644
+index 0000000..7a10074
+--- /dev/null
++++ b/tests/rules/test_prod_server_ini_validation_0241_rule.py
+@@ -0,0 +1,49 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def test_0241_validation_is_read_only_and_stdlib_only() -> None:
++    source = (ROOT / "src/context/prod_server_ini_validation_0241.py").read_text(
++        encoding="utf-8"
++    )
++    lowered = source.lower()
++
++    assert "validation_only" in source
++    assert "configobj_compatible_layout" in source
++    assert "imports_configobj" in source
++    assert "calls_github_api" in source
++    assert "publishes_github" in source
++    assert "writes_postgresql" in source
++    assert "writes_qdrant" in source
++    assert "import configparser" in source
++    assert "import configobj" not in lowered
++    assert "subprocess.run" not in source
++    assert "requests." not in lowered
++    assert "qdrant.upsert" not in lowered
++    assert "create table" not in lowered
++
++
++def test_0241_example_locks_github_and_qdrant_requirements() -> None:
++    example = (ROOT / "doc/examples/autodoc_prod_server_initial_0241.ini").read_text(
++        encoding="utf-8"
++    )
++
++    assert "token_env = GITHUB_TOKEN" in example
++    assert "mode = artifact_exchange" in example
++    assert "publish_enabled_by_default = false" in example
++    assert "publication_review_required = true" in example
++    assert "required_payload = sql_ref" in example
++    assert "vector_dimension = 384" in example
++
++
++def test_0241_docs_state_initial_server_validation() -> None:
++    doc = (ROOT / "doc/architecture/PROD_SERVER_INI_VALIDATION_0241.md").read_text(
++        encoding="utf-8"
++    )
++
++    assert "production server INI validation" in doc
++    assert "ConfigObj-compatible" in doc
++    assert "No runtime service is started" in doc
++    assert "GitHub remains artifact exchange" in doc
+diff --git a/tests/tools/test_run_prod_server_ini_validation_0241.py b/tests/tools/test_run_prod_server_ini_validation_0241.py
+new file mode 100644
+index 0000000..5badc11
+--- /dev/null
++++ b/tests/tools/test_run_prod_server_ini_validation_0241.py
+@@ -0,0 +1,52 @@
++import subprocess
++import sys
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++EXAMPLE = "doc/examples/autodoc_prod_server_initial_0241.ini"
++
++
++def test_ini_validation_tool_check_only_summary() -> None:
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/run_prod_server_ini_validation_0241.py",
++            "--config",
++            EXAMPLE,
++            "--check-only",
++            "--format",
++            "summary",
++        ],
++        cwd=ROOT,
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    assert "production_server_ini_valid=True" in result.stdout
++    assert "issues=0" in result.stdout
++
++
++def test_ini_validation_tool_writes_report(tmp_path: Path) -> None:
++    output = tmp_path / "prod_server_ini_validation_0241.json"
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/run_prod_server_ini_validation_0241.py",
++            "--config",
++            EXAMPLE,
++            "--output",
++            str(output),
++            "--format",
++            "summary",
++        ],
++        cwd=ROOT,
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    assert "production_server_ini_validation_written=True" in result.stdout
++    assert "valid=True" in result.stdout
++    assert output.exists()
+diff --git a/tools/run_prod_server_ini_validation_0241.py b/tools/run_prod_server_ini_validation_0241.py
+new file mode 100755
+index 0000000..0d3a1d0
+--- /dev/null
++++ b/tools/run_prod_server_ini_validation_0241.py
+@@ -0,0 +1,75 @@
++#!/usr/bin/env python3
++"""Validate the production server INI file for phase 0241."""
++
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++
++REPO_ROOT = Path(__file__).resolve().parents[1]
++SRC_ROOT = REPO_ROOT / "src"
++for _path in (str(SRC_ROOT), str(REPO_ROOT)):
++    if _path not in sys.path:
++        sys.path.insert(0, _path)
++
++from context.prod_server_ini_validation_0241 import (  # noqa: E402
++    INI_VALIDATION_BOUNDARY,
++    validate_ini_file,
++    validation_to_dict,
++    write_ini_validation_report,
++)
++
++
++def parse_args() -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument(
++        "--config",
++        default="doc/examples/autodoc_prod_server_initial_0241.ini",
++    )
++    parser.add_argument(
++        "--output",
++        default=".var/reports/prod_server_ini_validation_0241.json",
++    )
++    parser.add_argument("--check-only", action="store_true")
++    parser.add_argument("--format", choices=("json", "summary"), default="json")
++    return parser.parse_args()
++
++
++def main() -> int:
++    args = parse_args()
++    config_path = Path(args.config)
++    output_path = Path(args.output)
++
++    if args.check_only:
++        result = validate_ini_file(config_path)
++        payload = {
++            "production_server_ini_valid": result.valid,
++            "validation": validation_to_dict(result),
++            "boundary": dict(INI_VALIDATION_BOUNDARY),
++        }
++    else:
++        payload = write_ini_validation_report(config_path=config_path, output_path=output_path)
++        result = validate_ini_file(config_path)
++
++    if args.format == "summary":
++        issue_count = len(result.issues)
++        if args.check_only:
++            print(
++                "production_server_ini_valid="
++                f"{str(result.valid)} issues={issue_count} config={config_path}"
++            )
++        else:
++            print(
++                "production_server_ini_validation_written=True "
++                f"valid={str(result.valid)} issues={issue_count} output={output_path}"
++            )
++    else:
++        print(json.dumps(payload, indent=2, sort_keys=True))
++
++    return 0 if result.valid else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

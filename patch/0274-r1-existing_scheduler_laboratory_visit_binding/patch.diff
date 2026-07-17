@@ -1,0 +1,967 @@
+diff --git a/src/contracts/event.py b/src/contracts/event.py
+--- a/src/contracts/event.py
++++ b/src/contracts/event.py
+@@ -31,6 +31,10 @@ class EventType(Enum):
+     SOURCE_CANDIDATE_DECISION = auto()
+     SOURCE_CANDIDATE_DECISION_RESULT = auto()
+ 
++    # Laboratoire spécialiste — Phase 0274-r1 live Scheduler binding
++    LABORATORY_VISIT_REQUEST = auto()
++    LABORATORY_VISIT_RESULT = auto()
++
+     # Politique kernel
+     POLICY_DENIED = auto()
+ 
+diff --git a/PHASE0274_R1_EXISTING_SCHEDULER_LABORATORY_VISIT_BINDING_TEST_REPORT.md b/PHASE0274_R1_EXISTING_SCHEDULER_LABORATORY_VISIT_BINDING_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0274_R1_EXISTING_SCHEDULER_LABORATORY_VISIT_BINDING_TEST_REPORT.md
+@@ -0,0 +1,47 @@
++# Phase 0274-r1 test report — existing Scheduler laboratory visit binding
++
++## Validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. python -m pytest -q tests/rules
++PYTHONPATH=src:. python -m pytest -q \
++  tests/context/test_scheduler_laboratory_visit_binding_0274.py
++PYTHONPATH=src:. python -m pytest -q
++```
++
++## Covered behavior
++
++- event targets `scheduler`;
++- Handler rejects wrong event type or payload;
++- provider executes behind the existing Handler boundary;
++- Handler registration uses the existing Dispatcher;
++- live request passes through the existing Scheduler;
++- the Dispatcher publishes only its observation copy;
++- r3 follow-up scenarios survive the Scheduler path;
++- submission without the existing Scheduler running fails by timeout;
++- receipt remains JSON serializable and records no parallel authority.
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: existing single-Scheduler, immutable Event, Handler and passive EventBus rules are reused
++live_path_status: transition
++live_path_uses_real_backend: false
++context_contract_version: missipy.laboratory.v1
++context_contract_changed: false
++external_dependencies_added: false
++scheduler_created: false
++scheduler_modified: false
++scheduler_run_modified: false
++parallel_queue_created: false
++parallel_eventbus_created: false
++parallel_registry_created: false
++provider_active: true
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++```
+diff --git a/doc/CHANGELOG_0274_R1_EXISTING_SCHEDULER_LABORATORY_VISIT_BINDING.md b/doc/CHANGELOG_0274_R1_EXISTING_SCHEDULER_LABORATORY_VISIT_BINDING.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0274_R1_EXISTING_SCHEDULER_LABORATORY_VISIT_BINDING.md
+@@ -0,0 +1,20 @@
++# Changelog — 0274-r1 existing Scheduler laboratory visit binding
++
++## Added
++
++- explicit laboratory visit request/result event types;
++- immutable event builder for a bounded laboratory visit;
++- existing-Dispatcher Handler for the r3 provider membrane;
++- submission helper using an already-running `SchedulerContract`;
++- immutable Scheduler visit receipt with negative ownership assertions;
++- live test through the existing Scheduler, queue, policy, Dispatcher and
++  EventBus observation copy;
++- architecture, manifest, release and rule gates.
++
++## Not added
++
++- no LaboratoryScheduler or LaboratoryManager;
++- no second queue, EventBus, registry or runtime manager;
++- no `Scheduler.run()` modification;
++- no network or external dependency;
++- no SQL/Qdrant/GitHub/VisPy behavior change.
+diff --git a/doc/architecture/EXISTING_SCHEDULER_LABORATORY_VISIT_BINDING_0274.md b/doc/architecture/EXISTING_SCHEDULER_LABORATORY_VISIT_BINDING_0274.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/EXISTING_SCHEDULER_LABORATORY_VISIT_BINDING_0274.md
+@@ -0,0 +1,150 @@
++# Existing Scheduler laboratory visit binding — 0274-r1
++
++## Purpose
++
++0274-r1 closes the first live micro-kernel path from a typed laboratory visit
++request to the deterministic fake provider.
++
++There is **one existing Scheduler** for the complete platform.
++Scheduler.run() is unchanged.
++
++```text
++LaboratoryVisitRequest
++-> Scheduler.emit()
++-> PolicyEngine.decide()
++-> existing PriorityQueue
++-> existing Scheduler.run()
++-> existing Dispatcher
++-> LaboratoryVisitRequestHandler
++-> DeterministicFakeLaboratoryProvider
++-> LaboratorySchedulerVisitReceipt
++```
++
++No LaboratoryScheduler, LaboratoryManager, laboratory queue, parallel
++EventBus, parallel registry or second orchestration loop is introduced.
++
++## Event contract
++
++The kernel `EventType` receives two explicit values:
++
++```text
++LABORATORY_VISIT_REQUEST
++LABORATORY_VISIT_RESULT
++```
++
++Only the request event is active in 0274-r1. The result enum is reserved for a
++later normalized observation boundary. The Handler returns its immutable
++receipt through the existing `Request.reply` future.
++
++The Handler does not publish a result event itself. EventBus remains
++observation-only: the existing Dispatcher publishes the command event copy for
++observers before invoking the Handler.
++
++## Existing Scheduler lifecycle
++
++`submit_laboratory_visit()` accepts `SchedulerContract`. It:
++
++1. builds an immutable `LABORATORY_VISIT_REQUEST`;
++2. adds the existing `Request.reply` future;
++3. calls `await scheduler.emit(event)`;
++4. waits for the Dispatcher/Handler reply;
++5. validates the typed receipt.
++
++It never:
++
++- constructs a Scheduler;
++- starts `Scheduler.run()`;
++- stops the Scheduler;
++- constructs a PriorityQueue;
++- constructs an EventBus;
++- constructs a registry;
++- modifies Scheduler policy.
++
++The normal platform bootstrap remains the owner of the one Scheduler lifecycle.
++A submission made without the existing Scheduler running times out explicitly.
++
++## Handler boundary
++
++`LaboratoryVisitRequestHandler` is intentionally small. It validates the event
++type, destination and payload, then delegates to the r3 provider membrane.
++
++```text
++Dispatcher
++-> LaboratoryVisitRequestHandler.handle(event)
++-> execute_deterministic_fake_laboratory_visit()
++-> LaboratoryProvider.execute()
++```
++
++The provider still owns no orchestration, persistence, vector index, GitHub
++mutation, EventBus command publication, SHM lifecycle or renderer.
++
++## Result receipt
++
++`LaboratorySchedulerVisitReceipt` records:
++
++- event and correlation identities;
++- visit and provider refs;
++- existing registration component id;
++- immutable r3 execution record;
++- canonical Scheduler path;
++- explicit negative ownership flags.
++
++It requires:
++
++```text
++existing_scheduler_used = true
++scheduler_created = false
++scheduler_run_modified = false
++parallel_queue_created = false
++parallel_eventbus_created = false
++parallel_registry_created = false
++result_event_published = false
++```
++
++## Relation to deliberation
++
++0274-r1 proves only the live Scheduler-to-provider visit.
++
++0274-r2 will compose the existing deliberation contracts without a new
++orchestrator:
++
++```text
++durable SourceCandidate
++-> ServerOrientation
++-> DeliberationCycleCommand / SpecialistDispatchCommand
++-> existing Scheduler visit path
++-> preliminary opinion or follow-up
++-> RefinedSpecialistDemand
++-> DeliberationRound
++-> liaison / validation / synthesis
++-> FinalArtifactEnvelope
++```
++
++Later 0274 work will persist the final local artifacts, use the controlled
++E5/Qdrant path, emit normalized observation facts, feed PassiveSupervisor and
++Cell Lens, and build a GitHub publication preview.
++
++EventBus remains observation-only. PassiveSupervisor remains passive. VisPy remains passive and imports no laboratory provider.
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++live_path_status: transition
++live_path_uses_real_backend: false
++context_contract_version: missipy.laboratory.v1
++context_contract_changed: false
++external_dependencies_added: false
++scheduler_created: false
++scheduler_modified: false
++scheduler_run_modified: false
++parallel_queue_created: false
++parallel_eventbus_created: false
++parallel_registry_created: false
++provider_active: true
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++```
+diff --git a/doc/docs/architecture/runtime/274_r1_existing_scheduler_laboratory_visit_binding.dot b/doc/docs/architecture/runtime/274_r1_existing_scheduler_laboratory_visit_binding.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/274_r1_existing_scheduler_laboratory_visit_binding.dot
+@@ -0,0 +1,30 @@
++digraph ExistingSchedulerLaboratoryVisitBinding0274R1 {
++  rankdir=LR;
++  node [shape=box];
++
++  VisitRequest [label="LaboratoryVisitRequest"];
++  ExistingScheduler [label="existing Scheduler.emit()"];
++  Policy [label="existing PolicyEngine"];
++  ExistingQueue [label="existing PriorityQueue"];
++  UnchangedRun [label="existing Scheduler.run() unchanged"];
++  Dispatcher [label="existing Dispatcher"];
++  EventBus [label="existing EventBus observation copy"];
++  LaboratoryHandler [label="LaboratoryVisitRequestHandler"];
++  FakeProvider [label="r3 deterministic fake provider"];
++  Receipt [label="immutable Scheduler visit receipt"];
++  Reply [label="existing Request.reply"];
++
++  VisitRequest -> ExistingScheduler;
++  ExistingScheduler -> Policy;
++  Policy -> ExistingQueue;
++  ExistingQueue -> UnchangedRun;
++  UnchangedRun -> Dispatcher;
++  Dispatcher -> EventBus [style=dashed, label="observation only"];
++  Dispatcher -> LaboratoryHandler;
++  LaboratoryHandler -> FakeProvider;
++  FakeProvider -> Receipt;
++  Receipt -> Reply;
++
++  Rejected [shape=note, label="No LaboratoryScheduler / no parallel queue / no parallel bus / no parallel registry"];
++  ExistingScheduler -> Rejected [style=dotted, arrowhead=none];
++}
+diff --git a/doc/manifests/MANIFEST_0274_R1_EXISTING_SCHEDULER_LABORATORY_VISIT_BINDING_CHANGED_FILES.md b/doc/manifests/MANIFEST_0274_R1_EXISTING_SCHEDULER_LABORATORY_VISIT_BINDING_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0274_R1_EXISTING_SCHEDULER_LABORATORY_VISIT_BINDING_CHANGED_FILES.md
+@@ -0,0 +1,18 @@
++# Manifest — 0274-r1 existing Scheduler laboratory visit binding
++
++Changed files:
++
++- `PHASE0274_R1_EXISTING_SCHEDULER_LABORATORY_VISIT_BINDING_TEST_REPORT.md`
++- `doc/CHANGELOG_0274_R1_EXISTING_SCHEDULER_LABORATORY_VISIT_BINDING.md`
++- `doc/architecture/EXISTING_SCHEDULER_LABORATORY_VISIT_BINDING_0274.md`
++- `doc/docs/architecture/runtime/274_r1_existing_scheduler_laboratory_visit_binding.dot`
++- `doc/manifests/MANIFEST_0274_R1_EXISTING_SCHEDULER_LABORATORY_VISIT_BINDING_CHANGED_FILES.md`
++- `doc/releases/0274-r1-existing-scheduler-laboratory-visit-binding.md`
++- `src/context/scheduler_laboratory_visit_binding_0274.py`
++- `src/contracts/event.py`
++- `tests/context/test_scheduler_laboratory_visit_binding_0274.py`
++- `tests/rules/test_scheduler_laboratory_visit_binding_0274_rule.py`
++
++No Scheduler implementation, PolicyEngine, PriorityQueue, EventBus, registry,
++RouteProxy, ControlProxy, SQL/Qdrant adapter, GitHub mutation or renderer is
++added or replaced.
+diff --git a/doc/releases/0274-r1-existing-scheduler-laboratory-visit-binding.md b/doc/releases/0274-r1-existing-scheduler-laboratory-visit-binding.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/releases/0274-r1-existing-scheduler-laboratory-visit-binding.md
+@@ -0,0 +1,12 @@
++# 0274-r1 — Existing Scheduler laboratory visit binding
++
++This release activates the r3 deterministic fake laboratory through the one
++existing Scheduler path.
++
++The caller submits `LABORATORY_VISIT_REQUEST` to the already-running Scheduler.
++The existing policy, queue, `Scheduler.run()`, Dispatcher and Handler return an
++immutable receipt through `Request.reply`.
++
++No new Scheduler, queue, EventBus or registry is introduced. 0274-r2 will
++compose this live visit with the existing server-oriented deliberation and
++synthesis contracts.
+diff --git a/src/context/scheduler_laboratory_visit_binding_0274.py b/src/context/scheduler_laboratory_visit_binding_0274.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/context/scheduler_laboratory_visit_binding_0274.py
+@@ -0,0 +1,306 @@
++"""Existing-Scheduler laboratory visit binding for phase 0274-r1.
++
++This module connects ``missipy.laboratory.visit_request.v1`` to the existing
++micro-kernel path:
++
++    Scheduler.emit()
++    -> PolicyEngine.decide()
++    -> PriorityQueue
++    -> existing Scheduler.run()
++    -> Dispatcher
++    -> LaboratoryVisitRequestHandler
++    -> LaboratoryProvider.execute()
++
++It does not create, wrap, subclass or own a Scheduler.  It also does not create
++another queue, EventBus, registry or runtime manager.  The caller must submit
++through the already-running platform Scheduler.
++"""
++
++from __future__ import annotations
++
++import asyncio
++from dataclasses import dataclass
++from types import MappingProxyType
++from typing import Protocol
++
++from contracts.event import Event, EventType, Request
++from contracts.scheduler import SchedulerContract
++from context.deterministic_fake_laboratory_provider_0273 import (
++    DETERMINISTIC_FAKE_COMPONENT_ID,
++    FakeLaboratoryExecutionRecord,
++    LaboratoryProvider,
++    execute_deterministic_fake_laboratory_visit,
++)
++from context.laboratory_framework_contract_0273 import (
++    LaboratoryVisitRequest,
++)
++
++SCHEDULER_LABORATORY_VISIT_BINDING_VERSION = "0274.r1"
++SCHEDULER_LABORATORY_VISIT_RECEIPT_SCHEMA = (
++    "missipy.laboratory.scheduler_visit_receipt.v1"
++)
++SCHEDULER_LABORATORY_EVENT_SOURCE = "laboratory.scheduler_binding"
++SCHEDULER_LABORATORY_EVENT_DESTINATION = "scheduler"
++
++_SCHEDULER_PATH = (
++    "Scheduler.emit()",
++    "PolicyEngine.decide()",
++    "PriorityQueue",
++    "Scheduler.run()",
++    "Dispatcher",
++    "LaboratoryVisitRequestHandler",
++    "LaboratoryProvider.execute()",
++)
++
++
++class LaboratorySchedulerBindingError(RuntimeError):
++    """Raised when the existing Scheduler path cannot return a valid receipt."""
++
++
++class LaboratoryVisitDispatcher(Protocol):
++    """Only the existing Dispatcher registration surface used by this binding."""
++
++    def register(self, event_type: EventType, handler: object) -> None:
++        """Register one handler on the existing Dispatcher."""
++
++
++@dataclass(frozen=True, slots=True)
++class LaboratorySchedulerVisitReceipt:
++    """Immutable receipt returned through the existing Request.reply future."""
++
++    schema: str
++    event_id: str
++    correlation_id: str
++    visit_ref: str
++    provider_ref: str
++    registration_component_id: str
++    execution: FakeLaboratoryExecutionRecord
++    scheduler_path: tuple[str, ...] = _SCHEDULER_PATH
++    existing_scheduler_used: bool = True
++    scheduler_created: bool = False
++    scheduler_run_modified: bool = False
++    parallel_queue_created: bool = False
++    parallel_eventbus_created: bool = False
++    parallel_registry_created: bool = False
++    result_event_reserved: str = "LABORATORY_VISIT_RESULT"
++    result_event_published: bool = False
++
++    def __post_init__(self) -> None:
++        if self.schema != SCHEDULER_LABORATORY_VISIT_RECEIPT_SCHEMA:
++            raise LaboratorySchedulerBindingError(
++                "unsupported laboratory Scheduler receipt schema"
++            )
++        if not self.event_id:
++            raise LaboratorySchedulerBindingError("event_id must be non-empty")
++        if self.correlation_id != self.visit_ref:
++            raise LaboratorySchedulerBindingError(
++                "correlation_id must equal visit_ref"
++            )
++        if self.execution.request.visit_ref != self.visit_ref:
++            raise LaboratorySchedulerBindingError(
++                "execution request must belong to visit_ref"
++            )
++        if self.execution.result.visit_ref != self.visit_ref:
++            raise LaboratorySchedulerBindingError(
++                "execution result must belong to visit_ref"
++            )
++        if self.provider_ref != self.execution.provider_ref:
++            raise LaboratorySchedulerBindingError(
++                "provider_ref must match execution provider_ref"
++            )
++        if (
++            self.registration_component_id
++            != self.execution.registration_component_id
++        ):
++            raise LaboratorySchedulerBindingError(
++                "registration component must match execution"
++            )
++        if self.scheduler_path != _SCHEDULER_PATH:
++            raise LaboratorySchedulerBindingError(
++                "scheduler_path must preserve the canonical existing path"
++            )
++        forbidden = (
++            not self.existing_scheduler_used,
++            self.scheduler_created,
++            self.scheduler_run_modified,
++            self.parallel_queue_created,
++            self.parallel_eventbus_created,
++            self.parallel_registry_created,
++            self.result_event_published,
++        )
++        if any(forbidden):
++            raise LaboratorySchedulerBindingError(
++                "laboratory receipt must not claim parallel orchestration"
++            )
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": self.schema,
++            "event_id": self.event_id,
++            "event_type": "LABORATORY_VISIT_REQUEST",
++            "correlation_id": self.correlation_id,
++            "visit_ref": self.visit_ref,
++            "provider_ref": self.provider_ref,
++            "registration_component_id": self.registration_component_id,
++            "execution": self.execution.to_mapping(),
++            "scheduler_path": list(self.scheduler_path),
++            "existing_scheduler_used": self.existing_scheduler_used,
++            "scheduler_created": self.scheduler_created,
++            "scheduler_run_modified": self.scheduler_run_modified,
++            "parallel_queue_created": self.parallel_queue_created,
++            "parallel_eventbus_created": self.parallel_eventbus_created,
++            "parallel_registry_created": self.parallel_registry_created,
++            "result_event_reserved": self.result_event_reserved,
++            "result_event_published": self.result_event_published,
++            "eventbus_role": "Dispatcher observation copy only",
++            "publication_allowed": False,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class LaboratoryVisitRequestHandler:
++    """Tiny existing-Dispatcher Handler for one laboratory visit request."""
++
++    provider: LaboratoryProvider | None = None
++    registration_component_id: str = DETERMINISTIC_FAKE_COMPONENT_ID
++
++    async def handle(self, event: Event) -> LaboratorySchedulerVisitReceipt:
++        if event.type is not EventType.LABORATORY_VISIT_REQUEST:
++            raise LaboratorySchedulerBindingError(
++                "handler requires LABORATORY_VISIT_REQUEST"
++            )
++        if event.dest != SCHEDULER_LABORATORY_EVENT_DESTINATION:
++            raise LaboratorySchedulerBindingError(
++                "laboratory visit event destination must remain scheduler"
++            )
++        if not isinstance(event.payload, LaboratoryVisitRequest):
++            raise LaboratorySchedulerBindingError(
++                "LABORATORY_VISIT_REQUEST payload must be LaboratoryVisitRequest"
++            )
++        execution = execute_deterministic_fake_laboratory_visit(
++            event.payload,
++            provider=self.provider,
++        )
++        return LaboratorySchedulerVisitReceipt(
++            schema=SCHEDULER_LABORATORY_VISIT_RECEIPT_SCHEMA,
++            event_id=event.id,
++            correlation_id=event.correlation_id or event.payload.visit_ref,
++            visit_ref=event.payload.visit_ref,
++            provider_ref=execution.provider_ref,
++            registration_component_id=self.registration_component_id,
++            execution=execution,
++        )
++
++
++def build_laboratory_visit_event(
++    request: LaboratoryVisitRequest,
++    *,
++    priority: int = 0,
++    source: str = SCHEDULER_LABORATORY_EVENT_SOURCE,
++) -> Event:
++    """Build an immutable command event for the existing Scheduler."""
++
++    if not isinstance(request, LaboratoryVisitRequest):
++        raise TypeError("request must be a LaboratoryVisitRequest")
++    if not isinstance(source, str) or not source.strip():
++        raise ValueError("source must be non-empty")
++    if isinstance(priority, bool) or not isinstance(priority, int):
++        raise TypeError("priority must be an integer")
++    metadata = MappingProxyType(
++        {
++            "schema": "missipy.laboratory.scheduler_visit_event.v1",
++            "visit_ref": request.visit_ref,
++            "laboratory_ref": request.laboratory_ref,
++            "specialist_ref": request.specialist_ref,
++            "command": True,
++            "scheduler_created": False,
++            "scheduler_run_modified": False,
++        }
++    )
++    return Event(
++        type=EventType.LABORATORY_VISIT_REQUEST,
++        source=source.strip(),
++        dest=SCHEDULER_LABORATORY_EVENT_DESTINATION,
++        payload=request,
++        priority=priority,
++        correlation_id=request.visit_ref,
++        metadata=metadata,
++    )
++
++
++def register_laboratory_visit_handler(
++    dispatcher: LaboratoryVisitDispatcher,
++    *,
++    provider: LaboratoryProvider | None = None,
++) -> LaboratoryVisitRequestHandler:
++    """Register the Handler on the existing Dispatcher and return it."""
++
++    handler = LaboratoryVisitRequestHandler(provider=provider)
++    dispatcher.register(EventType.LABORATORY_VISIT_REQUEST, handler)
++    return handler
++
++
++async def submit_laboratory_visit(
++    scheduler: SchedulerContract,
++    request: LaboratoryVisitRequest,
++    *,
++    priority: int = 0,
++    timeout: float | None = None,
++    source: str = SCHEDULER_LABORATORY_EVENT_SOURCE,
++) -> LaboratorySchedulerVisitReceipt:
++    """Submit a visit to an already-running Scheduler and await its reply.
++
++    This helper never calls ``run()`` and never creates a Scheduler.  The
++    platform bootstrap remains responsible for the one Scheduler lifecycle.
++    """
++
++    if not isinstance(scheduler, SchedulerContract):
++        raise TypeError("scheduler must implement SchedulerContract")
++    effective_timeout = (
++        request.resource_budget.max_duration_ms / 1_000.0
++        if timeout is None
++        else timeout
++    )
++    if effective_timeout <= 0:
++        raise ValueError("timeout must be > 0")
++
++    loop = asyncio.get_running_loop()
++    reply = loop.create_future()
++    event = build_laboratory_visit_event(
++        request,
++        priority=priority,
++        source=source,
++    ).with_request(Request(reply=reply, timeout=effective_timeout))
++
++    await scheduler.emit(event)
++    try:
++        result = await asyncio.wait_for(reply, timeout=effective_timeout)
++    except TimeoutError as exc:
++        raise LaboratorySchedulerBindingError(
++            "existing Scheduler did not return laboratory visit before timeout"
++        ) from exc
++
++    if not isinstance(result, LaboratorySchedulerVisitReceipt):
++        raise LaboratorySchedulerBindingError(
++            "existing Scheduler returned an unexpected laboratory reply"
++        )
++    if result.visit_ref != request.visit_ref:
++        raise LaboratorySchedulerBindingError(
++            "Scheduler reply visit_ref does not match request"
++        )
++    return result
++
++
++__all__ = (
++    "LaboratorySchedulerBindingError",
++    "LaboratorySchedulerVisitReceipt",
++    "LaboratoryVisitDispatcher",
++    "LaboratoryVisitRequestHandler",
++    "SCHEDULER_LABORATORY_EVENT_DESTINATION",
++    "SCHEDULER_LABORATORY_EVENT_SOURCE",
++    "SCHEDULER_LABORATORY_VISIT_BINDING_VERSION",
++    "SCHEDULER_LABORATORY_VISIT_RECEIPT_SCHEMA",
++    "build_laboratory_visit_event",
++    "register_laboratory_visit_handler",
++    "submit_laboratory_visit",
++)
+diff --git a/tests/context/test_scheduler_laboratory_visit_binding_0274.py b/tests/context/test_scheduler_laboratory_visit_binding_0274.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/context/test_scheduler_laboratory_visit_binding_0274.py
+@@ -0,0 +1,216 @@
++import asyncio
++import json
++
++import pytest
++
++from contracts.event import Event, EventType
++from context.laboratory_framework_contract_0273 import (
++    LABORATORY_VISIT_REQUEST_SCHEMA,
++    LaboratoryResourceBudget,
++    LaboratoryVisitRequest,
++)
++from context.scheduler_laboratory_visit_binding_0274 import (
++    LaboratorySchedulerBindingError,
++    LaboratorySchedulerVisitReceipt,
++    LaboratoryVisitRequestHandler,
++    build_laboratory_visit_event,
++    register_laboratory_visit_handler,
++    submit_laboratory_visit,
++)
++from kernel.dispatcher import Dispatcher
++from kernel.event_bus import EventBus
++from kernel.queue import PriorityQueue
++from kernel.registry import Registry
++from kernel.scheduler import Scheduler
++
++
++def visit_request(*, scenario: str = "completed") -> LaboratoryVisitRequest:
++    return LaboratoryVisitRequest(
++        schema=LABORATORY_VISIT_REQUEST_SCHEMA,
++        visit_ref=f"laboratory-visit:scheduler-{scenario}",
++        laboratory_ref="laboratory:local-fake",
++        specialist_ref="specialist:technical",
++        objective_ref=f"orientation:scheduler-{scenario}",
++        source_candidate_ref=f"source-candidate:scheduler-{scenario}",
++        context_generation=1,
++        input_contract_ref="contract:missipy.specialist.demand.v1",
++        expected_output_contract_ref=(
++            "contract:missipy.laboratory.visit_result.v1"
++        ),
++        resource_budget=LaboratoryResourceBudget(
++            max_duration_ms=2_000,
++        ),
++        return_route_ref=f"route:laboratory/scheduler-{scenario}/result",
++        context_refs=(f"sql:context:scheduler-{scenario}",),
++        evidence_refs=(f"artifact:evidence:scheduler-{scenario}",),
++        metadata=(("fake_scenario", scenario),),
++    )
++
++
++def test_event_builder_targets_existing_scheduler() -> None:
++    request = visit_request()
++    event = build_laboratory_visit_event(request, priority=7)
++
++    assert event.type is EventType.LABORATORY_VISIT_REQUEST
++    assert event.dest == "scheduler"
++    assert event.payload is request
++    assert event.priority == 7
++    assert event.correlation_id == request.visit_ref
++    assert event.metadata["scheduler_created"] is False
++    assert event.metadata["scheduler_run_modified"] is False
++
++
++def test_handler_executes_provider_without_owning_scheduler() -> None:
++    async def scenario() -> LaboratorySchedulerVisitReceipt:
++        handler = LaboratoryVisitRequestHandler()
++        return await handler.handle(build_laboratory_visit_event(visit_request()))
++
++    receipt = asyncio.run(scenario())
++    payload = receipt.to_mapping()
++
++    assert receipt.execution.result.status == "completed"
++    assert payload["existing_scheduler_used"] is True
++    assert payload["scheduler_created"] is False
++    assert payload["scheduler_run_modified"] is False
++    assert payload["parallel_queue_created"] is False
++    assert payload["parallel_eventbus_created"] is False
++    assert payload["parallel_registry_created"] is False
++    assert payload["result_event_published"] is False
++    json.dumps(payload, sort_keys=True)
++
++
++def test_handler_rejects_wrong_event_type_and_payload() -> None:
++    handler = LaboratoryVisitRequestHandler()
++
++    async def wrong_type() -> None:
++        await handler.handle(
++            Event(
++                type=EventType.TICK,
++                source="test",
++                payload=visit_request(),
++            )
++        )
++
++    async def wrong_payload() -> None:
++        await handler.handle(
++            Event(
++                type=EventType.LABORATORY_VISIT_REQUEST,
++                source="test",
++                payload={"not": "a request"},
++            )
++        )
++
++    with pytest.raises(
++        LaboratorySchedulerBindingError,
++        match="requires LABORATORY_VISIT_REQUEST",
++    ):
++        asyncio.run(wrong_type())
++    with pytest.raises(
++        LaboratorySchedulerBindingError,
++        match="payload must be LaboratoryVisitRequest",
++    ):
++        asyncio.run(wrong_payload())
++
++
++def test_registration_uses_existing_dispatcher_surface() -> None:
++    bus = EventBus()
++    dispatcher = Dispatcher(bus)
++    handler = register_laboratory_visit_handler(dispatcher)
++
++    assert (
++        dispatcher.handlers[EventType.LABORATORY_VISIT_REQUEST]
++        is handler
++    )
++
++
++def test_existing_scheduler_runs_visit_end_to_end() -> None:
++    async def scenario():
++        event_bus = EventBus()
++        observed = event_bus.subscribe(EventType.LABORATORY_VISIT_REQUEST)
++        dispatcher = Dispatcher(event_bus)
++        register_laboratory_visit_handler(dispatcher)
++
++        scheduler = Scheduler(
++            queue=PriorityQueue(),
++            dispatcher=dispatcher,
++            event_bus=event_bus,
++            registry=Registry(),
++            context_interval=60.0,
++        )
++        run_task = asyncio.create_task(scheduler.run())
++        try:
++            receipt = await submit_laboratory_visit(
++                scheduler,
++                visit_request(),
++                priority=11,
++                timeout=1.0,
++            )
++            observed_event = await asyncio.wait_for(observed.get(), timeout=1.0)
++        finally:
++            await scheduler.shutdown()
++            await asyncio.wait_for(run_task, timeout=1.0)
++        return receipt, observed_event
++
++    receipt, observed_event = asyncio.run(scenario())
++
++    assert receipt.execution.result.status == "completed"
++    assert receipt.existing_scheduler_used is True
++    assert receipt.scheduler_created is False
++    assert observed_event.type is EventType.LABORATORY_VISIT_REQUEST
++    assert observed_event.correlation_id == receipt.visit_ref
++
++
++def test_existing_scheduler_preserves_fake_followup_scenario() -> None:
++    async def scenario():
++        event_bus = EventBus()
++        dispatcher = Dispatcher(event_bus)
++        register_laboratory_visit_handler(dispatcher)
++        scheduler = Scheduler(
++            queue=PriorityQueue(),
++            dispatcher=dispatcher,
++            event_bus=event_bus,
++            registry=Registry(),
++            context_interval=60.0,
++        )
++        run_task = asyncio.create_task(scheduler.run())
++        try:
++            return await submit_laboratory_visit(
++                scheduler,
++                visit_request(scenario="needs_specialist"),
++                timeout=1.0,
++            )
++        finally:
++            await scheduler.shutdown()
++            await asyncio.wait_for(run_task, timeout=1.0)
++
++    receipt = asyncio.run(scenario())
++
++    assert receipt.execution.result.status == "needs_specialist"
++    assert receipt.execution.result.requested_specialist_refs == (
++        "specialist:validator",
++    )
++
++
++def test_submit_requires_already_running_scheduler() -> None:
++    async def scenario() -> None:
++        event_bus = EventBus()
++        dispatcher = Dispatcher(event_bus)
++        register_laboratory_visit_handler(dispatcher)
++        scheduler = Scheduler(
++            queue=PriorityQueue(),
++            dispatcher=dispatcher,
++            event_bus=event_bus,
++            registry=Registry(),
++            context_interval=60.0,
++        )
++        await submit_laboratory_visit(
++            scheduler,
++            visit_request(),
++            timeout=0.01,
++        )
++
++    with pytest.raises(
++        LaboratorySchedulerBindingError,
++        match="did not return laboratory visit",
++    ):
++        asyncio.run(scenario())
+diff --git a/tests/rules/test_scheduler_laboratory_visit_binding_0274_rule.py b/tests/rules/test_scheduler_laboratory_visit_binding_0274_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_scheduler_laboratory_visit_binding_0274_rule.py
+@@ -0,0 +1,100 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++EVENTS = ROOT / "src/contracts/event.py"
++SOURCE = ROOT / "src/context/scheduler_laboratory_visit_binding_0274.py"
++ARCH = ROOT / "doc/architecture/EXISTING_SCHEDULER_LABORATORY_VISIT_BINDING_0274.md"
++GRAPH = ROOT / "doc/docs/architecture/runtime/274_r1_existing_scheduler_laboratory_visit_binding.dot"
++MANIFEST = ROOT / "doc/manifests/MANIFEST_0274_R1_EXISTING_SCHEDULER_LABORATORY_VISIT_BINDING_CHANGED_FILES.md"
++REPORT = ROOT / "PHASE0274_R1_EXISTING_SCHEDULER_LABORATORY_VISIT_BINDING_TEST_REPORT.md"
++
++
++def test_event_contract_adds_laboratory_visit_pair() -> None:
++    text = EVENTS.read_text(encoding="utf-8")
++    assert "LABORATORY_VISIT_REQUEST = auto()" in text
++    assert "LABORATORY_VISIT_RESULT = auto()" in text
++
++
++def test_binding_uses_scheduler_contract_without_creating_scheduler() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    for marker in (
++        "SchedulerContract",
++        "await scheduler.emit(event)",
++        "EventType.LABORATORY_VISIT_REQUEST",
++        "LaboratoryVisitRequestHandler",
++        "LaboratoryProvider.execute()",
++        "existing_scheduler_used: bool = True",
++        "scheduler_created: bool = False",
++        "scheduler_run_modified: bool = False",
++    ):
++        assert marker in text
++
++    forbidden = (
++        "class LaboratoryScheduler:",
++        "class LaboratoryManager:",
++        "Scheduler(",
++        "PriorityQueue(",
++        "EventBus(",
++        "Registry(",
++        "await scheduler.run(",
++        "asyncio.create_task(scheduler.run",
++    )
++    for marker in forbidden:
++        assert marker not in text
++
++
++def test_binding_keeps_eventbus_observation_only() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    assert "dispatcher.register(EventType.LABORATORY_VISIT_REQUEST, handler)" in text
++    assert "result_event_published: bool = False" in text
++    assert '"eventbus_role": "Dispatcher observation copy only"' in text
++    assert ".publish(" not in text
++
++
++def test_documentation_declares_one_scheduler_only() -> None:
++    architecture = ARCH.read_text(encoding="utf-8")
++    graph = GRAPH.read_text(encoding="utf-8")
++
++    for marker in (
++        "one existing Scheduler",
++        "No LaboratoryScheduler",
++        "Scheduler.run() is unchanged",
++        "0274-r2",
++        "ServerOrientation",
++        "DeliberationRound",
++        "FinalArtifactEnvelope",
++        "EventBus remains observation-only",
++        "VisPy remains passive",
++    ):
++        assert marker in architecture
++
++    for marker in (
++        "ExistingScheduler -> Policy",
++        "Policy -> ExistingQueue",
++        "ExistingQueue -> UnchangedRun",
++        "UnchangedRun -> Dispatcher",
++        "Dispatcher -> LaboratoryHandler",
++        "LaboratoryHandler -> FakeProvider",
++    ):
++        assert marker in graph
++
++
++def test_manifest_and_report_exclude_parallel_runtime_artifacts() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    report = REPORT.read_text(encoding="utf-8")
++
++    for marker in ("__pycache__", ".pyc", ".pyo", ".svg"):
++        assert marker not in manifest
++
++    for marker in (
++        "scheduler_created: false",
++        "scheduler_modified: false",
++        "scheduler_run_modified: false",
++        "parallel_queue_created: false",
++        "parallel_eventbus_created: false",
++        "parallel_registry_created: false",
++        "external_dependencies_added: false",
++        "provider_active: true",
++    ):
++        assert marker in report

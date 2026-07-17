@@ -1,0 +1,753 @@
+diff --git a/PHASE0257_SCHEDULER_OWNED_RUNTIME_REGISTRY_TEST_REPORT.md b/PHASE0257_SCHEDULER_OWNED_RUNTIME_REGISTRY_TEST_REPORT.md
+new file mode 100644
+index 0000000..5c5c53e
+--- /dev/null
++++ b/PHASE0257_SCHEDULER_OWNED_RUNTIME_REGISTRY_TEST_REPORT.md
+@@ -0,0 +1,24 @@
++# Phase 0257 test report - Scheduler-owned runtime registry
++
++## Expected validation
++
++```text
++python -m compileall -q src tests tools
++python -m pytest -q tests/context/test_scheduler_owned_runtime_registry_0257.py
++python -m pytest -q tests/tools/test_build_scheduler_owned_runtime_registry_0257.py
++python -m pytest -q tests/rules/test_scheduler_owned_runtime_registry_0257_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
++
++## Direct smoke
++
++```text
++PYTHONPATH=src:. python tools/build_scheduler_owned_runtime_registry_0257.py --source-map .var/reports/scheduler_owned_runtime_reuse_source_map_0256.json --output .var/reports/scheduler_owned_runtime_registry_0257.json --format summary
++```
++
++## Boundary
++
++Registry only.  No runtime manager, no component instantiation, no
++Scheduler.run modification, no PostgreSQL/OpenVINO/Qdrant/GitHub execution, and
++no EventBus publish.
+diff --git a/doc/CHANGELOG_0257_SCHEDULER_OWNED_RUNTIME_REGISTRY.md b/doc/CHANGELOG_0257_SCHEDULER_OWNED_RUNTIME_REGISTRY.md
+new file mode 100644
+index 0000000..8cf634d
+--- /dev/null
++++ b/doc/CHANGELOG_0257_SCHEDULER_OWNED_RUNTIME_REGISTRY.md
+@@ -0,0 +1,10 @@
++# Changelog 0257 - Scheduler-owned runtime registry
++
++## r1
++
++Adds a Scheduler-owned runtime registry plan derived from the 0256 source map.
++
++The registry references existing implementation surfaces for EventBus,
++PassiveSupervisor, SQLContextStore, OpenVINO/E5, Qdrant, and GitHub artifacts.
++It does not create a RuntimeManager, does not instantiate components, and does
++not turn component smoke tools into the runtime API.
+diff --git a/doc/architecture/SCHEDULER_OWNED_RUNTIME_REGISTRY_0257.md b/doc/architecture/SCHEDULER_OWNED_RUNTIME_REGISTRY_0257.md
+new file mode 100644
+index 0000000..a0a8387
+--- /dev/null
++++ b/doc/architecture/SCHEDULER_OWNED_RUNTIME_REGISTRY_0257.md
+@@ -0,0 +1,50 @@
++# Scheduler-owned runtime registry - 0257
++
++## Intent
++
++0257 builds the Scheduler-owned runtime registry from the reuse source map from
++0256.
++
++It is aligned with the corrected development axis:
++
++```text
++0254 -> Scheduler owns runtime components
++0255 -> audit existing surfaces
++0256 -> filtered source map
++0257 -> registry of existing surfaces owned by Scheduler
++```
++
++## Ownership
++
++Scheduler owns runtime components.
++
++The launcher remains bootstrap-only.  OpenRC remains a process supervisor.
++EventBus remains observation-only.
++
++## Registry shape
++
++The registry maps component ids to existing implementation surfaces:
++
++```text
++eventbus -> src/kernel/event_bus.py
++passive_supervisor_sink -> passive supervisor source surfaces
++sql_context_store -> existing DbApiSqlContextStore controlled write surface
++openvino_embedding_service -> existing OpenVINO/E5 surface
++qdrant_projection_store -> existing Qdrant projection/recall surfaces
++github_artifact_exchange -> existing ProjectPushFrame / GitHub artifact surfaces
++```
++
++## Runtime API boundary
++
++The registry is not a RuntimeManager.  There is no RuntimeManager.
++
++The registry does not instantiate components, start components, call
++Scheduler.run, open PostgreSQL, run OpenVINO, call Qdrant, call GitHub, or
++publish EventBus messages.
++
++There is no CLI per component.  Smoke tools remain validation helpers only.
++
++## Next step
++
++0258 will attach this registry to Scheduler bootstrap without changing
++Scheduler.run.
+diff --git a/doc/code-rules/0257_scheduler_owned_runtime_registry_rule.md b/doc/code-rules/0257_scheduler_owned_runtime_registry_rule.md
+new file mode 100644
+index 0000000..12da444
+--- /dev/null
++++ b/doc/code-rules/0257_scheduler_owned_runtime_registry_rule.md
+@@ -0,0 +1,26 @@
++# Code rule 0257 - Scheduler-owned runtime registry
++
++Required:
++
++```text
++Scheduler-owned runtime registry
++reuse source map from 0256
++Scheduler owns runtime components
++selected_from_existing_surfaces
++no CLI per component
++no RuntimeManager
++```
++
++Forbidden:
++
++```text
++new runtime manager
++new orchestrator
++launcher-owned lifecycle
++component-specific production CLI runtime API
++EventBus command path
++Scheduler.run modification
++```
++
++0258 may attach this registry to Scheduler bootstrap.  0257 must not instantiate
++or execute runtime components.
+diff --git a/doc/docs/architecture/runtime/257_scheduler_owned_runtime_registry.dot b/doc/docs/architecture/runtime/257_scheduler_owned_runtime_registry.dot
+new file mode 100644
+index 0000000..08f6bba
+--- /dev/null
++++ b/doc/docs/architecture/runtime/257_scheduler_owned_runtime_registry.dot
+@@ -0,0 +1,25 @@
++digraph scheduler_owned_runtime_registry_0257 {
++  rankdir=LR;
++
++  map [label="0256 source map"];
++  registry [label="0257 Scheduler-owned registry"];
++  scheduler [label="Scheduler\nowner"];
++  eventbus [label="EventBus"];
++  sql [label="SQLContextStore"];
++  openvino [label="OpenVINOEmbeddingService"];
++  qdrant [label="QdrantProjectionStore"];
++  github [label="GitHubArtifactExchange"];
++  supervisor [label="PassiveSupervisorSink"];
++
++  map -> registry;
++  scheduler -> registry;
++  registry -> eventbus;
++  registry -> sql;
++  registry -> openvino;
++  registry -> qdrant;
++  registry -> github;
++  registry -> supervisor;
++  qdrant -> sql [label="depends on"];
++  qdrant -> openvino [label="depends on"];
++  supervisor -> eventbus [label="observes"];
++}
+diff --git a/doc/manifests/MANIFEST_0257_SCHEDULER_OWNED_RUNTIME_REGISTRY_CHANGED_FILES.md b/doc/manifests/MANIFEST_0257_SCHEDULER_OWNED_RUNTIME_REGISTRY_CHANGED_FILES.md
+new file mode 100644
+index 0000000..6372a6f
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0257_SCHEDULER_OWNED_RUNTIME_REGISTRY_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest 0257 - Scheduler-owned runtime registry
++
++- `src/context/scheduler_owned_runtime_registry_0257.py`
++- `tools/build_scheduler_owned_runtime_registry_0257.py`
++- `tests/context/test_scheduler_owned_runtime_registry_0257.py`
++- `tests/tools/test_build_scheduler_owned_runtime_registry_0257.py`
++- `tests/rules/test_scheduler_owned_runtime_registry_0257_rule.py`
++- `doc/architecture/SCHEDULER_OWNED_RUNTIME_REGISTRY_0257.md`
++- `doc/code-rules/0257_scheduler_owned_runtime_registry_rule.md`
++- `doc/docs/architecture/runtime/257_scheduler_owned_runtime_registry.dot`
++- `doc/CHANGELOG_0257_SCHEDULER_OWNED_RUNTIME_REGISTRY.md`
++- `doc/manifests/MANIFEST_0257_SCHEDULER_OWNED_RUNTIME_REGISTRY_CHANGED_FILES.md`
++- `PHASE0257_SCHEDULER_OWNED_RUNTIME_REGISTRY_TEST_REPORT.md`
+diff --git a/src/context/scheduler_owned_runtime_registry_0257.py b/src/context/scheduler_owned_runtime_registry_0257.py
+new file mode 100644
+index 0000000..7864c58
+--- /dev/null
++++ b/src/context/scheduler_owned_runtime_registry_0257.py
+@@ -0,0 +1,310 @@
++"""Scheduler-owned runtime registry built from the 0256 reuse source map.
++
++This module turns the filtered source map into a Scheduler-owned component
++registry plan.  It does not instantiate components and it does not create a new
++runtime manager.  Scheduler remains the owner of runtime components.
++
++The registry references existing implementation surfaces so the following
++patches can adapt and execute them without reinventing a separate component
++stack or creating one production CLI per component.
++"""
++
++from __future__ import annotations
++
++from dataclasses import dataclass, field
++import json
++from pathlib import Path
++from typing import Any, Mapping, Sequence
++
++
++DEFAULT_LIFECYCLE: tuple[str, ...] = (
++    "validate",
++    "instantiate_by_scheduler",
++    "start_by_scheduler",
++    "health_by_scheduler",
++    "stop_by_scheduler",
++)
++
++
++CANONICAL_COMPONENT_SPECS: tuple[dict[str, Any], ...] = (
++    {
++        "component_id": "eventbus",
++        "surface": "eventbus",
++        "role": "observation",
++        "capabilities": ("eventbus.publish_fact", "eventbus.subscribe_fact"),
++        "depends_on": (),
++        "canonical_paths": ("src/kernel/event_bus.py",),
++    },
++    {
++        "component_id": "passive_supervisor_sink",
++        "surface": "passive_supervisor",
++        "role": "observation",
++        "capabilities": ("supervisor.observe", "supervisor.visual_read_model"),
++        "depends_on": ("eventbus",),
++        "canonical_paths": (
++            "src/context/passive_bus_supervisor_cellular_snapshot.py",
++            "src/context/passive_supervisor_visual_layout_model.py",
++            "src/context/passive_supervisor_visual_pipeline_0238.py",
++        ),
++    },
++    {
++        "component_id": "sql_context_store",
++        "surface": "sql_context_store",
++        "role": "command",
++        "capabilities": ("sql.context.write", "sql.context.rehydrate"),
++        "depends_on": (),
++        "canonical_paths": (
++            "tools/run_sql_context_store_controlled_write_smoke.py",
++        ),
++    },
++    {
++        "component_id": "openvino_embedding_service",
++        "surface": "openvino_embedding",
++        "role": "command",
++        "capabilities": ("embedding.openvino.passage", "embedding.openvino.query"),
++        "depends_on": (),
++        "canonical_paths": (
++            "tools/run_openvino_e5_live_smoke.py",
++            "tools/embed_e5.py",
++        ),
++    },
++    {
++        "component_id": "qdrant_projection_store",
++        "surface": "qdrant_projection",
++        "role": "command",
++        "capabilities": (
++            "qdrant.collection.ensure",
++            "qdrant.projection.upsert",
++            "qdrant.recall",
++        ),
++        "depends_on": ("sql_context_store", "openvino_embedding_service"),
++        "canonical_paths": (
++            "tools/run_qdrant_projection_live_smoke.py",
++            "tools/run_qdrant_live_recall_sql_rehydrate_smoke.py",
++            "tools/run_qdrant_recall_sql_rehydrate_smoke.py",
++        ),
++    },
++    {
++        "component_id": "github_artifact_exchange",
++        "surface": "github_artifact_exchange",
++        "role": "command",
++        "capabilities": ("github.artifact.scan_once", "github.project_push_frame.build"),
++        "depends_on": (),
++        "canonical_paths": (
++            "src/context/github_artifact_scheduler_intake.py",
++            "src/context/github_project_push_frame.py",
++            "src/context/github_action_ticket_artifact.py",
++        ),
++    },
++)
++
++
++@dataclass(frozen=True)
++class SchedulerOwnedRuntimeComponentRegistration:
++    """One Scheduler-owned runtime component registration."""
++
++    component_id: str
++    surface: str
++    owner: str
++    role: str
++    capabilities: tuple[str, ...]
++    depends_on: tuple[str, ...]
++    source_paths: tuple[str, ...]
++    lifecycle: tuple[str, ...] = DEFAULT_LIFECYCLE
++    runtime_api_kind: str = "scheduler_owned_object"
++    selected_from_existing_surfaces: bool = True
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "component_id": self.component_id,
++            "surface": self.surface,
++            "owner": self.owner,
++            "role": self.role,
++            "capabilities": list(self.capabilities),
++            "depends_on": list(self.depends_on),
++            "source_paths": list(self.source_paths),
++            "lifecycle": list(self.lifecycle),
++            "runtime_api_kind": self.runtime_api_kind,
++            "selected_from_existing_surfaces": self.selected_from_existing_surfaces,
++        }
++
++
++@dataclass(frozen=True)
++class SchedulerOwnedRuntimeRegistry:
++    """Registry plan owned by Scheduler, derived from existing source surfaces."""
++
++    registrations: tuple[SchedulerOwnedRuntimeComponentRegistration, ...]
++    source_map_complete: bool
++    owner: str = "scheduler"
++    launcher_bootstrap_only: bool = True
++    eventbus_observation_only: bool = True
++    no_cli_per_component: bool = True
++    creates_runtime_manager: bool = False
++    instantiates_components: bool = False
++
++    def to_dict(self) -> dict[str, Any]:
++        issues = validate_scheduler_owned_runtime_registry(self)
++        return {
++            "scheduler_owned_runtime_registry": True,
++            "valid": not issues,
++            "issues": list(issues),
++            "owner": self.owner,
++            "source_map_complete": self.source_map_complete,
++            "launcher_bootstrap_only": self.launcher_bootstrap_only,
++            "eventbus_observation_only": self.eventbus_observation_only,
++            "no_cli_per_component": self.no_cli_per_component,
++            "creates_runtime_manager": self.creates_runtime_manager,
++            "instantiates_components": self.instantiates_components,
++            "registrations": [registration.to_dict() for registration in self.registrations],
++        }
++
++
++def _selection_index(source_map_payload: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
++    if not source_map_payload:
++        return {}
++    return {
++        str(selection.get("surface")): dict(selection)
++        for selection in source_map_payload.get("selections", [])
++        if selection.get("surface")
++    }
++
++
++def _candidate_paths(selection: Mapping[str, Any] | None) -> tuple[str, ...]:
++    if not selection:
++        return ()
++    primary = tuple(str(path) for path in selection.get("primary_paths", ()) if path)
++    hits = tuple(
++        str(hit.get("path"))
++        for hit in selection.get("hits", ())
++        if isinstance(hit, Mapping) and hit.get("path")
++    )
++    result: list[str] = []
++    for path in primary + hits:
++        if path not in result:
++            result.append(path)
++    return tuple(result)
++
++
++def _select_source_paths(
++    canonical_paths: Sequence[str],
++    selection: Mapping[str, Any] | None,
++) -> tuple[str, ...]:
++    candidates = _candidate_paths(selection)
++    selected: list[str] = []
++
++    for canonical in canonical_paths:
++        if canonical in candidates:
++            selected.append(canonical)
++
++    if not selected:
++        for candidate in candidates:
++            if candidate.startswith(("src/", "tools/")) and candidate not in selected:
++                selected.append(candidate)
++            if len(selected) >= 3:
++                break
++
++    for canonical in canonical_paths:
++        if canonical not in selected:
++            selected.append(canonical)
++
++    return tuple(selected[:5])
++
++
++def build_scheduler_owned_runtime_registry(
++    source_map_payload: Mapping[str, Any] | None = None,
++) -> SchedulerOwnedRuntimeRegistry:
++    """Build a Scheduler-owned registry plan from the 0256 source map payload."""
++
++    selections = _selection_index(source_map_payload)
++    registrations: list[SchedulerOwnedRuntimeComponentRegistration] = []
++
++    for spec in CANONICAL_COMPONENT_SPECS:
++        surface = str(spec["surface"])
++        selected_paths = _select_source_paths(
++            tuple(spec["canonical_paths"]),
++            selections.get(surface),
++        )
++        registrations.append(
++            SchedulerOwnedRuntimeComponentRegistration(
++                component_id=str(spec["component_id"]),
++                surface=surface,
++                owner="scheduler",
++                role=str(spec["role"]),
++                capabilities=tuple(str(capability) for capability in spec["capabilities"]),
++                depends_on=tuple(str(dependency) for dependency in spec["depends_on"]),
++                source_paths=selected_paths,
++            )
++        )
++
++    return SchedulerOwnedRuntimeRegistry(
++        registrations=tuple(registrations),
++        source_map_complete=bool(source_map_payload.get("complete", False)) if source_map_payload else False,
++    )
++
++
++def validate_scheduler_owned_runtime_registry(
++    registry: SchedulerOwnedRuntimeRegistry,
++) -> tuple[str, ...]:
++    """Validate Scheduler-owned runtime registry boundaries."""
++
++    issues: list[str] = []
++    if registry.owner != "scheduler":
++        issues.append("registry owner must be scheduler")
++    if not registry.launcher_bootstrap_only:
++        issues.append("launcher must remain bootstrap-only")
++    if not registry.eventbus_observation_only:
++        issues.append("EventBus must remain observation-only")
++    if not registry.no_cli_per_component:
++        issues.append("runtime API must keep no CLI per component")
++    if registry.creates_runtime_manager:
++        issues.append("must not create a RuntimeManager")
++    if registry.instantiates_components:
++        issues.append("0257 must not instantiate components")
++    registrations = {item.component_id: item for item in registry.registrations}
++    required = {
++        "eventbus",
++        "passive_supervisor_sink",
++        "sql_context_store",
++        "openvino_embedding_service",
++        "qdrant_projection_store",
++        "github_artifact_exchange",
++    }
++    missing = sorted(required.difference(registrations))
++    for component_id in missing:
++        issues.append(f"missing component registration {component_id}")
++    for registration in registry.registrations:
++        if registration.owner != "scheduler":
++            issues.append(f"{registration.component_id} must be owned by scheduler")
++        if not registration.source_paths:
++            issues.append(f"{registration.component_id} must reference existing source paths")
++        if registration.runtime_api_kind != "scheduler_owned_object":
++            issues.append(f"{registration.component_id} must not expose a component CLI runtime API")
++        for dependency in registration.depends_on:
++            if dependency not in registrations:
++                issues.append(f"{registration.component_id} depends on missing {dependency}")
++    qdrant = registrations.get("qdrant_projection_store")
++    if qdrant and qdrant.depends_on != ("sql_context_store", "openvino_embedding_service"):
++        issues.append("qdrant_projection_store must depend on SQL and OpenVINO components")
++    supervisor = registrations.get("passive_supervisor_sink")
++    if supervisor and supervisor.depends_on != ("eventbus",):
++        issues.append("passive_supervisor_sink must depend only on EventBus")
++    return tuple(issues)
++
++
++def load_source_map_payload(path: Path) -> dict[str, Any]:
++    """Load a 0256 source-map report."""
++
++    return json.loads(path.read_text(encoding="utf-8"))
++
++
++def write_scheduler_owned_runtime_registry_report(
++    output: Path,
++    source_map_payload: Mapping[str, Any] | None = None,
++) -> dict[str, Any]:
++    """Write the Scheduler-owned runtime registry report."""
++
++    registry = build_scheduler_owned_runtime_registry(source_map_payload)
++    payload = registry.to_dict()
++    output.parent.mkdir(parents=True, exist_ok=True)
++    output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
++    return payload
+diff --git a/tests/context/test_scheduler_owned_runtime_registry_0257.py b/tests/context/test_scheduler_owned_runtime_registry_0257.py
+new file mode 100644
+index 0000000..e6eaeda
+--- /dev/null
++++ b/tests/context/test_scheduler_owned_runtime_registry_0257.py
+@@ -0,0 +1,85 @@
++from context.scheduler_owned_runtime_registry_0257 import (
++    build_scheduler_owned_runtime_registry,
++    validate_scheduler_owned_runtime_registry,
++)
++
++
++SOURCE_MAP = {
++    "complete": True,
++    "selections": [
++        {
++            "surface": "scheduler",
++            "primary_paths": ["src/contracts/scheduler.py", "src/kernel/scheduler.py"],
++            "hits": [],
++        },
++        {
++            "surface": "eventbus",
++            "primary_paths": ["src/kernel/event_bus.py"],
++            "hits": [],
++        },
++        {
++            "surface": "passive_supervisor",
++            "primary_paths": ["src/context/passive_bus_supervisor_cellular_snapshot.py"],
++            "hits": [],
++        },
++        {
++            "surface": "sql_context_store",
++            "primary_paths": ["tools/run_sql_context_store_controlled_write_smoke.py"],
++            "hits": [],
++        },
++        {
++            "surface": "openvino_embedding",
++            "primary_paths": ["tools/run_openvino_e5_live_smoke.py"],
++            "hits": [],
++        },
++        {
++            "surface": "qdrant_projection",
++            "primary_paths": [
++                "tools/run_qdrant_projection_live_smoke.py",
++                "tools/run_qdrant_live_recall_sql_rehydrate_smoke.py",
++            ],
++            "hits": [],
++        },
++        {
++            "surface": "github_artifact_exchange",
++            "primary_paths": [
++                "src/context/github_artifact_scheduler_intake.py",
++                "src/context/github_project_push_frame.py",
++            ],
++            "hits": [],
++        },
++    ],
++}
++
++
++def test_registry_is_scheduler_owned_and_valid() -> None:
++    registry = build_scheduler_owned_runtime_registry(SOURCE_MAP)
++    payload = registry.to_dict()
++
++    assert payload["valid"] is True
++    assert payload["owner"] == "scheduler"
++    assert payload["launcher_bootstrap_only"] is True
++    assert payload["eventbus_observation_only"] is True
++    assert payload["no_cli_per_component"] is True
++    assert payload["creates_runtime_manager"] is False
++    assert payload["instantiates_components"] is False
++
++
++def test_registry_reuses_existing_surfaces_for_core_components() -> None:
++    registry = build_scheduler_owned_runtime_registry(SOURCE_MAP)
++    registrations = {item.component_id: item for item in registry.registrations}
++
++    assert "src/kernel/event_bus.py" in registrations["eventbus"].source_paths
++    assert "sql.context.write" in registrations["sql_context_store"].capabilities
++    assert "embedding.openvino.passage" in registrations["openvino_embedding_service"].capabilities
++    assert registrations["qdrant_projection_store"].depends_on == (
++        "sql_context_store",
++        "openvino_embedding_service",
++    )
++    assert registrations["passive_supervisor_sink"].depends_on == ("eventbus",)
++
++
++def test_registry_validation_passes() -> None:
++    registry = build_scheduler_owned_runtime_registry(SOURCE_MAP)
++
++    assert validate_scheduler_owned_runtime_registry(registry) == ()
+diff --git a/tests/rules/test_scheduler_owned_runtime_registry_0257_rule.py b/tests/rules/test_scheduler_owned_runtime_registry_0257_rule.py
+new file mode 100644
+index 0000000..4ca6e5c
+--- /dev/null
++++ b/tests/rules/test_scheduler_owned_runtime_registry_0257_rule.py
+@@ -0,0 +1,33 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def test_0257_registry_reuses_surfaces_without_runtime_manager() -> None:
++    source = (ROOT / "src/context/scheduler_owned_runtime_registry_0257.py").read_text(
++        encoding="utf-8"
++    )
++
++    assert "Scheduler remains the owner of runtime components" in source
++    assert "selected_from_existing_surfaces" in source
++    assert "no_cli_per_component" in source
++    assert "creates_runtime_manager" in source
++    assert "instantiates_components" in source
++    assert "RuntimeManager(" not in source
++    assert "Scheduler.run(" not in source
++    assert ".upsert(" not in source
++    assert "requests." not in source
++
++
++def test_0257_docs_lock_registry_axis() -> None:
++    doc = (ROOT / "doc/architecture/SCHEDULER_OWNED_RUNTIME_REGISTRY_0257.md").read_text(
++        encoding="utf-8"
++    )
++
++    assert "Scheduler-owned runtime registry" in doc
++    assert "reuse source map from 0256" in doc
++    assert "Scheduler owns runtime components" in doc
++    assert "no CLI per component" in doc
++    assert "no RuntimeManager" in doc
++    assert "0258 will attach this registry to Scheduler bootstrap" in doc
+diff --git a/tests/tools/test_build_scheduler_owned_runtime_registry_0257.py b/tests/tools/test_build_scheduler_owned_runtime_registry_0257.py
+new file mode 100644
+index 0000000..930a2d1
+--- /dev/null
++++ b/tests/tools/test_build_scheduler_owned_runtime_registry_0257.py
+@@ -0,0 +1,50 @@
++import json
++import subprocess
++import sys
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def test_registry_tool_uses_source_map_file(tmp_path: Path) -> None:
++    source_map = tmp_path / "source_map.json"
++    output = tmp_path / "registry.json"
++    source_map.write_text(
++        json.dumps(
++            {
++                "complete": True,
++                "selections": [
++                    {"surface": "eventbus", "primary_paths": ["src/kernel/event_bus.py"], "hits": []},
++                    {"surface": "sql_context_store", "primary_paths": ["tools/run_sql_context_store_controlled_write_smoke.py"], "hits": []},
++                    {"surface": "openvino_embedding", "primary_paths": ["tools/run_openvino_e5_live_smoke.py"], "hits": []},
++                    {"surface": "qdrant_projection", "primary_paths": ["tools/run_qdrant_projection_live_smoke.py"], "hits": []},
++                    {"surface": "passive_supervisor", "primary_paths": ["src/context/passive_bus_supervisor_cellular_snapshot.py"], "hits": []},
++                    {"surface": "github_artifact_exchange", "primary_paths": ["src/context/github_project_push_frame.py"], "hits": []},
++                ],
++            }
++        ),
++        encoding="utf-8",
++    )
++
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/build_scheduler_owned_runtime_registry_0257.py",
++            "--source-map",
++            str(source_map),
++            "--output",
++            str(output),
++            "--format",
++            "summary",
++        ],
++        cwd=ROOT,
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    assert "scheduler_owned_runtime_registry_valid=True" in result.stdout
++    payload = json.loads(output.read_text(encoding="utf-8"))
++    assert payload["valid"] is True
++    assert payload["source_map_complete"] is True
+diff --git a/tools/build_scheduler_owned_runtime_registry_0257.py b/tools/build_scheduler_owned_runtime_registry_0257.py
+new file mode 100755
+index 0000000..65428d3
+--- /dev/null
++++ b/tools/build_scheduler_owned_runtime_registry_0257.py
+@@ -0,0 +1,61 @@
++#!/usr/bin/env python3
++"""Build a Scheduler-owned runtime registry from the 0256 source map."""
++
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++SRC_ROOT = ROOT / "src"
++for _path in (str(SRC_ROOT), str(ROOT)):
++    if _path not in sys.path:
++        sys.path.insert(0, _path)
++
++from context.scheduler_owned_runtime_registry_0257 import (  # noqa: E402
++    build_scheduler_owned_runtime_registry,
++    load_source_map_payload,
++    write_scheduler_owned_runtime_registry_report,
++)
++
++
++DEFAULT_SOURCE_MAP = ROOT / ".var/reports/scheduler_owned_runtime_reuse_source_map_0256.json"
++
++
++def parse_args() -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--source-map", default=str(DEFAULT_SOURCE_MAP))
++    parser.add_argument("--output", default="")
++    parser.add_argument("--format", choices=("json", "summary"), default="json")
++    return parser.parse_args()
++
++
++def main() -> int:
++    args = parse_args()
++    source_map_path = Path(args.source_map)
++    source_map_payload = load_source_map_payload(source_map_path) if source_map_path.exists() else None
++
++    if args.output:
++        payload = write_scheduler_owned_runtime_registry_report(
++            Path(args.output),
++            source_map_payload,
++        )
++    else:
++        payload = build_scheduler_owned_runtime_registry(source_map_payload).to_dict()
++
++    if args.format == "summary":
++        components = ",".join(item["component_id"] for item in payload["registrations"])
++        print(
++            "scheduler_owned_runtime_registry_valid="
++            f"{payload['valid']} issues={len(payload['issues'])} "
++            f"source_map_complete={payload['source_map_complete']} components={components}"
++        )
++    else:
++        print(json.dumps(payload, indent=2, sort_keys=True))
++    return 0 if payload["valid"] else 2
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

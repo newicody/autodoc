@@ -1,0 +1,662 @@
+diff --git a/PHASE0271_CONTROLLED_REAL_QDRANT_EXECUTOR_REUSE_AUDIT_TEST_REPORT.md b/PHASE0271_CONTROLLED_REAL_QDRANT_EXECUTOR_REUSE_AUDIT_TEST_REPORT.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..e9f34c98164bfa11810ff6d8c370296aea54af9f
+--- /dev/null
++++ b/PHASE0271_CONTROLLED_REAL_QDRANT_EXECUTOR_REUSE_AUDIT_TEST_REPORT.md
+@@ -0,0 +1,35 @@
++# Phase 0271 test report
++
++## Scope
++
++Passive source audit before any controlled real Qdrant executor implementation.
++
++## Expected findings on commit 70bda8c
++
++- existing protocol found: true
++- 0262 demo projection executor found: true
++- 0263 demo recall executor found: true
++- concrete non-demo executor found: false
++- implementation needed: true
++- one narrow executor module justified: true
++- network used by audit: false
++- Qdrant called by audit: false
++
++## Validation
++
++Run:
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. python -m pytest -q tests/rules
++PYTHONPATH=src:. python -m pytest -q
++```
++
++Audit smoke:
++
++```bash
++PYTHONPATH=src:. python tools/audit_controlled_real_qdrant_executor_reuse_0271.py \
++  --repo-root . \
++  --output .var/reports/controlled_real_qdrant_executor_reuse_audit_0271.json \
++  --format summary
++```
+diff --git a/doc/CHANGELOG_0271_CONTROLLED_REAL_QDRANT_EXECUTOR_REUSE_AUDIT.md b/doc/CHANGELOG_0271_CONTROLLED_REAL_QDRANT_EXECUTOR_REUSE_AUDIT.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..11d6174eed6e5c0ff5e2708235e325c7b9f4efbf
+--- /dev/null
++++ b/doc/CHANGELOG_0271_CONTROLLED_REAL_QDRANT_EXECUTOR_REUSE_AUDIT.md
+@@ -0,0 +1,8 @@
++# Changelog 0271
++
++- Added a passive source-only audit for real Qdrant executor reuse.
++- Confirmed the existing `QdrantProjectionExecutor` protocol is the extension seam.
++- Distinguished demo executors from concrete non-demo executors.
++- Confirmed 0247/0248 remain read-only readiness surfaces.
++- Documented why one narrow concrete executor module is justified only after this audit.
++- Added no network call, backend dependency, runtime manager or Scheduler modification.
+diff --git a/doc/architecture/CONTROLLED_REAL_QDRANT_EXECUTOR_REUSE_AUDIT_0271.md b/doc/architecture/CONTROLLED_REAL_QDRANT_EXECUTOR_REUSE_AUDIT_0271.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..a4907cf954d8deb9ac67ba048c6613f5a480f959
+--- /dev/null
++++ b/doc/architecture/CONTROLLED_REAL_QDRANT_EXECUTOR_REUSE_AUDIT_0271.md
+@@ -0,0 +1,28 @@
++# 0271-r1 — Controlled real Qdrant executor reuse audit
++
++## Decision
++
++The repository already owns the correct execution membrane:
++`inference.qdrant_projection_adapter.QdrantProjectionExecutor`.
++It defines both `upsert_points(...)` and `search_vector(...)` while keeping
++projection contracts independent from a concrete client.
++
++The current operational path does not contain a concrete non-demo executor:
++
++- 0262 injects `DemoQdrantProjectionExecutor`;
++- 0263 injects `DemoQdrantRecallExecutor`;
++- 0269 requires the explicit `--demo-qdrant` gate;
++- 0247/0248 are readiness-only and prohibit Qdrant API calls;
++- 0210/0211/0212 audit, plan and accept contracts without writes.
++
++Therefore 0271-r1 authorizes a later, narrow IO implementation of the existing
++protocol. It does **not** authorize a Qdrant manager, Scheduler lifecycle owner,
++new projection contract, or durable Qdrant authority.
++
++## Required next shape
++
++0271-r2 should implement the existing protocol in a small IO-edge module, use
++an explicit endpoint/collection/policy decision, return existing immutable
++write/recall results, preserve `payload.sql_ref`, and never start Qdrant.
++The dependency choice must remain explicit; no third-party dependency is added
++by this audit.
+diff --git a/doc/code-rules/0271_controlled_real_qdrant_executor_reuse_audit_rule.md b/doc/code-rules/0271_controlled_real_qdrant_executor_reuse_audit_rule.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..932f7e281f50118f0348377c24efc730015c4788
+--- /dev/null
++++ b/doc/code-rules/0271_controlled_real_qdrant_executor_reuse_audit_rule.md
+@@ -0,0 +1,10 @@
++# Rule 0271 — controlled real Qdrant executor reuse audit
++
++1. 0271-r1 is source inspection only.
++2. It must not import or execute audited modules.
++3. It must not call Qdrant, SQL, OpenVINO, GitHub or OpenRC.
++4. It must reuse `QdrantProjectionExecutor` as the future concrete executor contract.
++5. Qdrant remains projection/recall only; SQL remains durable authority.
++6. A new RuntimeManager, Orchestrator, Scheduler or service lifecycle owner is forbidden.
++7. The audit report may justify one narrow concrete executor module only when no live implementation exists.
++8. No non-stdlib dependency is introduced by 0271-r1.
+diff --git a/doc/docs/architecture/runtime/271_controlled_real_qdrant_executor_reuse_audit.dot b/doc/docs/architecture/runtime/271_controlled_real_qdrant_executor_reuse_audit.dot
+new file mode 100644
+index 0000000000000000000000000000000000000000..61db0977ffc7640f281a2916b43fb359919f9b27
+--- /dev/null
++++ b/doc/docs/architecture/runtime/271_controlled_real_qdrant_executor_reuse_audit.dot
+@@ -0,0 +1,19 @@
++digraph controlled_real_qdrant_executor_reuse_audit_0271 {
++  rankdir=LR;
++  node [shape=box];
++
++  protocol [label="existing QdrantProjectionExecutor\nupsert + search"];
++  projection_demo [label="0262 demo projection executor"];
++  recall_demo [label="0263 demo recall executor"];
++  readiness [label="0247/0248 read-only readiness"];
++  audit [label="0271-r1 passive source audit"];
++  decision [label="no live executor found\nimplement existing protocol next"];
++  forbidden [label="no RuntimeManager\nno Scheduler service control", shape=note];
++
++  protocol -> audit;
++  projection_demo -> audit;
++  recall_demo -> audit;
++  readiness -> audit;
++  audit -> decision;
++  forbidden -> decision [style=dashed];
++}
+diff --git a/doc/manifests/MANIFEST_0271_CONTROLLED_REAL_QDRANT_EXECUTOR_REUSE_AUDIT_CHANGED_FILES.md b/doc/manifests/MANIFEST_0271_CONTROLLED_REAL_QDRANT_EXECUTOR_REUSE_AUDIT_CHANGED_FILES.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..922484bdb05422d6dadcbfe183e6462118547498
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0271_CONTROLLED_REAL_QDRANT_EXECUTOR_REUSE_AUDIT_CHANGED_FILES.md
+@@ -0,0 +1,17 @@
++# Manifest 0271 — changed files
++
++Added:
++
++- `src/context/controlled_real_qdrant_executor_reuse_audit_0271.py`
++- `tools/audit_controlled_real_qdrant_executor_reuse_0271.py`
++- `tests/context/test_controlled_real_qdrant_executor_reuse_audit_0271.py`
++- `tests/tools/test_audit_controlled_real_qdrant_executor_reuse_0271.py`
++- `tests/rules/test_controlled_real_qdrant_executor_reuse_audit_0271_rule.py`
++- `doc/architecture/CONTROLLED_REAL_QDRANT_EXECUTOR_REUSE_AUDIT_0271.md`
++- `doc/code-rules/0271_controlled_real_qdrant_executor_reuse_audit_rule.md`
++- `doc/docs/architecture/runtime/271_controlled_real_qdrant_executor_reuse_audit.dot`
++- `doc/CHANGELOG_0271_CONTROLLED_REAL_QDRANT_EXECUTOR_REUSE_AUDIT.md`
++- `doc/manifests/MANIFEST_0271_CONTROLLED_REAL_QDRANT_EXECUTOR_REUSE_AUDIT_CHANGED_FILES.md`
++- `PHASE0271_CONTROLLED_REAL_QDRANT_EXECUTOR_REUSE_AUDIT_TEST_REPORT.md`
++
++No existing runtime, Scheduler, projection, recall, adapter or service file is modified.
+diff --git a/src/context/controlled_real_qdrant_executor_reuse_audit_0271.py b/src/context/controlled_real_qdrant_executor_reuse_audit_0271.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..e6660454c512dfca375642220bb7d2549d706650
+--- /dev/null
++++ b/src/context/controlled_real_qdrant_executor_reuse_audit_0271.py
+@@ -0,0 +1,240 @@
++"""Pure reuse audit for a controlled real Qdrant executor.
++
++0271-r1 reads source text supplied by an IO adapter and proves whether the
++repository already contains a concrete executor for the existing
++``QdrantProjectionExecutor`` protocol.  It performs no imports from audited
++modules, no network access, no Qdrant call, and no service control.
++"""
++
++from __future__ import annotations
++
++import ast
++from dataclasses import dataclass
++from typing import Any, Mapping
++
++AUDIT_SCHEMA = "missipy.qdrant.controlled_real_executor_reuse_audit.v1"
++
++REQUIRED_SURFACES: tuple[str, ...] = (
++    "src/inference/qdrant_projection_adapter.py",
++    "src/context/scheduler_managed_embedding_qdrant_projection_usage_0262.py",
++    "src/context/scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263.py",
++    "src/context/prod_server_qdrant_collection_readiness_0247.py",
++    "src/context/prod_server_projection_path_readiness_0248.py",
++    "tools/audit_sql_qdrant_projection_readiness.py",
++    "tools/plan_sql_qdrant_projection.py",
++    "tools/accept_controlled_sql_qdrant_projection.py",
++    "tools/run_production_prototype_smoke_composition_0269.py",
++)
++
++
++@dataclass(frozen=True, slots=True)
++class QdrantExecutorClassFinding:
++    """One class exposing the existing executor method pair."""
++
++    path: str
++    class_name: str
++    protocol: bool
++    demo: bool
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "path": self.path,
++            "class_name": self.class_name,
++            "protocol": self.protocol,
++            "demo": self.demo,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class ControlledRealQdrantExecutorReuseAuditResult:
++    """Immutable result of the 0271-r1 source-only audit."""
++
++    valid: bool
++    issues: tuple[str, ...]
++    scanned_file_count: int
++    required_surfaces_present: tuple[str, ...]
++    missing_required_surfaces: tuple[str, ...]
++    executor_classes: tuple[QdrantExecutorClassFinding, ...]
++    protocol_found: bool
++    projection_demo_found: bool
++    recall_demo_found: bool
++    live_executor_found: bool
++    live_executor_paths: tuple[str, ...]
++    qdrant_client_import_found: bool
++    readiness_surfaces_are_read_only: bool
++    demo_gate_present_in_0269: bool
++    existing_protocol_must_be_reused: bool = True
++    sql_remains_authority: bool = True
++    qdrant_remains_projection_recall_only: bool = True
++    scheduler_starts_qdrant: bool = False
++    network_used: bool = False
++    qdrant_called: bool = False
++    scheduler_run_modified: bool = False
++    runtime_manager_created: bool = False
++
++    @property
++    def implementation_needed(self) -> bool:
++        return self.valid and not self.live_executor_found
++
++    @property
++    def new_executor_module_justified(self) -> bool:
++        return self.implementation_needed
++
++    @property
++    def next_recommended_patch(self) -> str:
++        if self.live_executor_found:
++            return "0271-r2-reuse_existing_controlled_real_qdrant_executor"
++        return "0271-r2-stdlib_qdrant_http_executor_protocol_implementation"
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": AUDIT_SCHEMA,
++            "controlled_real_qdrant_executor_reuse_audit": True,
++            "valid": self.valid,
++            "issues": list(self.issues),
++            "scanned_file_count": self.scanned_file_count,
++            "required_surfaces_present": list(self.required_surfaces_present),
++            "missing_required_surfaces": list(self.missing_required_surfaces),
++            "executor_classes": [item.to_mapping() for item in self.executor_classes],
++            "protocol_found": self.protocol_found,
++            "projection_demo_found": self.projection_demo_found,
++            "recall_demo_found": self.recall_demo_found,
++            "live_executor_found": self.live_executor_found,
++            "live_executor_paths": list(self.live_executor_paths),
++            "qdrant_client_import_found": self.qdrant_client_import_found,
++            "readiness_surfaces_are_read_only": self.readiness_surfaces_are_read_only,
++            "demo_gate_present_in_0269": self.demo_gate_present_in_0269,
++            "implementation_needed": self.implementation_needed,
++            "new_executor_module_justified": self.new_executor_module_justified,
++            "next_recommended_patch": self.next_recommended_patch,
++            "existing_protocol_must_be_reused": self.existing_protocol_must_be_reused,
++            "sql_remains_authority": self.sql_remains_authority,
++            "qdrant_remains_projection_recall_only": self.qdrant_remains_projection_recall_only,
++            "scheduler_starts_qdrant": self.scheduler_starts_qdrant,
++            "network_used": self.network_used,
++            "qdrant_called": self.qdrant_called,
++            "scheduler_run_modified": self.scheduler_run_modified,
++            "runtime_manager_created": self.runtime_manager_created,
++        }
++
++
++def audit_controlled_real_qdrant_executor_reuse(
++    sources: Mapping[str, str],
++) -> ControlledRealQdrantExecutorReuseAuditResult:
++    """Audit supplied Python source text without importing or executing it."""
++
++    normalized = {str(path): str(text) for path, text in sources.items()}
++    present = tuple(path for path in REQUIRED_SURFACES if path in normalized)
++    missing = tuple(path for path in REQUIRED_SURFACES if path not in normalized)
++    issues: list[str] = []
++    if missing:
++        issues.extend(f"missing required surface: {path}" for path in missing)
++
++    adapter = normalized.get(REQUIRED_SURFACES[0], "")
++    projection = normalized.get(REQUIRED_SURFACES[1], "")
++    recall = normalized.get(REQUIRED_SURFACES[2], "")
++    readiness_collection = normalized.get(REQUIRED_SURFACES[3], "")
++    readiness_projection = normalized.get(REQUIRED_SURFACES[4], "")
++    composition = normalized.get(REQUIRED_SURFACES[8], "")
++
++    protocol_found = (
++        "class QdrantProjectionExecutor(Protocol)" in adapter
++        and "def upsert_points" in adapter
++        and "def search_vector" in adapter
++        and "build_qdrant_projection_batch" in adapter
++        and "unique_sql_context_refs_from_recall" in adapter
++    )
++    if not protocol_found:
++        issues.append("existing QdrantProjectionExecutor protocol surface is incomplete")
++
++    projection_demo_found = "class DemoQdrantProjectionExecutor" in projection
++    recall_demo_found = "class DemoQdrantRecallExecutor" in recall
++    if not projection_demo_found:
++        issues.append("0262 demo projection executor marker is missing")
++    if not recall_demo_found:
++        issues.append("0263 demo recall executor marker is missing")
++
++    readiness_surfaces_are_read_only = (
++        '"calls_qdrant_api": False' in readiness_collection
++        and '"upserts_qdrant_points": False' in readiness_collection
++        and '"calls_qdrant_api": False' in readiness_projection
++        and '"writes_qdrant_points": False' in readiness_projection
++    )
++    if not readiness_surfaces_are_read_only:
++        issues.append("0247/0248 readiness boundaries are not demonstrably read-only")
++
++    demo_gate_present = "--demo-qdrant" in composition
++    if not demo_gate_present:
++        issues.append("0269 explicit --demo-qdrant gate is missing")
++
++    executor_classes = _find_executor_classes(normalized)
++    live = tuple(
++        item for item in executor_classes if not item.protocol and not item.demo
++    )
++    qdrant_client_import_found = any(
++        _imports_qdrant_client(text) for text in normalized.values()
++    )
++
++    return ControlledRealQdrantExecutorReuseAuditResult(
++        valid=not issues,
++        issues=tuple(issues),
++        scanned_file_count=len(normalized),
++        required_surfaces_present=present,
++        missing_required_surfaces=missing,
++        executor_classes=executor_classes,
++        protocol_found=protocol_found,
++        projection_demo_found=projection_demo_found,
++        recall_demo_found=recall_demo_found,
++        live_executor_found=bool(live),
++        live_executor_paths=tuple(sorted({item.path for item in live})),
++        qdrant_client_import_found=qdrant_client_import_found,
++        readiness_surfaces_are_read_only=readiness_surfaces_are_read_only,
++        demo_gate_present_in_0269=demo_gate_present,
++    )
++
++
++def _find_executor_classes(
++    sources: Mapping[str, str],
++) -> tuple[QdrantExecutorClassFinding, ...]:
++    findings: list[QdrantExecutorClassFinding] = []
++    for path, text in sorted(sources.items()):
++        try:
++            tree = ast.parse(text, filename=path)
++        except SyntaxError:
++            continue
++        for node in tree.body:
++            if not isinstance(node, ast.ClassDef):
++                continue
++            methods = {
++                child.name
++                for child in node.body
++                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
++            }
++            if not {"upsert_points", "search_vector"}.issubset(methods):
++                continue
++            bases = {ast.unparse(base) for base in node.bases}
++            findings.append(
++                QdrantExecutorClassFinding(
++                    path=path,
++                    class_name=node.name,
++                    protocol="Protocol" in bases,
++                    demo=node.name.startswith(("Demo", "Fake", "Stub")),
++                )
++            )
++    return tuple(findings)
++
++
++def _imports_qdrant_client(text: str) -> bool:
++    try:
++        tree = ast.parse(text)
++    except SyntaxError:
++        return False
++    for node in ast.walk(tree):
++        if isinstance(node, ast.Import):
++            if any(alias.name == "qdrant_client" or alias.name.startswith("qdrant_client.") for alias in node.names):
++                return True
++        elif isinstance(node, ast.ImportFrom):
++            module = node.module or ""
++            if module == "qdrant_client" or module.startswith("qdrant_client."):
++                return True
++    return False
+diff --git a/tests/context/test_controlled_real_qdrant_executor_reuse_audit_0271.py b/tests/context/test_controlled_real_qdrant_executor_reuse_audit_0271.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..cc5697d2d4c633571b8be4faac2691d90388e800
+--- /dev/null
++++ b/tests/context/test_controlled_real_qdrant_executor_reuse_audit_0271.py
+@@ -0,0 +1,65 @@
++from context.controlled_real_qdrant_executor_reuse_audit_0271 import (
++    REQUIRED_SURFACES,
++    audit_controlled_real_qdrant_executor_reuse,
++)
++
++
++def _baseline_sources() -> dict[str, str]:
++    return {
++        REQUIRED_SURFACES[0]: """
++from typing import Protocol
++class QdrantProjectionExecutor(Protocol):
++    def upsert_points(self): ...
++    def search_vector(self): ...
++def build_qdrant_projection_batch(): ...
++def unique_sql_context_refs_from_recall(): ...
++""",
++        REQUIRED_SURFACES[1]: """
++class DemoQdrantProjectionExecutor:
++    def upsert_points(self): ...
++    def search_vector(self): ...
++""",
++        REQUIRED_SURFACES[2]: """
++class DemoQdrantRecallExecutor:
++    def upsert_points(self): ...
++    def search_vector(self): ...
++""",
++        REQUIRED_SURFACES[3]: 'BOUNDARY = {"calls_qdrant_api": False, "upserts_qdrant_points": False}',
++        REQUIRED_SURFACES[4]: 'BOUNDARY = {"calls_qdrant_api": False, "writes_qdrant_points": False}',
++        REQUIRED_SURFACES[5]: "audit only",
++        REQUIRED_SURFACES[6]: "plan only",
++        REQUIRED_SURFACES[7]: "acceptance only",
++        REQUIRED_SURFACES[8]: 'parser.add_argument("--demo-qdrant")',
++    }
++
++
++def test_0271_audit_proves_protocol_exists_but_live_executor_is_missing() -> None:
++    result = audit_controlled_real_qdrant_executor_reuse(_baseline_sources())
++
++    assert result.valid is True
++    assert result.protocol_found is True
++    assert result.projection_demo_found is True
++    assert result.recall_demo_found is True
++    assert result.live_executor_found is False
++    assert result.implementation_needed is True
++    assert result.new_executor_module_justified is True
++    assert result.network_used is False
++    assert result.qdrant_called is False
++    assert result.runtime_manager_created is False
++
++
++def test_0271_audit_detects_existing_live_executor_for_reuse() -> None:
++    sources = _baseline_sources()
++    sources["src/inference/existing_live_executor.py"] = """
++class ExistingLiveExecutor:
++    def upsert_points(self): ...
++    def search_vector(self): ...
++"""
++
++    result = audit_controlled_real_qdrant_executor_reuse(sources)
++
++    assert result.valid is True
++    assert result.live_executor_found is True
++    assert result.implementation_needed is False
++    assert result.new_executor_module_justified is False
++    assert result.live_executor_paths == ("src/inference/existing_live_executor.py",)
+diff --git a/tests/rules/test_controlled_real_qdrant_executor_reuse_audit_0271_rule.py b/tests/rules/test_controlled_real_qdrant_executor_reuse_audit_0271_rule.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..3eb8b78ce6ac3c17b0fceb670c479986afd278ca
+--- /dev/null
++++ b/tests/rules/test_controlled_real_qdrant_executor_reuse_audit_0271_rule.py
+@@ -0,0 +1,40 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++CORE = ROOT / "src/context/controlled_real_qdrant_executor_reuse_audit_0271.py"
++TOOL = ROOT / "tools/audit_controlled_real_qdrant_executor_reuse_0271.py"
++MANIFEST = ROOT / "doc/manifests/MANIFEST_0271_CONTROLLED_REAL_QDRANT_EXECUTOR_REUSE_AUDIT_CHANGED_FILES.md"
++
++
++def test_0271_is_a_passive_source_audit_only() -> None:
++    combined = CORE.read_text(encoding="utf-8") + TOOL.read_text(encoding="utf-8")
++    forbidden = (
++        "import qdrant_client",
++        "from qdrant_client",
++        "urllib.request",
++        "http.client",
++        "import requests",
++        "import httpx",
++        "subprocess",
++        "rc-service",
++        "Scheduler.run" + "(",
++    )
++    for token in forbidden:
++        assert token not in combined
++
++
++def test_0271_reuses_existing_protocol_and_forbids_manager_growth() -> None:
++    text = CORE.read_text(encoding="utf-8")
++    assert "QdrantProjectionExecutor" in text
++    assert "runtime_manager_created: bool = False" in text
++    assert "existing_protocol_must_be_reused: bool = True" in text
++    assert "sql_remains_authority: bool = True" in text
++    assert "qdrant_remains_projection_recall_only: bool = True" in text
++
++
++def test_0271_manifest_does_not_modify_scheduler_or_existing_runtime_modules() -> None:
++    text = MANIFEST.read_text(encoding="utf-8")
++    assert "src/kernel/scheduler.py" not in text
++    assert "src/inference/qdrant_projection_adapter.py" not in text
++    assert "scheduler_managed_embedding_qdrant_projection_usage_0262.py" not in text
++    assert "scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263.py" not in text
+diff --git a/tests/tools/test_audit_controlled_real_qdrant_executor_reuse_0271.py b/tests/tools/test_audit_controlled_real_qdrant_executor_reuse_0271.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..521588abfc941b3c2d3a43b021ccd89f92665303
+--- /dev/null
++++ b/tests/tools/test_audit_controlled_real_qdrant_executor_reuse_0271.py
+@@ -0,0 +1,52 @@
++import json
++from pathlib import Path
++
++from context.controlled_real_qdrant_executor_reuse_audit_0271 import REQUIRED_SURFACES
++from tools.audit_controlled_real_qdrant_executor_reuse_0271 import main
++
++
++def test_0271_cli_writes_audit_report(tmp_path: Path, capsys) -> None:
++    contents = {
++        REQUIRED_SURFACES[0]: """
++from typing import Protocol
++class QdrantProjectionExecutor(Protocol):
++    def upsert_points(self): ...
++    def search_vector(self): ...
++def build_qdrant_projection_batch(): ...
++def unique_sql_context_refs_from_recall(): ...
++""",
++        REQUIRED_SURFACES[1]: """
++class DemoQdrantProjectionExecutor:
++    def upsert_points(self): ...
++    def search_vector(self): ...
++""",
++        REQUIRED_SURFACES[2]: """
++class DemoQdrantRecallExecutor:
++    def upsert_points(self): ...
++    def search_vector(self): ...
++""",
++        REQUIRED_SURFACES[3]: '{"calls_qdrant_api": False, "upserts_qdrant_points": False}',
++        REQUIRED_SURFACES[4]: '{"calls_qdrant_api": False, "writes_qdrant_points": False}',
++        REQUIRED_SURFACES[5]: "audit",
++        REQUIRED_SURFACES[6]: "plan",
++        REQUIRED_SURFACES[7]: "accept",
++        REQUIRED_SURFACES[8]: "--demo-qdrant",
++    }
++    for relative, text in contents.items():
++        path = tmp_path / relative
++        path.parent.mkdir(parents=True, exist_ok=True)
++        path.write_text(text, encoding="utf-8")
++
++    output = tmp_path / "report.json"
++    code = main([
++        "--repo-root", str(tmp_path),
++        "--output", str(output),
++        "--format", "summary",
++    ])
++
++    assert code == 0
++    payload = json.loads(output.read_text(encoding="utf-8"))
++    assert payload["valid"] is True
++    assert payload["live_executor_found"] is False
++    assert payload["next_recommended_patch"].startswith("0271-r2-")
++    assert "audit_valid=True" in capsys.readouterr().out
+diff --git a/tools/audit_controlled_real_qdrant_executor_reuse_0271.py b/tools/audit_controlled_real_qdrant_executor_reuse_0271.py
+new file mode 100755
+index 0000000000000000000000000000000000000000..a22f0108c53037a094b62acfe29ea025ef95f76f
+--- /dev/null
++++ b/tools/audit_controlled_real_qdrant_executor_reuse_0271.py
+@@ -0,0 +1,82 @@
++#!/usr/bin/env python3
++"""Read repository source files and write the passive 0271-r1 reuse audit."""
++
++from __future__ import annotations
++
++import argparse
++import json
++import os
++from pathlib import Path
++from typing import Any, Mapping
++
++from context.controlled_real_qdrant_executor_reuse_audit_0271 import (
++    audit_controlled_real_qdrant_executor_reuse,
++)
++
++DEFAULT_OUTPUT = Path(".var/reports/controlled_real_qdrant_executor_reuse_audit_0271.json")
++SCAN_ROOTS = ("src", "tools")
++SKIP_PARTS = {".git", ".var", "patch", "__pycache__", ".pytest_cache"}
++
++
++def collect_python_sources(repo_root: Path) -> dict[str, str]:
++    """Collect repository-relative Python text without importing modules."""
++
++    sources: dict[str, str] = {}
++    for root_name in SCAN_ROOTS:
++        base = repo_root / root_name
++        if not base.exists():
++            continue
++        for path in sorted(base.rglob("*.py")):
++            relative = path.relative_to(repo_root)
++            if any(part in SKIP_PARTS for part in relative.parts):
++                continue
++            sources[relative.as_posix()] = path.read_text(encoding="utf-8")
++    return sources
++
++
++def write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
++    """Write one JSON report atomically at the CLI/IO edge."""
++
++    path.parent.mkdir(parents=True, exist_ok=True)
++    temporary = path.with_name(path.name + ".tmp")
++    temporary.write_text(
++        json.dumps(dict(payload), indent=2, sort_keys=True) + "\n",
++        encoding="utf-8",
++    )
++    os.replace(temporary, path)
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser(
++        description="Audit reuse surfaces before implementing a real Qdrant executor."
++    )
++    parser.add_argument("--repo-root", default=".")
++    parser.add_argument("--output", default=str(DEFAULT_OUTPUT))
++    parser.add_argument("--format", choices=("json", "summary"), default="summary")
++    args = parser.parse_args(argv)
++
++    repo_root = Path(args.repo_root).resolve()
++    result = audit_controlled_real_qdrant_executor_reuse(
++        collect_python_sources(repo_root)
++    )
++    payload = result.to_mapping()
++    write_json_atomic(Path(args.output), payload)
++
++    if args.format == "json":
++        print(json.dumps(payload, indent=2, sort_keys=True))
++    else:
++        print(
++            "controlled_real_qdrant_executor_reuse_audit_valid="
++            f"{result.valid} issues={len(result.issues)} "
++            f"scanned_files={result.scanned_file_count} "
++            f"protocol_found={result.protocol_found} "
++            f"live_executor_found={result.live_executor_found} "
++            f"implementation_needed={result.implementation_needed} "
++            f"new_executor_module_justified={result.new_executor_module_justified} "
++            f"next={result.next_recommended_patch}"
++        )
++    return 0 if result.valid else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

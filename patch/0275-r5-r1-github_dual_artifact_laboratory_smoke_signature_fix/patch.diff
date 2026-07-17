@@ -1,0 +1,241 @@
+diff --git a/tests/context/test_github_dual_artifact_laboratory_smoke_0275.py b/tests/context/test_github_dual_artifact_laboratory_smoke_0275.py
+--- a/tests/context/test_github_dual_artifact_laboratory_smoke_0275.py
++++ b/tests/context/test_github_dual_artifact_laboratory_smoke_0275.py
+@@ -1,13 +1,103 @@
+ import asyncio
+-from context.github_dual_artifact_contract_0275 import *
+-from context.github_dual_artifact_laboratory_smoke_0275 import *
++from types import SimpleNamespace
++from typing import cast
++
++import context.github_dual_artifact_laboratory_smoke_0275 as smoke_module
++from context.fake_laboratory_existing_scheduler_closed_loop_smoke_0274 import (
++    FakeLaboratoryClosedLoopSmokeCommand,
++)
++from context.github_dual_artifact_contract_0275 import (
++    GitHubAuthoritativeRequestArtifact,
++    build_dual_artifact_manifest,
++    canonical_json_bytes,
++)
++from context.github_dual_artifact_laboratory_smoke_0275 import (
++    GitHubDualArtifactLaboratorySmokeCommand,
++    run_github_dual_artifact_laboratory_smoke,
++)
+ from context.source_candidate import SourceCandidateDecision
+-from context.fake_laboratory_existing_scheduler_closed_loop_smoke_0274 import FakeLaboratoryClosedLoopSmokeCommand
+-class Scheduler: pass
++
++
++class Scheduler:
++    pass
++
++
+ def artifacts():
+- r=GitHubAuthoritativeRequestArtifact("f","r","github-request:x","newicody/autodoc",1,"T","B","https://x"); rb=canonical_json_bytes(r.to_mapping()); m=build_dual_artifact_manifest(r,rb); return rb,canonical_json_bytes(m.to_mapping())
+-def test_smoke_requires_operator_promotion_and_keeps_preview_local():
+- rb,mb=artifacts(); cmd=GitHubDualArtifactLaboratorySmokeCommand(SourceCandidateDecision("promote","ok"),FakeLaboratoryClosedLoopSmokeCommand("sc:x"),"policy:1")
+- result=asyncio.run(run_github_dual_artifact_laboratory_smoke(Scheduler(),rb,mb,None,cmd))
+- assert result.valid and result.approved_candidate["status"]=="promoted"
+- assert result.publication_preview["status"]=="pending" and result.github_mutation_performed is False
++    request = GitHubAuthoritativeRequestArtifact(
++        "f",
++        "r",
++        "github-request:x",
++        "newicody/autodoc",
++        1,
++        "T",
++        "B",
++        "https://x",
++    )
++    request_bytes = canonical_json_bytes(request.to_mapping())
++    manifest = build_dual_artifact_manifest(request, request_bytes)
++    return request_bytes, canonical_json_bytes(manifest.to_mapping())
++
++
++def test_smoke_requires_operator_promotion_and_keeps_preview_local(
++    monkeypatch,
++):
++    request_bytes, manifest_bytes = artifacts()
++    scheduler = Scheduler()
++    laboratory_command = cast(
++        FakeLaboratoryClosedLoopSmokeCommand,
++        object(),
++    )
++
++    async def fake_closed_loop(
++        supplied_scheduler,
++        supplied_command,
++        **dependencies,
++    ):
++        assert supplied_scheduler is scheduler
++        assert supplied_command is laboratory_command
++        assert dependencies == {}
++        return SimpleNamespace(
++            valid=True,
++            issues=(),
++            github_mutation_performed=False,
++            sql_ref="sql:specialist_output:test",
++            final_ref="artifact-final:laboratory:test",
++            to_mapping=lambda: {
++                "valid": True,
++                "sql_ref": "sql:specialist_output:test",
++                "final_ref": "artifact-final:laboratory:test",
++                "github_mutation_performed": False,
++            },
++        )
++
++    monkeypatch.setattr(
++        smoke_module,
++        "run_fake_laboratory_existing_scheduler_closed_loop_smoke",
++        fake_closed_loop,
++    )
++
++    command = GitHubDualArtifactLaboratorySmokeCommand(
++        SourceCandidateDecision("promote", "ok"),
++        laboratory_command,
++        "policy:1",
++    )
++    result = asyncio.run(
++        run_github_dual_artifact_laboratory_smoke(
++            scheduler,
++            request_bytes,
++            manifest_bytes,
++            None,
++            command,
++        )
++    )
++
++    assert result.valid
++    assert result.approved_candidate["status"] == "promoted"
++    assert result.publication_preview["status"] == "pending"
++    assert result.publication_preview["source_sql_ref"] == (
++        "sql:specialist_output:test"
++    )
++    assert result.publication_preview["source_final_ref"] == (
++        "artifact-final:laboratory:test"
++    )
++    assert result.github_mutation_performed is False
+diff --git a/tests/rules/test_github_dual_artifact_laboratory_smoke_0275_r1_rule.py b/tests/rules/test_github_dual_artifact_laboratory_smoke_0275_r1_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_github_dual_artifact_laboratory_smoke_0275_r1_rule.py
+@@ -0,0 +1,22 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TEST = (
++    ROOT
++    / "tests/context/test_github_dual_artifact_laboratory_smoke_0275.py"
++)
++
++
++def test_0275_r5_test_uses_current_0274_boundary_signature() -> None:
++    text = TEST.read_text(encoding="utf-8")
++
++    assert "monkeypatch.setattr(" in text
++    assert (
++        '"run_fake_laboratory_existing_scheduler_closed_loop_smoke"'
++        in text
++    )
++    assert "fake_closed_loop" in text
++    assert 'FakeLaboratoryClosedLoopSmokeCommand("sc:x")' not in text
++    assert "handoff=" not in text
++    assert "recall=" not in text
+diff --git a/doc/CHANGELOG_0275_R5_R1_GITHUB_DUAL_ARTIFACT_LABORATORY_SMOKE_SIGNATURE_FIX.md b/doc/CHANGELOG_0275_R5_R1_GITHUB_DUAL_ARTIFACT_LABORATORY_SMOKE_SIGNATURE_FIX.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0275_R5_R1_GITHUB_DUAL_ARTIFACT_LABORATORY_SMOKE_SIGNATURE_FIX.md
+@@ -0,0 +1,14 @@
++# Changelog — 0275-r5-r1 laboratory smoke signature fix
++
++## Fixed
++
++- removed the obsolete one-argument construction of
++  `FakeLaboratoryClosedLoopSmokeCommand`;
++- isolated the 0275 wrapper test from the complete 0274 laboratory runtime;
++- mocked the asynchronous 0274 boundary while checking Scheduler, command and
++  dependency forwarding;
++- retained assertions for promotion and local-only GitHub preview behavior.
++
++## Runtime impact
++
++None. This patch changes tests and documentation only.
+diff --git a/doc/manifests/MANIFEST_0275_R5_R1_GITHUB_DUAL_ARTIFACT_LABORATORY_SMOKE_SIGNATURE_FIX_CHANGED_FILES.md b/doc/manifests/MANIFEST_0275_R5_R1_GITHUB_DUAL_ARTIFACT_LABORATORY_SMOKE_SIGNATURE_FIX_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0275_R5_R1_GITHUB_DUAL_ARTIFACT_LABORATORY_SMOKE_SIGNATURE_FIX_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest — 0275-r5-r1 laboratory smoke signature fix
++
++Changed files:
++
++- `tests/context/test_github_dual_artifact_laboratory_smoke_0275.py`
++- `tests/rules/test_github_dual_artifact_laboratory_smoke_0275_r1_rule.py`
++- `doc/CHANGELOG_0275_R5_R1_GITHUB_DUAL_ARTIFACT_LABORATORY_SMOKE_SIGNATURE_FIX.md`
++- `doc/manifests/MANIFEST_0275_R5_R1_GITHUB_DUAL_ARTIFACT_LABORATORY_SMOKE_SIGNATURE_FIX_CHANGED_FILES.md`
++- `doc/releases/0275-r5-r1-github-dual-artifact-laboratory-smoke-signature-fix.md`
++- `PHASE0275_R5_R1_GITHUB_DUAL_ARTIFACT_LABORATORY_SMOKE_SIGNATURE_FIX_TEST_REPORT.md`
++
++No runtime, Scheduler, queue, EventBus, SQL, Qdrant, GitHub adapter or
++production contract is modified.
+diff --git a/doc/releases/0275-r5-r1-github-dual-artifact-laboratory-smoke-signature-fix.md b/doc/releases/0275-r5-r1-github-dual-artifact-laboratory-smoke-signature-fix.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/releases/0275-r5-r1-github-dual-artifact-laboratory-smoke-signature-fix.md
+@@ -0,0 +1,6 @@
++# 0275-r5-r1 — GitHub dual-artifact laboratory smoke signature fix
++
++The 0275-r5 wrapper test now targets the current 0274 closed-loop function
++boundary instead of constructing an obsolete simplified command.
++
++The production implementation is unchanged.
+diff --git a/PHASE0275_R5_R1_GITHUB_DUAL_ARTIFACT_LABORATORY_SMOKE_SIGNATURE_FIX_TEST_REPORT.md b/PHASE0275_R5_R1_GITHUB_DUAL_ARTIFACT_LABORATORY_SMOKE_SIGNATURE_FIX_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0275_R5_R1_GITHUB_DUAL_ARTIFACT_LABORATORY_SMOKE_SIGNATURE_FIX_TEST_REPORT.md
+@@ -0,0 +1,39 @@
++# Phase 0275-r5-r1 test report — laboratory smoke signature fix
++
++## Cause
++
++The test used:
++
++```python
++FakeLaboratoryClosedLoopSmokeCommand("sc:x")
++```
++
++The current 0274 command requires the explicit `deliberation`, `handoff` and
++`recall` contracts. Those contracts belong to the already-tested 0274
++closed-loop path and should not be reconstructed by this wrapper unit test.
++
++## Correction
++
++The test injects an opaque typed command sentinel and mocks the asynchronous
++0274 function boundary. It verifies forwarding and the resulting local GitHub
++preview.
++
++## Validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. python -m pytest -q   tests/context/test_github_dual_artifact_laboratory_smoke_0275.py   tests/rules/test_github_dual_artifact_laboratory_smoke_0275_r1_rule.py
++PYTHONPATH=src:. python -m pytest -q tests/rules
++PYTHONPATH=src:. python -m pytest -q
++```
++
++## Phase review
++
++```text
++runtime_modified: false
++scheduler_created: false
++scheduler_modified: false
++external_dependencies_added: false
++github_mutation_performed: false
++test_only_fix: true
++```

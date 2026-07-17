@@ -1,0 +1,264 @@
+diff --git a/doc/architecture/SCHEDULER_MANAGED_DB_API_SQL_CONTEXT_STORE_RECORD_ADAPTER_0260.md b/doc/architecture/SCHEDULER_MANAGED_DB_API_SQL_CONTEXT_STORE_RECORD_ADAPTER_0260.md
+new file mode 100644
+index 0000000..e9ae4e4
+--- /dev/null
++++ b/doc/architecture/SCHEDULER_MANAGED_DB_API_SQL_CONTEXT_STORE_RECORD_ADAPTER_0260.md
+@@ -0,0 +1,16 @@
++# Scheduler-managed DbApiSqlContextStore record adapter - 0260 r7
++
++0260-r7 adds the missing record adapter module required by the r6 binding
++change.
++
++The wrapper adapts real stores that expose `upsert_record(record)` and expect a
++record-like object with `context_ref`.
++
++Boundary:
++
++```text
++Scheduler does not start PostgreSQL
++does not create a new SQL store
++uses existing DbApiSqlContextStore
++does not modify Scheduler.run
++```
+diff --git a/src/context/scheduler_managed_db_api_sql_context_store_binding_0260.py b/src/context/scheduler_managed_db_api_sql_context_store_binding_0260.py
+index 5bc9913..ea8d49c 100644
+--- a/src/context/scheduler_managed_db_api_sql_context_store_binding_0260.py
++++ b/src/context/scheduler_managed_db_api_sql_context_store_binding_0260.py
+@@ -19,6 +19,8 @@ from context.scheduler_managed_sql_context_store_usage_0259 import (
+     run_scheduler_managed_sql_context_store_usage,
+ )
+ 
++RECORD_ADAPTER_BOUNDARY_0260 = "uses existing DbApiSqlContextStore record contract"
++
+ 
+ def run_scheduler_managed_db_api_sql_context_store_binding(
+     root: Path,
+diff --git a/src/context/scheduler_managed_db_api_sql_context_store_record_adapter_0260.py b/src/context/scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
+new file mode 100644
+index 0000000..be799dd
+--- /dev/null
++++ b/src/context/scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
+@@ -0,0 +1,180 @@
++"""Adapter for existing DbApiSqlContextStore.upsert_record contracts.
++
++0260 discovered the real ``context.sql_context_store.DbApiSqlContextStore``.
++That existing store can expose ``upsert_record(record)`` and expects a
++record-like object with ``context_ref`` instead of a raw payload dict.
++
++This module does not create a SQL store and does not start PostgreSQL.  It wraps
++an existing store object so the 0259 Scheduler-managed usage path can keep using
++``controlled_write(payload)`` while the real store contract remains intact.
++"""
++
++from __future__ import annotations
++
++from dataclasses import asdict, is_dataclass
++import inspect
++from types import SimpleNamespace
++from typing import Any, Mapping
++import uuid
++
++
++def _record_values_from_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
++    metadata = dict(payload.get("metadata", {}))
++    context_ref = str(
++        metadata.get("context_ref")
++        or payload.get("context_ref")
++        or payload.get("intent_id")
++        or uuid.uuid4().hex
++    )
++    text = str(payload.get("text", ""))
++    text_kind = str(payload.get("text_kind", "passage"))
++    return {
++        "context_ref": context_ref,
++        "record_ref": context_ref,
++        "record_id": context_ref,
++        "id": context_ref,
++        "content": text,
++        "text": text,
++        "body": text,
++        "text_kind": text_kind,
++        "kind": text_kind,
++        "source_ref": str(payload.get("source_ref", "")),
++        "metadata": metadata,
++        "payload": dict(payload),
++    }
++
++
++def _public_record_mapping(record: object) -> dict[str, Any]:
++    if isinstance(record, Mapping):
++        return dict(record)
++    if is_dataclass(record) and not isinstance(record, type):
++        return dict(asdict(record))
++    public: dict[str, Any] = {}
++    for name in (
++        "context_ref",
++        "record_ref",
++        "record_id",
++        "id",
++        "content",
++        "text",
++        "text_kind",
++        "source_ref",
++        "metadata",
++    ):
++        if hasattr(record, name):
++            value = getattr(record, name)
++            if isinstance(value, Mapping):
++                value = dict(value)
++            public[name] = value
++    return public
++
++
++def _result_to_mapping(result: object, fallback_record: object | None = None) -> dict[str, Any]:
++    if isinstance(result, Mapping):
++        payload = dict(result)
++    else:
++        record = _public_record_mapping(result)
++        payload = {"record": record} if record else {"result": result}
++
++    sql_ref = (
++        payload.get("sql_ref")
++        or payload.get("record_ref")
++        or payload.get("record_id")
++        or payload.get("context_ref")
++        or payload.get("id")
++        or ""
++    )
++    record_payload = payload.get("record")
++    if not sql_ref and isinstance(record_payload, Mapping):
++        sql_ref = (
++            record_payload.get("sql_ref")
++            or record_payload.get("record_ref")
++            or record_payload.get("record_id")
++            or record_payload.get("context_ref")
++            or record_payload.get("id")
++            or ""
++        )
++
++    if not sql_ref and fallback_record is not None:
++        fallback = _public_record_mapping(fallback_record)
++        sql_ref = (
++            fallback.get("sql_ref")
++            or fallback.get("record_ref")
++            or fallback.get("record_id")
++            or fallback.get("context_ref")
++            or fallback.get("id")
++            or ""
++        )
++        if "record" not in payload and fallback:
++            payload["record"] = fallback
++
++    if sql_ref:
++        payload["sql_ref"] = str(sql_ref)
++    return payload
++
++
++def _construct_existing_record_class(record_class: type[Any], values: Mapping[str, Any]) -> object:
++    signature = inspect.signature(record_class)
++    kwargs: dict[str, Any] = {}
++    for name, parameter in signature.parameters.items():
++        if name == "self":
++            continue
++        if parameter.kind in (parameter.VAR_KEYWORD, parameter.VAR_POSITIONAL):
++            continue
++        if name in values:
++            kwargs[name] = values[name]
++        elif parameter.default is inspect.Signature.empty:
++            if "ref" in name or name.endswith("_id"):
++                kwargs[name] = values["context_ref"]
++            elif "content" in name or name in {"text", "body"}:
++                kwargs[name] = values["content"]
++            elif "kind" in name:
++                kwargs[name] = values["text_kind"]
++            elif "metadata" in name:
++                kwargs[name] = values["metadata"]
++    return record_class(**kwargs)
++
++
++def _build_record_for_existing_store(store: object, payload: Mapping[str, Any]) -> object:
++    values = _record_values_from_payload(payload)
++    store_module = inspect.getmodule(store.__class__)
++    for name in (
++        "SqlContextRecord",
++        "ContextRecord",
++        "DbApiSqlContextRecord",
++        "SQLContextRecord",
++    ):
++        record_class = getattr(store_module, name, None) if store_module is not None else None
++        if inspect.isclass(record_class):
++            try:
++                return _construct_existing_record_class(record_class, values)
++            except TypeError:
++                continue
++    return SimpleNamespace(**values)
++
++
++class SchedulerManagedDbApiSqlContextStoreRecordAdapter:
++    """Expose ``controlled_write(payload)`` over an existing SQL store object."""
++
++    def __init__(self, store: object) -> None:
++        self.store = store
++
++    def controlled_write(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
++        controlled_write = getattr(self.store, "controlled_write", None)
++        if callable(controlled_write):
++            return _result_to_mapping(controlled_write(payload))
++
++        upsert_record = getattr(self.store, "upsert_record", None)
++        if not callable(upsert_record):
++            raise TypeError("existing SQLContextStore object must expose controlled_write or upsert_record")
++
++        record = _build_record_for_existing_store(self.store, payload)
++        return _result_to_mapping(upsert_record(record), fallback_record=record)
++
++
++def adapt_db_api_sql_context_store_for_scheduler_usage_0260(store: object | None) -> object | None:
++    """Wrap a real DbApiSqlContextStore for the 0259 controlled_write path."""
++
++    if store is None:
++        return None
++    return SchedulerManagedDbApiSqlContextStoreRecordAdapter(store)
+diff --git a/tests/context/test_scheduler_managed_db_api_sql_context_store_record_adapter_0260.py b/tests/context/test_scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
+new file mode 100644
+index 0000000..e4d3db4
+--- /dev/null
++++ b/tests/context/test_scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
+@@ -0,0 +1,37 @@
++from context.scheduler_managed_db_api_sql_context_store_record_adapter_0260 import (
++    adapt_db_api_sql_context_store_for_scheduler_usage_0260,
++)
++
++
++class UpsertOnlyStore:
++    def upsert_record(self, record):
++        assert record.context_ref == "intent:0260:test"
++        assert record.content == "payload text"
++        return record
++
++
++class ControlledWriteStore:
++    def controlled_write(self, payload):
++        return {"sql_ref": "sql:controlled/" + payload["intent_id"]}
++
++
++def test_record_adapter_builds_record_for_upsert_only_store() -> None:
++    adapter = adapt_db_api_sql_context_store_for_scheduler_usage_0260(UpsertOnlyStore())
++    result = adapter.controlled_write(
++        {
++            "intent_id": "intent:0260:test",
++            "text": "payload text",
++            "text_kind": "passage",
++            "metadata": {},
++        }
++    )
++
++    assert result["sql_ref"] == "intent:0260:test"
++    assert result["record"]["context_ref"] == "intent:0260:test"
++
++
++def test_record_adapter_delegates_controlled_write_store() -> None:
++    adapter = adapt_db_api_sql_context_store_for_scheduler_usage_0260(ControlledWriteStore())
++    result = adapter.controlled_write({"intent_id": "intent:0260:test", "text": "payload text"})
++
++    assert result["sql_ref"] == "sql:controlled/intent:0260:test"

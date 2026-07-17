@@ -1,0 +1,151 @@
+diff --git a/PHASE0287_R7_R15_R3_R2_R2_MISSING_RUNTIME_CONFIGURATION_TEST_ISOLATION_REPORT.md b/PHASE0287_R7_R15_R3_R2_R2_MISSING_RUNTIME_CONFIGURATION_TEST_ISOLATION_REPORT.md
+new file mode 100644
+index 0000000..3e34c3e
+--- /dev/null
++++ b/PHASE0287_R7_R15_R3_R2_R2_MISSING_RUNTIME_CONFIGURATION_TEST_ISOLATION_REPORT.md
+@@ -0,0 +1,28 @@
++# Phase 0287 R7 R15 R3 R2 R2 — missing runtime configuration test isolation
++
++## Failure
++
++The global suite failed only in
++`test_missing_runtime_configuration_has_operator_facing_error`.  The test used
++`config=None`, which intentionally tells the production command to inspect the
++installed default `.var/config/love_actions_closed_loop.ini`.
++
++On a configured operator machine that file exists and contains the canonical
++runtime factory, so the test no longer represented a missing-configuration
++case.
++
++## Resolution
++
++The test now creates and explicitly supplies an empty local configuration file.
++The ProjectV2 fixture remains explicit.  Therefore the test still verifies the
++operator-facing `real runtime factory is not configured` error, while remaining
++independent of all files under the operator's `.var/` directory.
++
++## Boundaries
++
++- no production code change;
++- no runtime-provider behavior change;
++- no fallback removal or addition;
++- no Scheduler, SQL, Qdrant or OpenVINO change;
++- installed local configuration remains usable by the real command;
++- tests no longer inspect operator state accidentally.
+diff --git a/doc/CHANGELOG_0287_R7_R15_R3_R2_R2_MISSING_RUNTIME_CONFIGURATION_TEST_ISOLATION.md b/doc/CHANGELOG_0287_R7_R15_R3_R2_R2_MISSING_RUNTIME_CONFIGURATION_TEST_ISOLATION.md
+new file mode 100644
+index 0000000..daa3b10
+--- /dev/null
++++ b/doc/CHANGELOG_0287_R7_R15_R3_R2_R2_MISSING_RUNTIME_CONFIGURATION_TEST_ISOLATION.md
+@@ -0,0 +1,6 @@
++# Changelog 0287 R7 R15 R3 R2 R2
++
++- isolate the missing-runtime configuration regression from `.var/` operator state;
++- explicitly provide an empty local INI fixture;
++- preserve the production default configuration lookup;
++- add an architecture rule preventing regression to `config=None` in this test.
+diff --git a/doc/architecture/MISSING_RUNTIME_CONFIGURATION_TEST_ISOLATION_0287_R7_R15_R3_R2_R2.dot b/doc/architecture/MISSING_RUNTIME_CONFIGURATION_TEST_ISOLATION_0287_R7_R15_R3_R2_R2.dot
+new file mode 100644
+index 0000000..ac1208c
+--- /dev/null
++++ b/doc/architecture/MISSING_RUNTIME_CONFIGURATION_TEST_ISOLATION_0287_R7_R15_R3_R2_R2.dot
+@@ -0,0 +1,10 @@
++digraph missing_runtime_configuration_test_isolation {
++  rankdir=LR;
++  operator_var [label="operator .var config", shape=folder];
++  production [label="production default lookup", shape=box];
++  temp_empty [label="explicit empty temp INI", shape=note];
++  negative_test [label="missing-runtime negative test", shape=box];
++  expected_error [label="operator-facing error", shape=box];
++  operator_var -> production;
++  temp_empty -> negative_test -> expected_error;
++}
+diff --git a/doc/architecture/MISSING_RUNTIME_CONFIGURATION_TEST_ISOLATION_0287_R7_R15_R3_R2_R2.md b/doc/architecture/MISSING_RUNTIME_CONFIGURATION_TEST_ISOLATION_0287_R7_R15_R3_R2_R2.md
+new file mode 100644
+index 0000000..a1f99ba
+--- /dev/null
++++ b/doc/architecture/MISSING_RUNTIME_CONFIGURATION_TEST_ISOLATION_0287_R7_R15_R3_R2_R2.md
+@@ -0,0 +1,15 @@
++# Missing runtime configuration test isolation
++
++```text
++production invocation without --config
++  -> may read .var/config/love_actions_closed_loop.ini
++
++test for missing runtime configuration
++  -> explicit empty temporary love.ini
++  -> explicit temporary project.ini
++  -> deterministic operator-facing error
++```
++
++The production command must continue to discover a real installed local
++configuration.  The negative-path test must not depend on whether an operator
++has configured that file on the machine running the suite.
+diff --git a/doc/manifests/MANIFEST_0287_R7_R15_R3_R2_R2_MISSING_RUNTIME_CONFIGURATION_TEST_ISOLATION.md b/doc/manifests/MANIFEST_0287_R7_R15_R3_R2_R2_MISSING_RUNTIME_CONFIGURATION_TEST_ISOLATION.md
+new file mode 100644
+index 0000000..574fe5f
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0287_R7_R15_R3_R2_R2_MISSING_RUNTIME_CONFIGURATION_TEST_ISOLATION.md
+@@ -0,0 +1,16 @@
++# Manifest 0287 R7 R15 R3 R2 R2
++
++## Modified
++
++- `tests/tools/test_run_love_actions_closed_loop_0287_r7_r15_r2.py`
++
++## Added
++
++- phase report;
++- changelog;
++- architecture note and DOT source;
++- architecture regression rule.
++
++## Functional effect
++
++None.  This patch changes only test isolation and documentation.
+diff --git a/tests/rules/test_missing_runtime_configuration_test_isolation_0287_r7_r15_r3_r2_r2_rule.py b/tests/rules/test_missing_runtime_configuration_test_isolation_0287_r7_r15_r3_r2_r2_rule.py
+new file mode 100644
+index 0000000..6831efc
+--- /dev/null
++++ b/tests/rules/test_missing_runtime_configuration_test_isolation_0287_r7_r15_r3_r2_r2_rule.py
+@@ -0,0 +1,19 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++TARGET = ROOT / "tests/tools/test_run_love_actions_closed_loop_0287_r7_r15_r2.py"
++
++
++def test_missing_runtime_configuration_case_is_hermetic() -> None:
++    source = TARGET.read_text(encoding="utf-8")
++    start = source.index(
++        "def test_missing_runtime_configuration_has_operator_facing_error"
++    )
++    tail = source[start:]
++    next_test = tail.find("\ndef test_", 1)
++    body = tail if next_test < 0 else tail[:next_test]
++
++    assert 'local = tmp_path / "love.ini"' in body
++    assert 'local.write_text("", encoding="utf-8")' in body
++    assert "config=str(local)" in body
++    assert "config=None" not in body
+diff --git a/tests/tools/test_run_love_actions_closed_loop_0287_r7_r15_r2.py b/tests/tools/test_run_love_actions_closed_loop_0287_r7_r15_r2.py
+index ca4f964..52c95c1 100644
+--- a/tests/tools/test_run_love_actions_closed_loop_0287_r7_r15_r2.py
++++ b/tests/tools/test_run_love_actions_closed_loop_0287_r7_r15_r2.py
+@@ -15,13 +15,15 @@ def test_missing_runtime_configuration_has_operator_facing_error(
+         "run_love_actions_closed_loop_missing_runtime",
+         "run_love_actions_closed_loop_0287.py",
+     )
++    local = tmp_path / "love.ini"
++    local.write_text("", encoding="utf-8")
+     project = tmp_path / "project.ini"
+     project.write_text(
+         "[project]\nowner = newicody\nnumber = 3\n",
+         encoding="utf-8",
+     )
+     args = SimpleNamespace(
+-        config=None,
++        config=str(local),
+         project_config=str(project),
+         project_owner=None,
+         project_number=None,

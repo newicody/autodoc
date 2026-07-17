@@ -1,0 +1,198 @@
+diff --git a/src/context/github_controlled_publication_adapter_0276.py b/src/context/github_controlled_publication_adapter_0276.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/context/github_controlled_publication_adapter_0276.py
+@@ -0,0 +1,53 @@
++"""Narrow injected GitHub REST transport membrane; apply needs r4 guard."""
++from __future__ import annotations
++from dataclasses import dataclass,field
++from collections.abc import Mapping
++from typing import Any,Protocol
++import json,urllib.request,urllib.error
++from context.github_controlled_publication_contract_0276 import GitHubControlledPublicationCommand,GitHubControlledPublicationPlan,build_github_controlled_publication_plan
++from context.source_candidate_remote_mutation_gate import SourceCandidateRemoteMutationGatePolicy,run_source_candidate_remote_mutation_gate
++
++@dataclass(frozen=True,slots=True)
++class GitHubHttpResponse:
++ status:int; headers:Mapping[str,str]=field(default_factory=dict); body:bytes=b""
++ def json_mapping(self):
++  if not self.body: return {}
++  p=json.loads(self.body); return p if isinstance(p,dict) else {"value":p}
++class GitHubHttpTransport(Protocol):
++ def request(self,method:str,path:str,*,headers:Mapping[str,str],body:bytes|None=None)->GitHubHttpResponse: ...
++@dataclass(frozen=True,slots=True)
++class UrllibGitHubTransport:
++ base_url:str="https://api.github.com"; timeout:float=30.0
++ def request(self,method,path,*,headers,body=None):
++  req=urllib.request.Request(self.base_url.rstrip("/")+path,data=body,headers=dict(headers),method=method)
++  try:
++   with urllib.request.urlopen(req,timeout=self.timeout) as r: return GitHubHttpResponse(r.status,dict(r.headers.items()),r.read())
++  except urllib.error.HTTPError as e: return GitHubHttpResponse(e.code,dict(e.headers.items()) if e.headers else {},e.read())
++@dataclass(frozen=True,slots=True)
++class GitHubControlledPublicationDryRun:
++ plan:GitHubControlledPublicationPlan; gate:Mapping[str,Any]
++ def to_mapping(self): return {"schema":"missipy.github.controlled_publication_dry_run.v1","plan":self.plan.to_mapping(),"gate":dict(self.gate),"http_call_performed":False}
++@dataclass(frozen=True,slots=True)
++class GitHubControlledPublicationApplyResult:
++ applied:bool; idempotent_replay:bool; status:str; http_status:int|None; response:Mapping[str,Any]=field(default_factory=dict); blocked_reasons:tuple[str,...]=(); token_serialized:bool=False
++ def to_mapping(self): return {"schema":"missipy.github.controlled_publication_apply.v1","applied":self.applied,"idempotent_replay":self.idempotent_replay,"status":self.status,"http_status":self.http_status,"response":dict(self.response),"blocked_reasons":list(self.blocked_reasons),"token_serialized":False}
++class GitHubControlledPublicationAdapter:
++ def plan(self,command,review): return build_github_controlled_publication_plan(command,review)
++ def dry_run(self,command,review,policy):
++  plan=self.plan(command,review); gate=run_source_candidate_remote_mutation_gate(plan.remote_gate_payload,policy); return GitHubControlledPublicationDryRun(plan,gate.to_json_dict())
++ def apply(self,command,review,policy,*,transport,token,guard_receipt):
++  dry=self.dry_run(command,review,policy); reasons=[]
++  if not command.execute: reasons.append("execute_false")
++  if not dry.gate.get("mutation_allowed"): reasons.extend(x.get("code","") for x in dry.gate.get("issues",[]))
++  if guard_receipt.get("schema")!="missipy.github.publication_collision_guard.v1": reasons.append("collision_guard_missing")
++  guard_status=guard_receipt.get("status")
++  if guard_status=="idempotent_replay": return GitHubControlledPublicationApplyResult(False,True,"idempotent_replay",None)
++  if guard_status!="clear": reasons.append("collision_guard_not_clear")
++  if not token.strip(): reasons.append("token_missing")
++  if reasons: return GitHubControlledPublicationApplyResult(False,False,"blocked",None,blocked_reasons=tuple(dict.fromkeys(reasons)))
++  headers={"Authorization":"Bearer "+token,"Accept":"application/vnd.github+json","X-GitHub-Api-Version":"2022-11-28","User-Agent":"autodoc-controlled-publication/0276"}
++  body=(json.dumps(dict(dry.plan.payload),ensure_ascii=False,separators=(",",":"))+"\n").encode()
++  response=transport.request(dry.plan.method,dry.plan.endpoint,headers=headers,body=body)
++  safe={k:v for k,v in response.json_mapping().items() if k not in {"token","authorization"}}
++  ok=200<=response.status<300
++  return GitHubControlledPublicationApplyResult(ok,False,"applied" if ok else "remote_error",response.status,safe,() if ok else ("http_status",))
+diff --git a/tests/context/test_github_controlled_publication_adapter_0276.py b/tests/context/test_github_controlled_publication_adapter_0276.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/context/test_github_controlled_publication_adapter_0276.py
+@@ -0,0 +1,18 @@
++from context.github_controlled_publication_adapter_0276 import *
++from context.github_controlled_publication_contract_0276 import *
++from context.source_candidate_remote_mutation_gate import SourceCandidateRemoteMutationGatePolicy
++class Transport:
++ def __init__(self): self.calls=[]
++ def request(self,m,p,*,headers,body=None): self.calls.append((m,p,headers,body)); return GitHubHttpResponse(201,{},b'{"id":1,"body":"ok"}')
++def command(): return GitHubControlledPublicationCommand("github-publication:x","newicody/autodoc",1,"issue_comment","github:issue:newicody/autodoc#1","artifact-final:x","sql:specialist_output:x","github-review:x","decision:1","policy:1","rev:1","body",execute=True,operator_confirmed=True,remote_mutation_enabled=True)
++def review(): return {"schema":"missipy.github_project.publication_review.v1","status":"approve","review_ref":"github-review:x","sql_context_ref":"sql:specialist_output:x"}
++def policy(): return SourceCandidateRemoteMutationGatePolicy(True,True,("newicody/autodoc",))
++def test_apply_refuses_without_r4_guard():
++ t=Transport(); r=GitHubControlledPublicationAdapter().apply(command(),review(),policy(),transport=t,token="secret",guard_receipt={})
++ assert not r.applied and not t.calls and "collision_guard_missing" in r.blocked_reasons
++def test_clear_guard_calls_injected_transport_and_never_serializes_token():
++ t=Transport(); guard={"schema":"missipy.github.publication_collision_guard.v1","status":"clear"}; r=GitHubControlledPublicationAdapter().apply(command(),review(),policy(),transport=t,token="secret",guard_receipt=guard)
++ assert r.applied and len(t.calls)==1 and "secret" not in str(r.to_mapping())
++def test_replay_guard_performs_no_http():
++ t=Transport(); guard={"schema":"missipy.github.publication_collision_guard.v1","status":"idempotent_replay"}; r=GitHubControlledPublicationAdapter().apply(command(),review(),policy(),transport=t,token="secret",guard_receipt=guard)
++ assert r.idempotent_replay and not t.calls
+diff --git a/tests/rules/test_github_controlled_publication_adapter_0276_rule.py b/tests/rules/test_github_controlled_publication_adapter_0276_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_github_controlled_publication_adapter_0276_rule.py
+@@ -0,0 +1,8 @@
++from pathlib import Path
++ROOT=Path(__file__).resolve().parents[2]
++def test_adapter_is_injected_and_guarded():
++ t=(ROOT/"src/context/github_controlled_publication_adapter_0276.py").read_text()
++ for m in ("class GitHubHttpTransport(Protocol)","UrllibGitHubTransport","collision_guard_missing","guard_status!=\"clear\"","run_source_candidate_remote_mutation_gate"):
++  assert m in t
++ for bad in ("os.environ","Scheduler(","EventBus(","token_serialized=True"):
++  assert bad not in t
+diff --git a/doc/architecture/GITHUB_CONTROLLED_PUBLICATION_ADAPTER_0276.md b/doc/architecture/GITHUB_CONTROLLED_PUBLICATION_ADAPTER_0276.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/GITHUB_CONTROLLED_PUBLICATION_ADAPTER_0276.md
+@@ -0,0 +1,9 @@
++# GitHub controlled-publication adapter — 0276-r3
++
++The adapter preserves plan, dry-run and apply separation and reuses the existing
++remote mutation gate. A stdlib `urllib` transport is available, but every apply
++requires an injected 0276-r4 collision-guard receipt. Therefore r3 cannot be
++used alone to mutate GitHub.
++
++The token is accepted only at the call boundary, sent in the Authorization
++header and excluded from every result. Tests use an injected fake transport.
+diff --git a/doc/docs/architecture/runtime/276_r3_github_controlled_publication_adapter.dot b/doc/docs/architecture/runtime/276_r3_github_controlled_publication_adapter.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/276_r3_github_controlled_publication_adapter.dot
+@@ -0,0 +1 @@
++digraph GitHubControlledPublicationAdapter0276R3 { Command->Plan; Plan->RemoteGate; RemoteGate->GuardReceipt; GuardReceipt->Adapter; Adapter->InjectedTransport; InjectedTransport->GitHub[style=dashed,label="only after r4 clear"]; Token[shape=note,label="call-only, never serialized"]; Token->Adapter[style=dotted]; }
+diff --git a/doc/manifests/MANIFEST_0276_R3_GITHUB_CONTROLLED_PUBLICATION_ADAPTER_CHANGED_FILES.md b/doc/manifests/MANIFEST_0276_R3_GITHUB_CONTROLLED_PUBLICATION_ADAPTER_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0276_R3_GITHUB_CONTROLLED_PUBLICATION_ADAPTER_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest — 0276-r3 GitHub controlled-publication adapter
++
++Changed files:
++
++- `src/context/github_controlled_publication_adapter_0276.py`
++- `tests/context/test_github_controlled_publication_adapter_0276.py`
++- `tests/rules/test_github_controlled_publication_adapter_0276_rule.py`
++- `doc/architecture/GITHUB_CONTROLLED_PUBLICATION_ADAPTER_0276.md`
++- `doc/docs/architecture/runtime/276_r3_github_controlled_publication_adapter.dot`
++
++No generated binaries, caches, secrets or local configuration are included.
+diff --git a/doc/CHANGELOG_0276_R3_GITHUB_CONTROLLED_PUBLICATION_ADAPTER.md b/doc/CHANGELOG_0276_R3_GITHUB_CONTROLLED_PUBLICATION_ADAPTER.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0276_R3_GITHUB_CONTROLLED_PUBLICATION_ADAPTER.md
+@@ -0,0 +1,14 @@
++# Changelog — 0276-r3 GitHub controlled-publication adapter
++
++## Added
++
++- added an injected REST transport protocol and stdlib implementation;
++- reused the default-closed remote mutation gate;
++- refused apply without an r4 guard receipt.
++
++## Boundaries
++
++- one existing Scheduler only;
++- SQL remains durable authority;
++- GitHub mutation remains closed unless this phase explicitly reaches the guarded adapter;
++- no secret is serialized.
+diff --git a/doc/releases/0276-r3-0276-r3-github-controlled-publication-adapter.md b/doc/releases/0276-r3-0276-r3-github-controlled-publication-adapter.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/releases/0276-r3-0276-r3-github-controlled-publication-adapter.md
+@@ -0,0 +1,7 @@
++# 0276-r3 GitHub controlled-publication adapter
++
++- added an injected REST transport protocol and stdlib implementation;
++- reused the default-closed remote mutation gate;
++- refused apply without an r4 guard receipt.
++
++Next: 0276-r4 collision guard and configured GitHub test.
+diff --git a/PHASE0276_R3_GITHUB_CONTROLLED_PUBLICATION_ADAPTER_TEST_REPORT.md b/PHASE0276_R3_GITHUB_CONTROLLED_PUBLICATION_ADAPTER_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0276_R3_GITHUB_CONTROLLED_PUBLICATION_ADAPTER_TEST_REPORT.md
+@@ -0,0 +1,23 @@
++# Phase 0276-r3 test report — 0276-r3 GitHub controlled-publication adapter
++
++## Validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. python -m pytest -q tests/rules
++PYTHONPATH=src:. python -m pytest -q
++```
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++external_dependencies_added: false
++scheduler_created: false
++scheduler_modified: false
++parallel_orchestrator_created: false
++parallel_eventbus_created: false
++parallel_registry_created: false
++github_mutation_performed: false
++```

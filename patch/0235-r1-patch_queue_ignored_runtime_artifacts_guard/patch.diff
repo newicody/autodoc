@@ -1,0 +1,267 @@
+diff --git a/PHASE0235_PATCH_QUEUE_IGNORED_RUNTIME_ARTIFACTS_GUARD_TEST_REPORT.md b/PHASE0235_PATCH_QUEUE_IGNORED_RUNTIME_ARTIFACTS_GUARD_TEST_REPORT.md
+new file mode 100644
+index 0000000..b94003d
+--- /dev/null
++++ b/PHASE0235_PATCH_QUEUE_IGNORED_RUNTIME_ARTIFACTS_GUARD_TEST_REPORT.md
+@@ -0,0 +1,39 @@
++# PHASE 0235 — Patch queue ignored runtime artifacts guard — test report
++
++## Scope
++
++Patch 0235 guards the patch queue commit step against ignored runtime artifacts
++under `.var/`.
++
++## Rationale
++
++Patch 0234 validated functionally, but the automated commit step attempted to
++stage `.var/reports/eventbus_supervision_reuse_findings_triage_0229.json`.
++That path is intentionally ignored and must remain a local runtime/reporting
++artifact.
++
++## Expected behavior
++
++The patch queue may still apply patches that mention local runtime reports in
++metadata, but commit staging must exclude `.var` paths.
++
++## Authority boundary
++
++This patch does not change runtime behavior.
++
++It does not:
++
++- call `Scheduler.run()`;
++- create an EventBus;
++- control RouteProxy or ControlProxy;
++- mutate SHM;
++- decide policy;
++- write SQL or Qdrant;
++- call GitHub;
++- add non-stdlib dependencies.
++
++## Validation
++
++- `git apply --check`: OK on a control tree.
++- `compileall tests`: OK on a control tree.
++- targeted rule test: OK on a control tree.
+diff --git a/apply_patch_queue.py b/apply_patch_queue.py
+index e6e86bc..3369395 100644
+--- a/apply_patch_queue.py
++++ b/apply_patch_queue.py
+@@ -3,5 +3,13 @@ def create_commit(root, item, message, ssh=None):
+     if not files:
+         return
+ 
++    files = tuple(
++        file
++        for file in files
++        if file != ".var" and not file.startswith(".var/")
++    )
++    if not files:
++        return
++
+     run_git(("add", "--", *files), root=root, ssh=ssh)
+     run_git(("commit", "-m", message), root=root, ssh=ssh)
+diff --git a/doc/CHANGELOG_0235_PATCH_QUEUE_IGNORED_RUNTIME_ARTIFACTS_GUARD.md b/doc/CHANGELOG_0235_PATCH_QUEUE_IGNORED_RUNTIME_ARTIFACTS_GUARD.md
+new file mode 100644
+index 0000000..c321b32
+--- /dev/null
++++ b/doc/CHANGELOG_0235_PATCH_QUEUE_IGNORED_RUNTIME_ARTIFACTS_GUARD.md
+@@ -0,0 +1,18 @@
++# Changelog — 0235 patch queue ignored runtime artifacts guard
++
++## Added
++
++- Documented the rule that `.var/` reports are local runtime artifacts and must
++  not be staged by patch queue commits.
++- Added a rule test to keep the guard visible.
++
++## Changed
++
++- `apply_patch_queue.py` now filters `.var` paths before `git add` in the
++  commit step.
++
++## Not changed
++
++- No runtime code path is changed.
++- No EventBus, scheduler, proxy, SHM, policy, SQL, Qdrant, GitHub, or VisPy
++  behavior is changed.
+diff --git a/doc/architecture/PATCH_QUEUE_IGNORED_RUNTIME_ARTIFACTS_GUARD_0235.md b/doc/architecture/PATCH_QUEUE_IGNORED_RUNTIME_ARTIFACTS_GUARD_0235.md
+new file mode 100644
+index 0000000..73fc648
+--- /dev/null
++++ b/doc/architecture/PATCH_QUEUE_IGNORED_RUNTIME_ARTIFACTS_GUARD_0235.md
+@@ -0,0 +1,59 @@
++# Patch queue ignored runtime artifacts guard — 0235
++
++## Decision
++
++Patch queue commits must not stage ignored runtime artifacts under `.var/`.
++
++`.var/` is a local runtime/reporting area. It may contain audit outputs,
++triage reports, smoke outputs, replay files, and generated local diagnostics.
++Those files are useful during development, but they are not source artifacts and
++must not be part of the committed patch payload.
++
++## Trigger
++
++After the all-surfaces passive supervisor smoke passed, the automated commit
++step attempted to stage:
++
++```text
++.var/reports/eventbus_supervision_reuse_findings_triage_0229.json
++```
++
++Git correctly rejected it because `.var/` is ignored.
++
++## Canonical behavior
++
++Patch queue application may use local reports for validation, but commit staging
++must filter `.var` paths before invoking `git add`.
++
++```text
++patch metadata / changed files
++  -> filter ignored local runtime artifacts
++  -> git add source/docs/tests/tools only
++```
++
++## Boundary
++
++This is a patch-queue hygiene guard, not a runtime feature.
++
++It does not:
++
++- create or replace the EventBus;
++- change scheduler orchestration;
++- call or wrap `Scheduler.run()`;
++- control RouteProxy or ControlProxy;
++- mutate SHM;
++- decide policy;
++- read or write SQL/Qdrant;
++- call GitHub;
++- introduce VisPy;
++- add non-stdlib dependencies.
++
++## Relation to supervision work
++
++The passive supervision path remains:
++
++```text
++EventBus -> PassiveSupervisorSink -> CellularState -> snapshot/audit optional
++```
++
++Patch 0235 only prevents local `.var` evidence from breaking the commit step.
+diff --git a/doc/code-rules/0235_patch_queue_ignored_runtime_artifacts_guard_rule.md b/doc/code-rules/0235_patch_queue_ignored_runtime_artifacts_guard_rule.md
+new file mode 100644
+index 0000000..812d39c
+--- /dev/null
++++ b/doc/code-rules/0235_patch_queue_ignored_runtime_artifacts_guard_rule.md
+@@ -0,0 +1,37 @@
++# Code rule — 0235 patch queue ignored runtime artifacts guard
++
++## Rule
++
++Patch queue commits must not stage `.var/` runtime artifacts.
++
++`.var/` is reserved for local runtime outputs, reports, audit files, replay
++fixtures, smoke outputs, and developer diagnostics. These files may inform a
++patch, but they must not be committed by the patch queue.
++
++## Required behavior
++
++Before `git add`, the patch queue commit step must exclude:
++
++```text
++.var
++.var/*
++```
++
++## Forbidden behavior
++
++The patch queue must not require `git add -f .var/...` for normal patches.
++
++## Runtime boundary
++
++This rule does not authorize any runtime behavior.
++
++It explicitly does not authorize:
++
++- Scheduler execution;
++- proxy control;
++- SHM mutation;
++- policy decisions;
++- SQL/Qdrant writes;
++- GitHub mutation;
++- a new EventBus;
++- VisPy runtime integration.
+diff --git a/doc/docs/architecture/runtime/235_patch_queue_ignored_runtime_artifacts_guard.dot b/doc/docs/architecture/runtime/235_patch_queue_ignored_runtime_artifacts_guard.dot
+new file mode 100644
+index 0000000..a0ffc9f
+--- /dev/null
++++ b/doc/docs/architecture/runtime/235_patch_queue_ignored_runtime_artifacts_guard.dot
+@@ -0,0 +1,12 @@
++digraph patch_queue_ignored_runtime_artifacts_guard_0235 {
++  rankdir=LR;
++
++  metadata [label="patch metadata / changed files"];
++  filter [label="commit staging filter\nexclude .var / .var/*"];
++  gitadd [label="git add source/docs/tests/tools"];
++  ignored [label=".var runtime reports\nlocal only", shape=box];
++
++  metadata -> filter;
++  filter -> gitadd;
++  filter -> ignored [style=dashed, label="not staged"];
++}
+diff --git a/doc/manifests/MANIFEST_0235_PATCH_QUEUE_IGNORED_RUNTIME_ARTIFACTS_GUARD_CHANGED_FILES.md b/doc/manifests/MANIFEST_0235_PATCH_QUEUE_IGNORED_RUNTIME_ARTIFACTS_GUARD_CHANGED_FILES.md
+new file mode 100644
+index 0000000..b441070
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0235_PATCH_QUEUE_IGNORED_RUNTIME_ARTIFACTS_GUARD_CHANGED_FILES.md
+@@ -0,0 +1,12 @@
++# Manifest — 0235 patch queue ignored runtime artifacts guard
++
++- `apply_patch_queue.py`
++- `PHASE0235_PATCH_QUEUE_IGNORED_RUNTIME_ARTIFACTS_GUARD_TEST_REPORT.md`
++- `doc/CHANGELOG_0235_PATCH_QUEUE_IGNORED_RUNTIME_ARTIFACTS_GUARD.md`
++- `doc/architecture/PATCH_QUEUE_IGNORED_RUNTIME_ARTIFACTS_GUARD_0235.md`
++- `doc/code-rules/0235_patch_queue_ignored_runtime_artifacts_guard_rule.md`
++- `doc/docs/architecture/runtime/235_patch_queue_ignored_runtime_artifacts_guard.dot`
++- `doc/manifests/MANIFEST_0235_PATCH_QUEUE_IGNORED_RUNTIME_ARTIFACTS_GUARD_CHANGED_FILES.md`
++- `tests/rules/test_patch_queue_ignored_runtime_artifacts_guard_0235_rule.py`
++
++No `.var/` runtime report is part of this manifest.
+diff --git a/tests/rules/test_patch_queue_ignored_runtime_artifacts_guard_0235_rule.py b/tests/rules/test_patch_queue_ignored_runtime_artifacts_guard_0235_rule.py
+new file mode 100644
+index 0000000..a7d78ba
+--- /dev/null
++++ b/tests/rules/test_patch_queue_ignored_runtime_artifacts_guard_0235_rule.py
+@@ -0,0 +1,30 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def test_0235_commit_step_filters_var_runtime_artifacts() -> None:
++    source = (ROOT / "apply_patch_queue.py").read_text(encoding="utf-8")
++
++    assert 'file != ".var"' in source
++    assert 'file.startswith(".var/")' in source
++    assert 'run_git(("add", "--", *files)' in source
++
++
++def test_0235_manifest_does_not_list_var_runtime_report() -> None:
++    manifest = (
++        ROOT
++        / "doc/manifests/MANIFEST_0235_PATCH_QUEUE_IGNORED_RUNTIME_ARTIFACTS_GUARD_CHANGED_FILES.md"
++    ).read_text(encoding="utf-8")
++
++    assert ".var/reports" not in manifest
++
++
++def test_0235_rule_keeps_runtime_boundary() -> None:
++    rule = (ROOT / "doc/code-rules/0235_patch_queue_ignored_runtime_artifacts_guard_rule.md").read_text(encoding="utf-8")
++
++    assert "Scheduler execution" in rule
++    assert "SQL/Qdrant writes" in rule
++    assert "new EventBus" in rule
++    assert "VisPy runtime integration" in rule

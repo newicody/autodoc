@@ -1,0 +1,225 @@
+diff --git a/PHASE0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL_REPORT.md b/PHASE0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL_REPORT.md
+index dc76755..ad46918 100644
+--- a/PHASE0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL_REPORT.md
++++ b/PHASE0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL_REPORT.md
+@@ -43,3 +43,6 @@ and readback are validated.
+ 
+ The next unit implements named dense+sparse projection into the validated
+ physical collection while keeping point payloads reference-only.
++## r10-r1 compatibility correction
++
++Legacy direct constructors now receive safe defaults for the new named-vector fields.
+diff --git a/config/love_installed_runtime.example.ini b/config/love_installed_runtime.example.ini
+index 36b0988..caa9694 100644
+--- a/config/love_installed_runtime.example.ini
++++ b/config/love_installed_runtime.example.ini
+@@ -74,3 +74,4 @@ passage_prefix = passage:
+ [evidence]
+ # Durable refs are completed after the live bootstrap registers the exact ports.
+ refs = config:love-installed-runtime,service:postgresql-18,service:qdrant,model:multilingual-e5-small
++# r10-r1: direct Python callers may omit the named-vector fields; INI users keep them explicit.
+diff --git a/doc/CHANGELOG_0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL.md b/doc/CHANGELOG_0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL.md
+index 3f8ff2d..4ede430 100644
+--- a/doc/CHANGELOG_0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL.md
++++ b/doc/CHANGELOG_0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL.md
+@@ -8,3 +8,4 @@
+ - Added preview-first collection planning with a stable digest.
+ - Added controlled physical collection and canonical payload-index creation.
+ - Explicitly excluded deletion, alias mutation and point writes.
++- r10-r1: restored compatibility for existing direct `QdrantRuntimeSettings` callers.
+diff --git a/doc/architecture/QDRANT_NAMED_COLLECTION_CONTROL_0287_R7_R15_R3_R10.dot b/doc/architecture/QDRANT_NAMED_COLLECTION_CONTROL_0287_R7_R15_R3_R10.dot
+index e619af4..c6e4f5b 100644
+--- a/doc/architecture/QDRANT_NAMED_COLLECTION_CONTROL_0287_R7_R15_R3_R10.dot
++++ b/doc/architecture/QDRANT_NAMED_COLLECTION_CONTROL_0287_R7_R15_R3_R10.dot
+@@ -19,3 +19,4 @@ digraph qdrant_named_collection_control_0287_r7_r15_r3_r10 {
+   physical -> indexes;
+   physical -> alias [style=dashed, label="not mutated"];
+ }
++// r10-r1: legacy constructor compatibility retained.
+diff --git a/doc/architecture/QDRANT_NAMED_COLLECTION_CONTROL_0287_R7_R15_R3_R10.md b/doc/architecture/QDRANT_NAMED_COLLECTION_CONTROL_0287_R7_R15_R3_R10.md
+index c509f87..0a2c355 100644
+--- a/doc/architecture/QDRANT_NAMED_COLLECTION_CONTROL_0287_R7_R15_R3_R10.md
++++ b/doc/architecture/QDRANT_NAMED_COLLECTION_CONTROL_0287_R7_R15_R3_R10.md
+@@ -25,3 +25,4 @@ payload:             SQL/provenance references only
+ 
+ The alias is not created or switched in this phase. The existing
+ `autodoc_context_current` target is not deleted or modified.
++The r10-r1 correction preserves legacy direct settings construction without changing named mode.
+diff --git a/doc/manifests/MANIFEST_0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL.md b/doc/manifests/MANIFEST_0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL.md
+index 1348e1d..4a06a81 100644
+--- a/doc/manifests/MANIFEST_0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL.md
++++ b/doc/manifests/MANIFEST_0287_R7_R15_R3_R10_QDRANT_NAMED_COLLECTION_CONTROL.md
+@@ -29,3 +29,6 @@
+ - no alias mutation;
+ - no point write;
+ - SQL remains authoritative.
++## r10-r1 correction
++
++All r10 artifacts are staged together after the initial global-suite failure.
+diff --git a/src/context/love_manual_runtime_configuration_0287.py b/src/context/love_manual_runtime_configuration_0287.py
+index acc2327..f9978b9 100644
+--- a/src/context/love_manual_runtime_configuration_0287.py
++++ b/src/context/love_manual_runtime_configuration_0287.py
+@@ -134,15 +134,15 @@ class QdrantRuntimeSettings:
+     grpc_port: int
+     api_key_env: str
+     collection: str
+-    physical_collection: str
+-    collection_alias: str
+     vector_name: str
+-    dense_vector_name: str
+-    sparse_vector_name: str
+-    named_vectors_enabled: bool
+     dimension: int
+     distance: str
+     timeout_seconds: float = 5.0
++    physical_collection: str = ""
++    collection_alias: str = ""
++    dense_vector_name: str = "dense_e5_v1"
++    sparse_vector_name: str = "sparse_lexical_v1"
++    named_vectors_enabled: bool = False
+ 
+     def __post_init__(self) -> None:
+         parsed = urlparse(self.url)
+@@ -153,6 +153,33 @@ class QdrantRuntimeSettings:
+             raise ManualRuntimeConfigurationError(
+                 "qdrant grpc_port and timeout must be positive"
+             )
++        collection = self.collection.strip()
++        if not collection:
++            raise ManualRuntimeConfigurationError(
++                "qdrant collection or alias must be non-empty"
++            )
++        object.__setattr__(
++            self,
++            "physical_collection",
++            self.physical_collection.strip() or collection,
++        )
++        object.__setattr__(
++            self,
++            "collection_alias",
++            self.collection_alias.strip() or collection,
++        )
++        object.__setattr__(
++            self,
++            "dense_vector_name",
++            self.dense_vector_name.strip()
++            or self.vector_name.strip()
++            or "dense_e5_v1",
++        )
++        object.__setattr__(
++            self,
++            "sparse_vector_name",
++            self.sparse_vector_name.strip() or "sparse_lexical_v1",
++        )
+         for name in ("collection", "physical_collection", "collection_alias"):
+             if not getattr(self, name).strip():
+                 raise ManualRuntimeConfigurationError(
+diff --git a/src/context/love_manual_runtime_readiness_0287.py b/src/context/love_manual_runtime_readiness_0287.py
+index 1857b0a..44446d0 100644
+--- a/src/context/love_manual_runtime_readiness_0287.py
++++ b/src/context/love_manual_runtime_readiness_0287.py
+@@ -496,3 +496,4 @@ __all__ = (
+     "inspect_postgresql_readiness",
+     "inspect_qdrant_readiness",
+ )
++# r10-r1 keeps legacy unnamed settings compatible before this readiness boundary.
+diff --git a/src/context/love_qdrant_named_collection_control_0287.py b/src/context/love_qdrant_named_collection_control_0287.py
+index dfcb964..0d62076 100644
+--- a/src/context/love_qdrant_named_collection_control_0287.py
++++ b/src/context/love_qdrant_named_collection_control_0287.py
+@@ -409,3 +409,4 @@ __all__ = (
+     "execute_love_qdrant_named_collection_plan",
+     "inspect_love_qdrant_named_collection",
+ )
++# r10-r1 does not change the controlled mutation boundary.
+diff --git a/src/inference/qdrant_client_named_collection_admin_0287.py b/src/inference/qdrant_client_named_collection_admin_0287.py
+index da8cd6b..6c94564 100644
+--- a/src/inference/qdrant_client_named_collection_admin_0287.py
++++ b/src/inference/qdrant_client_named_collection_admin_0287.py
+@@ -375,3 +375,4 @@ __all__ = (
+     "QdrantNamedCollectionShape",
+     "build_qdrant_client_named_collection_admin",
+ )
++# r10-r1 does not change collection-admin effects.
+diff --git a/tests/context/test_love_qdrant_named_collection_control_0287_r7_r15_r3_r10.py b/tests/context/test_love_qdrant_named_collection_control_0287_r7_r15_r3_r10.py
+index e879bfb..b2ec92d 100644
+--- a/tests/context/test_love_qdrant_named_collection_control_0287_r7_r15_r3_r10.py
++++ b/tests/context/test_love_qdrant_named_collection_control_0287_r7_r15_r3_r10.py
+@@ -6,6 +6,7 @@ import json
+ import pytest
+ 
+ from context.love_manual_runtime_configuration_0287 import (
++    QdrantRuntimeSettings,
+     load_manual_installed_runtime_settings,
+ )
+ from context.love_manual_runtime_readiness_0287 import inspect_qdrant_readiness
+@@ -245,3 +246,20 @@ def test_manual_readiness_validates_both_named_vector_spaces(
+     assert evidence["sparse_vector_name"] == "sparse_lexical_v1"
+     assert evidence["sparse_configured"] is True
+ 
++
++
++def test_legacy_qdrant_runtime_settings_constructor_keeps_old_callers() -> None:
++    settings = QdrantRuntimeSettings(
++        url="http://127.0.0.1:6333",
++        grpc_port=6334,
++        api_key_env="",
++        collection="autodoc_context_current",
++        vector_name="",
++        dimension=384,
++        distance="Cosine",
++    )
++    assert settings.named_vectors_enabled is False
++    assert settings.physical_collection == "autodoc_context_current"
++    assert settings.collection_alias == "autodoc_context_current"
++    assert settings.dense_vector_name == "dense_e5_v1"
++    assert settings.sparse_vector_name == "sparse_lexical_v1"
+diff --git a/tests/context/test_qdrant_client_named_collection_admin_0287_r7_r15_r3_r10.py b/tests/context/test_qdrant_client_named_collection_admin_0287_r7_r15_r3_r10.py
+index 17eb70f..cfa7b96 100644
+--- a/tests/context/test_qdrant_client_named_collection_admin_0287_r7_r15_r3_r10.py
++++ b/tests/context/test_qdrant_client_named_collection_admin_0287_r7_r15_r3_r10.py
+@@ -116,3 +116,4 @@ def test_sdk_admin_creates_and_reads_named_collection() -> None:
+     assert shape.sparse_vectors == ("sparse_lexical_v1",)
+     assert shape.payload_indexes["sql_ref"] == "keyword"
+     assert "vectors" not in shape.to_mapping()
++# r10-r1 leaves the admin membrane behavior unchanged.
+diff --git a/tests/rules/test_love_qdrant_named_collection_control_0287_r7_r15_r3_r10_rule.py b/tests/rules/test_love_qdrant_named_collection_control_0287_r7_r15_r3_r10_rule.py
+index e09a736..3d4e1a7 100644
+--- a/tests/rules/test_love_qdrant_named_collection_control_0287_r7_r15_r3_r10_rule.py
++++ b/tests/rules/test_love_qdrant_named_collection_control_0287_r7_r15_r3_r10_rule.py
+@@ -6,6 +6,7 @@ CONTROL = ROOT / "src/context/love_qdrant_named_collection_control_0287.py"
+ ADMIN = ROOT / "src/inference/qdrant_client_named_collection_admin_0287.py"
+ CONFIG = ROOT / "config/love_installed_runtime.example.ini"
+ TOOL = ROOT / "tools/control_love_qdrant_named_collection_0287.py"
++RUNTIME_CONFIG = ROOT / "src/context/love_manual_runtime_configuration_0287.py"
+ 
+ 
+ def test_r10_keeps_collection_creation_additive_and_preview_first() -> None:
+@@ -54,3 +55,17 @@ def test_r10_keeps_collection_creation_additive_and_preview_first() -> None:
+     assert "AUTODOC_QDRANT_COLLECTION_MUTATION_ALLOWED" in tool
+     assert "Scheduler(" not in control
+     assert "Scheduler(" not in admin
++
++
++def test_r10_keeps_legacy_qdrant_constructor_compatible() -> None:
++    source = RUNTIME_CONFIG.read_text(encoding="utf-8")
++    for marker in (
++        'physical_collection: str = ""',
++        'collection_alias: str = ""',
++        'dense_vector_name: str = "dense_e5_v1"',
++        'sparse_vector_name: str = "sparse_lexical_v1"',
++        'named_vectors_enabled: bool = False',
++        'self.physical_collection.strip() or collection',
++        'self.collection_alias.strip() or collection',
++    ):
++        assert marker in source
+diff --git a/tools/control_love_qdrant_named_collection_0287.py b/tools/control_love_qdrant_named_collection_0287.py
+index 066780b..093228d 100644
+--- a/tools/control_love_qdrant_named_collection_0287.py
++++ b/tools/control_love_qdrant_named_collection_0287.py
+@@ -149,3 +149,4 @@ def main(argv: Sequence[str] | None = None) -> int:
+ 
+ if __name__ == "__main__":
+     raise SystemExit(main())
++# r10-r1 preserves preview-first CLI behavior.

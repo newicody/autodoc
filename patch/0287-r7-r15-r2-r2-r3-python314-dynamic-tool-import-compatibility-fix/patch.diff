@@ -1,0 +1,190 @@
+diff --git a/PHASE0287_R7_R15_R2_R2_R3_PYTHON314_DYNAMIC_TOOL_IMPORT_COMPATIBILITY_FIX_REPORT.md b/PHASE0287_R7_R15_R2_R2_R3_PYTHON314_DYNAMIC_TOOL_IMPORT_COMPATIBILITY_FIX_REPORT.md
+new file mode 100644
+index 0000000..560e031
+--- /dev/null
++++ b/PHASE0287_R7_R15_R2_R2_R3_PYTHON314_DYNAMIC_TOOL_IMPORT_COMPATIBILITY_FIX_REPORT.md
+@@ -0,0 +1,34 @@
++# Phase 0287 R7 R15 R2 R2 R3 — Python 3.14 dynamic tool import compatibility fix
++
++## Status
++
++Closed as a narrow test-infrastructure compatibility correction.
++
++## Failure reproduced
++
++The full suite passed all rule tests, then failed twelve tests while dynamically
++loading `tools/run_love_actions_closed_loop_0287.py`.  The helper created a
++module with `module_from_spec()` and executed it directly, but did not register
++that module in `sys.modules` before `exec_module()`.
++
++On Python 3.14, the dataclass decorator resolves postponed string annotations
++through the defining module.  Because the helper had not installed that module,
++`sys.modules.get(cls.__module__)` returned `None`.
++
++## Correction
++
++The test helper now follows the standard programmatic-import sequence:
++
++1. create the module from its spec;
++2. save any previous entry using the same synthetic name;
++3. register the new module in `sys.modules`;
++4. execute the module;
++5. restore or remove the entry only when execution fails.
++
++The production CLI, runtime contracts, Scheduler lifecycle, artifact selection,
++ProjectV2 resolution and publication preview are unchanged.
++
++## Boundary
++
++This patch fixes the invalid test loader instead of weakening the production
++module by removing annotations or adding self-registration side effects.
+diff --git a/doc/CHANGELOG_0287_R7_R15_R2_R2_R3_PYTHON314_DYNAMIC_TOOL_IMPORT_COMPATIBILITY_FIX.md b/doc/CHANGELOG_0287_R7_R15_R2_R2_R3_PYTHON314_DYNAMIC_TOOL_IMPORT_COMPATIBILITY_FIX.md
+new file mode 100644
+index 0000000..d457456
+--- /dev/null
++++ b/doc/CHANGELOG_0287_R7_R15_R2_R2_R3_PYTHON314_DYNAMIC_TOOL_IMPORT_COMPATIBILITY_FIX.md
+@@ -0,0 +1,7 @@
++# Changelog — 0287 R7 R15 R2 R2 R3
++
++- made the dynamic CLI test loader compatible with Python 3.14 dataclasses;
++- registered source-file modules in `sys.modules` before `exec_module()`;
++- restored the prior module entry when execution fails;
++- added a rule locking the correct import order;
++- changed no production runtime or remote-mutation behavior.
+diff --git a/doc/architecture/PYTHON314_DYNAMIC_TOOL_IMPORT_COMPATIBILITY_FIX_0287_R7_R15_R2_R2_R3.dot b/doc/architecture/PYTHON314_DYNAMIC_TOOL_IMPORT_COMPATIBILITY_FIX_0287_R7_R15_R2_R2_R3.dot
+new file mode 100644
+index 0000000..831ddd5
+--- /dev/null
++++ b/doc/architecture/PYTHON314_DYNAMIC_TOOL_IMPORT_COMPATIBILITY_FIX_0287_R7_R15_R2_R2_R3.dot
+@@ -0,0 +1,12 @@
++digraph python314_dynamic_tool_import_compatibility_fix_0287_r7_r15_r2_r2_r3 {
++  rankdir=LR;
++  node [shape=box];
++  spec [label="module spec"];
++  module [label="module_from_spec"];
++  registry [label="sys.modules[name] = module"];
++  execute [label="exec_module"];
++  dataclass [label="dataclass annotations resolve"];
++  failure [label="restore previous entry", shape=diamond];
++  spec -> module -> registry -> execute -> dataclass;
++  execute -> failure [label="exception"];
++}
+diff --git a/doc/architecture/PYTHON314_DYNAMIC_TOOL_IMPORT_COMPATIBILITY_FIX_0287_R7_R15_R2_R2_R3.md b/doc/architecture/PYTHON314_DYNAMIC_TOOL_IMPORT_COMPATIBILITY_FIX_0287_R7_R15_R2_R2_R3.md
+new file mode 100644
+index 0000000..eb2f392
+--- /dev/null
++++ b/doc/architecture/PYTHON314_DYNAMIC_TOOL_IMPORT_COMPATIBILITY_FIX_0287_R7_R15_R2_R2_R3.md
+@@ -0,0 +1,19 @@
++# Python 3.14 dynamic tool import compatibility
++
++The tests load tool scripts under synthetic module names so each scenario gets
++an isolated module object.  A source-file import must nevertheless preserve the
++normal import invariant that the module is visible in `sys.modules` while its
++body executes.
++
++```text
++spec_from_file_location
++→ module_from_spec
++→ sys.modules[name] = module
++→ exec_module(module)
++→ usable dataclasses and postponed annotations
++```
++
++If execution fails, the helper restores the entry that existed before the
++attempt, or removes the synthetic entry when none existed.
++
++No production module is made responsible for repairing a non-standard loader.
+diff --git a/doc/manifests/MANIFEST_0287_R7_R15_R2_R2_R3_PYTHON314_DYNAMIC_TOOL_IMPORT_COMPATIBILITY_FIX.md b/doc/manifests/MANIFEST_0287_R7_R15_R2_R2_R3_PYTHON314_DYNAMIC_TOOL_IMPORT_COMPATIBILITY_FIX.md
+new file mode 100644
+index 0000000..811bf91
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0287_R7_R15_R2_R2_R3_PYTHON314_DYNAMIC_TOOL_IMPORT_COMPATIBILITY_FIX.md
+@@ -0,0 +1,17 @@
++# Manifest — 0287 R7 R15 R2 R2 R3
++
++## Modified
++
++- `tests/tools/test_run_love_actions_closed_loop_0287_r7_r15_r2.py`
++
++## Added
++
++- `PHASE0287_R7_R15_R2_R2_R3_PYTHON314_DYNAMIC_TOOL_IMPORT_COMPATIBILITY_FIX_REPORT.md`
++- `doc/CHANGELOG_0287_R7_R15_R2_R2_R3_PYTHON314_DYNAMIC_TOOL_IMPORT_COMPATIBILITY_FIX.md`
++- `doc/architecture/PYTHON314_DYNAMIC_TOOL_IMPORT_COMPATIBILITY_FIX_0287_R7_R15_R2_R2_R3.md`
++- `doc/architecture/PYTHON314_DYNAMIC_TOOL_IMPORT_COMPATIBILITY_FIX_0287_R7_R15_R2_R2_R3.dot`
++- `tests/rules/test_python314_dynamic_tool_import_compatibility_0287_r7_r15_r2_r2_r3_rule.py`
++
++## Runtime impact
++
++None.  This patch changes test loading only.
+diff --git a/tests/rules/test_python314_dynamic_tool_import_compatibility_0287_r7_r15_r2_r2_r3_rule.py b/tests/rules/test_python314_dynamic_tool_import_compatibility_0287_r7_r15_r2_r2_r3_rule.py
+new file mode 100644
+index 0000000..436c14f
+--- /dev/null
++++ b/tests/rules/test_python314_dynamic_tool_import_compatibility_0287_r7_r15_r2_r2_r3_rule.py
+@@ -0,0 +1,35 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++TEST_SOURCE = (
++    ROOT / "tests/tools/test_run_love_actions_closed_loop_0287_r7_r15_r2.py"
++)
++REPORT = (
++    ROOT
++    / "PHASE0287_R7_R15_R2_R2_R3_PYTHON314_DYNAMIC_TOOL_IMPORT_COMPATIBILITY_FIX_REPORT.md"
++)
++
++
++def test_dynamic_loader_registers_module_before_execution() -> None:
++    source = TEST_SOURCE.read_text(encoding="utf-8")
++    register = "sys.modules[name] = module"
++    execute = "spec.loader.exec_module(module)"
++    assert "import sys" in source
++    assert register in source
++    assert execute in source
++    assert source.index(register) < source.index(execute)
++
++
++def test_dynamic_loader_restores_registry_on_failure() -> None:
++    source = TEST_SOURCE.read_text(encoding="utf-8")
++    assert "previous = sys.modules.get(name)" in source
++    assert "sys.modules.pop(name, None)" in source
++    assert "sys.modules[name] = previous" in source
++
++
++def test_fix_is_declared_as_test_only() -> None:
++    report = REPORT.read_text(encoding="utf-8")
++    assert "production CLI" in report
++    assert "unchanged" in report
++    assert "invalid test loader" in report
+diff --git a/tests/tools/test_run_love_actions_closed_loop_0287_r7_r15_r2.py b/tests/tools/test_run_love_actions_closed_loop_0287_r7_r15_r2.py
+index 3484ce3..db81323 100644
+--- a/tests/tools/test_run_love_actions_closed_loop_0287_r7_r15_r2.py
++++ b/tests/tools/test_run_love_actions_closed_loop_0287_r7_r15_r2.py
+@@ -2,6 +2,7 @@ from __future__ import annotations
+ 
+ import importlib.util
+ from pathlib import Path
++import sys
+ from types import ModuleType, SimpleNamespace
+ 
+ import pytest
+@@ -12,7 +13,16 @@ def _load_tool(name: str, filename: str) -> ModuleType:
+     spec = importlib.util.spec_from_file_location(name, path)
+     assert spec is not None and spec.loader is not None
+     module = importlib.util.module_from_spec(spec)
+-    spec.loader.exec_module(module)
++    previous = sys.modules.get(name)
++    sys.modules[name] = module
++    try:
++        spec.loader.exec_module(module)
++    except BaseException:
++        if previous is None:
++            sys.modules.pop(name, None)
++        else:
++            sys.modules[name] = previous
++        raise
+     return module
+ 
+ 

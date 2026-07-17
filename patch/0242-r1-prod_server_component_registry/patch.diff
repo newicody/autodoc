@@ -1,0 +1,709 @@
+diff --git a/PHASE0242_PROD_SERVER_COMPONENT_REGISTRY_TEST_REPORT.md b/PHASE0242_PROD_SERVER_COMPONENT_REGISTRY_TEST_REPORT.md
+new file mode 100644
+index 0000000..0044124
+--- /dev/null
++++ b/PHASE0242_PROD_SERVER_COMPONENT_REGISTRY_TEST_REPORT.md
+@@ -0,0 +1,26 @@
++# Phase 0242 test report - production server component registry
++
++## Expected validation
++
++```text
++python -m compileall -q src tests tools
++python -m pytest -q tests/context/test_prod_server_component_registry_0242.py
++python -m pytest -q tests/tools/test_run_prod_server_component_registry_0242.py
++python -m pytest -q tests/rules/test_prod_server_component_registry_0242_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
++
++## Direct smoke
++
++```text
++PYTHONPATH=src:. python tools/run_prod_server_component_registry_0242.py --check-only --format summary
++PYTHONPATH=src:. python tools/run_prod_server_component_registry_0242.py --format summary
++```
++
++## Boundary
++
++This patch builds a declarative registry only. It does not import or call
++component factories, start OpenRC, create Scheduler/EventBus, start threads,
++publish events, call GitHub, execute PostgreSQL DDL/DML, create Qdrant
++collections, or add non-stdlib dependencies.
+diff --git a/doc/CHANGELOG_0242_PROD_SERVER_COMPONENT_REGISTRY.md b/doc/CHANGELOG_0242_PROD_SERVER_COMPONENT_REGISTRY.md
+new file mode 100644
+index 0000000..2e2b0cf
+--- /dev/null
++++ b/doc/CHANGELOG_0242_PROD_SERVER_COMPONENT_REGISTRY.md
+@@ -0,0 +1,9 @@
++# Changelog 0242 - production server component registry
++
++## r1
++
++Added a registry-only component table derived from the validated production
++server INI file.
++
++The registry validates factory reference syntax, computes dependency order, and
++marks command/observation path components without importing or calling factories.
+diff --git a/doc/architecture/PROD_SERVER_COMPONENT_REGISTRY_0242.md b/doc/architecture/PROD_SERVER_COMPONENT_REGISTRY_0242.md
+new file mode 100644
+index 0000000..c25a6ce
+--- /dev/null
++++ b/doc/architecture/PROD_SERVER_COMPONENT_REGISTRY_0242.md
+@@ -0,0 +1,62 @@
++# Production server component registry - 0242
++
++## Intent
++
++This patch builds a declarative component registry from the validated production
++server INI file.
++
++It answers:
++
++```text
++which components exist
++which factory reference each component declares
++which phase owns the component
++which dependency order should be used later
++which components are command path vs observation path
++```
++
++No component factory is imported or called in this phase.
++
++## Factory reference shape
++
++Factories are stored as strings using:
++
++```text
++module:function
++```
++
++Example:
++
++```text
++autodoc.scheduler:create_scheduler
++```
++
++This is only a reference. The registry does not import the module and does not
++call the function.
++
++## Ordering
++
++The registry computes dependency order for enabled components. Current initial
++order from the example server INI is:
++
++```text
++eventbus
++scheduler
++passive_supervisor_sink
++sql_context_store
++github_artifact_exchange
++qdrant_projection
++```
++
++The order remains data only until 0243.
++
++## No __init__ side effects
++
++No __init__ side effects are allowed here. This phase cannot start threads,
++create Scheduler/EventBus instances, call GitHub, write PostgreSQL, write Qdrant,
++or publish EventBus events.
++
++## Boundary
++
++0242 is registry-only. 0243 may use this registry to prepare bootstrap logic, but
++0242 remains read-only and declarative.
+diff --git a/doc/code-rules/0242_prod_server_component_registry_rule.md b/doc/code-rules/0242_prod_server_component_registry_rule.md
+new file mode 100644
+index 0000000..fa6d2e5
+--- /dev/null
++++ b/doc/code-rules/0242_prod_server_component_registry_rule.md
+@@ -0,0 +1,28 @@
++# Code rule 0242 - production server component registry
++
++Patch 0242 may build a declarative component registry from the validated server
++INI only.
++
++Required:
++
++```text
++factory references use module:function
++component dependency order is computed as data
++command path and observation path are explicit
++INI validation runs before registry acceptance
++```
++
++Forbidden in this phase:
++
++```text
++importing factory modules
++calling factories
++creating Scheduler/EventBus instances
++starting OpenRC
++starting threads
++publishing EventBus events
++calling GitHub API
++executing PostgreSQL DDL/DML
++creating/upserting Qdrant collections or points
++adding non-stdlib dependencies
++```
+diff --git a/doc/docs/architecture/runtime/242_prod_server_component_registry.dot b/doc/docs/architecture/runtime/242_prod_server_component_registry.dot
+new file mode 100644
+index 0000000..25fd524
+--- /dev/null
++++ b/doc/docs/architecture/runtime/242_prod_server_component_registry.dot
+@@ -0,0 +1,12 @@
++digraph prod_server_component_registry_0242 {
++  rankdir=LR;
++
++  ini [label="validated prod INI"];
++  registry [label="component registry"];
++  order [label="dependency order"];
++  bootstrap [label="0243 bootstrap"];
++
++  ini -> registry;
++  registry -> order;
++  order -> bootstrap [style=dashed];
++}
+diff --git a/doc/manifests/MANIFEST_0242_PROD_SERVER_COMPONENT_REGISTRY_CHANGED_FILES.md b/doc/manifests/MANIFEST_0242_PROD_SERVER_COMPONENT_REGISTRY_CHANGED_FILES.md
+new file mode 100644
+index 0000000..ea5f50e
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0242_PROD_SERVER_COMPONENT_REGISTRY_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest 0242 - production server component registry
++
++- `src/context/prod_server_component_registry_0242.py`
++- `tools/run_prod_server_component_registry_0242.py`
++- `tests/context/test_prod_server_component_registry_0242.py`
++- `tests/tools/test_run_prod_server_component_registry_0242.py`
++- `tests/rules/test_prod_server_component_registry_0242_rule.py`
++- `doc/architecture/PROD_SERVER_COMPONENT_REGISTRY_0242.md`
++- `doc/code-rules/0242_prod_server_component_registry_rule.md`
++- `doc/docs/architecture/runtime/242_prod_server_component_registry.dot`
++- `doc/CHANGELOG_0242_PROD_SERVER_COMPONENT_REGISTRY.md`
++- `doc/manifests/MANIFEST_0242_PROD_SERVER_COMPONENT_REGISTRY_CHANGED_FILES.md`
++- `PHASE0242_PROD_SERVER_COMPONENT_REGISTRY_TEST_REPORT.md`
+diff --git a/src/context/prod_server_component_registry_0242.py b/src/context/prod_server_component_registry_0242.py
+new file mode 100644
+index 0000000..9ed1672
+--- /dev/null
++++ b/src/context/prod_server_component_registry_0242.py
+@@ -0,0 +1,229 @@
++"""Production server component registry for phase 0242.
++
++The registry is a declarative table built from the validated production server
++INI. It records component ids, factory references, phases, dependency order, and
++command/observation roles.
++
++This module does not import component factory modules, call factories,
++instantiate Scheduler/EventBus, start OpenRC, start threads, publish events,
++call GitHub, or mutate PostgreSQL/Qdrant.
++"""
++
++from __future__ import annotations
++
++import json
++import re
++from dataclasses import asdict, dataclass
++from pathlib import Path
++from typing import Any
++
++from context.prod_server_ini_validation_0241 import load_ini, validate_ini_file
++
++
++COMPONENT_REGISTRY_VERSION = "0242.r1"
++
++
++COMPONENT_REGISTRY_BOUNDARY: dict[str, bool] = {
++    "registry_only": True,
++    "validates_ini_first": True,
++    "imports_factory_modules": False,
++    "calls_factories": False,
++    "creates_scheduler": False,
++    "creates_eventbus": False,
++    "starts_openrc": False,
++    "starts_threads": False,
++    "publishes_events": False,
++    "calls_github_api": False,
++    "writes_postgresql": False,
++    "writes_qdrant": False,
++    "requires_non_stdlib": False,
++}
++
++
++FACTORY_REF_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]*:[A-Za-z_][A-Za-z0-9_]*$")
++
++
++COMMAND_COMPONENTS = frozenset(
++    {
++        "scheduler",
++        "sql_context_store",
++        "qdrant_projection",
++        "github_artifact_exchange",
++    }
++)
++OBSERVATION_COMPONENTS = frozenset({"eventbus", "passive_supervisor_sink"})
++DEFAULT_DEPENDENCIES: dict[str, tuple[str, ...]] = {
++    "sql_context_store": ("scheduler",),
++    "qdrant_projection": ("sql_context_store",),
++    "github_artifact_exchange": ("scheduler", "sql_context_store"),
++    "passive_supervisor_sink": ("eventbus",),
++}
++
++
++@dataclass(frozen=True)
++class ComponentRegistryIssue:
++    """One registry issue found while reading component sections."""
++
++    component_id: str
++    field: str
++    message: str
++
++
++@dataclass(frozen=True)
++class ComponentRegistryEntry:
++    """One declarative component registry entry."""
++
++    component_id: str
++    factory: str
++    phase: str
++    enabled: bool
++    depends_on: tuple[str, ...]
++    command_path: bool
++    observation_path: bool
++
++
++@dataclass(frozen=True)
++class ComponentRegistryReport:
++    """JSON-compatible component registry report."""
++
++    version: str
++    config_path: str
++    valid: bool
++    ordered_components: tuple[str, ...]
++    entries: tuple[ComponentRegistryEntry, ...]
++    issues: tuple[ComponentRegistryIssue, ...]
++
++
++def _split_csv(value: str) -> tuple[str, ...]:
++    return tuple(item.strip() for item in value.split(",") if item.strip())
++
++
++def _component_id_from_section(section: str) -> str:
++    return section.removeprefix("component.")
++
++
++def _component_sections(parser: Any) -> tuple[str, ...]:
++    return tuple(section for section in parser.sections() if section.startswith("component."))
++
++
++def _entry_from_section(parser: Any, section: str) -> tuple[ComponentRegistryEntry | None, tuple[ComponentRegistryIssue, ...]]:
++    component_id = _component_id_from_section(section)
++    issues: list[ComponentRegistryIssue] = []
++
++    factory = parser.get(section, "factory", fallback="")
++    phase = parser.get(section, "phase", fallback="")
++    enabled = parser.getboolean(section, "enabled", fallback=False)
++    depends_on = _split_csv(parser.get(section, "depends_on", fallback=""))
++    if not depends_on:
++        depends_on = DEFAULT_DEPENDENCIES.get(component_id, ())
++
++    if not factory:
++        issues.append(ComponentRegistryIssue(component_id, "factory", "missing factory reference"))
++    elif not FACTORY_REF_RE.match(factory):
++        issues.append(ComponentRegistryIssue(component_id, "factory", "must use module:function syntax"))
++
++    if not phase:
++        issues.append(ComponentRegistryIssue(component_id, "phase", "missing phase"))
++
++    if issues:
++        return None, tuple(issues)
++
++    return (
++        ComponentRegistryEntry(
++            component_id=component_id,
++            factory=factory,
++            phase=phase,
++            enabled=enabled,
++            depends_on=depends_on,
++            command_path=component_id in COMMAND_COMPONENTS,
++            observation_path=component_id in OBSERVATION_COMPONENTS,
++        ),
++        tuple(),
++    )
++
++
++def dependency_order(entries: tuple[ComponentRegistryEntry, ...]) -> tuple[tuple[str, ...], tuple[ComponentRegistryIssue, ...]]:
++    """Return dependency order for enabled entries without instantiating them."""
++
++    enabled_entries = {entry.component_id: entry for entry in entries if entry.enabled}
++    issues: list[ComponentRegistryIssue] = []
++
++    for entry in enabled_entries.values():
++        for dependency in entry.depends_on:
++            if dependency not in enabled_entries:
++                issues.append(
++                    ComponentRegistryIssue(
++                        entry.component_id,
++                        "depends_on",
++                        f"unknown or disabled dependency {dependency}",
++                    )
++                )
++
++    ordered: list[str] = []
++    remaining = set(enabled_entries)
++    while remaining:
++        ready = sorted(
++            component_id
++            for component_id in remaining
++            if all(dependency in ordered for dependency in enabled_entries[component_id].depends_on)
++        )
++        if not ready:
++            cycle = ",".join(sorted(remaining))
++            issues.append(ComponentRegistryIssue("*", "depends_on", f"dependency cycle {cycle}"))
++            break
++        ordered.extend(ready)
++        remaining.difference_update(ready)
++
++    return tuple(ordered), tuple(issues)
++
++
++def build_component_registry(config_path: Path) -> ComponentRegistryReport:
++    """Build the declarative component registry from a validated INI file."""
++
++    ini_validation = validate_ini_file(config_path)
++    parser = load_ini(config_path)
++
++    entries: list[ComponentRegistryEntry] = []
++    issues: list[ComponentRegistryIssue] = []
++
++    if not ini_validation.valid:
++        for issue in ini_validation.issues:
++            issues.append(ComponentRegistryIssue(issue.section, issue.key, issue.message))
++
++    for section in _component_sections(parser):
++        entry, section_issues = _entry_from_section(parser, section)
++        issues.extend(section_issues)
++        if entry is not None:
++            entries.append(entry)
++
++    ordered_components, dependency_issues = dependency_order(tuple(entries))
++    issues.extend(dependency_issues)
++
++    return ComponentRegistryReport(
++        version=COMPONENT_REGISTRY_VERSION,
++        config_path=str(config_path),
++        valid=not issues,
++        ordered_components=ordered_components,
++        entries=tuple(entries),
++        issues=tuple(issues),
++    )
++
++
++def registry_to_dict(report: ComponentRegistryReport) -> dict[str, Any]:
++    """Convert a registry report to JSON-compatible data."""
++
++    return asdict(report)
++
++
++def write_component_registry_report(*, config_path: Path, output_path: Path) -> dict[str, Any]:
++    """Build and write the component registry report."""
++
++    report = build_component_registry(config_path)
++    payload = {
++        "production_server_component_registry_written": True,
++        "registry": registry_to_dict(report),
++        "boundary": dict(COMPONENT_REGISTRY_BOUNDARY),
++    }
++    output_path.parent.mkdir(parents=True, exist_ok=True)
++    output_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + chr(10), encoding="utf-8")
++    return payload
+diff --git a/tests/context/test_prod_server_component_registry_0242.py b/tests/context/test_prod_server_component_registry_0242.py
+new file mode 100644
+index 0000000..956b994
+--- /dev/null
++++ b/tests/context/test_prod_server_component_registry_0242.py
+@@ -0,0 +1,99 @@
++from pathlib import Path
++
++from context.prod_server_component_registry_0242 import (
++    COMPONENT_REGISTRY_BOUNDARY,
++    build_component_registry,
++    dependency_order,
++    write_component_registry_report,
++)
++from context.prod_server_ini_validation_0241 import load_ini, validate_ini_parser
++
++
++ROOT = Path(__file__).resolve().parents[2]
++EXAMPLE = ROOT / "doc/examples/autodoc_prod_server_initial_0241.ini"
++
++
++def test_component_registry_boundary_is_declarative_only() -> None:
++    assert COMPONENT_REGISTRY_BOUNDARY == {
++        "registry_only": True,
++        "validates_ini_first": True,
++        "imports_factory_modules": False,
++        "calls_factories": False,
++        "creates_scheduler": False,
++        "creates_eventbus": False,
++        "starts_openrc": False,
++        "starts_threads": False,
++        "publishes_events": False,
++        "calls_github_api": False,
++        "writes_postgresql": False,
++        "writes_qdrant": False,
++        "requires_non_stdlib": False,
++    }
++
++
++def test_example_registry_orders_components() -> None:
++    report = build_component_registry(EXAMPLE)
++
++    assert report.valid is True
++    assert report.issues == ()
++    assert report.ordered_components == (
++        "eventbus",
++        "scheduler",
++        "passive_supervisor_sink",
++        "sql_context_store",
++        "github_artifact_exchange",
++        "qdrant_projection",
++    )
++
++
++def test_registry_marks_command_and_observation_paths() -> None:
++    report = build_component_registry(EXAMPLE)
++    entries = {entry.component_id: entry for entry in report.entries}
++
++    assert entries["scheduler"].command_path is True
++    assert entries["scheduler"].observation_path is False
++    assert entries["eventbus"].command_path is False
++    assert entries["eventbus"].observation_path is True
++    assert entries["passive_supervisor_sink"].observation_path is True
++
++
++def test_invalid_factory_syntax_is_reported(tmp_path: Path) -> None:
++    config = tmp_path / "bad_factory.ini"
++    config.write_text(EXAMPLE.read_text(encoding="utf-8").replace(
++        "factory = autodoc.scheduler:create_scheduler",
++        "factory = new create_scheduler",
++    ), encoding="utf-8")
++
++    report = build_component_registry(config)
++
++    assert report.valid is False
++    assert any(issue.component_id == "scheduler" and issue.field == "factory" for issue in report.issues)
++
++
++def test_dependency_cycle_is_reported() -> None:
++    parser = load_ini(EXAMPLE)
++    parser.set("component.scheduler", "depends_on", "qdrant_projection")
++    parser.set("component.qdrant_projection", "depends_on", "scheduler")
++    validation = validate_ini_parser(parser, config_path=EXAMPLE)
++    assert validation.valid is True
++
++    from context.prod_server_component_registry_0242 import _entry_from_section, _component_sections
++
++    entries = []
++    for section in _component_sections(parser):
++        entry, issues = _entry_from_section(parser, section)
++        assert issues == ()
++        assert entry is not None
++        entries.append(entry)
++
++    _ordered, issues = dependency_order(tuple(entries))
++    assert any(issue.field == "depends_on" and "dependency cycle" in issue.message for issue in issues)
++
++
++def test_write_component_registry_report(tmp_path: Path) -> None:
++    output = tmp_path / "registry.json"
++    payload = write_component_registry_report(config_path=EXAMPLE, output_path=output)
++
++    assert payload["production_server_component_registry_written"] is True
++    assert payload["registry"]["valid"] is True
++    assert output.exists()
+diff --git a/tests/rules/test_prod_server_component_registry_0242_rule.py b/tests/rules/test_prod_server_component_registry_0242_rule.py
+new file mode 100644
+index 0000000..74700f4
+--- /dev/null
++++ b/tests/rules/test_prod_server_component_registry_0242_rule.py
+@@ -0,0 +1,36 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def test_0242_registry_does_not_instantiate_or_start_runtime() -> None:
++    source = (ROOT / "src/context/prod_server_component_registry_0242.py").read_text(
++        encoding="utf-8"
++    )
++    lowered = source.lower()
++
++    assert "registry_only" in source
++    assert "imports_factory_modules" in source
++    assert "calls_factories" in source
++    assert "starts_threads" in source
++    assert "calls_github_api" in source
++    assert "writes_postgresql" in source
++    assert "writes_qdrant" in source
++    assert "importlib" not in lowered
++    assert "subprocess.run" not in source
++    assert "threading." not in lowered
++    assert "scheduler.run(" not in lowered
++    assert "requests." not in lowered
++    assert "qdrant.upsert" not in lowered
++
++
++def test_0242_docs_lock_registry_boundary() -> None:
++    doc = (ROOT / "doc/architecture/PROD_SERVER_COMPONENT_REGISTRY_0242.md").read_text(
++        encoding="utf-8"
++    )
++
++    assert "declarative component registry" in doc
++    assert "No component factory is imported or called" in doc
++    assert "No __init__ side effects" in doc
++    assert "0243" in doc
+diff --git a/tests/tools/test_run_prod_server_component_registry_0242.py b/tests/tools/test_run_prod_server_component_registry_0242.py
+new file mode 100644
+index 0000000..67ca43d
+--- /dev/null
++++ b/tests/tools/test_run_prod_server_component_registry_0242.py
+@@ -0,0 +1,53 @@
++import subprocess
++import sys
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++EXAMPLE = "doc/examples/autodoc_prod_server_initial_0241.ini"
++
++
++def test_component_registry_tool_check_only_summary() -> None:
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/run_prod_server_component_registry_0242.py",
++            "--config",
++            EXAMPLE,
++            "--check-only",
++            "--format",
++            "summary",
++        ],
++        cwd=ROOT,
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    assert "production_server_component_registry_valid=True" in result.stdout
++    assert "issues=0" in result.stdout
++    assert "scheduler" in result.stdout
++
++
++def test_component_registry_tool_writes_report(tmp_path: Path) -> None:
++    output = tmp_path / "prod_server_component_registry_0242.json"
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/run_prod_server_component_registry_0242.py",
++            "--config",
++            EXAMPLE,
++            "--output",
++            str(output),
++            "--format",
++            "summary",
++        ],
++        cwd=ROOT,
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    assert "production_server_component_registry_written=True" in result.stdout
++    assert "valid=True" in result.stdout
++    assert output.exists()
+diff --git a/tools/run_prod_server_component_registry_0242.py b/tools/run_prod_server_component_registry_0242.py
+new file mode 100755
+index 0000000..e3b89ef
+--- /dev/null
++++ b/tools/run_prod_server_component_registry_0242.py
+@@ -0,0 +1,76 @@
++#!/usr/bin/env python3
++"""Build the phase 0242 declarative production server component registry."""
++
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++
++REPO_ROOT = Path(__file__).resolve().parents[1]
++SRC_ROOT = REPO_ROOT / "src"
++for _path in (str(SRC_ROOT), str(REPO_ROOT)):
++    if _path not in sys.path:
++        sys.path.insert(0, _path)
++
++from context.prod_server_component_registry_0242 import (  # noqa: E402
++    COMPONENT_REGISTRY_BOUNDARY,
++    build_component_registry,
++    registry_to_dict,
++    write_component_registry_report,
++)
++
++
++def parse_args() -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument(
++        "--config",
++        default="doc/examples/autodoc_prod_server_initial_0241.ini",
++    )
++    parser.add_argument(
++        "--output",
++        default=".var/reports/prod_server_component_registry_0242.json",
++    )
++    parser.add_argument("--check-only", action="store_true")
++    parser.add_argument("--format", choices=("json", "summary"), default="json")
++    return parser.parse_args()
++
++
++def main() -> int:
++    args = parse_args()
++    config_path = Path(args.config)
++    output_path = Path(args.output)
++
++    if args.check_only:
++        report = build_component_registry(config_path)
++        payload = {
++            "production_server_component_registry_valid": report.valid,
++            "registry": registry_to_dict(report),
++            "boundary": dict(COMPONENT_REGISTRY_BOUNDARY),
++        }
++    else:
++        payload = write_component_registry_report(config_path=config_path, output_path=output_path)
++        report = build_component_registry(config_path)
++
++    if args.format == "summary":
++        issue_count = len(report.issues)
++        ordered = ",".join(report.ordered_components)
++        if args.check_only:
++            print(
++                "production_server_component_registry_valid="
++                f"{str(report.valid)} issues={issue_count} order={ordered}"
++            )
++        else:
++            print(
++                "production_server_component_registry_written=True "
++                f"valid={str(report.valid)} issues={issue_count} output={output_path}"
++            )
++    else:
++        print(json.dumps(payload, indent=2, sort_keys=True))
++
++    return 0 if report.valid else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

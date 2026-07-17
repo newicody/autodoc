@@ -1,0 +1,1835 @@
+diff --git a/PHASE0285_R6_SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_REPORT.md b/PHASE0285_R6_SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_REPORT.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..12080340d3f04f1cf8dbb6e3b40752f63b99b967
+--- /dev/null
++++ b/PHASE0285_R6_SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_REPORT.md
+@@ -0,0 +1,73 @@
++# Phase 0285-r6 — Scheduler-approved specialist revision selection
++
++Status: implemented and targeted tests green.
++
++## Goal
++
++Extend the existing Scheduler event path so it can select exactly one portable
++specialist revision that is:
++
++- already operator-approved by 0285-r4;
++- already recorded by a durable SQL-authoritative 0285-r5 adapter;
++- the latest entry of the correlated append-only history;
++- compatible with the requested capability, contracts, laboratory and execution
++  boundary.
++
++The phase performs selection only. It does not dispatch or execute a laboratory
++visit.
++
++## Reuse decision
++
++Reused unchanged:
++
++- `PortableSpecialistDescriptor` and laboratory bindings from 0284-r2;
++- `PortableSpecialistRevision` from 0285-r3;
++- operator authorization from 0285-r4;
++- SQL-addressed history result from 0285-r5;
++- the existing immutable `Event`, central Scheduler, Dispatcher and Handler path.
++
++No second Scheduler, registry, laboratory manager or orchestration loop was added.
++The two new event enum members are appended after existing members so previously
++assigned `auto()` values remain stable.
++
++## Authority boundaries
++
++- Scheduler remains the only orchestration authority.
++- SQL remains the durable authority for approved specialist history.
++- Qdrant remains projection/recall only.
++- EventBus remains observation only.
++- GitHub Projects remains a workflow surface.
++- The r6 result has `scheduler_dispatch_performed=false` and
++  `laboratory_execution_performed=false`.
++
++## Validation
++
++- new context tests: 22 passed;
++- new rule tests: targeted green;
++- cumulative 0285-r2 through r6 targeted suite: 101 passed;
++- `compileall`: green;
++- `git diff --check`: green;
++- isolated `git apply --check`: green.
++
++## Reviews
++
++code_rule_review: completed
++
++code_rule_update_required: false
++
++Reason: the existing rules already require immutable contracts, explicit policy,
++Scheduler centrality, effects at adapters, EventBus observation-only behavior and
++reuse of the real runtime path. This phase conforms to those rules without changing
++them.
++
++projects_installation_review: completed
++
++projects_installation_update_required: false
++
++Reason: r6 adds no Projects workflow, form, field, secret, variable, Action or copy
++procedure. The cumulative `INSTALLATION.md` remains at `0284-r9`, with Copilot
++disabled by default and synchronization without `--delete`.
++
++## Next
++
++`0285-r7-specialist-capability-growth-observation-projection`
+diff --git a/doc/CHANGELOG_0285_R6_SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION.md b/doc/CHANGELOG_0285_R6_SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..d79eef44c0879e0035b33ef6eae2be0c82d220a0
+--- /dev/null
++++ b/doc/CHANGELOG_0285_R6_SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION.md
+@@ -0,0 +1,24 @@
++# Changelog — 0285-r6
++
++## Added
++
++- immutable Scheduler revision-selection policy, command and result;
++- pure selector requiring the latest durable operator-approved r5 history entry;
++- Dispatcher-compatible async handler;
++- event builder and existing-Dispatcher registration helper;
++- `SPECIALIST_REVISION_SELECTION` and reserved result event types appended to
++  `EventType` without renumbering earlier members;
++- capability, contract, laboratory and execution-boundary validation;
++- context tests, architecture rules, report, documentation, graph and manifest.
++
++## Unchanged
++
++- one central Scheduler;
++- SQL authority and Qdrant projection/recall boundary;
++- EventBus observation-only role;
++- laboratory execution path;
++- GitHub Projects workflows and cumulative installation guide.
++
++## Next
++
++`0285-r7-specialist-capability-growth-observation-projection`
+diff --git a/doc/architecture/SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_0285.dot b/doc/architecture/SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_0285.dot
+new file mode 100644
+index 0000000000000000000000000000000000000000..dd446c5473276b9962a1df98a2559e67a699ab1d
+--- /dev/null
++++ b/doc/architecture/SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_0285.dot
+@@ -0,0 +1,23 @@
++digraph scheduler_approved_specialist_revision_selection_0285 {
++    rankdir=LR;
++    node [shape=box];
++
++    history [label="0285-r5 durable SQL history\nlatest approved revision"];
++    event [label="SPECIALIST_REVISION_SELECTION\nimmutable Event"];
++    scheduler [label="existing Scheduler\nPolicyEngine + PriorityQueue"];
++    dispatcher [label="existing Dispatcher"];
++    handler [label="r6 selection Handler\npure validation"];
++    result [label="immutable selection result\nrevision + sql_ref + route"];
++    laboratory [label="laboratory dispatch/execution\nNOT performed", style=dashed];
++    qdrant [label="Qdrant projection\nNOT written", style=dashed];
++    eventbus [label="r7 observation projection\nnext", style=dashed];
++
++    history -> event;
++    event -> scheduler;
++    scheduler -> dispatcher;
++    dispatcher -> handler;
++    handler -> result;
++    result -> laboratory [style=dashed];
++    result -> qdrant [style=dashed];
++    result -> eventbus [style=dashed];
++}
+diff --git a/doc/architecture/SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_0285.md b/doc/architecture/SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_0285.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..679b8b0ff4f56d9a1f396796e0d1e6f0dc9faa34
+--- /dev/null
++++ b/doc/architecture/SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_0285.md
+@@ -0,0 +1,69 @@
++# Scheduler-approved specialist revision selection — 0285-r6
++
++## Decision
++
++The existing Scheduler path selects a specialist revision; no specialist, laboratory,
++Copilot component or storage adapter may select itself.
++
++```text
++approved proposal/revision
++        │
++        ▼
++SQL-authoritative append-only history (r5)
++        │ durable result + sql_ref + snapshot digest
++        ▼
++EventType.SPECIALIST_REVISION_SELECTION
++        │ Scheduler.emit → PolicyEngine → PriorityQueue
++        ▼
++existing Dispatcher
++        │
++        ▼
++SchedulerApprovedSpecialistRevisionSelectionHandler
++        │ pure policy validation
++        ▼
++immutable selection result
++        ├── selected revision
++        ├── operator decision ref
++        ├── sql_ref
++        ├── laboratory route
++        └── execution boundary
++```
++
++## Required proof
++
++The selector rejects a candidate unless:
++
++1. the r5 adapter reports a durable write;
++2. the supplied snapshot digest matches;
++3. the entry is the latest history entry;
++4. the embedded operator decision authorizes the revision;
++5. the specialist descriptor is `ready`;
++6. capability and input/output contracts match;
++7. the target laboratory binding and visit mode match;
++8. all required laboratory capabilities are available;
++9. one preferred execution boundary is both available and allowed.
++
++## Runtime boundary
++
++The r6 handler is structurally compatible with the existing Dispatcher. Composition
++registers it through the Dispatcher's existing `register()` method. The handler does
++not import or instantiate `Scheduler`, `Registry`, SQL, Qdrant, OpenVINO, EventBus or
++a laboratory provider.
++
++`SPECIALIST_REVISION_SELECTION_RESULT` is reserved for the passive observation
++projection in r7. The r6 handler returns the immutable result through the existing
++cooperative request path; it does not publish a second event by itself.
++
++## Side effects deliberately absent
++
++- no SQL write;
++- no Qdrant write;
++- no laboratory dispatch or execution;
++- no EventBus publication from business code;
++- no GitHub or ProjectV2 mutation;
++- no new Scheduler, registry or parallel orchestrator.
++
++## Projects installation review
++
++No workflow, form, field, variable, secret or deployment instruction changes in r6.
++The cumulative Projects installation guide therefore remains unchanged.
+diff --git a/doc/manifests/MANIFEST_0285_R6_SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION.md b/doc/manifests/MANIFEST_0285_R6_SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..e23a1d6c5dff1d8e266dc9b3c72ff3878961dbac
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0285_R6_SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION.md
+@@ -0,0 +1,33 @@
++# Manifest — 0285-r6 Scheduler-approved specialist revision selection
++
++Patch id: `0285-r6-scheduler-approved-specialist-revision-selection`
++
++## Modified
++
++- `src/contracts/event.py`
++
++## Added
++
++- `src/context/scheduler_approved_specialist_revision_selection_0285.py`
++- `tests/context/test_scheduler_approved_specialist_revision_selection_0285.py`
++- `tests/rules/test_scheduler_approved_specialist_revision_selection_0285_rule.py`
++- `PHASE0285_R6_SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_REPORT.md`
++- `doc/architecture/SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_0285.md`
++- `doc/architecture/SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_0285.dot`
++- `doc/CHANGELOG_0285_R6_SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION.md`
++- `doc/manifests/MANIFEST_0285_R6_SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION.md`
++
++## Runtime impact
++
++- two enum members appended after all existing `EventType` members;
++- one handler available for registration on the existing Dispatcher;
++- no automatic registration, dispatch, persistence, projection or remote mutation;
++- no dependency outside the Python standard library and existing Autodoc contracts.
++
++## Verification
++
++- contract and rule tests;
++- cumulative r2-r6 targeted tests;
++- compileall;
++- patch whitespace and isolated application checks;
++- cumulative Projects `INSTALLATION.md` review.
+diff --git a/src/context/scheduler_approved_specialist_revision_selection_0285.py b/src/context/scheduler_approved_specialist_revision_selection_0285.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..5071e47a9f6b151eab6a91adbebe8f56158ce285
+--- /dev/null
++++ b/src/context/scheduler_approved_specialist_revision_selection_0285.py
+@@ -0,0 +1,850 @@
++"""Scheduler-owned selection of one approved portable-specialist revision.
++
++Phase 0285-r6 extends the existing Event -> Scheduler -> Dispatcher -> Handler path
++without adding another Scheduler, registry or orchestrator.  Selection is pure: it
++requires a durable SQL-authoritative r5 history result, selects only its latest
++operator-approved revision, validates one laboratory route and returns an immutable
++selection result.  It does not dispatch a laboratory visit or write SQL/Qdrant.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Sequence
++from dataclasses import dataclass, field
++from hashlib import sha256
++import json
++import re
++from types import MappingProxyType
++from typing import Protocol, runtime_checkable
++
++from contracts.event import Event, EventType
++from context.portable_specialist_contract_0284 import (
++    PortableSpecialistDescriptor,
++    SpecialistCapabilityContract,
++    SpecialistExecutionBoundary,
++    SpecialistLaboratoryVisitMode,
++)
++from context.portable_specialist_revision_lineage_contract_0285 import (
++    PortableSpecialistRevision,
++)
++from context.specialist_capability_growth_durable_history_0285 import (
++    SpecialistCapabilityGrowthHistoryAppendResult,
++)
++
++SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_POLICY_SCHEMA = (
++    "missipy.specialist.scheduler_approved_revision_selection_policy.v1"
++)
++SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_COMMAND_SCHEMA = (
++    "missipy.specialist.scheduler_approved_revision_selection_command.v1"
++)
++SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_RESULT_SCHEMA = (
++    "missipy.specialist.scheduler_approved_revision_selection_result.v1"
++)
++SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_CONTRACT_VERSION = "0285.r6"
++
++_ALLOWED_VISIT_MODES = frozenset({"resident", "visitor", "transfer"})
++_ALLOWED_EXECUTION_BOUNDARIES = frozenset(
++    {"in_process", "local_process", "remote_service"}
++)
++_TYPED_REF_RE = re.compile(r"^[a-z][a-z0-9-]*:[^\s].*$")
++_CAPABILITY_RE = re.compile(r"^[a-z][a-z0-9_.-]+$")
++_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
++_COMMAND_PREFIXES = ("selection-command:",)
++_SELECTION_PREFIXES = ("selection:",)
++_POLICY_PREFIXES = ("policy:",)
++_SCHEDULER_PREFIXES = ("scheduler:",)
++_SPECIALIST_PREFIXES = ("specialist:", "llm:")
++_LABORATORY_PREFIXES = ("laboratory:",)
++_CONTRACT_PREFIXES = ("contract:",)
++_CONVERSATION_PREFIXES = ("conversation:",)
++_CONTEXT_PREFIXES = ("context:", "sql:")
++
++
++class SchedulerApprovedSpecialistRevisionSelectionError(ValueError):
++    """Raised when an approved specialist revision cannot be selected safely."""
++
++
++@dataclass(frozen=True, slots=True)
++class SchedulerApprovedSpecialistRevisionSelectionPolicy:
++    """Explicit Scheduler-side constraints for revision selection."""
++
++    schema: str
++    policy_ref: str
++    scheduler_ref: str
++    allowed_laboratory_refs: tuple[str, ...] = field(default_factory=tuple)
++    allowed_visit_modes: tuple[SpecialistLaboratoryVisitMode, ...] = (
++        "resident",
++        "visitor",
++    )
++    allowed_execution_boundaries: tuple[SpecialistExecutionBoundary, ...] = (
++        "in_process",
++        "local_process",
++        "remote_service",
++    )
++    require_latest_history_entry: bool = field(default=True, init=False)
++    require_ready_descriptor: bool = field(default=True, init=False)
++    metadata: tuple[tuple[str, str], ...] = field(default_factory=tuple)
++
++    def __post_init__(self) -> None:
++        if self.schema != SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_POLICY_SCHEMA:
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "unsupported Scheduler approved revision selection policy schema"
++            )
++        _require_typed_ref(
++            "policy_ref", self.policy_ref, required_prefixes=_POLICY_PREFIXES
++        )
++        _require_typed_ref(
++            "scheduler_ref", self.scheduler_ref, required_prefixes=_SCHEDULER_PREFIXES
++        )
++        object.__setattr__(
++            self,
++            "allowed_laboratory_refs",
++            _normalize_refs(
++                "allowed_laboratory_refs",
++                self.allowed_laboratory_refs,
++                required_prefixes=_LABORATORY_PREFIXES,
++                allow_empty=True,
++            ),
++        )
++        object.__setattr__(
++            self,
++            "allowed_visit_modes",
++            _normalize_literals(
++                "allowed_visit_modes",
++                self.allowed_visit_modes,
++                allowed=_ALLOWED_VISIT_MODES,
++            ),
++        )
++        object.__setattr__(
++            self,
++            "allowed_execution_boundaries",
++            _normalize_literals(
++                "allowed_execution_boundaries",
++                self.allowed_execution_boundaries,
++                allowed=_ALLOWED_EXECUTION_BOUNDARIES,
++            ),
++        )
++        object.__setattr__(self, "metadata", _normalize_metadata(self.metadata))
++
++    @property
++    def policy_digest(self) -> str:
++        payload = json.dumps(
++            self.to_mapping(include_digest=False),
++            ensure_ascii=False,
++            separators=(",", ":"),
++            sort_keys=True,
++        ).encode("utf-8")
++        return sha256(payload).hexdigest()
++
++    def to_mapping(self, *, include_digest: bool = True) -> dict[str, object]:
++        mapping: dict[str, object] = {
++            "schema": self.schema,
++            "policy_ref": self.policy_ref,
++            "scheduler_ref": self.scheduler_ref,
++            "allowed_laboratory_refs": list(self.allowed_laboratory_refs),
++            "allowed_visit_modes": list(self.allowed_visit_modes),
++            "allowed_execution_boundaries": list(
++                self.allowed_execution_boundaries
++            ),
++            "require_latest_history_entry": self.require_latest_history_entry,
++            "require_ready_descriptor": self.require_ready_descriptor,
++            "metadata": dict(self.metadata),
++            "requires_durable_sql_history": True,
++            "requires_operator_approval": True,
++            "scheduler_remains_only_orchestrator": True,
++            "new_scheduler_created": False,
++            "parallel_orchestrator_created": False,
++        }
++        if include_digest:
++            mapping["policy_digest"] = self.policy_digest
++        return mapping
++
++
++@dataclass(frozen=True, slots=True)
++class SchedulerApprovedSpecialistRevisionSelectionCommand:
++    """Immutable request to select one durable, approved specialist revision."""
++
++    schema: str
++    command_ref: str
++    selection_ref: str
++    scheduler_ref: str
++    history_result: SpecialistCapabilityGrowthHistoryAppendResult
++    expected_snapshot_digest_sha256: str
++    specialist_ref: str
++    capability: str
++    input_contract_ref: str
++    output_contract_ref: str
++    laboratory_ref: str
++    visit_mode: SpecialistLaboratoryVisitMode
++    available_laboratory_capabilities: tuple[str, ...]
++    available_execution_boundaries: tuple[SpecialistExecutionBoundary, ...]
++    conversation_ref: str
++    context_refs: tuple[str, ...]
++    metadata: tuple[tuple[str, str], ...] = field(default_factory=tuple)
++
++    def __post_init__(self) -> None:
++        if self.schema != SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_COMMAND_SCHEMA:
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "unsupported Scheduler approved revision selection command schema"
++            )
++        _require_typed_ref(
++            "command_ref", self.command_ref, required_prefixes=_COMMAND_PREFIXES
++        )
++        _require_typed_ref(
++            "selection_ref", self.selection_ref, required_prefixes=_SELECTION_PREFIXES
++        )
++        _require_typed_ref(
++            "scheduler_ref", self.scheduler_ref, required_prefixes=_SCHEDULER_PREFIXES
++        )
++        if not isinstance(
++            self.history_result, SpecialistCapabilityGrowthHistoryAppendResult
++        ):
++            raise TypeError(
++                "history_result must be SpecialistCapabilityGrowthHistoryAppendResult"
++            )
++        _require_sha256(
++            "expected_snapshot_digest_sha256",
++            self.expected_snapshot_digest_sha256,
++        )
++        _require_typed_ref(
++            "specialist_ref",
++            self.specialist_ref,
++            required_prefixes=_SPECIALIST_PREFIXES,
++        )
++        _require_capability("capability", self.capability)
++        _require_typed_ref(
++            "input_contract_ref",
++            self.input_contract_ref,
++            required_prefixes=_CONTRACT_PREFIXES,
++        )
++        _require_typed_ref(
++            "output_contract_ref",
++            self.output_contract_ref,
++            required_prefixes=_CONTRACT_PREFIXES,
++        )
++        _require_typed_ref(
++            "laboratory_ref",
++            self.laboratory_ref,
++            required_prefixes=_LABORATORY_PREFIXES,
++        )
++        if self.visit_mode not in _ALLOWED_VISIT_MODES:
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "unsupported visit_mode"
++            )
++        object.__setattr__(
++            self,
++            "available_laboratory_capabilities",
++            _normalize_capabilities(
++                "available_laboratory_capabilities",
++                self.available_laboratory_capabilities,
++            ),
++        )
++        object.__setattr__(
++            self,
++            "available_execution_boundaries",
++            _normalize_literals(
++                "available_execution_boundaries",
++                self.available_execution_boundaries,
++                allowed=_ALLOWED_EXECUTION_BOUNDARIES,
++            ),
++        )
++        _require_typed_ref(
++            "conversation_ref",
++            self.conversation_ref,
++            required_prefixes=_CONVERSATION_PREFIXES,
++        )
++        object.__setattr__(
++            self,
++            "context_refs",
++            _normalize_refs(
++                "context_refs",
++                self.context_refs,
++                required_prefixes=_CONTEXT_PREFIXES,
++            ),
++        )
++        object.__setattr__(self, "metadata", _normalize_metadata(self.metadata))
++
++    @property
++    def command_digest(self) -> str:
++        payload = json.dumps(
++            self.to_mapping(include_digest=False),
++            ensure_ascii=False,
++            separators=(",", ":"),
++            sort_keys=True,
++        ).encode("utf-8")
++        return sha256(payload).hexdigest()
++
++    def to_mapping(self, *, include_digest: bool = True) -> dict[str, object]:
++        mapping: dict[str, object] = {
++            "schema": self.schema,
++            "command_ref": self.command_ref,
++            "selection_ref": self.selection_ref,
++            "scheduler_ref": self.scheduler_ref,
++            "history_ref": self.history_result.entry.history_ref,
++            "history_entry_ref": self.history_result.entry.entry_ref,
++            "history_sql_ref": self.history_result.entry.sql_ref,
++            "expected_snapshot_digest_sha256": (
++                self.expected_snapshot_digest_sha256
++            ),
++            "specialist_ref": self.specialist_ref,
++            "capability": self.capability,
++            "input_contract_ref": self.input_contract_ref,
++            "output_contract_ref": self.output_contract_ref,
++            "laboratory_ref": self.laboratory_ref,
++            "visit_mode": self.visit_mode,
++            "available_laboratory_capabilities": list(
++                self.available_laboratory_capabilities
++            ),
++            "available_execution_boundaries": list(
++                self.available_execution_boundaries
++            ),
++            "conversation_ref": self.conversation_ref,
++            "context_refs": list(self.context_refs),
++            "metadata": dict(self.metadata),
++            "requires_existing_scheduler": True,
++            "laboratory_dispatch_requested": False,
++        }
++        if include_digest:
++            mapping["command_digest"] = self.command_digest
++        return mapping
++
++
++@dataclass(frozen=True, slots=True)
++class SchedulerApprovedSpecialistRevisionSelectionResult:
++    """Immutable Scheduler selection; not a laboratory dispatch or execution."""
++
++    schema: str
++    selection_ref: str
++    command_ref: str
++    scheduler_ref: str
++    policy_ref: str
++    policy_digest_sha256: str
++    history_ref: str
++    history_snapshot_digest_sha256: str
++    history_entry_ref: str
++    history_entry_digest_sha256: str
++    sql_ref: str
++    decision_ref: str
++    selected_revision: PortableSpecialistRevision
++    capability: str
++    input_contract_ref: str
++    output_contract_ref: str
++    laboratory_ref: str
++    visit_mode: SpecialistLaboratoryVisitMode
++    execution_boundary: SpecialistExecutionBoundary
++    conversation_ref: str
++    context_refs: tuple[str, ...]
++    metadata: tuple[tuple[str, str], ...] = field(default_factory=tuple)
++
++    def __post_init__(self) -> None:
++        if self.schema != SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_RESULT_SCHEMA:
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "unsupported Scheduler approved revision selection result schema"
++            )
++        _require_typed_ref(
++            "selection_ref", self.selection_ref, required_prefixes=_SELECTION_PREFIXES
++        )
++        _require_typed_ref(
++            "command_ref", self.command_ref, required_prefixes=_COMMAND_PREFIXES
++        )
++        _require_typed_ref(
++            "scheduler_ref", self.scheduler_ref, required_prefixes=_SCHEDULER_PREFIXES
++        )
++        _require_typed_ref(
++            "policy_ref", self.policy_ref, required_prefixes=_POLICY_PREFIXES
++        )
++        _require_sha256("policy_digest_sha256", self.policy_digest_sha256)
++        _require_typed_ref("history_ref", self.history_ref, required_prefixes=("history:",))
++        _require_sha256(
++            "history_snapshot_digest_sha256",
++            self.history_snapshot_digest_sha256,
++        )
++        _require_typed_ref(
++            "history_entry_ref",
++            self.history_entry_ref,
++            required_prefixes=("history-entry:",),
++        )
++        _require_sha256(
++            "history_entry_digest_sha256",
++            self.history_entry_digest_sha256,
++        )
++        _require_typed_ref("sql_ref", self.sql_ref, required_prefixes=("sql:",))
++        _require_typed_ref(
++            "decision_ref", self.decision_ref, required_prefixes=("decision:",)
++        )
++        if not isinstance(self.selected_revision, PortableSpecialistRevision):
++            raise TypeError("selected_revision must be PortableSpecialistRevision")
++        _require_capability("capability", self.capability)
++        _require_typed_ref(
++            "input_contract_ref",
++            self.input_contract_ref,
++            required_prefixes=_CONTRACT_PREFIXES,
++        )
++        _require_typed_ref(
++            "output_contract_ref",
++            self.output_contract_ref,
++            required_prefixes=_CONTRACT_PREFIXES,
++        )
++        _require_typed_ref(
++            "laboratory_ref",
++            self.laboratory_ref,
++            required_prefixes=_LABORATORY_PREFIXES,
++        )
++        if self.visit_mode not in _ALLOWED_VISIT_MODES:
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "unsupported visit_mode"
++            )
++        if self.execution_boundary not in _ALLOWED_EXECUTION_BOUNDARIES:
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "unsupported execution_boundary"
++            )
++        _require_typed_ref(
++            "conversation_ref",
++            self.conversation_ref,
++            required_prefixes=_CONVERSATION_PREFIXES,
++        )
++        object.__setattr__(
++            self,
++            "context_refs",
++            _normalize_refs(
++                "context_refs",
++                self.context_refs,
++                required_prefixes=_CONTEXT_PREFIXES,
++            ),
++        )
++        object.__setattr__(self, "metadata", _normalize_metadata(self.metadata))
++
++    @property
++    def specialist_ref(self) -> str:
++        return self.selected_revision.specialist_ref
++
++    @property
++    def selection_digest(self) -> str:
++        payload = json.dumps(
++            self.to_mapping(include_digest=False),
++            ensure_ascii=False,
++            separators=(",", ":"),
++            sort_keys=True,
++        ).encode("utf-8")
++        return sha256(payload).hexdigest()
++
++    def to_mapping(self, *, include_digest: bool = True) -> dict[str, object]:
++        mapping: dict[str, object] = {
++            "schema": self.schema,
++            "selection_ref": self.selection_ref,
++            "command_ref": self.command_ref,
++            "scheduler_ref": self.scheduler_ref,
++            "policy_ref": self.policy_ref,
++            "policy_digest_sha256": self.policy_digest_sha256,
++            "history_ref": self.history_ref,
++            "history_snapshot_digest_sha256": (
++                self.history_snapshot_digest_sha256
++            ),
++            "history_entry_ref": self.history_entry_ref,
++            "history_entry_digest_sha256": self.history_entry_digest_sha256,
++            "sql_ref": self.sql_ref,
++            "decision_ref": self.decision_ref,
++            "selected_revision": self.selected_revision.to_mapping(),
++            "specialist_ref": self.specialist_ref,
++            "capability": self.capability,
++            "input_contract_ref": self.input_contract_ref,
++            "output_contract_ref": self.output_contract_ref,
++            "laboratory_ref": self.laboratory_ref,
++            "visit_mode": self.visit_mode,
++            "execution_boundary": self.execution_boundary,
++            "conversation_ref": self.conversation_ref,
++            "context_refs": list(self.context_refs),
++            "metadata": dict(self.metadata),
++            "scheduler_selection_performed": True,
++            "scheduler_dispatch_performed": False,
++            "laboratory_execution_performed": False,
++            "sql_write_performed": False,
++            "qdrant_write_performed": False,
++            "eventbus_observation_published": False,
++            "github_mutation_performed": False,
++            "new_scheduler_created": False,
++            "parallel_orchestrator_created": False,
++        }
++        if include_digest:
++            mapping["selection_digest"] = self.selection_digest
++        return mapping
++
++
++class SchedulerApprovedSpecialistRevisionSelector:
++    """Pure selection use case invoked by the existing Scheduler handler path."""
++
++    def select(
++        self,
++        command: SchedulerApprovedSpecialistRevisionSelectionCommand,
++        policy: SchedulerApprovedSpecialistRevisionSelectionPolicy,
++    ) -> SchedulerApprovedSpecialistRevisionSelectionResult:
++        if not isinstance(
++            command, SchedulerApprovedSpecialistRevisionSelectionCommand
++        ):
++            raise TypeError(
++                "command must be SchedulerApprovedSpecialistRevisionSelectionCommand"
++            )
++        if not isinstance(
++            policy, SchedulerApprovedSpecialistRevisionSelectionPolicy
++        ):
++            raise TypeError(
++                "policy must be SchedulerApprovedSpecialistRevisionSelectionPolicy"
++            )
++        if command.scheduler_ref != policy.scheduler_ref:
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "command scheduler_ref must match selection policy"
++            )
++
++        history_result = command.history_result
++        if not history_result.durable_write_performed:
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "selection requires a durable SQL-authoritative history result"
++            )
++        if history_result.adapter_kind == "deterministic_test_memory":
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "selection rejects the deterministic test-only history adapter"
++            )
++        snapshot = history_result.snapshot
++        entry = history_result.entry
++        if command.expected_snapshot_digest_sha256 != snapshot.snapshot_digest:
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "expected history snapshot digest does not match"
++            )
++        if policy.require_latest_history_entry and (
++            entry.entry_ref != snapshot.latest_entry.entry_ref
++            or entry.entry_digest != snapshot.latest_entry.entry_digest
++        ):
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "selection requires the latest durable history entry"
++            )
++        if not entry.decision.revision_authorized:
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "history entry revision is not operator-approved"
++            )
++        if command.specialist_ref != entry.specialist_ref:
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "command specialist_ref must match durable history"
++            )
++        revision = entry.revision
++        descriptor = revision.descriptor
++        if policy.require_ready_descriptor and descriptor.availability != "ready":
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "selected specialist descriptor must be ready"
++            )
++
++        capability = _find_capability(descriptor, command.capability)
++        if command.input_contract_ref not in descriptor.accepted_input_contract_refs:
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "input contract is not accepted by specialist descriptor"
++            )
++        if command.input_contract_ref not in capability.accepted_input_contract_refs:
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "input contract is not accepted by requested capability"
++            )
++        if command.output_contract_ref not in descriptor.produced_output_contract_refs:
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "output contract is not produced by specialist descriptor"
++            )
++        if command.output_contract_ref not in capability.produced_output_contract_refs:
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "output contract is not produced by requested capability"
++            )
++
++        binding = next(
++            (
++                item
++                for item in descriptor.laboratory_bindings
++                if item.laboratory_ref == command.laboratory_ref
++            ),
++            None,
++        )
++        if binding is None:
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "laboratory is not declared by selected specialist revision"
++            )
++        if policy.allowed_laboratory_refs and (
++            command.laboratory_ref not in policy.allowed_laboratory_refs
++        ):
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "laboratory is not allowed by Scheduler selection policy"
++            )
++        if command.visit_mode not in policy.allowed_visit_modes:
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "visit mode is not allowed by Scheduler selection policy"
++            )
++        if command.visit_mode not in binding.visit_modes:
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "visit mode is not allowed by specialist laboratory binding"
++            )
++        missing_laboratory_capabilities = set(
++            binding.required_laboratory_capabilities
++        ).difference(command.available_laboratory_capabilities)
++        if missing_laboratory_capabilities:
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "target laboratory does not provide required capabilities: "
++                + ", ".join(sorted(missing_laboratory_capabilities))
++            )
++        execution_boundary = _select_execution_boundary(
++            descriptor,
++            command.available_execution_boundaries,
++            policy.allowed_execution_boundaries,
++        )
++        return SchedulerApprovedSpecialistRevisionSelectionResult(
++            schema=SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_RESULT_SCHEMA,
++            selection_ref=command.selection_ref,
++            command_ref=command.command_ref,
++            scheduler_ref=command.scheduler_ref,
++            policy_ref=policy.policy_ref,
++            policy_digest_sha256=policy.policy_digest,
++            history_ref=entry.history_ref,
++            history_snapshot_digest_sha256=snapshot.snapshot_digest,
++            history_entry_ref=entry.entry_ref,
++            history_entry_digest_sha256=entry.entry_digest,
++            sql_ref=entry.sql_ref,
++            decision_ref=entry.decision.decision_ref,
++            selected_revision=revision,
++            capability=command.capability,
++            input_contract_ref=command.input_contract_ref,
++            output_contract_ref=command.output_contract_ref,
++            laboratory_ref=command.laboratory_ref,
++            visit_mode=command.visit_mode,
++            execution_boundary=execution_boundary,
++            conversation_ref=command.conversation_ref,
++            context_refs=command.context_refs,
++            metadata=command.metadata,
++        )
++
++
++class SchedulerApprovedSpecialistRevisionSelectionHandler:
++    """Dispatcher-compatible handler for the existing Scheduler event path."""
++
++    def __init__(
++        self,
++        policy: SchedulerApprovedSpecialistRevisionSelectionPolicy,
++        selector: SchedulerApprovedSpecialistRevisionSelector | None = None,
++    ) -> None:
++        self.policy = policy
++        self.selector = selector or SchedulerApprovedSpecialistRevisionSelector()
++
++    async def handle(
++        self, event: Event
++    ) -> SchedulerApprovedSpecialistRevisionSelectionResult:
++        if not isinstance(event, Event):
++            raise TypeError("event must be Event")
++        if event.type is not EventType.SPECIALIST_REVISION_SELECTION:
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "handler only accepts SPECIALIST_REVISION_SELECTION events"
++            )
++        if not isinstance(
++            event.payload, SchedulerApprovedSpecialistRevisionSelectionCommand
++        ):
++            raise TypeError(
++                "event payload must be SchedulerApprovedSpecialistRevisionSelectionCommand"
++            )
++        return self.selector.select(event.payload, self.policy)
++
++
++@runtime_checkable
++class SchedulerDispatcherRegistrationPort(Protocol):
++    """Minimal composition boundary already implemented by kernel.Dispatcher."""
++
++    def register(self, event_type: EventType, handler: object) -> None:
++        """Register one handler on the existing Dispatcher."""
++
++
++def register_scheduler_approved_specialist_revision_selection(
++    dispatcher: SchedulerDispatcherRegistrationPort,
++    handler: SchedulerApprovedSpecialistRevisionSelectionHandler,
++) -> None:
++    """Register r6 on the existing Dispatcher; create no registry or Scheduler."""
++
++    if not isinstance(handler, SchedulerApprovedSpecialistRevisionSelectionHandler):
++        raise TypeError(
++            "handler must be SchedulerApprovedSpecialistRevisionSelectionHandler"
++        )
++    dispatcher.register(EventType.SPECIALIST_REVISION_SELECTION, handler)
++
++
++def build_scheduler_approved_specialist_revision_selection_event(
++    command: SchedulerApprovedSpecialistRevisionSelectionCommand,
++    *,
++    source: str = "specialist-capability-growth",
++    priority: int = 0,
++    correlation_id: str | None = None,
++) -> Event:
++    """Build the immutable event consumed through Scheduler.emit()."""
++
++    if not isinstance(command, SchedulerApprovedSpecialistRevisionSelectionCommand):
++        raise TypeError(
++            "command must be SchedulerApprovedSpecialistRevisionSelectionCommand"
++        )
++    if not isinstance(source, str) or not source.strip():
++        raise SchedulerApprovedSpecialistRevisionSelectionError(
++            "event source must be non-empty"
++        )
++    if isinstance(priority, bool) or not isinstance(priority, int):
++        raise SchedulerApprovedSpecialistRevisionSelectionError(
++            "event priority must be an integer"
++        )
++    return Event(
++        type=EventType.SPECIALIST_REVISION_SELECTION,
++        source=source.strip(),
++        dest="scheduler",
++        payload=command,
++        priority=priority,
++        correlation_id=correlation_id,
++        metadata=MappingProxyType(
++            {
++                "phase": "0285-r6",
++                "selection_ref": command.selection_ref,
++                "specialist_ref": command.specialist_ref,
++            }
++        ),
++    )
++
++
++def _find_capability(
++    descriptor: PortableSpecialistDescriptor,
++    capability_name: str,
++) -> SpecialistCapabilityContract:
++    capability = next(
++        (
++            item
++            for item in descriptor.capabilities
++            if item.capability == capability_name
++        ),
++        None,
++    )
++    if capability is None:
++        raise SchedulerApprovedSpecialistRevisionSelectionError(
++            "requested capability is not declared by selected revision"
++        )
++    return capability
++
++
++def _select_execution_boundary(
++    descriptor: PortableSpecialistDescriptor,
++    available: tuple[SpecialistExecutionBoundary, ...],
++    allowed: tuple[SpecialistExecutionBoundary, ...],
++) -> SpecialistExecutionBoundary:
++    available_set = frozenset(available)
++    allowed_set = frozenset(allowed)
++    for boundary in descriptor.execution_profile.preferred_execution_boundaries:
++        if boundary in available_set and boundary in allowed_set:
++            return boundary
++    raise SchedulerApprovedSpecialistRevisionSelectionError(
++        "no compatible execution boundary is available"
++    )
++
++
++def _require_typed_ref(
++    name: str,
++    value: str,
++    *,
++    required_prefixes: tuple[str, ...],
++) -> None:
++    if not isinstance(value, str) or not _TYPED_REF_RE.fullmatch(value):
++        raise SchedulerApprovedSpecialistRevisionSelectionError(
++            f"{name} must be a typed reference"
++        )
++    if not value.startswith(required_prefixes):
++        raise SchedulerApprovedSpecialistRevisionSelectionError(
++            f"{name} must start with one of: {', '.join(required_prefixes)}"
++        )
++
++
++def _require_sha256(name: str, value: str) -> None:
++    if not isinstance(value, str) or not _SHA256_RE.fullmatch(value):
++        raise SchedulerApprovedSpecialistRevisionSelectionError(
++            f"{name} must be a lowercase SHA-256 digest"
++        )
++
++
++def _require_capability(name: str, value: str) -> None:
++    if not isinstance(value, str) or not _CAPABILITY_RE.fullmatch(value):
++        raise SchedulerApprovedSpecialistRevisionSelectionError(
++            f"{name} must use lowercase dotted identifier syntax"
++        )
++
++
++def _normalize_refs(
++    name: str,
++    values: Sequence[str],
++    *,
++    required_prefixes: tuple[str, ...],
++    allow_empty: bool = False,
++) -> tuple[str, ...]:
++    normalized = tuple(values)
++    if not normalized and not allow_empty:
++        raise SchedulerApprovedSpecialistRevisionSelectionError(
++            f"{name} must not be empty"
++        )
++    for value in normalized:
++        _require_typed_ref(name, value, required_prefixes=required_prefixes)
++    return tuple(dict.fromkeys(normalized))
++
++
++def _normalize_capabilities(
++    name: str,
++    values: Sequence[str],
++) -> tuple[str, ...]:
++    normalized = tuple(dict.fromkeys(values))
++    if not normalized:
++        raise SchedulerApprovedSpecialistRevisionSelectionError(
++            f"{name} must not be empty"
++        )
++    for value in normalized:
++        _require_capability(name, value)
++    return normalized
++
++
++def _normalize_literals(
++    name: str,
++    values: Sequence[str],
++    *,
++    allowed: frozenset[str],
++) -> tuple[str, ...]:
++    normalized = tuple(dict.fromkeys(values))
++    if not normalized:
++        raise SchedulerApprovedSpecialistRevisionSelectionError(
++            f"{name} must not be empty"
++        )
++    if any(value not in allowed for value in normalized):
++        raise SchedulerApprovedSpecialistRevisionSelectionError(
++            f"unsupported value in {name}"
++        )
++    return normalized
++
++
++def _normalize_metadata(
++    values: Sequence[tuple[str, str]],
++) -> tuple[tuple[str, str], ...]:
++    normalized: dict[str, str] = {}
++    for key, value in values:
++        if not isinstance(key, str) or not key.strip():
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "metadata key must be non-empty"
++            )
++        if not isinstance(value, str) or not value.strip():
++            raise SchedulerApprovedSpecialistRevisionSelectionError(
++                "metadata value must be non-empty"
++            )
++        normalized[key.strip()] = value.strip()
++    return tuple(sorted(normalized.items()))
++
++
++__all__ = (
++    "SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_COMMAND_SCHEMA",
++    "SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_CONTRACT_VERSION",
++    "SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_POLICY_SCHEMA",
++    "SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_RESULT_SCHEMA",
++    "SchedulerApprovedSpecialistRevisionSelectionCommand",
++    "SchedulerApprovedSpecialistRevisionSelectionError",
++    "SchedulerApprovedSpecialistRevisionSelectionHandler",
++    "SchedulerApprovedSpecialistRevisionSelectionPolicy",
++    "SchedulerApprovedSpecialistRevisionSelectionResult",
++    "SchedulerApprovedSpecialistRevisionSelector",
++    "SchedulerDispatcherRegistrationPort",
++    "build_scheduler_approved_specialist_revision_selection_event",
++    "register_scheduler_approved_specialist_revision_selection",
++)
+diff --git a/src/contracts/event.py b/src/contracts/event.py
+index d9b77f04299a587d7ed19e0aaae6630d09a9458b..36666fd946599e04dc3b354f3975114ec58a9226 100644
+--- a/src/contracts/event.py
++++ b/src/contracts/event.py
+@@ -46,6 +46,10 @@ class EventType(Enum):
+     # Système
+     SHUTDOWN = auto()
+ 
++    # Sélection de révision spécialiste — Phase 0285-r6
++    SPECIALIST_REVISION_SELECTION = auto()
++    SPECIALIST_REVISION_SELECTION_RESULT = auto()
++
+ 
+ @dataclass(frozen=True, slots=True)
+ class Request:
+diff --git a/tests/context/test_scheduler_approved_specialist_revision_selection_0285.py b/tests/context/test_scheduler_approved_specialist_revision_selection_0285.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..40bdab78e7c6ee9ce8cdc3b38487220987a7d176
+--- /dev/null
++++ b/tests/context/test_scheduler_approved_specialist_revision_selection_0285.py
+@@ -0,0 +1,551 @@
++import asyncio
++from dataclasses import FrozenInstanceError, replace
++
++import pytest
++
++from contracts.event import Event, EventType
++from context.portable_specialist_contract_0284 import (
++    PORTABLE_SPECIALIST_DESCRIPTOR_SCHEMA,
++    SPECIALIST_CAPABILITY_SCHEMA,
++    SPECIALIST_EXECUTION_PROFILE_SCHEMA,
++    SPECIALIST_LABORATORY_BINDING_SCHEMA,
++    PortableSpecialistDescriptor,
++    SpecialistCapabilityContract,
++    SpecialistExecutionProfile,
++    SpecialistLaboratoryBinding,
++)
++from context.portable_specialist_revision_lineage_contract_0285 import (
++    PORTABLE_SPECIALIST_REVISION_SCHEMA,
++    SPECIALIST_REVISION_LINEAGE_SCHEMA,
++    PortableSpecialistRevision,
++    SpecialistRevisionLineage,
++)
++from context.scheduler_approved_specialist_revision_selection_0285 import (
++    SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_COMMAND_SCHEMA,
++    SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_POLICY_SCHEMA,
++    SchedulerApprovedSpecialistRevisionSelectionCommand,
++    SchedulerApprovedSpecialistRevisionSelectionError,
++    SchedulerApprovedSpecialistRevisionSelectionHandler,
++    SchedulerApprovedSpecialistRevisionSelectionPolicy,
++    SchedulerApprovedSpecialistRevisionSelector,
++    build_scheduler_approved_specialist_revision_selection_event,
++    register_scheduler_approved_specialist_revision_selection,
++)
++from context.specialist_capability_growth_durable_history_0285 import (
++    SPECIALIST_CAPABILITY_GROWTH_HISTORY_APPEND_COMMAND_SCHEMA,
++    DeterministicSpecialistCapabilityGrowthHistoryAdapter,
++    SpecialistCapabilityGrowthHistoryAppendCommand,
++)
++from context.specialist_capability_growth_operator_gate_0285 import (
++    SPECIALIST_CAPABILITY_GROWTH_OPERATOR_GATE_SCHEMA,
++    SpecialistCapabilityGrowthOperatorGate,
++)
++from context.specialist_capability_growth_proposal_contract_0285 import (
++    SPECIALIST_CAPABILITY_EVIDENCE_REF_SCHEMA,
++    SPECIALIST_CAPABILITY_GROWTH_PROPOSAL_SCHEMA,
++    SpecialistCapabilityEvidenceRef,
++    SpecialistCapabilityGrowthProposal,
++)
++
++
++SPECIALIST_REF = "specialist:researcher"
++LABORATORY_REF = "laboratory:fake-local"
++INPUT_REF = "contract:research.input.v1"
++OUTPUT_REF = "contract:research.output.v1"
++CAPABILITY = "research.validation"
++
++
++def _descriptor(
++    version: str,
++    capability: str,
++    *,
++    availability: str = "ready",
++    boundaries: tuple[str, ...] = ("in_process", "local_process"),
++    visit_modes: tuple[str, ...] = ("resident", "visitor"),
++    laboratory_ref: str = LABORATORY_REF,
++    required_laboratory_capabilities: tuple[str, ...] = (
++        "deterministic.execution",
++    ),
++) -> PortableSpecialistDescriptor:
++    return PortableSpecialistDescriptor(
++        schema=PORTABLE_SPECIALIST_DESCRIPTOR_SCHEMA,
++        specialist_ref=SPECIALIST_REF,
++        display_name="Research specialist",
++        specialist_version=version,
++        capabilities=(
++            SpecialistCapabilityContract(
++                schema=SPECIALIST_CAPABILITY_SCHEMA,
++                capability=capability,
++                description=f"Capability {capability}",
++                accepted_input_contract_refs=(INPUT_REF,),
++                produced_output_contract_refs=(OUTPUT_REF,),
++            ),
++        ),
++        accepted_input_contract_refs=(INPUT_REF,),
++        produced_output_contract_refs=(OUTPUT_REF,),
++        execution_profile=SpecialistExecutionProfile(
++            schema=SPECIALIST_EXECUTION_PROFILE_SCHEMA,
++            preferred_execution_boundaries=boundaries,  # type: ignore[arg-type]
++        ),
++        laboratory_bindings=(
++            SpecialistLaboratoryBinding(
++                schema=SPECIALIST_LABORATORY_BINDING_SCHEMA,
++                specialist_ref=SPECIALIST_REF,
++                laboratory_ref=laboratory_ref,
++                visit_modes=visit_modes,  # type: ignore[arg-type]
++                required_laboratory_capabilities=(
++                    required_laboratory_capabilities
++                ),
++            ),
++        ),
++        availability=availability,  # type: ignore[arg-type]
++    )
++
++
++def _root_lineage() -> SpecialistRevisionLineage:
++    root = PortableSpecialistRevision(
++        schema=PORTABLE_SPECIALIST_REVISION_SCHEMA,
++        revision_ref="revision:researcher:1",
++        revision_number=1,
++        descriptor=_descriptor("1.0", "research.synthesis", availability="ready"),
++    )
++    return SpecialistRevisionLineage(
++        schema=SPECIALIST_REVISION_LINEAGE_SCHEMA,
++        lineage_ref="lineage:researcher",
++        specialist_ref=SPECIALIST_REF,
++        revisions=(root,),
++        head_revision_ref=root.revision_ref,
++    )
++
++
++def _proposal(
++    *,
++    suffix: str = "2",
++    base_version: str = "1.0",
++    capability: str = CAPABILITY,
++) -> SpecialistCapabilityGrowthProposal:
++    evidence = SpecialistCapabilityEvidenceRef(
++        schema=SPECIALIST_CAPABILITY_EVIDENCE_REF_SCHEMA,
++        evidence_ref=f"evidence:researcher:{suffix}",
++        evidence_kind="test_report",
++        specialist_ref=SPECIALIST_REF,
++        capability=capability,
++        source_ref=f"test:researcher:{suffix}",
++        digest_sha256=suffix[-1] * 64,
++        claim=f"The {capability} capability passed controlled tests.",
++    )
++    return SpecialistCapabilityGrowthProposal(
++        schema=SPECIALIST_CAPABILITY_GROWTH_PROPOSAL_SCHEMA,
++        proposal_ref=f"proposal:researcher:{suffix}",
++        specialist_ref=SPECIALIST_REF,
++        base_specialist_version=base_version,
++        action="add",
++        capability=capability,
++        proposed_description=f"Add {capability}.",
++        evidence_refs=(evidence,),
++        proposer_ref="system:capability-review",
++        conversation_ref="conversation:0285-r6",
++        context_refs=("context:0285-r6",),
++        requested_input_contract_refs=(INPUT_REF,),
++        requested_output_contract_refs=(OUTPUT_REF,),
++        requested_laboratory_capability_refs=(
++            "laboratory-capability:deterministic.execution",
++        ),
++    )
++
++
++def _candidate(
++    proposal: SpecialistCapabilityGrowthProposal,
++    *,
++    revision_number: int = 2,
++    version: str = "1.1",
++    parent_revision_ref: str = "revision:researcher:1",
++    descriptor: PortableSpecialistDescriptor | None = None,
++) -> PortableSpecialistRevision:
++    return PortableSpecialistRevision(
++        schema=PORTABLE_SPECIALIST_REVISION_SCHEMA,
++        revision_ref=f"revision:researcher:{revision_number}",
++        revision_number=revision_number,
++        descriptor=descriptor or _descriptor(version, proposal.capability),
++        parent_revision_ref=parent_revision_ref,
++        source_proposal_ref=proposal.proposal_ref,
++        source_proposal_digest_sha256=proposal.proposal_digest,
++        evidence_refs=tuple(item.evidence_ref for item in proposal.evidence_refs),
++    )
++
++
++def _history_command(
++    *,
++    lineage: SpecialistRevisionLineage | None = None,
++    proposal: SpecialistCapabilityGrowthProposal | None = None,
++    candidate: PortableSpecialistRevision | None = None,
++    expected_entry_count: int = 0,
++    entry_number: int = 1,
++) -> SpecialistCapabilityGrowthHistoryAppendCommand:
++    base = lineage or _root_lineage()
++    growth = proposal or _proposal()
++    revision = candidate or _candidate(growth)
++    gate = SpecialistCapabilityGrowthOperatorGate(
++        schema=SPECIALIST_CAPABILITY_GROWTH_OPERATOR_GATE_SCHEMA,
++        gate_ref="gate:specialist-capability-growth",
++        policy_ref="policy:specialist-capability-growth:v1",
++    )
++    decision = gate.decide(
++        growth,
++        revision,
++        base,
++        outcome="approve",
++        decision_ref=f"decision:researcher:{revision.revision_number}:approve",
++        operator_ref="operator:eric",
++        reason="Explicit operator review.",
++    )
++    return SpecialistCapabilityGrowthHistoryAppendCommand(
++        schema=SPECIALIST_CAPABILITY_GROWTH_HISTORY_APPEND_COMMAND_SCHEMA,
++        history_ref="history:specialist-capability-growth:researcher",
++        entry_ref=f"history-entry:researcher:{entry_number}",
++        sql_ref=f"sql:specialist-capability-history:researcher:{entry_number}",
++        base_lineage=base,
++        candidate_revision=revision,
++        decision=decision,
++        expected_entry_count=expected_entry_count,
++    )
++
++
++def _durable_result(
++    *,
++    descriptor: PortableSpecialistDescriptor | None = None,
++):
++    proposal = _proposal()
++    candidate = _candidate(proposal, descriptor=descriptor)
++    result = DeterministicSpecialistCapabilityGrowthHistoryAdapter().append(
++        _history_command(proposal=proposal, candidate=candidate)
++    )
++    return replace(
++        result,
++        adapter_kind="dbapi_sql_specialist_capability_history",
++        durable_write_performed=True,
++    )
++
++
++def _policy(**changes) -> SchedulerApprovedSpecialistRevisionSelectionPolicy:
++    values = {
++        "schema": SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_POLICY_SCHEMA,
++        "policy_ref": "policy:scheduler-specialist-revision-selection:v1",
++        "scheduler_ref": "scheduler:main",
++        "allowed_laboratory_refs": (LABORATORY_REF,),
++    }
++    values.update(changes)
++    return SchedulerApprovedSpecialistRevisionSelectionPolicy(**values)
++
++
++def _command(*, history_result=None, **changes):
++    durable = history_result or _durable_result()
++    values = {
++        "schema": SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_COMMAND_SCHEMA,
++        "command_ref": "selection-command:researcher:1",
++        "selection_ref": "selection:researcher:1",
++        "scheduler_ref": "scheduler:main",
++        "history_result": durable,
++        "expected_snapshot_digest_sha256": durable.snapshot.snapshot_digest,
++        "specialist_ref": SPECIALIST_REF,
++        "capability": CAPABILITY,
++        "input_contract_ref": INPUT_REF,
++        "output_contract_ref": OUTPUT_REF,
++        "laboratory_ref": LABORATORY_REF,
++        "visit_mode": "visitor",
++        "available_laboratory_capabilities": ("deterministic.execution",),
++        "available_execution_boundaries": ("local_process", "in_process"),
++        "conversation_ref": "conversation:0285-r6",
++        "context_refs": ("context:0285-r6", durable.entry.sql_ref),
++    }
++    values.update(changes)
++    return SchedulerApprovedSpecialistRevisionSelectionCommand(**values)
++
++
++def test_selects_latest_durable_operator_approved_revision() -> None:
++    command = _command()
++    result = SchedulerApprovedSpecialistRevisionSelector().select(command, _policy())
++
++    assert result.selected_revision.revision_ref == "revision:researcher:2"
++    assert result.sql_ref == command.history_result.entry.sql_ref
++    assert result.decision_ref == command.history_result.entry.decision.decision_ref
++    assert result.execution_boundary == "in_process"
++    mapping = result.to_mapping()
++    assert mapping["scheduler_selection_performed"] is True
++    assert mapping["scheduler_dispatch_performed"] is False
++    assert mapping["laboratory_execution_performed"] is False
++    assert mapping["sql_write_performed"] is False
++    assert mapping["qdrant_write_performed"] is False
++    assert mapping["new_scheduler_created"] is False
++
++
++def test_event_builder_targets_existing_scheduler_event_path() -> None:
++    command = _command()
++    event = build_scheduler_approved_specialist_revision_selection_event(
++        command,
++        source="operator-gate",
++        priority=42,
++        correlation_id="correlation:0285-r6",
++    )
++    assert event.type is EventType.SPECIALIST_REVISION_SELECTION
++    assert event.dest == "scheduler"
++    assert event.payload is command
++    assert event.source == "operator-gate"
++    assert event.priority == 42
++    assert event.metadata["phase"] == "0285-r6"
++
++
++def test_handler_is_dispatcher_compatible() -> None:
++    command = _command()
++    handler = SchedulerApprovedSpecialistRevisionSelectionHandler(_policy())
++    event = build_scheduler_approved_specialist_revision_selection_event(command)
++    result = asyncio.run(handler.handle(event))
++    assert result.selection_ref == command.selection_ref
++
++
++class _FakeDispatcher:
++    def __init__(self) -> None:
++        self.registration = None
++
++    def register(self, event_type, handler) -> None:
++        self.registration = (event_type, handler)
++
++
++def test_registration_uses_existing_dispatcher_without_new_registry() -> None:
++    dispatcher = _FakeDispatcher()
++    handler = SchedulerApprovedSpecialistRevisionSelectionHandler(_policy())
++    register_scheduler_approved_specialist_revision_selection(dispatcher, handler)
++    assert dispatcher.registration == (
++        EventType.SPECIALIST_REVISION_SELECTION,
++        handler,
++    )
++
++
++def test_non_durable_history_result_is_rejected() -> None:
++    non_durable = replace(
++        DeterministicSpecialistCapabilityGrowthHistoryAdapter().append(
++            _history_command()
++        ),
++        adapter_kind="dbapi_sql_specialist_capability_history",
++    )
++    with pytest.raises(
++        SchedulerApprovedSpecialistRevisionSelectionError,
++        match="durable SQL-authoritative",
++    ):
++        SchedulerApprovedSpecialistRevisionSelector().select(
++            _command(history_result=non_durable),
++            _policy(),
++        )
++
++
++
++def test_test_only_history_adapter_cannot_claim_selection_authority() -> None:
++    forged = replace(
++        DeterministicSpecialistCapabilityGrowthHistoryAdapter().append(
++            _history_command()
++        ),
++        durable_write_performed=True,
++    )
++    with pytest.raises(
++        SchedulerApprovedSpecialistRevisionSelectionError,
++        match="test-only history adapter",
++    ):
++        SchedulerApprovedSpecialistRevisionSelector().select(
++            _command(history_result=forged),
++            _policy(),
++        )
++
++def test_snapshot_digest_must_match_command() -> None:
++    command = _command(expected_snapshot_digest_sha256="f" * 64)
++    with pytest.raises(
++        SchedulerApprovedSpecialistRevisionSelectionError,
++        match="snapshot digest",
++    ):
++        SchedulerApprovedSpecialistRevisionSelector().select(command, _policy())
++
++
++def test_only_latest_durable_history_entry_can_be_selected() -> None:
++    adapter = DeterministicSpecialistCapabilityGrowthHistoryAdapter()
++    first = adapter.append(_history_command())
++    proposal = _proposal(suffix="3", base_version="1.1", capability="research.audit")
++    candidate = _candidate(
++        proposal,
++        revision_number=3,
++        version="1.2",
++        parent_revision_ref="revision:researcher:2",
++    )
++    second = adapter.append(
++        _history_command(
++            lineage=first.snapshot.latest_lineage,
++            proposal=proposal,
++            candidate=candidate,
++            expected_entry_count=1,
++            entry_number=2,
++        )
++    )
++    stale = replace(
++        first,
++        snapshot=second.snapshot,
++        inserted=False,
++        adapter_kind="dbapi_sql_specialist_capability_history",
++        durable_write_performed=True,
++    )
++    command = _command(
++        history_result=stale,
++        expected_snapshot_digest_sha256=second.snapshot.snapshot_digest,
++    )
++    with pytest.raises(
++        SchedulerApprovedSpecialistRevisionSelectionError,
++        match="latest durable history entry",
++    ):
++        SchedulerApprovedSpecialistRevisionSelector().select(command, _policy())
++
++
++def test_specialist_identity_must_match_history() -> None:
++    command = _command(specialist_ref="specialist:other")
++    with pytest.raises(
++        SchedulerApprovedSpecialistRevisionSelectionError,
++        match="specialist_ref",
++    ):
++        SchedulerApprovedSpecialistRevisionSelector().select(command, _policy())
++
++
++def test_descriptor_must_be_ready() -> None:
++    descriptor = _descriptor("1.1", CAPABILITY, availability="declared")
++    command = _command(history_result=_durable_result(descriptor=descriptor))
++    with pytest.raises(
++        SchedulerApprovedSpecialistRevisionSelectionError,
++        match="must be ready",
++    ):
++        SchedulerApprovedSpecialistRevisionSelector().select(command, _policy())
++
++
++def test_requested_capability_must_exist() -> None:
++    command = _command(capability="research.unknown")
++    with pytest.raises(
++        SchedulerApprovedSpecialistRevisionSelectionError,
++        match="requested capability",
++    ):
++        SchedulerApprovedSpecialistRevisionSelector().select(command, _policy())
++
++
++@pytest.mark.parametrize(
++    ("field", "value", "message"),
++    (
++        ("input_contract_ref", "contract:other.input.v1", "input contract"),
++        ("output_contract_ref", "contract:other.output.v1", "output contract"),
++    ),
++)
++def test_contract_envelope_must_match_capability(field, value, message) -> None:
++    command = _command(**{field: value})
++    with pytest.raises(
++        SchedulerApprovedSpecialistRevisionSelectionError,
++        match=message,
++    ):
++        SchedulerApprovedSpecialistRevisionSelector().select(command, _policy())
++
++
++def test_target_laboratory_must_be_declared() -> None:
++    command = _command(laboratory_ref="laboratory:other")
++    with pytest.raises(
++        SchedulerApprovedSpecialistRevisionSelectionError,
++        match="not declared",
++    ):
++        SchedulerApprovedSpecialistRevisionSelector().select(
++            command,
++            _policy(allowed_laboratory_refs=()),
++        )
++
++
++def test_scheduler_policy_must_allow_target_laboratory() -> None:
++    command = _command()
++    with pytest.raises(
++        SchedulerApprovedSpecialistRevisionSelectionError,
++        match="not allowed by Scheduler",
++    ):
++        SchedulerApprovedSpecialistRevisionSelector().select(
++            command,
++            _policy(allowed_laboratory_refs=("laboratory:other",)),
++        )
++
++
++def test_visit_mode_must_match_policy_and_binding() -> None:
++    command = _command(visit_mode="transfer")
++    with pytest.raises(
++        SchedulerApprovedSpecialistRevisionSelectionError,
++        match="selection policy",
++    ):
++        SchedulerApprovedSpecialistRevisionSelector().select(command, _policy())
++
++
++def test_target_laboratory_must_supply_required_capabilities() -> None:
++    command = _command(
++        available_laboratory_capabilities=("artifact.exchange",),
++    )
++    with pytest.raises(
++        SchedulerApprovedSpecialistRevisionSelectionError,
++        match="required capabilities",
++    ):
++        SchedulerApprovedSpecialistRevisionSelector().select(command, _policy())
++
++
++def test_execution_boundary_is_selected_in_specialist_preference_order() -> None:
++    descriptor = _descriptor(
++        "1.1",
++        CAPABILITY,
++        boundaries=("local_process", "in_process"),
++    )
++    command = _command(history_result=_durable_result(descriptor=descriptor))
++    result = SchedulerApprovedSpecialistRevisionSelector().select(command, _policy())
++    assert result.execution_boundary == "local_process"
++
++
++def test_missing_compatible_execution_boundary_is_rejected() -> None:
++    command = _command(available_execution_boundaries=("local_process",))
++    policy = _policy(allowed_execution_boundaries=("in_process",))
++    with pytest.raises(
++        SchedulerApprovedSpecialistRevisionSelectionError,
++        match="no compatible execution boundary",
++    ):
++        SchedulerApprovedSpecialistRevisionSelector().select(command, policy)
++
++
++def test_scheduler_refs_must_match() -> None:
++    with pytest.raises(
++        SchedulerApprovedSpecialistRevisionSelectionError,
++        match="scheduler_ref",
++    ):
++        SchedulerApprovedSpecialistRevisionSelector().select(
++            _command(),
++            _policy(scheduler_ref="scheduler:other"),
++        )
++
++
++def test_handler_rejects_wrong_event_and_payload() -> None:
++    handler = SchedulerApprovedSpecialistRevisionSelectionHandler(_policy())
++    wrong_type = Event(EventType.TICK, source="test", payload=_command())
++    with pytest.raises(
++        SchedulerApprovedSpecialistRevisionSelectionError,
++        match="only accepts",
++    ):
++        asyncio.run(handler.handle(wrong_type))
++
++    wrong_payload = Event(
++        EventType.SPECIALIST_REVISION_SELECTION,
++        source="test",
++        payload={"not": "a command"},
++    )
++    with pytest.raises(TypeError, match="event payload"):
++        asyncio.run(handler.handle(wrong_payload))
++
++
++def test_contracts_are_immutable_and_digests_are_deterministic() -> None:
++    first = _command(metadata=(("z", "last"), ("a", "first")))
++    second = _command(metadata=(("a", "first"), ("z", "last")))
++    assert first.command_digest == second.command_digest
++    with pytest.raises(FrozenInstanceError):
++        first.scheduler_ref = "scheduler:other"  # type: ignore[misc]
++
++    policy_first = _policy(metadata=(("z", "last"), ("a", "first")))
++    policy_second = _policy(metadata=(("a", "first"), ("z", "last")))
++    assert policy_first.policy_digest == policy_second.policy_digest
+diff --git a/tests/rules/test_scheduler_approved_specialist_revision_selection_0285_rule.py b/tests/rules/test_scheduler_approved_specialist_revision_selection_0285_rule.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..a9c1f9f94d6d9dc98b9971b0ff7227327a47b9e3
+--- /dev/null
++++ b/tests/rules/test_scheduler_approved_specialist_revision_selection_0285_rule.py
+@@ -0,0 +1,149 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++SOURCE = ROOT / "src/context/scheduler_approved_specialist_revision_selection_0285.py"
++EVENTS = ROOT / "src/contracts/event.py"
++REPORT = ROOT / "PHASE0285_R6_SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_REPORT.md"
++ARCHITECTURE = (
++    ROOT
++    / "doc/architecture/SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_0285.md"
++)
++GRAPH = (
++    ROOT
++    / "doc/architecture/SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION_0285.dot"
++)
++CHANGELOG = (
++    ROOT
++    / "doc/CHANGELOG_0285_R6_SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION.md"
++)
++MANIFEST = (
++    ROOT
++    / "doc/manifests/MANIFEST_0285_R6_SCHEDULER_APPROVED_SPECIALIST_REVISION_SELECTION.md"
++)
++INSTALLATION = ROOT / "templates/github/projects-repository/INSTALLATION.md"
++
++
++def test_r6_systematic_deliverables_exist() -> None:
++    for path in (
++        SOURCE,
++        REPORT,
++        ARCHITECTURE,
++        GRAPH,
++        CHANGELOG,
++        MANIFEST,
++    ):
++        assert path.is_file(), path
++
++
++def test_event_types_extend_existing_enum_without_renumbering_old_members() -> None:
++    text = EVENTS.read_text(encoding="utf-8")
++    shutdown = text.index("SHUTDOWN = auto()")
++    selection = text.index("SPECIALIST_REVISION_SELECTION = auto()")
++    result = text.index("SPECIALIST_REVISION_SELECTION_RESULT = auto()")
++    assert shutdown < selection < result
++
++
++def test_r6_uses_existing_scheduler_dispatcher_handler_path() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    required = (
++        "from contracts.event import Event, EventType",
++        "class SchedulerApprovedSpecialistRevisionSelectionHandler",
++        "async def handle(",
++        "EventType.SPECIALIST_REVISION_SELECTION",
++        "dispatcher.register(EventType.SPECIALIST_REVISION_SELECTION, handler)",
++        "dest=\"scheduler\"",
++        "requires_existing_scheduler",
++    )
++    for token in required:
++        assert token in text
++
++
++def test_r6_does_not_create_parallel_runtime_authority() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    forbidden = (
++        "class Scheduler(",
++        "class LaboratoryManager",
++        "class SpecialistRegistry",
++        "from kernel.scheduler import Scheduler",
++        "from kernel.registry import Registry",
++        "import qdrant",
++        "import openvino",
++        "import sqlalchemy",
++        "import psycopg",
++        "github.com",
++        "api.github.com",
++    )
++    for token in forbidden:
++        assert token not in text
++    for token in (
++        '"new_scheduler_created": False',
++        '"parallel_orchestrator_created": False',
++        '"scheduler_dispatch_performed": False',
++        '"laboratory_execution_performed": False',
++        '"sql_write_performed": False',
++        '"qdrant_write_performed": False',
++        '"eventbus_observation_published": False',
++        '"github_mutation_performed": False',
++    ):
++        assert token in text
++
++
++def test_r6_requires_durable_latest_operator_approved_history() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    required = (
++        "durable_write_performed",
++        "snapshot.latest_entry.entry_ref",
++        "snapshot.latest_entry.entry_digest",
++        "revision_authorized",
++        "expected_snapshot_digest_sha256",
++        "descriptor.availability != \"ready\"",
++        "entry.sql_ref",
++    )
++    for token in required:
++        assert token in text
++
++
++def test_r6_validates_capability_contract_laboratory_and_execution_boundary() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    required = (
++        "descriptor.capabilities",
++        "accepted_input_contract_refs",
++        "produced_output_contract_refs",
++        "descriptor.laboratory_bindings",
++        "required_laboratory_capabilities",
++        "preferred_execution_boundaries",
++        "available_execution_boundaries",
++    )
++    for token in required:
++        assert token in text
++
++
++def test_r6_contracts_are_immutable_stdlib_first() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    assert text.count("@dataclass(frozen=True, slots=True)") >= 3
++    assert "MappingProxyType" in text
++    assert "requests" not in text
++    assert "pydantic" not in text
++    assert "numpy" not in text
++
++
++def test_report_records_code_rule_and_projects_installation_reviews() -> None:
++    report = REPORT.read_text(encoding="utf-8")
++    required = (
++        "code_rule_review: completed",
++        "code_rule_update_required: false",
++        "Scheduler remains the only orchestration authority",
++        "projects_installation_review: completed",
++        "projects_installation_update_required: false",
++        "0285-r7-specialist-capability-growth-observation-projection",
++    )
++    for token in required:
++        assert token in report
++
++
++def test_projects_installation_safe_invariants_remain_current() -> None:
++    text = INSTALLATION.read_text(encoding="utf-8")
++    assert "Version du guide :" in text
++    assert "AUTODOC_COPILOT_ADVISORY_ENABLED=false" in text
++    assert "Ne pas utiliser `--delete`" in text

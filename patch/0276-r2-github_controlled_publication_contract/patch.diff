@@ -1,0 +1,198 @@
+diff --git a/src/context/github_controlled_publication_contract_0276.py b/src/context/github_controlled_publication_contract_0276.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/context/github_controlled_publication_contract_0276.py
+@@ -0,0 +1,53 @@
++"""Pure controlled GitHub publication command and plan."""
++from __future__ import annotations
++from dataclasses import dataclass
++from collections.abc import Mapping
++from typing import Any
++import hashlib,json,re
++COMMAND_SCHEMA="missipy.github.controlled_publication_command.v1"; PLAN_SCHEMA="missipy.github.controlled_publication_plan.v1"; REVIEW_SCHEMA="missipy.github_project.publication_review.v1"
++_ALLOWED={"issue_comment","issue_body_update","issue_labels_replace"}; _REPO=re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
++class GitHubControlledPublicationError(ValueError): pass
++@dataclass(frozen=True,slots=True)
++class GitHubControlledPublicationCommand:
++ publication_ref:str; repository:str; issue_number:int; mutation_kind:str; target_ref:str; source_final_ref:str; source_sql_ref:str; source_review_ref:str; review_decision_id:str; policy_decision_id:str; expected_remote_revision:str
++ body:str=""; labels:tuple[str,...]=(); provenance_refs:tuple[str,...]=(); execute:bool=False; operator_confirmed:bool=False; remote_mutation_enabled:bool=False; schema:str=COMMAND_SCHEMA
++ def __post_init__(self):
++  if self.schema!=COMMAND_SCHEMA: raise GitHubControlledPublicationError("unsupported command schema")
++  for n in ("publication_ref","repository","target_ref","source_final_ref","source_sql_ref","source_review_ref","review_decision_id","policy_decision_id","expected_remote_revision"):
++   if not isinstance(getattr(self,n),str) or not getattr(self,n).strip(): raise GitHubControlledPublicationError(f"{n} is required")
++  if not _REPO.fullmatch(self.repository) or self.issue_number<=0: raise GitHubControlledPublicationError("repository or issue_number invalid")
++  expected_target=f"github:issue:{self.repository}#{self.issue_number}"
++  if self.target_ref!=expected_target: raise GitHubControlledPublicationError("target_ref must match repository and issue_number")
++  if not self.publication_ref.startswith("github-publication:"): raise GitHubControlledPublicationError("publication_ref must be typed")
++  if not self.source_final_ref.startswith("artifact-final:"): raise GitHubControlledPublicationError("source_final_ref must be typed")
++  if not self.source_sql_ref.startswith("sql:"): raise GitHubControlledPublicationError("source_sql_ref must be typed")
++  if not self.source_review_ref.startswith("github-review:"): raise GitHubControlledPublicationError("source_review_ref must be typed")
++  object.__setattr__(self,"labels",tuple(dict.fromkeys(str(x).strip() for x in self.labels if str(x).strip())))
++  object.__setattr__(self,"provenance_refs",tuple(dict.fromkeys(str(x).strip() for x in self.provenance_refs if str(x).strip())))
++  if self.mutation_kind not in _ALLOWED: raise GitHubControlledPublicationError("unsupported mutation_kind")
++  if self.mutation_kind in {"issue_comment","issue_body_update"} and not self.body.strip(): raise GitHubControlledPublicationError("body is required")
++  if self.mutation_kind=="issue_labels_replace" and not self.labels: raise GitHubControlledPublicationError("labels are required")
++  if self.execute and not (self.operator_confirmed and self.remote_mutation_enabled): raise GitHubControlledPublicationError("execute requires operator confirmation and remote enablement")
++ def to_mapping(self): return {"schema":self.schema,"publication_ref":self.publication_ref,"repository":self.repository,"issue_number":self.issue_number,"mutation_kind":self.mutation_kind,"target_ref":self.target_ref,"source_final_ref":self.source_final_ref,"source_sql_ref":self.source_sql_ref,"source_review_ref":self.source_review_ref,"review_decision_id":self.review_decision_id,"policy_decision_id":self.policy_decision_id,"expected_remote_revision":self.expected_remote_revision,"body":self.body,"labels":list(self.labels),"provenance_refs":list(self.provenance_refs),"execute":self.execute,"operator_confirmed":self.operator_confirmed,"remote_mutation_enabled":self.remote_mutation_enabled}
++@dataclass(frozen=True,slots=True)
++class GitHubControlledPublicationPlan:
++ command:GitHubControlledPublicationCommand; endpoint:str; method:str; payload:Mapping[str,Any]; publication_marker:str; remote_gate_payload:Mapping[str,Any]; schema:str=PLAN_SCHEMA
++ def to_mapping(self): return {"schema":self.schema,"command":self.command.to_mapping(),"endpoint":self.endpoint,"method":self.method,"payload":dict(self.payload),"publication_marker":self.publication_marker,"remote_gate_payload":dict(self.remote_gate_payload),"requires_collision_guard":True,"http_call_performed":False}
++def validate_approved_review(review,command):
++ issues=[]
++ if review.get("schema")!=REVIEW_SCHEMA: issues.append("review schema mismatch")
++ if review.get("status")!="approve": issues.append("review must be approved")
++ if review.get("review_ref")!=command.source_review_ref: issues.append("source_review_ref mismatch")
++ if review.get("sql_context_ref")!=command.source_sql_ref: issues.append("source_sql_ref mismatch")
++ return tuple(issues)
++def build_github_controlled_publication_plan(command,review):
++ issues=validate_approved_review(review,command)
++ if issues: raise GitHubControlledPublicationError("; ".join(issues))
++ marker="<!-- autodoc-publication:"+hashlib.sha256((command.publication_ref+"\0"+command.source_sql_ref).encode()).hexdigest()[:20]+" -->"
++ base=f"/repos/{command.repository}/issues/{command.issue_number}"
++ if command.mutation_kind=="issue_comment": method,endpoint,payload="POST",base+"/comments",{"body":command.body.rstrip()+"\n\n"+marker}
++ elif command.mutation_kind=="issue_body_update": method,endpoint,payload="PATCH",base,{"body":command.body.rstrip()+"\n\n"+marker}
++ else: method,endpoint,payload="PUT",base+"/labels",{"labels":list(command.labels)}
++ operation={"action":command.mutation_kind,"candidate_id":command.source_final_ref,"title":command.publication_ref,"labels":list(command.labels),"safety_flags":[],"endpoint":endpoint,"method":method}
++ gate={"schema":"missipy.source_candidate.github_projection_payload.v1","repository":command.repository,"project_key":None,"dry_run":True,"remote_mutation":False,"projection_allowed":True,"operations":[operation]}
++ return GitHubControlledPublicationPlan(command,endpoint,method,payload,marker,gate)
+diff --git a/tests/context/test_github_controlled_publication_contract_0276.py b/tests/context/test_github_controlled_publication_contract_0276.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/context/test_github_controlled_publication_contract_0276.py
+@@ -0,0 +1,16 @@
++import pytest
++from context.github_controlled_publication_contract_0276 import *
++def command(**kw):
++ d=dict(publication_ref="github-publication:test",repository="newicody/autodoc",issue_number=42,mutation_kind="issue_comment",target_ref="github:issue:newicody/autodoc#42",source_final_ref="artifact-final:test",source_sql_ref="sql:specialist_output:test",source_review_ref="github-review:test",review_decision_id="decision:review:1",policy_decision_id="policy:1",expected_remote_revision="2026-07-11T00:00:00Z",body="Result") ; d.update(kw); return GitHubControlledPublicationCommand(**d)
++def review(status="approve"): return {"schema":"missipy.github_project.publication_review.v1","review_ref":"github-review:test","sql_context_ref":"sql:specialist_output:test","status":status}
++def test_plan_contains_marker_and_existing_gate_payload():
++ p=build_github_controlled_publication_plan(command(),review()); assert p.method=="POST" and p.publication_marker in p.payload["body"]
++ assert p.remote_gate_payload["dry_run"] is True and p.remote_gate_payload["remote_mutation"] is False
++def test_unapproved_review_blocks_plan():
++ with pytest.raises(GitHubControlledPublicationError): build_github_controlled_publication_plan(command(),review("pending"))
++def test_execute_needs_both_explicit_flags():
++ with pytest.raises(GitHubControlledPublicationError): command(execute=True)
++
++def test_list_labels_are_normalized_to_tuple():
++ c=command(mutation_kind="issue_labels_replace",body="",labels=["one","one","two"])
++ assert c.labels==("one","two")
+diff --git a/tests/rules/test_github_controlled_publication_contract_0276_rule.py b/tests/rules/test_github_controlled_publication_contract_0276_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_github_controlled_publication_contract_0276_rule.py
+@@ -0,0 +1,8 @@
++from pathlib import Path
++ROOT=Path(__file__).resolve().parents[2]
++def test_contract_requires_durable_review_and_revision_refs():
++ t=(ROOT/"src/context/github_controlled_publication_contract_0276.py").read_text()
++ for m in ("source_final_ref","source_sql_ref","source_review_ref","review_decision_id","policy_decision_id","expected_remote_revision","requires_collision_guard","remote_mutation\":False"):
++  assert m in t
++ for bad in ("urllib.request","requests","EventBus(","Scheduler("):
++  assert bad not in t
+diff --git a/doc/architecture/GITHUB_CONTROLLED_PUBLICATION_CONTRACT_0276.md b/doc/architecture/GITHUB_CONTROLLED_PUBLICATION_CONTRACT_0276.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/GITHUB_CONTROLLED_PUBLICATION_CONTRACT_0276.md
+@@ -0,0 +1,11 @@
++# GitHub controlled-publication contract — 0276-r2
++
++An approved local review, durable SQL/final refs, review and policy decisions,
++expected remote revision and explicit operator flags are mandatory inputs.
++
++The pure planner supports issue comments, issue body updates and label
++replacement. It adds a deterministic marker to text mutations and produces a
++payload compatible with the existing default-closed remote mutation gate.
++
++No HTTP call occurs. Every plan declares that a 0276-r4 collision guard is
++required before apply.
+diff --git a/doc/docs/architecture/runtime/276_r2_github_controlled_publication_contract.dot b/doc/docs/architecture/runtime/276_r2_github_controlled_publication_contract.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/276_r2_github_controlled_publication_contract.dot
+@@ -0,0 +1 @@
++digraph GitHubControlledPublicationContract0276R2 { Preview->ApprovedReview; ApprovedReview->Command; DurableSQL->Command; Command->Plan; Plan->RemoteGate; Plan->CollisionGuard[style=dashed,label="required"]; CollisionGuard->Adapter[style=dashed]; }
+diff --git a/doc/manifests/MANIFEST_0276_R2_GITHUB_CONTROLLED_PUBLICATION_CONTRACT_CHANGED_FILES.md b/doc/manifests/MANIFEST_0276_R2_GITHUB_CONTROLLED_PUBLICATION_CONTRACT_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0276_R2_GITHUB_CONTROLLED_PUBLICATION_CONTRACT_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest — 0276-r2 GitHub controlled-publication contract
++
++Changed files:
++
++- `src/context/github_controlled_publication_contract_0276.py`
++- `tests/context/test_github_controlled_publication_contract_0276.py`
++- `tests/rules/test_github_controlled_publication_contract_0276_rule.py`
++- `doc/architecture/GITHUB_CONTROLLED_PUBLICATION_CONTRACT_0276.md`
++- `doc/docs/architecture/runtime/276_r2_github_controlled_publication_contract.dot`
++
++No generated binaries, caches, secrets or local configuration are included.
+diff --git a/doc/CHANGELOG_0276_R2_GITHUB_CONTROLLED_PUBLICATION_CONTRACT.md b/doc/CHANGELOG_0276_R2_GITHUB_CONTROLLED_PUBLICATION_CONTRACT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0276_R2_GITHUB_CONTROLLED_PUBLICATION_CONTRACT.md
+@@ -0,0 +1,14 @@
++# Changelog — 0276-r2 GitHub controlled-publication contract
++
++## Added
++
++- added a pure publication command and plan;
++- required approved review, durable refs and expected remote revision;
++- produced an existing-gate-compatible dry-run payload.
++
++## Boundaries
++
++- one existing Scheduler only;
++- SQL remains durable authority;
++- GitHub mutation remains closed unless this phase explicitly reaches the guarded adapter;
++- no secret is serialized.
+diff --git a/doc/releases/0276-r2-0276-r2-github-controlled-publication-contract.md b/doc/releases/0276-r2-0276-r2-github-controlled-publication-contract.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/releases/0276-r2-0276-r2-github-controlled-publication-contract.md
+@@ -0,0 +1,7 @@
++# 0276-r2 GitHub controlled-publication contract
++
++- added a pure publication command and plan;
++- required approved review, durable refs and expected remote revision;
++- produced an existing-gate-compatible dry-run payload.
++
++Next: 0276-r3 real transport adapter.
+diff --git a/PHASE0276_R2_GITHUB_CONTROLLED_PUBLICATION_CONTRACT_TEST_REPORT.md b/PHASE0276_R2_GITHUB_CONTROLLED_PUBLICATION_CONTRACT_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0276_R2_GITHUB_CONTROLLED_PUBLICATION_CONTRACT_TEST_REPORT.md
+@@ -0,0 +1,23 @@
++# Phase 0276-r2 test report — 0276-r2 GitHub controlled-publication contract
++
++## Validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. python -m pytest -q tests/rules
++PYTHONPATH=src:. python -m pytest -q
++```
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++external_dependencies_added: false
++scheduler_created: false
++scheduler_modified: false
++parallel_orchestrator_created: false
++parallel_eventbus_created: false
++parallel_registry_created: false
++github_mutation_performed: false
++```

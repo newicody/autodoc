@@ -1,0 +1,420 @@
+diff --git a/src/context/love_imported_actions_runtime_contract_0287.py b/src/context/love_imported_actions_runtime_contract_0287.py
+--- a/src/context/love_imported_actions_runtime_contract_0287.py
++++ b/src/context/love_imported_actions_runtime_contract_0287.py
+@@ -4,7 +4,6 @@
+ from collections.abc import Callable, Mapping
+ from dataclasses import dataclass, field, replace
+ import inspect
+-import os
+ from threading import RLock
+ from typing import Any, Literal, Protocol, runtime_checkable
+ 
+@@ -345,8 +344,8 @@
+     schema: str
+     ports: ImportedActionsRuntimePorts
+     owner_ref: str
++    process_id: int
+     close_hooks: tuple[ImportedActionsRuntimeCloseHook, ...] = ()
+-    process_id: int = field(default_factory=os.getpid)
+     _closed: bool = field(default=False, init=False, repr=False)
+     _receipt: ImportedActionsRuntimeLeaseReceipt | None = field(
+         default=None,
+@@ -420,8 +419,11 @@
+                 ),
+             }
+ 
+-    def ensure_current_process(self) -> None:
+-        current_process_id = os.getpid()
++    def ensure_current_process(self, current_process_id: int) -> None:
++        if current_process_id <= 0:
++            raise ImportedActionsRuntimeContractError(
++                "current_process_id must be positive"
++            )
+         if self.process_id != current_process_id:
+             raise ImportedActionsRuntimeContractError(
+                 "runtime lease is process-local and cannot cross a process "
+@@ -429,10 +431,14 @@
+                 f"{current_process_id}"
+             )
+ 
+-    def close(self) -> ImportedActionsRuntimeLeaseReceipt:
++    def close(
++        self,
++        *,
++        current_process_id: int,
++    ) -> ImportedActionsRuntimeLeaseReceipt:
+         """Close all owned effects in reverse order, exactly once."""
+ 
+-        self.ensure_current_process()
++        self.ensure_current_process(current_process_id)
+         with self._lock:
+             if self._closed:
+                 if self._receipt is None:
+@@ -499,17 +505,20 @@
+ 
+ def acquire_imported_actions_runtime_lease(
+     value: object,
++    *,
++    current_process_id: int,
+ ) -> ImportedActionsRuntimeLease:
+     """Normalize a modern lease or legacy direct ports without side effects."""
+ 
+     if isinstance(value, ImportedActionsRuntimeLease):
+-        value.ensure_current_process()
++        value.ensure_current_process(current_process_id)
+         return value
+     if isinstance(value, ImportedActionsRuntimePorts):
+         return ImportedActionsRuntimeLease(
+             schema=IMPORTED_ACTIONS_RUNTIME_LEASE_SCHEMA,
+             ports=value,
+             owner_ref="runtime-owner:legacy-direct-ports",
++            process_id=current_process_id,
+         )
+     raise ImportedActionsRuntimeContractError(
+         "runtime factory must return ImportedActionsRuntimeLease or "
+diff --git a/tools/run_love_actions_closed_loop_0287.py b/tools/run_love_actions_closed_loop_0287.py
+--- a/tools/run_love_actions_closed_loop_0287.py
++++ b/tools/run_love_actions_closed_loop_0287.py
+@@ -3,6 +3,7 @@
+     ImportedActionsRuntimeContractError,
+     ImportedActionsRuntimeFactory,
+     acquire_imported_actions_runtime_lease,
++    validate_imported_actions_runtime_ports,
+ )
+ from context.human_readable_artifact_identity_0287 import (  # noqa: E402
+     matches_actions_artifact_name,
+@@ -401,9 +402,12 @@
+                 "project_target": project_target.to_mapping(),
+             },
+             created_at=created_at,
+-        )
++        ),
++        current_process_id=os.getpid(),
+     )
+-    runtime = runtime_lease.ports
++    runtime = validate_imported_actions_runtime_ports(
++        runtime_lease.ports
++    )
+     try:
+         r14_command = LoveFullDeterministicLocalSmokeCommand(
+             schema=LOVE_FULL_DETERMINISTIC_LOCAL_SMOKE_COMMAND_SCHEMA,
+@@ -574,7 +578,9 @@
+     """Close only resources explicitly owned by a tool-bounded runtime."""
+ 
+     if runtime.scheduler_lifecycle == "tool-bounded":
+-        runtime_lease.close()
++        runtime_lease.close(
++            current_process_id=os.getpid(),
++        )
+ 
+ 
+ def _load_runtime_factory(reference: str) -> ImportedActionsRuntimeFactory:
+diff --git a/tests/context/test_love_imported_actions_runtime_lease_0287_r7_r15_r3_r3.py b/tests/context/test_love_imported_actions_runtime_lease_0287_r7_r15_r3_r3.py
+--- a/tests/context/test_love_imported_actions_runtime_lease_0287_r7_r15_r3_r3.py
++++ b/tests/context/test_love_imported_actions_runtime_lease_0287_r7_r15_r3_r3.py
+@@ -125,6 +125,7 @@
+         schema=IMPORTED_ACTIONS_RUNTIME_LEASE_SCHEMA,
+         ports=_ports(),
+         owner_ref="runtime-owner:actions-preview-123",
++        process_id=os.getpid(),
+         close_hooks=(
+             _hook("runtime-close:postgresql", lambda: effects.append("sql")),
+             _hook("runtime-close:qdrant", lambda: effects.append("qdrant")),
+@@ -132,8 +133,12 @@
+         ),
+     )
+ 
+-    receipt = lease.close()
+-    replay = lease.close()
++    receipt = lease.close(
++        current_process_id=os.getpid(),
++    )
++    replay = lease.close(
++        current_process_id=os.getpid(),
++    )
+ 
+     assert effects == ["openvino", "qdrant", "sql"]
+     assert receipt.action == "closed"
+@@ -163,6 +168,7 @@
+         schema=IMPORTED_ACTIONS_RUNTIME_LEASE_SCHEMA,
+         ports=_ports(),
+         owner_ref="runtime-owner:actions-preview-123",
++        process_id=os.getpid(),
+         close_hooks=(
+             _hook("runtime-close:postgresql", lambda: effects.append("sql")),
+             _hook("runtime-close:qdrant", broken),
+@@ -171,7 +177,9 @@
+     )
+ 
+     with pytest.raises(ImportedActionsRuntimeLeaseCloseError) as raised:
+-        lease.close()
++        lease.close(
++            current_process_id=os.getpid(),
++        )
+ 
+     assert effects == ["openvino", "broken", "sql"]
+     assert raised.value.receipt.completed_hook_refs == (
+@@ -179,16 +187,23 @@
+         "runtime-close:postgresql",
+     )
+     assert raised.value.receipt.issues
+-    assert lease.close().action == "replay"
++    assert lease.close(
++        current_process_id=os.getpid(),
++    ).action == "replay"
+ 
+ 
+ def test_legacy_direct_ports_are_wrapped_without_owned_close_hooks() -> None:
+     ports = _ports()
+-    lease = acquire_imported_actions_runtime_lease(ports)
++    lease = acquire_imported_actions_runtime_lease(
++        ports,
++        current_process_id=os.getpid(),
++    )
+ 
+     assert lease.ports is ports
+     assert lease.close_hooks == ()
+-    assert lease.close().valid is True
++    assert lease.close(
++        current_process_id=os.getpid(),
++    ).valid is True
+ 
+ 
+ def test_runtime_lease_rejects_cross_process_use() -> None:
+@@ -203,7 +218,10 @@
+         ImportedActionsRuntimeContractError,
+         match="process-local",
+     ):
+-        acquire_imported_actions_runtime_lease(lease)
++        acquire_imported_actions_runtime_lease(
++            lease,
++            current_process_id=os.getpid(),
++        )
+ 
+ 
+ def test_externally_managed_runtime_cannot_own_close_hooks() -> None:
+@@ -215,6 +233,7 @@
+             schema=IMPORTED_ACTIONS_RUNTIME_LEASE_SCHEMA,
+             ports=_ports(lifecycle="externally-managed"),
+             owner_ref="runtime-owner:external-server",
++            process_id=os.getpid(),
+             close_hooks=(
+                 _hook("runtime-close:postgresql", lambda: None),
+             ),
+diff --git a/tests/tools/test_run_love_actions_closed_loop_runtime_lease_0287_r7_r15_r3_r3.py b/tests/tools/test_run_love_actions_closed_loop_runtime_lease_0287_r7_r15_r3_r3.py
+--- a/tests/tools/test_run_love_actions_closed_loop_runtime_lease_0287_r7_r15_r3_r3.py
++++ b/tests/tools/test_run_love_actions_closed_loop_runtime_lease_0287_r7_r15_r3_r3.py
+@@ -17,7 +17,7 @@
+     def __init__(self) -> None:
+         self.close_count = 0
+ 
+-    def close(self) -> None:
++    def close(self, *, current_process_id: int) -> None:
+         self.close_count += 1
+ 
+ 
+@@ -56,9 +56,11 @@
+             self.stopped.set()
+ 
+     class Lease(_Lease):
+-        def close(self) -> None:
++        def close(self, *, current_process_id: int) -> None:
+             events.append("lease-close")
+-            super().close()
++            super().close(
++                current_process_id=current_process_id,
++            )
+ 
+     scheduler = Scheduler()
+     lease = Lease()
+diff --git a/tests/rules/test_love_runtime_lease_process_identity_injection_0287_r7_r15_r3_r3_r1_rule.py b/tests/rules/test_love_runtime_lease_process_identity_injection_0287_r7_r15_r3_r3_r1_rule.py
+new file mode 100644
+--- /dev/null
++++ b/tests/rules/test_love_runtime_lease_process_identity_injection_0287_r7_r15_r3_r3_r1_rule.py
+@@ -0,0 +1,26 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++CONTRACT = ROOT / "src/context/love_imported_actions_runtime_contract_0287.py"
++TOOL = ROOT / "tools/run_love_actions_closed_loop_0287.py"
++
++
++def test_runtime_lease_contract_has_no_process_transport_dependency() -> None:
++    source = CONTRACT.read_text(encoding="utf-8")
++    assert "import os" not in source
++    assert "os.getpid" not in source
++    assert "current_process_id: int" in source
++    assert "self.ensure_current_process(current_process_id)" in source
++
++
++def test_preview_tool_injects_process_identity_and_keeps_port_validation() -> None:
++    source = TOOL.read_text(encoding="utf-8")
++    for marker in (
++        "validate_imported_actions_runtime_ports",
++        "current_process_id=os.getpid()",
++        "runtime_lease.ports",
++        "_close_tool_bounded_runtime_lease",
++    ):
++        assert marker in source
++    assert "runtime = validate_imported_actions_runtime_ports(" in source
+diff --git a/PHASE0287_R7_R15_R3_R3_R1_RUNTIME_LEASE_RULE_ALIGNMENT_REPORT.md b/PHASE0287_R7_R15_R3_R3_R1_RUNTIME_LEASE_RULE_ALIGNMENT_REPORT.md
+new file mode 100644
+--- /dev/null
++++ b/PHASE0287_R7_R15_R3_R3_R1_RUNTIME_LEASE_RULE_ALIGNMENT_REPORT.md
+@@ -0,0 +1,50 @@
++# Phase 0287-r7-r15-r3-r3-r1 — runtime lease rule alignment
++
++## Failure reproduced
++
++The first r15-r3-r3 application compiled and its focused lease tests were
++present, but the cumulative rule suite stopped on two regressions:
++
++1. the domain runtime contract imported `os` to obtain the current PID;
++2. the preview tool no longer contained the explicit historical call to
++   `validate_imported_actions_runtime_ports`.
++
++## Correction
++
++Process identity is now an injected value:
++
++```text
++tool / composition
++  os.getpid()
++      |
++      v
++runtime lease contract
++  current_process_id: int
++```
++
++The contract validates only positive integer identities and compares the
++injected current identity with the immutable creator identity. It performs no
++environment, process, network or transport lookup.
++
++The preview tool again performs the cumulative sequence:
++
++```text
++runtime factory
++→ acquire lease with current_process_id
++→ validate_imported_actions_runtime_ports(lease.ports)
++→ r14 on the existing Scheduler
++→ Scheduler shutdown
++→ lease close with current_process_id
++```
++
++Legacy factories returning direct ports remain supported. They are wrapped in a
++lease whose creator identity is supplied by the tool. Modern factories must
++construct leases with an explicit creator identity.
++
++## Boundaries
++
++- no old rule or historical test is weakened;
++- no Scheduler, manager, laboratory or backend is added;
++- no PostgreSQL, Qdrant, OpenVINO or GitHub operation is performed;
++- E5 remains fixed at 384 dimensions;
++- the existing r15-r3-r3 ownership and exact-once cleanup model is preserved.
+diff --git a/doc/CHANGELOG_0287_R7_R15_R3_R3_R1_RUNTIME_LEASE_RULE_ALIGNMENT.md b/doc/CHANGELOG_0287_R7_R15_R3_R3_R1_RUNTIME_LEASE_RULE_ALIGNMENT.md
+new file mode 100644
+--- /dev/null
++++ b/doc/CHANGELOG_0287_R7_R15_R3_R3_R1_RUNTIME_LEASE_RULE_ALIGNMENT.md
+@@ -0,0 +1,10 @@
++# Changelog — 0287-r7-r15-r3-r3-r1
++
++- remove process discovery from the imported-runtime domain contract;
++- require explicit creator and current process identities at lease boundaries;
++- inject `os.getpid()` only from the preview tool;
++- restore explicit `validate_imported_actions_runtime_ports` reuse;
++- retain lease compatibility for legacy direct-port factories;
++- retain reverse-order exact-once cleanup and replay receipts;
++- add cumulative architecture rules for process-identity injection;
++- change no remote-mutation or backend behavior.
+diff --git a/doc/architecture/RUNTIME_LEASE_RULE_ALIGNMENT_0287_R7_R15_R3_R3_R1.md b/doc/architecture/RUNTIME_LEASE_RULE_ALIGNMENT_0287_R7_R15_R3_R3_R1.md
+new file mode 100644
+--- /dev/null
++++ b/doc/architecture/RUNTIME_LEASE_RULE_ALIGNMENT_0287_R7_R15_R3_R3_R1.md
+@@ -0,0 +1,29 @@
++# Runtime lease rule alignment
++
++The runtime lease remains a domain ownership contract. It may compare process
++identities supplied by its caller, but it does not discover those identities.
++
++```text
++CLI adapter
++  └─ os.getpid()
++       ├─ acquire_imported_actions_runtime_lease(
++       │    current_process_id=...)
++       └─ ImportedActionsRuntimeLease.close(
++            current_process_id=...)
++
++domain contract
++  ├─ validates creator process_id
++  ├─ validates current_process_id
++  ├─ rejects mismatches
++  └─ never imports os
++```
++
++After acquisition the preview tool explicitly validates `runtime_lease.ports`
++through the existing `validate_imported_actions_runtime_ports` function. The
++lease is therefore an ownership wrapper, not a replacement for the historical
++runtime-port gate.
++
++The Scheduler remains the sole orchestrator. The tool starts and stops it only
++for the already-declared `tool-bounded` lifecycle. SQL remains durable
++authority, Qdrant remains a reference projection/recall surface, and OpenVINO
++E5 remains a 384-dimensional injected backend.
+diff --git a/doc/architecture/RUNTIME_LEASE_RULE_ALIGNMENT_0287_R7_R15_R3_R3_R1.dot b/doc/architecture/RUNTIME_LEASE_RULE_ALIGNMENT_0287_R7_R15_R3_R3_R1.dot
+new file mode 100644
+--- /dev/null
++++ b/doc/architecture/RUNTIME_LEASE_RULE_ALIGNMENT_0287_R7_R15_R3_R3_R1.dot
+@@ -0,0 +1,19 @@
++digraph runtime_lease_rule_alignment_0287_r7_r15_r3_r3_r1 {
++  rankdir=LR;
++  node [shape=box];
++
++  tool [label="Preview tool"];
++  pid [label="os.getpid()", shape=note];
++  acquire [label="Acquire runtime lease"];
++  validate [label="Validate runtime ports"];
++  scheduler [label="Existing Scheduler + r14"];
++  close [label="Close lease"];
++  contract [label="Transport-neutral lease contract"];
++
++  tool -> pid;
++  pid -> acquire [label="current_process_id"];
++  acquire -> validate -> scheduler -> close;
++  pid -> close [label="current_process_id"];
++  contract -> acquire [dir=back];
++  contract -> close [dir=back];
++}
+diff --git a/doc/manifests/MANIFEST_0287_R7_R15_R3_R3_R1_RUNTIME_LEASE_RULE_ALIGNMENT.md b/doc/manifests/MANIFEST_0287_R7_R15_R3_R3_R1_RUNTIME_LEASE_RULE_ALIGNMENT.md
+new file mode 100644
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0287_R7_R15_R3_R3_R1_RUNTIME_LEASE_RULE_ALIGNMENT.md
+@@ -0,0 +1,27 @@
++# Manifest — 0287-r7-r15-r3-r3-r1
++
++## Modified
++
++- `src/context/love_imported_actions_runtime_contract_0287.py`
++- `tools/run_love_actions_closed_loop_0287.py`
++- `tests/context/test_love_imported_actions_runtime_lease_0287_r7_r15_r3_r3.py`
++- `tests/tools/test_run_love_actions_closed_loop_runtime_lease_0287_r7_r15_r3_r3.py`
++
++## Added
++
++- `tests/rules/test_love_runtime_lease_process_identity_injection_0287_r7_r15_r3_r3_r1_rule.py`
++- `PHASE0287_R7_R15_R3_R3_R1_RUNTIME_LEASE_RULE_ALIGNMENT_REPORT.md`
++- `doc/CHANGELOG_0287_R7_R15_R3_R3_R1_RUNTIME_LEASE_RULE_ALIGNMENT.md`
++- `doc/architecture/RUNTIME_LEASE_RULE_ALIGNMENT_0287_R7_R15_R3_R3_R1.md`
++- `doc/architecture/RUNTIME_LEASE_RULE_ALIGNMENT_0287_R7_R15_R3_R3_R1.dot`
++- `doc/manifests/MANIFEST_0287_R7_R15_R3_R3_R1_RUNTIME_LEASE_RULE_ALIGNMENT.md`
++
++## Preserved boundaries
++
++- no test weakening;
++- no new Scheduler or orchestrator;
++- no backend construction;
++- no remote mutation;
++- no callback serialization;
++- no process-global runtime registry;
++- E5 dimension remains 384.

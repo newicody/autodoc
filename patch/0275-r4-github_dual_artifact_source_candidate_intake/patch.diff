@@ -1,0 +1,186 @@
+diff --git a/src/context/github_dual_artifact_source_candidate_intake_0275.py b/src/context/github_dual_artifact_source_candidate_intake_0275.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/context/github_dual_artifact_source_candidate_intake_0275.py
+@@ -0,0 +1,39 @@
++"""Read-only intake of authoritative request plus optional advisory."""
++from __future__ import annotations
++from dataclasses import dataclass, field
++from collections.abc import Mapping
++from typing import Any
++import json
++from context.github_dual_artifact_contract_0275 import GitHubAuthoritativeRequestArtifact,GitHubCopilotAdvisoryArtifact,GitHubDualArtifactManifest,sha256_bytes,validate_dual_artifact_correlation
++from context.source_candidate import SourceCandidateInput,SourceCandidateOrigin,SourceCandidatePolicy,build_source_candidate
++
++INTAKE_SCHEMA="missipy.github.dual_artifact_source_candidate_intake.v1"
++@dataclass(frozen=True,slots=True)
++class GitHubDualArtifactIntakeCommand:
++ allow_missing_advisory:bool=True
++ policy_decision_id:str=""
++ execute:bool=False
++ def __post_init__(self):
++  if self.execute: raise ValueError("intake is read-only and execute must remain false")
++@dataclass(frozen=True,slots=True)
++class GitHubDualArtifactIntakeResult:
++ valid:bool; issues:tuple[str,...]; request:Mapping[str,Any]=field(default_factory=dict); advisory:Mapping[str,Any]=field(default_factory=dict); manifest:Mapping[str,Any]=field(default_factory=dict); source_candidate:Mapping[str,Any]=field(default_factory=dict)
++ request_authoritative:bool=True; advisory_used_as_hint_only:bool=True; scheduler_route_created:bool=False; sql_write_performed:bool=False; qdrant_write_performed:bool=False; github_mutation_performed:bool=False
++ def to_mapping(self): return {"schema":INTAKE_SCHEMA,"valid":self.valid,"issues":list(self.issues),"request":dict(self.request),"advisory":dict(self.advisory),"manifest":dict(self.manifest),"source_candidate":dict(self.source_candidate),"request_authoritative":True,"advisory_used_as_hint_only":True,"scheduler_route_created":False,"sql_write_performed":False,"qdrant_write_performed":False,"github_mutation_performed":False}
++
++def run_github_dual_artifact_source_candidate_intake(request_bytes:bytes,manifest_bytes:bytes,advisory_bytes:bytes|None=None,*,command=None):
++ cmd=command or GitHubDualArtifactIntakeCommand(); issues=[]
++ try:
++  req=GitHubAuthoritativeRequestArtifact.from_mapping(json.loads(request_bytes)); man=GitHubDualArtifactManifest.from_mapping(json.loads(manifest_bytes)); adv=None if advisory_bytes is None else GitHubCopilotAdvisoryArtifact.from_mapping(json.loads(advisory_bytes))
++ except Exception as e: return GitHubDualArtifactIntakeResult(False,(str(e),))
++ if man.request_sha256!=sha256_bytes(request_bytes): issues.append("request digest mismatch")
++ if advisory_bytes is None:
++  if man.advisory_artifact_ref is not None: issues.append("manifest requires advisory bytes")
++  if not cmd.allow_missing_advisory: issues.append("advisory is required by intake command")
++ else:
++  if man.advisory_sha256!=sha256_bytes(advisory_bytes): issues.append("advisory digest mismatch")
++ issues.extend(validate_dual_artifact_correlation(req,man,adv))
++ if issues: return GitHubDualArtifactIntakeResult(False,tuple(dict.fromkeys(issues)),req.to_mapping(),{} if adv is None else adv.to_mapping(),man.to_mapping())
++ metadata={"request_artifact_ref":req.artifact_ref,"ticket_revision_id":req.ticket_revision_id,"origin_frame_id":req.origin_frame_id,"advisory_present":adv is not None,"advisory_ref":"" if adv is None else adv.artifact_ref,"advisory_response_digest":"" if adv is None else adv.response_digest,"advisory_content_copied":False,"request_authoritative":True}
++ created=build_source_candidate(SourceCandidateInput(title=req.title,body=req.body,origin=SourceCandidateOrigin(kind="github",reference=req.artifact_ref,repository=req.repository),labels=tuple(dict.fromkeys(("github-request",*req.labels))),metadata=metadata),SourceCandidatePolicy(default_repository=req.repository,id_prefix="github-request"))
++ return GitHubDualArtifactIntakeResult(True,(),req.to_mapping(),{} if adv is None else adv.to_mapping(),man.to_mapping(),created.candidate.to_json_dict())
+diff --git a/tests/context/test_github_dual_artifact_source_candidate_intake_0275.py b/tests/context/test_github_dual_artifact_source_candidate_intake_0275.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/context/test_github_dual_artifact_source_candidate_intake_0275.py
+@@ -0,0 +1,20 @@
++import json
++from context.github_dual_artifact_contract_0275 import *
++from context.github_dual_artifact_source_candidate_intake_0275 import *
++def artifacts(with_adv=True):
++ r=GitHubAuthoritativeRequestArtifact("frame:1","rev:1","github-request:x","newicody/autodoc",1,"Authoritative title","Authoritative body","https://x/1"); rb=canonical_json_bytes(r.to_mapping()); a=None; ab=None
++ if with_adv:
++  a=GitHubCopilotAdvisoryArtifact("frame:1","rev:1","github-advisory:x",r.artifact_ref,"a"*64,"b"*64,"DO NOT COPY","route"); ab=canonical_json_bytes(a.to_mapping())
++ m=build_dual_artifact_manifest(r,rb,a,ab); return rb,canonical_json_bytes(m.to_mapping()),ab
++def test_candidate_uses_request_not_advisory_content():
++ rb,mb,ab=artifacts(); result=run_github_dual_artifact_source_candidate_intake(rb,mb,ab)
++ assert result.valid
++ assert result.source_candidate["title"]=="Authoritative title" and result.source_candidate["body"]=="Authoritative body"
++ assert "DO NOT COPY" not in json.dumps(result.source_candidate)
++ assert result.source_candidate["metadata"]["advisory_content_copied"] is False
++def test_digest_tamper_blocks_intake():
++ rb,mb,ab=artifacts(); result=run_github_dual_artifact_source_candidate_intake(rb+b" ",mb,ab)
++ assert not result.valid and "request digest mismatch" in result.issues
++def test_advisory_can_be_absent():
++ rb,mb,ab=artifacts(False); result=run_github_dual_artifact_source_candidate_intake(rb,mb)
++ assert result.valid and result.advisory=={}
+diff --git a/tests/rules/test_github_dual_artifact_source_candidate_intake_0275_rule.py b/tests/rules/test_github_dual_artifact_source_candidate_intake_0275_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_github_dual_artifact_source_candidate_intake_0275_rule.py
+@@ -0,0 +1,8 @@
++from pathlib import Path
++ROOT=Path(__file__).resolve().parents[2]
++def test_intake_uses_existing_source_candidate_and_no_scheduler():
++ t=(ROOT/"src/context/github_dual_artifact_source_candidate_intake_0275.py").read_text()
++ for m in ("build_source_candidate","SourceCandidateOrigin(kind=\"github\"","advisory_content_copied\":False","scheduler_route_created:bool=False"):
++  assert m in t
++ for bad in ("Scheduler(","EventBus(","upsert_record","import qdrant","urllib.request"):
++  assert bad not in t
+diff --git a/doc/architecture/GITHUB_DUAL_ARTIFACT_SOURCE_CANDIDATE_INTAKE_0275.md b/doc/architecture/GITHUB_DUAL_ARTIFACT_SOURCE_CANDIDATE_INTAKE_0275.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/GITHUB_DUAL_ARTIFACT_SOURCE_CANDIDATE_INTAKE_0275.md
+@@ -0,0 +1,9 @@
++# GitHub dual-artifact SourceCandidate intake — 0275-r4
++
++The local intake verifies manifest SHA-256 values and request/advisory
++correlation. It builds SourceCandidate title and body exclusively from the
++authoritative request. Advisory content is not copied into the candidate; only
++its ref and response digest are retained as hint provenance.
++
++The result is unauthorized local material. It creates no Scheduler route,
++performs no SQL/Qdrant write and makes no GitHub call.
+diff --git a/doc/docs/architecture/runtime/275_r4_github_dual_artifact_source_candidate_intake.dot b/doc/docs/architecture/runtime/275_r4_github_dual_artifact_source_candidate_intake.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/275_r4_github_dual_artifact_source_candidate_intake.dot
+@@ -0,0 +1 @@
++digraph GitHubDualArtifactIntake0275R4 { Request->DigestGate; Advisory->DigestGate[style=dashed]; Manifest->DigestGate; DigestGate->SourceCandidate[label="request title/body only"]; Advisory->HintProvenance[style=dashed]; HintProvenance->SourceCandidate; SourceCandidate->OperatorGate[style=dashed,label="future r5"]; }
+diff --git a/doc/manifests/MANIFEST_0275_R4_GITHUB_DUAL_ARTIFACT_SOURCE_CANDIDATE_INTAKE_CHANGED_FILES.md b/doc/manifests/MANIFEST_0275_R4_GITHUB_DUAL_ARTIFACT_SOURCE_CANDIDATE_INTAKE_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0275_R4_GITHUB_DUAL_ARTIFACT_SOURCE_CANDIDATE_INTAKE_CHANGED_FILES.md
+@@ -0,0 +1,11 @@
++# Manifest — 0275-r4 GitHub dual-artifact SourceCandidate intake
++
++Changed files:
++
++- `src/context/github_dual_artifact_source_candidate_intake_0275.py`
++- `tests/context/test_github_dual_artifact_source_candidate_intake_0275.py`
++- `tests/rules/test_github_dual_artifact_source_candidate_intake_0275_rule.py`
++- `doc/architecture/GITHUB_DUAL_ARTIFACT_SOURCE_CANDIDATE_INTAKE_0275.md`
++- `doc/docs/architecture/runtime/275_r4_github_dual_artifact_source_candidate_intake.dot`
++
++No generated binaries, caches, secrets or local configuration are included.
+diff --git a/doc/CHANGELOG_0275_R4_GITHUB_DUAL_ARTIFACT_SOURCE_CANDIDATE_INTAKE.md b/doc/CHANGELOG_0275_R4_GITHUB_DUAL_ARTIFACT_SOURCE_CANDIDATE_INTAKE.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0275_R4_GITHUB_DUAL_ARTIFACT_SOURCE_CANDIDATE_INTAKE.md
+@@ -0,0 +1,14 @@
++# Changelog — 0275-r4 GitHub dual-artifact SourceCandidate intake
++
++## Added
++
++- verified dual-artifact digests and correlation;
++- built SourceCandidate only from the request;
++- retained advisory refs as non-authoritative provenance.
++
++## Boundaries
++
++- one existing Scheduler only;
++- SQL remains durable authority;
++- GitHub mutation remains closed unless this phase explicitly reaches the guarded adapter;
++- no secret is serialized.
+diff --git a/doc/releases/0275-r4-0275-r4-github-dual-artifact-sourcecandidate-intake.md b/doc/releases/0275-r4-0275-r4-github-dual-artifact-sourcecandidate-intake.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/releases/0275-r4-0275-r4-github-dual-artifact-sourcecandidate-intake.md
+@@ -0,0 +1,7 @@
++# 0275-r4 GitHub dual-artifact SourceCandidate intake
++
++- verified dual-artifact digests and correlation;
++- built SourceCandidate only from the request;
++- retained advisory refs as non-authoritative provenance.
++
++Next: 0275-r5 laboratory smoke.
+diff --git a/PHASE0275_R4_GITHUB_DUAL_ARTIFACT_SOURCE_CANDIDATE_INTAKE_TEST_REPORT.md b/PHASE0275_R4_GITHUB_DUAL_ARTIFACT_SOURCE_CANDIDATE_INTAKE_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0275_R4_GITHUB_DUAL_ARTIFACT_SOURCE_CANDIDATE_INTAKE_TEST_REPORT.md
+@@ -0,0 +1,23 @@
++# Phase 0275-r4 test report — 0275-r4 GitHub dual-artifact SourceCandidate intake
++
++## Validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. python -m pytest -q tests/rules
++PYTHONPATH=src:. python -m pytest -q
++```
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++external_dependencies_added: false
++scheduler_created: false
++scheduler_modified: false
++parallel_orchestrator_created: false
++parallel_eventbus_created: false
++parallel_registry_created: false
++github_mutation_performed: false
++```

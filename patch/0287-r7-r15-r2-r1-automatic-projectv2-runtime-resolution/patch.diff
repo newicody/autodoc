@@ -1,0 +1,1625 @@
+diff --git a/PHASE0287_R7_R15_R2_IMPORTED_ACTIONS_RUN_PREVIEW_REPORT.md b/PHASE0287_R7_R15_R2_IMPORTED_ACTIONS_RUN_PREVIEW_REPORT.md
+index eb92e452de3683f7c70aafe160468badf06f1545..feb5443ca5eca290d17d486af3f44706e5618fb3 100644
+--- a/PHASE0287_R7_R15_R2_IMPORTED_ACTIONS_RUN_PREVIEW_REPORT.md
++++ b/PHASE0287_R7_R15_R2_IMPORTED_ACTIONS_RUN_PREVIEW_REPORT.md
+@@ -11,7 +11,7 @@ completed workflow run metadata
+ → read-only artifact download
+ → pure dual-artifact preflight validation
+ → explicit SourceCandidate promote/merge decision
+-→ explicit existing-runtime factory
++→ configured existing-runtime factory
+ → real Scheduler + SQL + OpenVINO/E5 + Qdrant ports
+ → r14 execution
+ → reusable love-r14-result-<RUN_ID>.json
+@@ -51,8 +51,9 @@ A first draft used deterministic adapters while setting the r12 projection flags
+ r12 contract, which requires real E5 projection proof. The draft was rejected
+ before packaging.
+ 
+-The final patch contains no fake runtime. `--runtime-factory module:function` is
+-mandatory. The factory must return `ImportedActionsRuntimePorts` with:
++The final patch contains no fake runtime. Since 0287-r7-r15-r2-r1, the
++`module:function` reference is loaded from the one-time local configuration by
++default; `--runtime-factory` is an advanced override. The factory must return `ImportedActionsRuntimePorts` with:
+ 
+ - the existing Scheduler and dispatcher with one explicit lifecycle mode:
+   `tool-bounded` lets the CLI run and stop that dedicated canonical Scheduler,
+@@ -84,7 +85,7 @@ Preview remains mandatory. `run_love_actions_closed_loop_0287.py` always:
+ 1. imports the current successful Actions run and its exact three artifacts;
+ 2. validates their correlation before any real backend is initialized;
+ 3. requires the operator to choose `promote` or `merge`;
+-4. executes r14 only through the explicit real runtime factory;
++4. executes r14 only through the configured explicit real runtime factory;
+ 5. reads current Issue comments and ProjectV2 value;
+ 6. computes create/update/replay/collision through r15-r1;
+ 7. writes the exact r14 JSON, runtime attestation and `plan_digest`;
+@@ -107,8 +108,10 @@ def build_runtime(
+     ...
+ ```
+ 
+-This phase defines and validates the portable boundary. It does not invent a
+-second runtime manager or choose local deployment paths on behalf of the server.
++This phase defines and validates the portable boundary. The corrective
++0287-r7-r15-r2-r1 patch resolves ProjectV2 identities automatically and loads
++the installation-owned factory reference from local configuration; it still
++does not invent a second runtime manager or guess deployment paths.
+ 
+ ## Failure modes
+ 
+diff --git a/PHASE0287_R7_R15_R2_R1_AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION_REPORT.md b/PHASE0287_R7_R15_R2_R1_AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION_REPORT.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..8f4fbcca4ac2e1cc53186adaa72b4e6dcb628104
+--- /dev/null
++++ b/PHASE0287_R7_R15_R2_R1_AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION_REPORT.md
+@@ -0,0 +1,151 @@
++# Phase 0287-r7-r15-r2-r1 — Automatic ProjectV2 and runtime resolution
++
++## Objective
++
++Correct the operator boundary exposed by r15-r2. The preview command must not
++require an operator to discover GraphQL node identifiers or repeat stable local
++configuration on every run.
++
++The corrected flow is:
++
++```text
++RUN_ID + repository + promote/merge decision
++→ read existing local ProjectV2 configuration
++→ load one configured real-runtime factory reference
++→ download and validate the three Actions artifacts
++→ derive the source Issue from the authoritative request
++→ resolve the exact ProjectV2 and Issue item by read-only GraphQL
++→ resolve the configured field by exact name
++→ execute r14 on the attested real ports
++→ mandatory r15-r1 preview
++→ write the correlated JSON and resolved target metadata
++```
++
++No Issue comment or ProjectV2 mutation is performed.
++
++## Reuse audit
++
++The patch reuses:
++
++- `.var/config/github_project_v2_query_only.ini` as the ProjectV2 owner, number
++  and GitHub token-name authority;
++- the authoritative request as the source-Issue authority;
++- `GitHubCliFinalDeliverablePublicationAdapter` as the existing GraphQL
++  transport boundary;
++- the r15-r2 `ImportedActionsRuntimePorts` contract and dynamic factory loader;
++- the r14 composition and r15-r1 preview without copying their logic.
++
++The new pure resolver under `src/context` selects one exact project, item and
++field from a GraphQL mapping. It does not import subprocess, environment,
++configuration, GitHub SDKs or runtime backends.
++
++## Operator boundary
++
++The normal command becomes:
++
++```bash
++python tools/run_love_actions_closed_loop_0287.py \
++  --run-id "$RUN_ID" \
++  --repository newicody/projects \
++  --candidate-decision promote \
++  --format text
++```
++
++The following low-level options are no longer required:
++
++```text
++--project-item-id
++--project-field-ref
++--project-field-name
++--project-owner
++--project-number
++--runtime-factory
++```
++
++They remain diagnostic overrides only.
++
++## One-time local configuration
++
++Project owner, number and token environment are read by default from:
++
++```text
++.var/config/github_project_v2_query_only.ini
++```
++
++The real runtime factory is installation-specific and remains explicit. It is
++configured once in:
++
++```text
++.var/config/love_actions_closed_loop.ini
++```
++
++from `config/love_actions_closed_loop.example.ini`:
++
++```ini
++[runtime]
++factory = package.module:build_runtime
++```
++
++The environment override `AUTODOC_LOVE_RUNTIME_FACTORY=module:function` remains
++available. There is no module search, guessed factory or dummy fallback.
++
++## Exact ProjectV2 resolution
++
++After validating the downloaded request, the CLI obtains its `issue_number` and
++performs one read-only GraphQL query that returns:
++
++- the Issue's ProjectV2 items;
++- the configured user- or organization-owned ProjectV2;
++- that project's fields.
++
++The pure resolver requires exactly one configured project, one Issue item in
++that project and one field with the configured name. Missing or ambiguous
++matches fail before SQL, OpenVINO, Qdrant or the Scheduler are invoked.
++
++The resolved identifiers are stored under `_r15_resolution` in the output JSON
++for audit and later replay, but the operator does not need to discover or export
++them.
++
++## Failure behavior
++
++All configuration and command construction now occur inside the CLI error
++boundary. Missing project configuration, missing runtime factory, malformed
++values, absent ProjectV2 membership and ambiguous fields return `error: ...`
++with exit status 2 instead of a Python traceback.
++
++If the Issue is absent from the configured project, the error explicitly states
++that the source Issue is not present exactly once. The patch does not silently
++add the Issue because that would be a remote mutation before preview approval.
++
++## Code-rule review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: existing configuration, typed resolver and adapter boundaries are sufficient
++live_path_status: transition
++live_path_uses_real_backend: false
++context_contract_version: n/a
++context_contract_changed: false
++external_dependencies_added: false
++scheduler_modified: false
++network_added: false
++github_api_added: false
++qdrant_added: false
++llm_or_openvino_added: false
++search_commands_bounded: n/a
++```
++
++The patch adds no new transport or network authority. It extends the existing
++GitHub CLI GraphQL adapter with a read-only resolver operation.
++
++## Validation
++
++Tests cover exact project/item/field selection, optional low-level CLI
++arguments, configuration precedence, reuse of the existing ProjectV2 config,
++clear missing-runtime failure, atomic diagnostic overrides and source-only DOT.
++
++## Next phase
++
++`0287-r7-r15-r3` can now focus on the concrete installed runtime factory and the
++actual preview/publication/readback evidence instead of manual GraphQL plumbing.
+diff --git a/config/love_actions_closed_loop.example.ini b/config/love_actions_closed_loop.example.ini
+new file mode 100644
+index 0000000000000000000000000000000000000000..a38c51a54eaef3394fb5ca4eb53165b3f5b06f3f
+--- /dev/null
++++ b/config/love_actions_closed_loop.example.ini
+@@ -0,0 +1,13 @@
++# Copy to .var/config/love_actions_closed_loop.ini.
++# Project owner/number and token_env are reused from
++# .var/config/github_project_v2_query_only.ini unless overridden here.
++
++[project]
++field_name = Statut révision
++status_value = Terminé
++
++[runtime]
++# Required once for the live r14/r15 path. The referenced factory must return
++# ImportedActionsRuntimePorts backed by the existing Scheduler, SQL authority,
++# OpenVINO/E5-384 projection and Qdrant ports. No dummy fallback is selected.
++factory =
+diff --git a/doc/CHANGELOG_0287_R7_R15_R2_R1_AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION.md b/doc/CHANGELOG_0287_R7_R15_R2_R1_AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..e13915481b30d57202cf163569adb16658a02ca2
+--- /dev/null
++++ b/doc/CHANGELOG_0287_R7_R15_R2_R1_AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION.md
+@@ -0,0 +1,13 @@
++# Changelog — 0287-r7-r15-r2-r1
++
++- make ProjectV2 item and field identifiers optional diagnostic overrides;
++- derive the source Issue from the validated authoritative request;
++- resolve the exact ProjectV2, Issue item and field through the existing
++  read-only GitHub CLI GraphQL adapter;
++- reuse `.var/config/github_project_v2_query_only.ini` for owner, number and
++  token environment;
++- add one local config slot for the installation-specific real runtime factory;
++- move command construction into the operator-facing error boundary;
++- store resolved target metadata under `_r15_resolution`;
++- keep preview mandatory and keep remote mutation absent;
++- update the cumulative `newicody/projects` installation guide.
+diff --git a/doc/architecture/AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION_0287_R7_R15_R2_R1.dot b/doc/architecture/AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION_0287_R7_R15_R2_R1.dot
+new file mode 100644
+index 0000000000000000000000000000000000000000..44497b20b08d9d2e17692515caf14762ce999caa
+--- /dev/null
++++ b/doc/architecture/AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION_0287_R7_R15_R2_R1.dot
+@@ -0,0 +1,27 @@
++digraph automatic_projectv2_runtime_resolution_0287_r7_r15_r2_r1 {
++  rankdir=LR;
++  node [shape=box];
++
++  operator [label="RUN_ID + repository\n+ promote/merge"];
++  project_config [label="existing ProjectV2 config\nowner / number / token_env"];
++  runtime_config [label="local runtime config\nmodule:function"];
++  artifacts [label="three Actions artifacts"];
++  issue [label="authoritative request\nissue_number"];
++  graphql [label="read-only GraphQL"];
++  target [label="exact project + item + field"];
++  runtime [label="attested existing runtime ports"];
++  r14 [label="r14 composition"];
++  preview [label="r15-r1 mandatory preview"];
++  output [label="correlated JSON\n_r15_resolution"];
++
++  operator -> artifacts;
++  project_config -> graphql;
++  runtime_config -> runtime;
++  artifacts -> issue;
++  issue -> graphql;
++  graphql -> target;
++  target -> r14;
++  runtime -> r14;
++  r14 -> preview;
++  preview -> output;
++}
+diff --git a/doc/architecture/AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION_0287_R7_R15_R2_R1.md b/doc/architecture/AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION_0287_R7_R15_R2_R1.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..9e0f99d0ad1db0a5897309e8ff89f50fb41ba48b
+--- /dev/null
++++ b/doc/architecture/AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION_0287_R7_R15_R2_R1.md
+@@ -0,0 +1,47 @@
++# Automatic ProjectV2/runtime resolution — 0287-r7-r15-r2-r1
++
++## Normal operator path
++
++```text
++run id + repository + candidate decision
++        │
++        ├── github_project_v2_query_only.ini
++        │     ├── owner
++        │     ├── number
++        │     └── token_env
++        │
++        ├── love_actions_closed_loop.ini
++        │     └── real runtime factory module:function
++        │
++        ▼
++three correlated Actions artifacts
++        │ authoritative request → issue_number
++        ▼
++read-only GraphQL resolution
++        ├── exact ProjectV2
++        ├── exact Issue item
++        └── exact configured field
++        ▼
++r14 real-port composition
++        ▼
++r15-r1 mandatory preview
++        ▼
++love-r14-result-<RUN_ID>.json
++```
++
++## Authority boundaries
++
++- authoritative request: source Issue identity;
++- existing ProjectV2 configuration: owner and project number;
++- read-only GraphQL: current item and field identities;
++- installed runtime configuration: one explicit real factory reference;
++- Scheduler/SQL/OpenVINO/Qdrant: unchanged injected authorities;
++- r15-r1: preview computation;
++- remote mutation: absent.
++
++## Overrides
++
++Low-level ProjectV2 identifiers and `--runtime-factory` remain available only
++for diagnostics and controlled substitutions. If one item override is supplied,
++the matching field override is required too. Both are still checked against the
++read-only GraphQL response.
+diff --git a/doc/architecture/IMPORTED_ACTIONS_RUN_PREVIEW_0287_R7_R15_R2.md b/doc/architecture/IMPORTED_ACTIONS_RUN_PREVIEW_0287_R7_R15_R2.md
+index 704c16769fac53d98e6d4ec5dbc64177ab842a24..c019c84fcfa19962512728c180dffa009e9be329 100644
+--- a/doc/architecture/IMPORTED_ACTIONS_RUN_PREVIEW_0287_R7_R15_R2.md
++++ b/doc/architecture/IMPORTED_ACTIONS_RUN_PREVIEW_0287_R7_R15_R2.md
+@@ -46,11 +46,10 @@ data lives under `remote_publication_preview`.
+ ## No fake live proof
+ 
+ r12 requires real E5 projection proof. Therefore r15-r2 has no deterministic
+-fallback. The tool requires:
+-
+-```text
+---runtime-factory package.module:build_runtime
+-```
++fallback. The tool requires one configured real factory reference. Since
++0287-r7-r15-r2-r1 it is loaded by default from
++`.var/config/love_actions_closed_loop.ini`; `--runtime-factory` remains an
++advanced override.
+ 
+ The returned `ImportedActionsRuntimePorts` must attest and expose real ports.
+ The tool also inspects the r14 result and confirms two normalized 384-dimensional
+@@ -70,7 +69,7 @@ projection receipts in the attested Qdrant collection.
+ 
+ ## Operator flow
+ 
+-1. select the configured real runtime factory;
++1. configure the real runtime factory once;
+ 2. explicitly choose `--candidate-decision promote` or `merge`;
+ 3. run r15-r2 and inspect the generated JSON plus backend evidence;
+ 4. rerun the publication command in preview when desired;
+diff --git a/doc/manifests/MANIFEST_0287_R7_R15_R2_IMPORTED_ACTIONS_RUN_PREVIEW.md b/doc/manifests/MANIFEST_0287_R7_R15_R2_IMPORTED_ACTIONS_RUN_PREVIEW.md
+index 8032475432d6f46a34d41f9a2416e8eeff35da5b..bd2f5dfe1397bb4ad218776e2c5e16b81a235553 100644
+--- a/doc/manifests/MANIFEST_0287_R7_R15_R2_IMPORTED_ACTIONS_RUN_PREVIEW.md
++++ b/doc/manifests/MANIFEST_0287_R7_R15_R2_IMPORTED_ACTIONS_RUN_PREVIEW.md
+@@ -40,3 +40,9 @@
+ 
+ - `0287-r7-r15-r3`: bind the factory to the concrete server deployment, run the mandatory preview, perform controlled remote publication, verify exact Issue/ProjectV2 readback and record replay evidence;
+ - `0287-r7-r16`: recovery, installation and prototype closure.
++
++## Corrective continuation
++
++`0287-r7-r15-r2-r1` removes the need to provide ProjectV2 node identifiers and
++the runtime factory reference on every command. Exact resolution and the
++mandatory preview remain unchanged.
+diff --git a/doc/manifests/MANIFEST_0287_R7_R15_R2_R1_AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION.md b/doc/manifests/MANIFEST_0287_R7_R15_R2_R1_AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..e81fd3fbd218d3371633082ddecead9e309a01c4
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0287_R7_R15_R2_R1_AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION.md
+@@ -0,0 +1,39 @@
++# Manifest — 0287-r7-r15-r2-r1 automatic ProjectV2/runtime resolution
++
++## Added files
++
++- `src/context/love_actions_closed_loop_resolution_0287.py`
++- `config/love_actions_closed_loop.example.ini`
++- `tests/context/test_love_actions_closed_loop_resolution_0287_r7_r15_r2_r1.py`
++- `tests/rules/test_love_actions_closed_loop_resolution_0287_r7_r15_r2_r1_rule.py`
++- `PHASE0287_R7_R15_R2_R1_AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION_REPORT.md`
++- `doc/architecture/AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION_0287_R7_R15_R2_R1.md`
++- `doc/architecture/AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION_0287_R7_R15_R2_R1.dot`
++- `doc/CHANGELOG_0287_R7_R15_R2_R1_AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION.md`
++- `doc/manifests/MANIFEST_0287_R7_R15_R2_R1_AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION.md`
++
++## Modified files
++
++- `tools/run_love_actions_closed_loop_0287.py`
++- `tools/publish_love_final_deliverable_0287.py`
++- `tests/tools/test_run_love_actions_closed_loop_0287_r7_r15_r2.py`
++- `templates/github/projects-repository/INSTALLATION.md`
++
++## Invariants
++
++- preview remains mandatory;
++- no remote mutation is available in the imported-run command;
++- ProjectV2 resolution is read-only and exact;
++- the authoritative request remains the source-Issue authority;
++- existing ProjectV2 configuration remains the project authority;
++- the real runtime factory remains explicit and installation-owned;
++- no dummy fallback, module scan, Scheduler, manager or backend is added;
++- SQL, Qdrant and OpenVINO/E5 authority boundaries are unchanged;
++- diagnostic overrides remain validated against remote readback;
++- no external dependency, binary or generated SVG is added.
++
++## Roadmap
++
++- `0287-r7-r15-r3`: concrete installed factory, mandatory live preview,
++  controlled publication, exact remote readback and replay proof;
++- `0287-r7-r16`: recovery, installation and prototype closure.
+diff --git a/src/context/love_actions_closed_loop_resolution_0287.py b/src/context/love_actions_closed_loop_resolution_0287.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..f1819b475c9bbc24b41e1bdbd22b892f4d826896
+--- /dev/null
++++ b/src/context/love_actions_closed_loop_resolution_0287.py
+@@ -0,0 +1,235 @@
++"""Pure ProjectV2 target resolution for the imported Actions closed loop.
++
++The module selects one ProjectV2, one Issue item and one field from a GraphQL
++readback.  It contains no transport, environment or configuration access.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Mapping, Sequence
++from dataclasses import dataclass
++from typing import Any
++
++
++class LoveActionsClosedLoopResolutionError(ValueError):
++    """Raised when a remote ProjectV2 target cannot be resolved exactly."""
++
++
++@dataclass(frozen=True, slots=True)
++class LoveProjectV2TargetRequest:
++    """Exact read-only target requested after the source Issue is known."""
++
++    repository: str
++    issue_number: int
++    project_owner: str
++    project_number: int
++    field_name: str
++    project_item_id_override: str = ""
++    field_ref_override: str = ""
++
++    def __post_init__(self) -> None:
++        if "/" not in self.repository:
++            raise LoveActionsClosedLoopResolutionError(
++                "repository must use owner/name"
++            )
++        if self.issue_number <= 0:
++            raise LoveActionsClosedLoopResolutionError(
++                "issue_number must be positive"
++            )
++        if not self.project_owner.strip():
++            raise LoveActionsClosedLoopResolutionError(
++                "project_owner must be non-empty"
++            )
++        if self.project_number <= 0:
++            raise LoveActionsClosedLoopResolutionError(
++                "project_number must be positive"
++            )
++        if not self.field_name.strip():
++            raise LoveActionsClosedLoopResolutionError(
++                "field_name must be non-empty"
++            )
++        override_presence = (
++            bool(self.project_item_id_override.strip()),
++            bool(self.field_ref_override.strip()),
++        )
++        if override_presence.count(True) == 1:
++            raise LoveActionsClosedLoopResolutionError(
++                "project item and field overrides must be supplied together"
++            )
++
++
++@dataclass(frozen=True, slots=True)
++class ResolvedLoveProjectV2Target:
++    """One exact ProjectV2 item and field resolved without mutation."""
++
++    project_id: str
++    project_owner: str
++    project_number: int
++    project_item_id: str
++    field_ref: str
++    field_name: str
++    resolution_source: str
++
++    def __post_init__(self) -> None:
++        for name in (
++            "project_id",
++            "project_owner",
++            "project_item_id",
++            "field_ref",
++            "field_name",
++            "resolution_source",
++        ):
++            if not str(getattr(self, name)).strip():
++                raise LoveActionsClosedLoopResolutionError(
++                    f"{name} must be non-empty"
++                )
++        if self.project_number <= 0:
++            raise LoveActionsClosedLoopResolutionError(
++                "project_number must be positive"
++            )
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "project_id": self.project_id,
++            "project_owner": self.project_owner,
++            "project_number": self.project_number,
++            "project_item_id": self.project_item_id,
++            "field_ref": self.field_ref,
++            "field_name": self.field_name,
++            "resolution_source": self.resolution_source,
++        }
++
++
++def resolve_love_projectv2_target(
++    request: LoveProjectV2TargetRequest,
++    payload: Mapping[str, Any],
++) -> ResolvedLoveProjectV2Target:
++    """Resolve one exact ProjectV2 target from a GraphQL response mapping."""
++
++    data = _mapping(payload.get("data"), "GraphQL data")
++    repository = _mapping(data.get("repository"), "repository")
++    issue = _mapping(repository.get("issue"), "source Issue")
++
++    project = _select_project(data, request)
++    project_id = _required_text(project, "id", "ProjectV2 id")
++    project_number = int(project.get("number", 0))
++    if project_number != request.project_number:
++        raise LoveActionsClosedLoopResolutionError(
++            "resolved ProjectV2 number differs from requested project"
++        )
++
++    items = _nodes(issue.get("projectItems"), "Issue project items")
++    item_matches = tuple(
++        item
++        for item in items
++        if isinstance(item, Mapping)
++        and isinstance(item.get("project"), Mapping)
++        and str(item["project"].get("id", "")) == project_id
++    )
++    if request.project_item_id_override.strip():
++        item_matches = tuple(
++            item
++            for item in item_matches
++            if str(item.get("id", "")) == request.project_item_id_override
++        )
++    if len(item_matches) != 1:
++        if not item_matches:
++            raise LoveActionsClosedLoopResolutionError(
++                "source Issue is not present exactly once in the configured "
++                "ProjectV2"
++            )
++        raise LoveActionsClosedLoopResolutionError(
++            "source Issue has multiple matching ProjectV2 items"
++        )
++    project_item_id = _required_text(
++        item_matches[0], "id", "ProjectV2 item id"
++    )
++
++    fields = _nodes(project.get("fields"), "ProjectV2 fields")
++    field_matches = tuple(
++        field
++        for field in fields
++        if isinstance(field, Mapping)
++        and str(field.get("name", "")) == request.field_name
++    )
++    if request.field_ref_override.strip():
++        field_matches = tuple(
++            field
++            for field in field_matches
++            if str(field.get("id", "")) == request.field_ref_override
++        )
++    if len(field_matches) != 1:
++        if not field_matches:
++            raise LoveActionsClosedLoopResolutionError(
++                "configured ProjectV2 field cannot be resolved exactly"
++            )
++        raise LoveActionsClosedLoopResolutionError(
++            "configured ProjectV2 field name is ambiguous"
++        )
++    field = field_matches[0]
++    field_ref = _required_text(field, "id", "ProjectV2 field id")
++
++    return ResolvedLoveProjectV2Target(
++        project_id=project_id,
++        project_owner=request.project_owner,
++        project_number=request.project_number,
++        project_item_id=project_item_id,
++        field_ref=field_ref,
++        field_name=request.field_name,
++        resolution_source=(
++            "explicit-overrides"
++            if request.project_item_id_override.strip()
++            else "authoritative-request-and-project-config"
++        ),
++    )
++
++
++def _select_project(
++    data: Mapping[str, Any],
++    request: LoveProjectV2TargetRequest,
++) -> Mapping[str, Any]:
++    candidates: list[Mapping[str, Any]] = []
++    for owner_key in ("user", "organization"):
++        owner = data.get(owner_key)
++        if not isinstance(owner, Mapping):
++            continue
++        project = owner.get("projectV2")
++        if isinstance(project, Mapping):
++            candidates.append(project)
++    matches = tuple(
++        project
++        for project in candidates
++        if int(project.get("number", 0)) == request.project_number
++    )
++    if len(matches) != 1:
++        raise LoveActionsClosedLoopResolutionError(
++            "configured ProjectV2 cannot be resolved exactly for its owner"
++        )
++    return matches[0]
++
++
++def _nodes(value: object, name: str) -> Sequence[Any]:
++    connection = _mapping(value, name)
++    nodes = connection.get("nodes", ())
++    if isinstance(nodes, Sequence) and not isinstance(
++        nodes, (str, bytes, bytearray)
++    ):
++        return nodes
++    raise LoveActionsClosedLoopResolutionError(f"{name} nodes must be an array")
++
++
++def _mapping(value: object, name: str) -> Mapping[str, Any]:
++    if not isinstance(value, Mapping):
++        raise LoveActionsClosedLoopResolutionError(
++            f"{name} must be a JSON object"
++        )
++    return value
++
++
++def _required_text(
++    value: Mapping[str, Any], key: str, name: str
++) -> str:
++    text = str(value.get(key, "")).strip()
++    if not text:
++        raise LoveActionsClosedLoopResolutionError(f"{name} is missing")
++    return text
+diff --git a/templates/github/projects-repository/INSTALLATION.md b/templates/github/projects-repository/INSTALLATION.md
+index 517788f91f3ce85fb01e613bdb96666066d718c2..ef556d086f04ecf6ba406c13214a223ea63a3208 100644
+--- a/templates/github/projects-repository/INSTALLATION.md
++++ b/templates/github/projects-repository/INSTALLATION.md
+@@ -252,6 +252,10 @@ test -f .var/config/github_project_v2_query_only.ini || \
+ test -f .var/config/github_projects_workflow_dispatch.ini || \
+   cp config/github_projects_workflow_dispatch.example.ini \
+      .var/config/github_projects_workflow_dispatch.ini
++
++test -f .var/config/love_actions_closed_loop.ini || \
++  cp config/love_actions_closed_loop.example.ini \
++     .var/config/love_actions_closed_loop.ini
+ ```
+ 
+ Vérification sans mutation :
+@@ -273,6 +277,29 @@ PYTHONPATH=src:. python \
+ Une exécution distante exige toujours les verrous locaux, `--execute` et la
+ décision de politique exacte. Les outils restent preview-first.
+ 
++### Preview final sans identifiants ProjectV2 manuels
++
++Le preview du livrable final réutilise automatiquement `owner`, `number` et `token_env` depuis `.var/config/github_project_v2_query_only.ini`. Après lecture de l’artefact autoritatif, il déduit le numéro d’Issue, retrouve l’item `PVTI_...` et le champ configuré. Il n’est donc pas nécessaire de chercher ou d’exporter `PROJECT_ITEM_ID` et `PROJECT_FIELD_ID`.
++
++Renseigner une seule fois la factory runtime installée dans :
++
++```ini
++[runtime]
++factory = paquet.module:build_runtime
++```
++
++Cette factory doit composer les ports existants du Scheduler, de SQL, d’OpenVINO/E5-384 et de Qdrant. Aucun backend factice n’est sélectionné automatiquement. Le preview se lance ensuite avec la commande opérateur courte :
++
++```bash
++python tools/run_love_actions_closed_loop_0287.py \
++  --run-id "$RUN_ID" \
++  --repository newicody/projects \
++  --candidate-decision promote \
++  --format text
++```
++
++Les options `--project-item-id`, `--project-field-ref`, `--project-owner`, `--project-number` et `--runtime-factory` restent disponibles uniquement comme overrides de diagnostic. Le preview ne réalise aucune mutation distante.
++
+ ## Copilot optionnel
+ 
+ Le défaut reste :
+diff --git a/tests/context/test_love_actions_closed_loop_resolution_0287_r7_r15_r2_r1.py b/tests/context/test_love_actions_closed_loop_resolution_0287_r7_r15_r2_r1.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..c1e748c9d44dee0f5b60a8878aed0b854895597a
+--- /dev/null
++++ b/tests/context/test_love_actions_closed_loop_resolution_0287_r7_r15_r2_r1.py
+@@ -0,0 +1,114 @@
++from __future__ import annotations
++
++import pytest
++
++from context.love_actions_closed_loop_resolution_0287 import (
++    LoveActionsClosedLoopResolutionError,
++    LoveProjectV2TargetRequest,
++    resolve_love_projectv2_target,
++)
++
++
++def _payload(*, duplicate_item: bool = False, field_name: str = "Statut révision"):
++    items = [
++        {
++            "id": "PVTI_item",
++            "project": {"id": "PVT_project", "number": 3},
++        }
++    ]
++    if duplicate_item:
++        items.append(
++            {
++                "id": "PVTI_other",
++                "project": {"id": "PVT_project", "number": 3},
++            }
++        )
++    return {
++        "data": {
++            "repository": {
++                "issue": {"id": "I_issue", "projectItems": {"nodes": items}}
++            },
++            "user": {
++                "projectV2": {
++                    "id": "PVT_project",
++                    "number": 3,
++                    "fields": {
++                        "nodes": [
++                            {"id": "PVTSSF_field", "name": field_name}
++                        ]
++                    },
++                }
++            },
++            "organization": None,
++        }
++    }
++
++
++def _request(**overrides):
++    values = {
++        "repository": "newicody/projects",
++        "issue_number": 42,
++        "project_owner": "newicody",
++        "project_number": 3,
++        "field_name": "Statut révision",
++    }
++    values.update(overrides)
++    return LoveProjectV2TargetRequest(**values)
++
++
++def test_resolves_item_and_field_from_authoritative_issue_and_project() -> None:
++    target = resolve_love_projectv2_target(_request(), _payload())
++    assert target.project_id == "PVT_project"
++    assert target.project_item_id == "PVTI_item"
++    assert target.field_ref == "PVTSSF_field"
++    assert target.field_name == "Statut révision"
++    assert (
++        target.resolution_source
++        == "authoritative-request-and-project-config"
++    )
++
++
++def test_exact_overrides_remain_available_for_diagnostics() -> None:
++    target = resolve_love_projectv2_target(
++        _request(
++            project_item_id_override="PVTI_item",
++            field_ref_override="PVTSSF_field",
++        ),
++        _payload(),
++    )
++    assert target.resolution_source == "explicit-overrides"
++
++
++def test_rejects_issue_missing_from_configured_project() -> None:
++    payload = _payload()
++    payload["data"]["repository"]["issue"]["projectItems"]["nodes"] = []
++    with pytest.raises(
++        LoveActionsClosedLoopResolutionError,
++        match="not present exactly once",
++    ):
++        resolve_love_projectv2_target(_request(), payload)
++
++
++def test_rejects_ambiguous_item_and_wrong_field() -> None:
++    with pytest.raises(
++        LoveActionsClosedLoopResolutionError,
++        match="multiple matching",
++    ):
++        resolve_love_projectv2_target(
++            _request(), _payload(duplicate_item=True)
++        )
++    with pytest.raises(
++        LoveActionsClosedLoopResolutionError,
++        match="field cannot be resolved",
++    ):
++        resolve_love_projectv2_target(
++            _request(), _payload(field_name="Résumé")
++        )
++
++
++def test_override_pair_is_atomic() -> None:
++    with pytest.raises(
++        LoveActionsClosedLoopResolutionError,
++        match="supplied together",
++    ):
++        _request(project_item_id_override="PVTI_item")
+diff --git a/tests/rules/test_love_actions_closed_loop_resolution_0287_r7_r15_r2_r1_rule.py b/tests/rules/test_love_actions_closed_loop_resolution_0287_r7_r15_r2_r1_rule.py
+new file mode 100644
+index 0000000000000000000000000000000000000000..99af533da99449716456e092292311830a6e1e21
+--- /dev/null
++++ b/tests/rules/test_love_actions_closed_loop_resolution_0287_r7_r15_r2_r1_rule.py
+@@ -0,0 +1,145 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++RESOLUTION = ROOT / "src/context/love_actions_closed_loop_resolution_0287.py"
++TOOL = ROOT / "tools/run_love_actions_closed_loop_0287.py"
++PUBLISH_TOOL = ROOT / "tools/publish_love_final_deliverable_0287.py"
++CONFIG = ROOT / "config/love_actions_closed_loop.example.ini"
++CONTEXT_TEST = ROOT / "tests/context/test_love_actions_closed_loop_resolution_0287_r7_r15_r2_r1.py"
++TOOL_TEST = ROOT / "tests/tools/test_run_love_actions_closed_loop_0287_r7_r15_r2.py"
++REPORT = ROOT / "PHASE0287_R7_R15_R2_R1_AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION_REPORT.md"
++ARCH = ROOT / "doc/architecture/AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION_0287_R7_R15_R2_R1.md"
++DOT = ROOT / "doc/architecture/AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION_0287_R7_R15_R2_R1.dot"
++CHANGELOG = ROOT / "doc/CHANGELOG_0287_R7_R15_R2_R1_AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION.md"
++MANIFEST = ROOT / "doc/manifests/MANIFEST_0287_R7_R15_R2_R1_AUTOMATIC_PROJECTV2_RUNTIME_RESOLUTION.md"
++INSTALLATION = ROOT / "templates/github/projects-repository/INSTALLATION.md"
++RULE_TEST = Path(__file__)
++
++
++def test_corrective_bundle_is_complete_and_dot_is_source_only() -> None:
++    for path in (
++        RESOLUTION,
++        TOOL,
++        PUBLISH_TOOL,
++        CONFIG,
++        CONTEXT_TEST,
++        TOOL_TEST,
++        REPORT,
++        ARCH,
++        DOT,
++        CHANGELOG,
++        MANIFEST,
++        INSTALLATION,
++        RULE_TEST,
++    ):
++        assert path.is_file(), path
++    assert not DOT.with_suffix(".svg").exists()
++
++
++def test_resolution_contract_is_pure_typed_and_exact() -> None:
++    text = RESOLUTION.read_text(encoding="utf-8")
++    for required in (
++        "LoveProjectV2TargetRequest",
++        "ResolvedLoveProjectV2Target",
++        "resolve_love_projectv2_target",
++        "source Issue is not present exactly once",
++        "configured ProjectV2 field cannot be resolved exactly",
++        "project item and field overrides must be supplied together",
++        "authoritative-request-and-project-config",
++    ):
++        assert required in text
++    for forbidden in (
++        "import subprocess",
++        "import os",
++        "import configparser",
++        "import requests",
++        "GitHubCli",
++        "QdrantClient",
++        "openvino",
++    ):
++        assert forbidden not in text
++
++
++def test_short_operator_command_and_configuration_precedence_are_present() -> None:
++    text = TOOL.read_text(encoding="utf-8")
++    for required in (
++        "LoveClosedLoopLocalSettings",
++        "_resolve_local_settings",
++        ".var/config/love_actions_closed_loop.ini",
++        ".var/config/github_project_v2_query_only.ini",
++        "AUTODOC_LOVE_RUNTIME_FACTORY",
++        "resolve_project_target",
++        'output["_r15_resolution"]',
++        'parser.add_argument("--project-item-id", default="")',
++        'parser.add_argument("--project-field-ref", default="")',
++        'parser.add_argument("--project-owner")',
++        'parser.add_argument("--project-number", type=int)',
++    ):
++        assert required in text
++    assert 'parser.add_argument("--execute"' not in text
++    assert 'parser.add_argument("--runtime-factory",\n        required=True' not in text
++
++
++def test_existing_graphql_adapter_owns_read_only_target_resolution() -> None:
++    text = PUBLISH_TOOL.read_text(encoding="utf-8")
++    for required in (
++        "_PROJECT_TARGET_QUERY",
++        "def resolve_project_target(",
++        "LoveProjectV2TargetRequest",
++        "resolve_love_projectv2_target",
++        '"issueNumber": request.issue_number',
++        '"projectNumber": request.project_number',
++    ):
++        assert required in text
++    assert "addProjectV2ItemById" not in text
++
++
++def test_runtime_remains_explicit_without_discovery_or_dummy_fallback() -> None:
++    tool = TOOL.read_text(encoding="utf-8")
++    config = CONFIG.read_text(encoding="utf-8")
++    for required in (
++        "real runtime factory is not configured",
++        "runtime factory must use module:function",
++        "_load_runtime_factory",
++    ):
++        assert required in tool
++    assert "factory =" in config
++    for forbidden in (
++        "pkgutil.iter_modules",
++        "walk_packages",
++        "DeterministicLoveProjectionPort",
++        "dummy runtime",
++    ):
++        assert forbidden not in tool
++
++
++def test_cumulative_installation_documents_the_short_preview_path() -> None:
++    text = INSTALLATION.read_text(encoding="utf-8")
++    for required in (
++        "love_actions_closed_loop.example.ini",
++        "Preview final sans identifiants ProjectV2 manuels",
++        "PROJECT_ITEM_ID",
++        "python tools/run_love_actions_closed_loop_0287.py",
++        "--candidate-decision promote",
++        "Le preview ne réalise aucune mutation distante",
++    ):
++        assert required in text
++
++
++def test_report_contains_mandatory_code_rule_review_fields() -> None:
++    text = REPORT.read_text(encoding="utf-8")
++    for required in (
++        "code_rule_review: done",
++        "code_rule_update_required: false",
++        "live_path_status: transition",
++        "live_path_uses_real_backend: false",
++        "external_dependencies_added: false",
++        "scheduler_modified: false",
++        "network_added: false",
++        "github_api_added: false",
++        "qdrant_added: false",
++        "llm_or_openvino_added: false",
++        "search_commands_bounded: n/a",
++    ):
++        assert required in text
+diff --git a/tests/tools/test_run_love_actions_closed_loop_0287_r7_r15_r2.py b/tests/tools/test_run_love_actions_closed_loop_0287_r7_r15_r2.py
+index 274e4a9ae36fc32622edd7d1b6b9163ad3ebd024..3484ce3ca801f0cc6e4d7d482ee56d0a1239fb59 100644
+--- a/tests/tools/test_run_love_actions_closed_loop_0287_r7_r15_r2.py
++++ b/tests/tools/test_run_love_actions_closed_loop_0287_r7_r15_r2.py
+@@ -2,7 +2,7 @@ from __future__ import annotations
+ 
+ import importlib.util
+ from pathlib import Path
+-from types import ModuleType
++from types import ModuleType, SimpleNamespace
+ 
+ import pytest
+ 
+@@ -285,6 +285,8 @@ def test_candidate_decision_is_explicit_and_merge_requires_target(tmp_path: Path
+     common = {
+         "repository": "newicody/projects",
+         "run_id": "12345",
++        "project_owner": "newicody",
++        "project_number": 3,
+         "project_item_id": "PVTI_item",
+         "project_field_ref": "PVTSSF_field",
+         "project_field_name": "Statut révision",
+@@ -316,3 +318,125 @@ def test_candidate_decision_is_explicit_and_merge_requires_target(tmp_path: Path
+             candidate_decision="merge",
+             **common,
+         )
++
++
++def test_low_level_project_identifiers_and_runtime_override_are_optional() -> None:
++    tool = _load_tool(
++        "run_love_actions_closed_loop_short_cli",
++        "run_love_actions_closed_loop_0287.py",
++    )
++    args = tool._parse_args(
++        [
++            "--run-id",
++            "12345",
++            "--repository",
++            "newicody/projects",
++            "--candidate-decision",
++            "promote",
++        ]
++    )
++    assert args.project_item_id == ""
++    assert args.project_field_ref == ""
++    assert args.runtime_factory is None
++
++
++def test_local_settings_reuse_project_config_and_one_runtime_config(
++    tmp_path: Path,
++) -> None:
++    tool = _load_tool(
++        "run_love_actions_closed_loop_settings",
++        "run_love_actions_closed_loop_0287.py",
++    )
++    local = tmp_path / "love.ini"
++    local.write_text(
++        "[runtime]\n"
++        "factory = configured.runtime:build_runtime\n"
++        "[project]\n"
++        "field_name = Statut révision\n"
++        "status_value = Terminé\n",
++        encoding="utf-8",
++    )
++    project = tmp_path / "project.ini"
++    project.write_text(
++        "[github]\n"
++        "token_env = GITHUB_TOKEN\n"
++        "[project]\n"
++        "owner = newicody\n"
++        "number = 3\n",
++        encoding="utf-8",
++    )
++    args = SimpleNamespace(
++        config=str(local),
++        project_config=str(project),
++        project_owner=None,
++        project_number=None,
++        project_field_name=None,
++        project_status_value=None,
++        runtime_factory=None,
++        token_env=None,
++    )
++    settings = tool._resolve_local_settings(args)
++    assert settings.project_owner == "newicody"
++    assert settings.project_number == 3
++    assert settings.project_field_name == "Statut révision"
++    assert settings.project_status_value == "Terminé"
++    assert settings.runtime_factory_ref == "configured.runtime:build_runtime"
++    assert settings.token_env == "GITHUB_TOKEN"
++
++
++def test_cli_values_override_local_configuration(tmp_path: Path) -> None:
++    tool = _load_tool(
++        "run_love_actions_closed_loop_settings_override",
++        "run_love_actions_closed_loop_0287.py",
++    )
++    local = tmp_path / "love.ini"
++    local.write_text(
++        "[runtime]\nfactory = configured.runtime:build_runtime\n",
++        encoding="utf-8",
++    )
++    args = SimpleNamespace(
++        config=str(local),
++        project_config=None,
++        project_owner="operator",
++        project_number=7,
++        project_field_name="Final",
++        project_status_value="Ready",
++        runtime_factory="override.runtime:build",
++        token_env="TOKEN_ENV",
++    )
++    settings = tool._resolve_local_settings(args)
++    assert settings.project_owner == "operator"
++    assert settings.project_number == 7
++    assert settings.project_field_name == "Final"
++    assert settings.project_status_value == "Ready"
++    assert settings.runtime_factory_ref == "override.runtime:build"
++    assert settings.token_env == "TOKEN_ENV"
++
++
++def test_missing_runtime_configuration_has_operator_facing_error(
++    tmp_path: Path,
++) -> None:
++    tool = _load_tool(
++        "run_love_actions_closed_loop_missing_runtime",
++        "run_love_actions_closed_loop_0287.py",
++    )
++    project = tmp_path / "project.ini"
++    project.write_text(
++        "[project]\nowner = newicody\nnumber = 3\n",
++        encoding="utf-8",
++    )
++    args = SimpleNamespace(
++        config=None,
++        project_config=str(project),
++        project_owner=None,
++        project_number=None,
++        project_field_name=None,
++        project_status_value=None,
++        runtime_factory=None,
++        token_env=None,
++    )
++    with pytest.raises(
++        tool.LoveActionsClosedLoopPreviewError,
++        match="real runtime factory is not configured",
++    ):
++        tool._resolve_local_settings(args)
+diff --git a/tools/publish_love_final_deliverable_0287.py b/tools/publish_love_final_deliverable_0287.py
+index 3db03a3a7c6d9eea73c55ef4442cb980830a7ce8..72250357b0cdec4afbc70e2e804b19a067e7d48d 100755
+--- a/tools/publish_love_final_deliverable_0287.py
++++ b/tools/publish_love_final_deliverable_0287.py
+@@ -35,6 +35,11 @@ from context.love_final_deliverable_remote_publication_0287 import (  # noqa: E4
+     execute_love_final_deliverable_remote_publication,
+     parse_love_final_deliverable_publication_plan,
+ )
++from context.love_actions_closed_loop_resolution_0287 import (  # noqa: E402
++    LoveProjectV2TargetRequest,
++    ResolvedLoveProjectV2Target,
++    resolve_love_projectv2_target,
++)
+ 
+ _REMOTE_MUTATION_ENV = "AUTODOC_REMOTE_MUTATION_ALLOWED"
+ _ISSUE_PUBLICATION_ENV = "AUTODOC_ISSUE_PUBLICATION_ALLOWED"
+@@ -83,6 +88,57 @@ query($itemId: ID!) {
+ }
+ """.strip()
+ 
++
++_PROJECT_TARGET_QUERY = """
++query(
++  $repoOwner: String!,
++  $repoName: String!,
++  $issueNumber: Int!,
++  $projectOwner: String!,
++  $projectNumber: Int!
++) {
++  repository(owner: $repoOwner, name: $repoName) {
++    issue(number: $issueNumber) {
++      id
++      projectItems(first: 100) {
++        nodes {
++          id
++          project { id number title }
++        }
++      }
++    }
++  }
++  user(login: $projectOwner) {
++    projectV2(number: $projectNumber) {
++      id
++      number
++      title
++      fields(first: 100) {
++        nodes {
++          ... on ProjectV2Field { id name dataType }
++          ... on ProjectV2SingleSelectField { id name }
++          ... on ProjectV2IterationField { id name }
++        }
++      }
++    }
++  }
++  organization(login: $projectOwner) {
++    projectV2(number: $projectNumber) {
++      id
++      number
++      title
++      fields(first: 100) {
++        nodes {
++          ... on ProjectV2Field { id name dataType }
++          ... on ProjectV2SingleSelectField { id name }
++          ... on ProjectV2IterationField { id name }
++        }
++      }
++    }
++  }
++}
++""".strip()
++
+ _UPDATE_PROJECT_FIELD_MUTATION = """
+ mutation(
+   $projectId: ID!,
+@@ -124,6 +180,26 @@ class GitHubCliFinalDeliverablePublicationAdapter:
+             self._env["GH_TOKEN"] = token
+         self._field_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
+ 
++
++    def resolve_project_target(
++        self,
++        request: LoveProjectV2TargetRequest,
++    ) -> ResolvedLoveProjectV2Target:
++        """Resolve the Issue item and field without performing a mutation."""
++
++        repository_owner, repository_name = request.repository.split("/", 1)
++        payload = self._graphql(
++            _PROJECT_TARGET_QUERY,
++            {
++                "repoOwner": repository_owner,
++                "repoName": repository_name,
++                "issueNumber": request.issue_number,
++                "projectOwner": request.project_owner,
++                "projectNumber": request.project_number,
++            },
++        )
++        return resolve_love_projectv2_target(request, _mapping(payload, "GraphQL response"))
++
+     def list_comments(
+         self,
+         repository: str,
+diff --git a/tools/run_love_actions_closed_loop_0287.py b/tools/run_love_actions_closed_loop_0287.py
+index c5fd9b797c4ee18a0f3f99b4386a4311d87c3a7b..422975261e9c27a55b6bd57af937539ca5f858e0 100755
+--- a/tools/run_love_actions_closed_loop_0287.py
++++ b/tools/run_love_actions_closed_loop_0287.py
+@@ -11,6 +11,7 @@ from __future__ import annotations
+ 
+ import argparse
+ import asyncio
++import configparser
+ from collections.abc import Mapping, Sequence
+ from dataclasses import dataclass
+ import hashlib
+@@ -49,6 +50,10 @@ from context.love_imported_actions_runtime_contract_0287 import (  # noqa: E402
+     ImportedActionsRuntimeFactory,
+     validate_imported_actions_runtime_ports,
+ )
++from context.love_actions_closed_loop_resolution_0287 import (  # noqa: E402
++    LoveActionsClosedLoopResolutionError,
++    LoveProjectV2TargetRequest,
++)
+ from context.love_imported_actions_run_preview_0287 import (  # noqa: E402
+     GitHubActionsArtifactIdentity,
+     LOVE_IMPORTED_ACTIONS_RUN_PREVIEW_COMMAND_SCHEMA,
+@@ -77,6 +82,8 @@ class LoveActionsClosedLoopPreviewCliCommand:
+ 
+     repository: str
+     run_id: str
++    project_owner: str
++    project_number: int
+     project_item_id: str
+     project_field_ref: str
+     project_field_name: str
+@@ -99,8 +106,7 @@ class LoveActionsClosedLoopPreviewCliCommand:
+         for name in (
+             "repository",
+             "run_id",
+-            "project_item_id",
+-            "project_field_ref",
++            "project_owner",
+             "project_field_name",
+             "project_status_value",
+             "gh_command",
+@@ -121,6 +127,18 @@ class LoveActionsClosedLoopPreviewCliCommand:
+             raise LoveActionsClosedLoopPreviewError(
+                 "repository must use owner/name"
+             )
++        if self.project_number <= 0:
++            raise LoveActionsClosedLoopPreviewError(
++                "project_number must be positive"
++            )
++        override_presence = (
++            bool(self.project_item_id.strip()),
++            bool(self.project_field_ref.strip()),
++        )
++        if override_presence.count(True) == 1:
++            raise LoveActionsClosedLoopPreviewError(
++                "project item and field overrides must be supplied together"
++            )
+         if self.context_generation < 0:
+             raise LoveActionsClosedLoopPreviewError(
+                 "context_generation must be non-negative"
+@@ -159,6 +177,46 @@ class LoveActionsClosedLoopPreviewCliCommand:
+             )
+ 
+ 
++@dataclass(frozen=True, slots=True)
++class LoveClosedLoopLocalSettings:
++    """One-time local integration settings resolved before the run import."""
++
++    project_owner: str
++    project_number: int
++    project_field_name: str
++    project_status_value: str
++    runtime_factory_ref: str
++    token_env: str
++
++    def __post_init__(self) -> None:
++        if not self.project_owner.strip():
++            raise LoveActionsClosedLoopPreviewError(
++                "ProjectV2 owner is not configured"
++            )
++        if self.project_number <= 0:
++            raise LoveActionsClosedLoopPreviewError(
++                "ProjectV2 number is not configured"
++            )
++        if not self.project_field_name.strip():
++            raise LoveActionsClosedLoopPreviewError(
++                "ProjectV2 field name is not configured"
++            )
++        if not self.project_status_value.strip():
++            raise LoveActionsClosedLoopPreviewError(
++                "ProjectV2 status value is not configured"
++            )
++        if ":" not in self.runtime_factory_ref:
++            raise LoveActionsClosedLoopPreviewError(
++                "real runtime factory is not configured; set [runtime] factory "
++                "in .var/config/love_actions_closed_loop.ini or export "
++                "AUTODOC_LOVE_RUNTIME_FACTORY=module:function"
++            )
++        if not self.token_env.strip():
++            raise LoveActionsClosedLoopPreviewError(
++                "GitHub token environment name is not configured"
++            )
++
++
+ class GitHubCliActionsRunAdapter:
+     """Read/download adapter for one GitHub Actions run."""
+ 
+@@ -368,6 +426,18 @@ def execute_love_actions_closed_loop_preview(
+             "validated authoritative request issue_number is invalid"
+         )
+ 
++    project_target = publication_adapter.resolve_project_target(
++        LoveProjectV2TargetRequest(
++            repository=command.repository,
++            issue_number=issue_number,
++            project_owner=command.project_owner,
++            project_number=command.project_number,
++            field_name=command.project_field_name,
++            project_item_id_override=command.project_item_id,
++            field_ref_override=command.project_field_ref,
++        )
++    )
++
+     runtime = validate_imported_actions_runtime_ports(
+         runtime_factory(
+             repository=command.repository,
+@@ -410,9 +480,9 @@ def execute_love_actions_closed_loop_preview(
+         artifact_storage_ref=command.artifact_storage_ref,
+         created_at=created_at,
+         policy_decision_id=command.policy_decision_id,
+-        project_item_id=command.project_item_id,
+-        project_field_ref=command.project_field_ref,
+-        project_field_name=command.project_field_name,
++        project_item_id=project_target.project_item_id,
++        project_field_ref=project_target.field_ref,
++        project_field_name=project_target.field_name,
+         project_status_value=command.project_status_value,
+         context_refs=(f"ctx:github-actions-run:{command.run_id}",),
+         evidence_refs=(f"evidence:github-actions-run:{command.run_id}",),
+@@ -463,6 +533,7 @@ def execute_love_actions_closed_loop_preview(
+             + "; ".join(correlated.issues)
+         )
+     output = correlated.to_mapping()
++    output["_r15_resolution"] = project_target.to_mapping()
+     _write_json_atomic(command.output_path, output)
+     return output
+ 
+@@ -613,22 +684,143 @@ def _mapping(value: object, name: str) -> Mapping[str, Any]:
+     return value
+ 
+ 
++def _read_ini(path: Path, *, required: bool) -> configparser.ConfigParser:
++    parser = configparser.ConfigParser(interpolation=None)
++    if not path.is_file():
++        if required:
++            raise LoveActionsClosedLoopPreviewError(
++                f"configuration file not found: {path}"
++            )
++        return parser
++    try:
++        with path.open("r", encoding="utf-8") as handle:
++            parser.read_file(handle)
++    except (OSError, configparser.Error) as exc:
++        raise LoveActionsClosedLoopPreviewError(
++            f"cannot read configuration file {path}: {exc}"
++        ) from exc
++    return parser
++
++
++def _config_value(
++    parser: configparser.ConfigParser,
++    section: str,
++    option: str,
++) -> str:
++    if not parser.has_option(section, option):
++        return ""
++    return parser.get(section, option).strip()
++
++
++def _positive_int(value: str, name: str) -> int:
++    try:
++        parsed = int(value)
++    except (TypeError, ValueError) as exc:
++        raise LoveActionsClosedLoopPreviewError(
++            f"{name} must be a positive integer"
++        ) from exc
++    if parsed <= 0:
++        raise LoveActionsClosedLoopPreviewError(
++            f"{name} must be a positive integer"
++        )
++    return parsed
++
++
++def _resolve_local_settings(args: argparse.Namespace) -> LoveClosedLoopLocalSettings:
++    configured_path = str(args.config or os.environ.get(
++        "AUTODOC_LOVE_CLOSED_LOOP_CONFIG", ""
++    )).strip()
++    local_path = (
++        Path(configured_path)
++        if configured_path
++        else _ROOT / ".var/config/love_actions_closed_loop.ini"
++    )
++    local = _read_ini(local_path, required=bool(configured_path))
++
++    configured_project_path = str(args.project_config or os.environ.get(
++        "AUTODOC_GITHUB_PROJECT_CONFIG", ""
++    )).strip()
++    project_path = (
++        Path(configured_project_path)
++        if configured_project_path
++        else _ROOT / ".var/config/github_project_v2_query_only.ini"
++    )
++    project = _read_ini(
++        project_path,
++        required=bool(configured_project_path),
++    )
++
++    project_owner = (
++        str(args.project_owner or "").strip()
++        or _config_value(local, "project", "owner")
++        or _config_value(project, "project", "owner")
++    )
++    project_number_text = (
++        str(args.project_number or "").strip()
++        or _config_value(local, "project", "number")
++        or _config_value(project, "project", "number")
++    )
++    if not project_number_text:
++        raise LoveActionsClosedLoopPreviewError(
++            "ProjectV2 number is not configured; keep "
++            ".var/config/github_project_v2_query_only.ini or pass "
++            "--project-number"
++        )
++    project_field_name = (
++        str(args.project_field_name or "").strip()
++        or _config_value(local, "project", "field_name")
++        or "Statut révision"
++    )
++    project_status_value = (
++        str(args.project_status_value or "").strip()
++        or _config_value(local, "project", "status_value")
++        or "Terminé"
++    )
++    runtime_factory_ref = (
++        str(args.runtime_factory or "").strip()
++        or os.environ.get("AUTODOC_LOVE_RUNTIME_FACTORY", "").strip()
++        or _config_value(local, "runtime", "factory")
++    )
++    token_env = (
++        str(args.token_env or "").strip()
++        or _config_value(local, "github", "token_env")
++        or _config_value(project, "github", "token_env")
++        or "AUTODOC_PROJECT_TOKEN"
++    )
++    return LoveClosedLoopLocalSettings(
++        project_owner=project_owner,
++        project_number=_positive_int(
++            project_number_text, "ProjectV2 number"
++        ),
++        project_field_name=project_field_name,
++        project_status_value=project_status_value,
++        runtime_factory_ref=runtime_factory_ref,
++        token_env=token_env,
++    )
++
++
+ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
+     parser = argparse.ArgumentParser(description=__doc__)
+     parser.add_argument("--run-id", required=True)
+     parser.add_argument("--repository", required=True)
+-    parser.add_argument("--project-item-id", required=True)
+-    parser.add_argument("--project-field-ref", required=True)
+-    parser.add_argument("--project-field-name", required=True)
+-    parser.add_argument("--project-status-value", default="Terminé")
++    parser.add_argument("--config")
++    parser.add_argument("--project-config")
++    parser.add_argument("--project-owner")
++    parser.add_argument("--project-number", type=int)
++    parser.add_argument("--project-item-id", default="")
++    parser.add_argument("--project-field-ref", default="")
++    parser.add_argument("--project-field-name")
++    parser.add_argument("--project-status-value")
+     parser.add_argument(
+         "--runtime-factory",
+-        required=True,
+-        help="Existing real runtime factory as module:function.",
++        help=(
++            "Advanced override for the configured real runtime factory as "
++            "module:function."
++        ),
+     )
+     parser.add_argument("--output")
+     parser.add_argument("--gh-command", default="gh")
+-    parser.add_argument("--token-env", default="AUTODOC_PROJECT_TOKEN")
++    parser.add_argument("--token-env")
+     parser.add_argument("--context-generation", type=int, default=1)
+     parser.add_argument(
+         "--candidate-decision",
+@@ -652,40 +844,43 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
+ 
+ def main(argv: Sequence[str] | None = None) -> int:
+     args = _parse_args(sys.argv[1:] if argv is None else argv)
+-    run_id = str(args.run_id)
+-    repository = str(args.repository)
+-    slug = repository.replace("/", "-")
+-    output_path = Path(
+-        args.output or f"/tmp/love-r14-result-{run_id}.json"
+-    )
+-    command = LoveActionsClosedLoopPreviewCliCommand(
+-        repository=repository,
+-        run_id=run_id,
+-        project_item_id=str(args.project_item_id),
+-        project_field_ref=str(args.project_field_ref),
+-        project_field_name=str(args.project_field_name),
+-        project_status_value=str(args.project_status_value),
+-        output_path=output_path,
+-        gh_command=str(args.gh_command),
+-        token_env=str(args.token_env),
+-        context_generation=int(args.context_generation),
+-        branch_ref=str(args.branch_ref),
+-        project_ref=str(args.project_ref or f"project:{slug}"),
+-        security_scope=str(args.security_scope),
+-        artifact_storage_ref=str(
+-            args.artifact_storage_ref
+-            or f"storage:zfs:love-actions-run-{run_id}"
+-        ),
+-        policy_decision_id=str(
+-            args.policy_decision_id
+-            or f"policy:love-actions-run-{run_id}-preview"
+-        ),
+-        candidate_decision=str(args.candidate_decision),
+-        target_context_id=str(args.target_context_id),
+-        operator_reason=str(args.operator_reason),
+-        runtime_factory_ref=str(args.runtime_factory),
+-    )
+     try:
++        settings = _resolve_local_settings(args)
++        run_id = str(args.run_id).strip()
++        repository = str(args.repository).strip()
++        slug = repository.replace("/", "-")
++        output_path = Path(
++            args.output or f"/tmp/love-r14-result-{run_id}.json"
++        )
++        command = LoveActionsClosedLoopPreviewCliCommand(
++            repository=repository,
++            run_id=run_id,
++            project_owner=settings.project_owner,
++            project_number=settings.project_number,
++            project_item_id=str(args.project_item_id),
++            project_field_ref=str(args.project_field_ref),
++            project_field_name=settings.project_field_name,
++            project_status_value=settings.project_status_value,
++            output_path=output_path,
++            gh_command=str(args.gh_command),
++            token_env=settings.token_env,
++            context_generation=int(args.context_generation),
++            branch_ref=str(args.branch_ref),
++            project_ref=str(args.project_ref or f"project:{slug}"),
++            security_scope=str(args.security_scope),
++            artifact_storage_ref=str(
++                args.artifact_storage_ref
++                or f"storage:zfs:love-actions-run-{run_id}"
++            ),
++            policy_decision_id=str(
++                args.policy_decision_id
++                or f"policy:love-actions-run-{run_id}-preview"
++            ),
++            candidate_decision=str(args.candidate_decision),
++            target_context_id=str(args.target_context_id),
++            operator_reason=str(args.operator_reason),
++            runtime_factory_ref=settings.runtime_factory_ref,
++        )
+         actions_adapter = GitHubCliActionsRunAdapter(
+             gh_command=command.gh_command,
+             token_env=command.token_env,
+@@ -703,6 +898,7 @@ def main(argv: Sequence[str] | None = None) -> int:
+         )
+     except (
+         LoveActionsClosedLoopPreviewError,
++        LoveActionsClosedLoopResolutionError,
+         ImportedActionsRuntimeContractError,
+         OSError,
+         TypeError,
+@@ -712,6 +908,9 @@ def main(argv: Sequence[str] | None = None) -> int:
+         return 2
+ 
+     import_info = _mapping(result.get("_r15_import"), "_r15_import")
++    resolution = _mapping(
++        result.get("_r15_resolution"), "_r15_resolution"
++    )
+     preview = _mapping(
+         result.get("remote_publication_preview"),
+         "remote_publication_preview",
+@@ -721,6 +920,8 @@ def main(argv: Sequence[str] | None = None) -> int:
+     else:
+         print(f"output: {output_path}")
+         print(f"run_id: {import_info['run_id']}")
++        print(f"project_item_id: {resolution['project_item_id']}")
++        print(f"project_field_ref: {resolution['field_ref']}")
+         print(f"proof_digest: {import_info['proof_digest']}")
+         print(f"plan_digest: {import_info['plan_digest']}")
+         print(f"preview_action: {preview.get('action')}")

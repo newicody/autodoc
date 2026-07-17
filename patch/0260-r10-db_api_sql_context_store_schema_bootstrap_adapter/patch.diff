@@ -1,0 +1,86 @@
+diff --git a/doc/architecture/SCHEDULER_MANAGED_DB_API_SQL_CONTEXT_STORE_RECORD_ADAPTER_0260.md b/doc/architecture/SCHEDULER_MANAGED_DB_API_SQL_CONTEXT_STORE_RECORD_ADAPTER_0260.md
+index 78db691..dff6603 100644
+--- a/doc/architecture/SCHEDULER_MANAGED_DB_API_SQL_CONTEXT_STORE_RECORD_ADAPTER_0260.md
++++ b/doc/architecture/SCHEDULER_MANAGED_DB_API_SQL_CONTEXT_STORE_RECORD_ADAPTER_0260.md
+@@ -20,3 +20,10 @@ does not modify Scheduler.run
+ The real `DbApiSqlContextStore` validates `context_ref` as a typed SQL
+ reference.  The adapter now normalises generated context references so they
+ start with `sql:` while preserving already-typed `sql:` references.
++
++## r10
++
++The real execution path reached SQLite and failed when the target database had
++no `sql_context_records` table.  The adapter now calls an existing schema
++bootstrap hook when the bound store exposes one.  This does not invent a schema;
++it delegates schema readiness to the existing DbApiSqlContextStore surface.
+diff --git a/src/context/scheduler_managed_db_api_sql_context_store_record_adapter_0260.py b/src/context/scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
+index f016b3e..bbf813f 100644
+--- a/src/context/scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
++++ b/src/context/scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
+@@ -162,11 +162,31 @@ def _build_record_for_existing_store(store: object, payload: Mapping[str, Any])
+     return SimpleNamespace(**values)
+ 
+ 
++def _call_existing_schema_bootstrap(store: object) -> bool:
++    """Call an existing schema bootstrap hook when the store exposes one."""
++
++    for name in (
++        "ensure_schema",
++        "initialize_schema",
++        "init_schema",
++        "create_schema",
++        "setup_schema",
++        "bootstrap_schema",
++        "migrate",
++    ):
++        hook = getattr(store, name, None)
++        if callable(hook):
++            hook()
++            return True
++    return False
++
++
+ class SchedulerManagedDbApiSqlContextStoreRecordAdapter:
+     """Expose ``controlled_write(payload)`` over an existing SQL store object."""
+ 
+     def __init__(self, store: object) -> None:
+         self.store = store
++        self.schema_bootstrap_called = _call_existing_schema_bootstrap(store)
+ 
+     def controlled_write(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+         controlled_write = getattr(self.store, "controlled_write", None)
+diff --git a/tests/context/test_scheduler_managed_db_api_sql_context_store_record_adapter_0260.py b/tests/context/test_scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
+index 4c320a0..cd38509 100644
+--- a/tests/context/test_scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
++++ b/tests/context/test_scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
+@@ -48,3 +48,30 @@ def test_record_adapter_keeps_existing_sql_typed_context_ref() -> None:
+     )
+ 
+     assert result["sql_ref"] == "sql:already-typed"
++
++
++class SchemaBootstrapStore(UpsertOnlyStore):
++    def __init__(self) -> None:
++        self.schema_ready = False
++
++    def ensure_schema(self) -> None:
++        self.schema_ready = True
++
++    def upsert_record(self, record):
++        assert self.schema_ready is True
++        return super().upsert_record(record)
++
++
++def test_record_adapter_calls_existing_schema_bootstrap_hook() -> None:
++    store = SchemaBootstrapStore()
++    adapter = adapt_db_api_sql_context_store_for_scheduler_usage_0260(store)
++
++    assert adapter.schema_bootstrap_called is True
++    result = adapter.controlled_write(
++        {
++            "intent_id": "intent:0260:schema",
++            "text": "payload text",
++            "metadata": {},
++        }
++    )
++    assert result["sql_ref"] == "sql:intent:0260:schema"

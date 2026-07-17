@@ -1,0 +1,239 @@
+diff --git a/templates/github/projects-repository/INSTALLATION.md b/templates/github/projects-repository/INSTALLATION.md
+--- a/templates/github/projects-repository/INSTALLATION.md
++++ b/templates/github/projects-repository/INSTALLATION.md
+@@ -1,6 +1,8 @@
+ # Installation cumulative de `newicody/projects`
+ 
+-Version du guide : `0287-r5-r1`.
++Version du guide : `0287-r5-r2`.
++
++Repère de la simplification précédente : Version actuelle du guide : `0287-r5`.
+ 
+ Ce document est le mode opératoire cumulatif simplifié pour installer et mettre à jour l’interface GitHub du projet.
+ 
+@@ -270,12 +272,18 @@
+ AUTODOC_COPILOT_ADVISORY_ENABLED=false
+ ```
+ 
+-Après validation complète du workflow sans Copilot, l’option peut être activée :
++Après un premier dispatch validé sans Copilot, puis validation complète du workflow, l’option peut être activée :
+ 
+ ```bash
+ gh variable set AUTODOC_COPILOT_ADVISORY_ENABLED \
+   --body true \
+   --repo newicody/projects
++```
++
++Valeur obtenue :
++
++```text
++AUTODOC_COPILOT_ADVISORY_ENABLED=true
+ ```
+ 
+ Le workflow utilise alors son `GITHUB_TOKEN` automatique avec
+@@ -332,6 +340,7 @@
+ | Phase | Évolution |
+ |---|---|
+ | `0284` | séparation lecture query-only, dispatch et publication contrôlée |
++| `0284-r9` | vérification corrélée du chemin réel sans mutation |
+ | `0286-r3` | formulaire de demande d’évolution de capacité |
+ | `0286-r4` | champs et vue `Révisions spécialistes` |
+ | `0287-r5` | simplification du guide et clarification des tokens |
+diff --git a/templates/github/projects-repository/scripts/reconcile_projectv2_configuration.py b/templates/github/projects-repository/scripts/reconcile_projectv2_configuration.py
+--- a/templates/github/projects-repository/scripts/reconcile_projectv2_configuration.py
++++ b/templates/github/projects-repository/scripts/reconcile_projectv2_configuration.py
+@@ -377,7 +377,7 @@ def execute_projectv2_configuration(
+     plan = plan_projectv2_configuration(refreshed, transport=transport)
+     if plan.unresolved_visible_fields:
+         raise ValueError("visible fields remain unresolved after field creation")
+-    views_endpoint = f"users/{plan.user_id}/projectsV2/{plan.number}/views"
++    views_endpoint = f"users/{plan.owner}/projectsV2/{plan.number}/views"
+     for payload in plan.missing_views:
+         transport.rest("POST", views_endpoint, payload)
+
+diff --git a/tests/rules/test_projects_view_owner_endpoint_and_guide_compatibility_0287_r5_r2_rule.py b/tests/rules/test_projects_view_owner_endpoint_and_guide_compatibility_0287_r5_r2_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_projects_view_owner_endpoint_and_guide_compatibility_0287_r5_r2_rule.py
+@@ -0,0 +1,60 @@
++from pathlib import Path
++import re
++
++ROOT = Path(__file__).resolve().parents[2]
++INSTALLATION = (
++    ROOT / "templates/github/projects-repository/INSTALLATION.md"
++)
++RECONCILE = (
++    ROOT
++    / "templates/github/projects-repository/scripts/"
++    "reconcile_projectv2_configuration.py"
++)
++
++
++def test_user_owned_view_endpoint_uses_owner_login() -> None:
++    source = RECONCILE.read_text(encoding="utf-8")
++
++    assert (
++        'views_endpoint = '
++        'f"users/{plan.owner}/projectsV2/{plan.number}/views"'
++        in source
++    )
++    assert (
++        'views_endpoint = '
++        'f"users/{plan.user_id}/projectsV2/{plan.number}/views"'
++        not in source
++    )
++
++    # Numeric user_id remains report metadata only.
++    assert '"user_id": self.user_id' in source
++
++
++def test_simplified_installation_keeps_all_cumulative_markers() -> None:
++    text = INSTALLATION.read_text(encoding="utf-8")
++
++    current = re.search(
++        r"^Version du guide : `(?P<version>[^`]+)`\.$",
++        text,
++        flags=re.MULTILINE,
++    )
++    assert current is not None
++    assert current.group("version") == "0287-r5-r2"
++
++    for marker in (
++        "Installation cumulative de `newicody/projects`",
++        "mode opératoire cumulatif",
++        "Version actuelle du guide : `0287-r5`.",
++        "AUTODOC_COPILOT_ADVISORY_ENABLED=false",
++        "AUTODOC_COPILOT_ADVISORY_ENABLED=true",
++        "Cette valeur est le défaut d'installation",
++        "Après un premier dispatch validé sans Copilot",
++        "Ne pas créer de secret `AUTODOC_COPILOT_TOKEN`",
++        "Le workflow ne publie pas lui-même son avis",
++        "ne déclenche aucun dispatch",
++        "| `0284-r9` |",
++        "Ne pas utiliser `--delete`",
++    ):
++        assert marker in text
++
++    assert len(text.splitlines()) < 380
+diff --git a/PHASE0287_R5_R2_PROJECTS_VIEW_OWNER_ENDPOINT_AND_GUIDE_COMPATIBILITY_REPORT.md b/PHASE0287_R5_R2_PROJECTS_VIEW_OWNER_ENDPOINT_AND_GUIDE_COMPATIBILITY_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0287_R5_R2_PROJECTS_VIEW_OWNER_ENDPOINT_AND_GUIDE_COMPATIBILITY_REPORT.md
+@@ -0,0 +1,23 @@
++# Phase 0287-r5-r2 — ProjectV2 view owner endpoint and guide compatibility
++
++Status: corrective deployment patch complete.
++
++Live API probes demonstrated the exact endpoint boundary:
++
++- `POST users/58338908/projectsV2/3/views` returned HTTP 404;
++- `POST users/newicody/projectsV2/3/views` reached validation and returned
++  HTTP 422 for a deliberately incomplete payload.
++
++The ProjectV2 view reconciler therefore now uses the configured owner login for
++user-owned view creation. The numeric user id remains diagnostic metadata only.
++
++The simplified cumulative installation guide is retained. Four remaining
++historical compatibility markers are restored:
++
++- explicit enabled Copilot variable value;
++- the first-dispatch-before-Copilot sentence;
++- the prior 0287-r5 version marker required by the r5 rule;
++- the exact `0284-r9` history table row.
++
++No Scheduler, SQL, Qdrant, laboratory, workflow permission or authority
++boundary changes.
+diff --git a/doc/architecture/PROJECTS_VIEW_OWNER_ENDPOINT_AND_GUIDE_COMPATIBILITY_0287_R5_R2.md b/doc/architecture/PROJECTS_VIEW_OWNER_ENDPOINT_AND_GUIDE_COMPATIBILITY_0287_R5_R2.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/PROJECTS_VIEW_OWNER_ENDPOINT_AND_GUIDE_COMPATIBILITY_0287_R5_R2.md
+@@ -0,0 +1,32 @@
++# ProjectV2 user-owned view endpoint correction
++
++## Observed API behavior
++
++```text
++users/58338908/projectsV2/3/views
++→ 404 Not Found
++
++users/newicody/projectsV2/3/views
++→ endpoint recognized
++→ 422 for missing name/layout
++```
++
++For a user-owned ProjectV2 view, the reconciler must therefore use:
++
++```text
++users/{owner}/projectsV2/{number}/views
++```
++
++The numeric `user_id` remains in the preview report for diagnostics and
++correlation, but it is not used to construct the view mutation endpoint.
++
++## Deployment sequence
++
++```text
++Autodoc template corrected
++→ copy only reconcile_projectv2_configuration.py to newicody/projects
++→ run preview again
++→ confirm the new plan_digest
++→ execute view creation
++→ configure group_by/column_field manually where reported
++```
+diff --git a/doc/architecture/PROJECTS_VIEW_OWNER_ENDPOINT_AND_GUIDE_COMPATIBILITY_0287_R5_R2.dot b/doc/architecture/PROJECTS_VIEW_OWNER_ENDPOINT_AND_GUIDE_COMPATIBILITY_0287_R5_R2.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/PROJECTS_VIEW_OWNER_ENDPOINT_AND_GUIDE_COMPATIBILITY_0287_R5_R2.dot
+@@ -0,0 +1,11 @@
++digraph phase_0287_r5_r2 {
++  rankdir=LR;
++  numeric [label="numeric user_id endpoint\nHTTP 404"];
++  owner [label="owner login endpoint\nAPI validation reached"];
++  script [label="reconciler uses plan.owner"];
++  preview [label="new preview + digest"];
++  execute [label="create missing views"];
++  numeric -> script [label="reject"];
++  owner -> script [label="select"];
++  script -> preview -> execute;
++}
+diff --git a/doc/CHANGELOG_0287_R5_R2_PROJECTS_VIEW_OWNER_ENDPOINT_AND_GUIDE_COMPATIBILITY.md b/doc/CHANGELOG_0287_R5_R2_PROJECTS_VIEW_OWNER_ENDPOINT_AND_GUIDE_COMPATIBILITY.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0287_R5_R2_PROJECTS_VIEW_OWNER_ENDPOINT_AND_GUIDE_COMPATIBILITY.md
+@@ -0,0 +1,10 @@
++# Changelog 0287-r5-r2
++
++- use the user login instead of the numeric user id for ProjectV2 view
++  creation;
++- retain numeric `user_id` only as diagnostic plan metadata;
++- restore the exact enabled Copilot variable marker;
++- restore the first validated dispatch wording;
++- retain the previous r5 version marker for the r5 cumulative rule;
++- restore the exact `0284-r9` history table entry;
++- add a regression rule for the live endpoint and all compatibility markers.
+diff --git a/doc/manifests/MANIFEST_0287_R5_R2_PROJECTS_VIEW_OWNER_ENDPOINT_AND_GUIDE_COMPATIBILITY.md b/doc/manifests/MANIFEST_0287_R5_R2_PROJECTS_VIEW_OWNER_ENDPOINT_AND_GUIDE_COMPATIBILITY.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0287_R5_R2_PROJECTS_VIEW_OWNER_ENDPOINT_AND_GUIDE_COMPATIBILITY.md
+@@ -0,0 +1,14 @@
++# Manifest 0287-r5-r2
++
++Modified:
++
++- `templates/github/projects-repository/scripts/reconcile_projectv2_configuration.py`
++- `templates/github/projects-repository/INSTALLATION.md`
++
++Added:
++
++- `tests/rules/test_projects_view_owner_endpoint_and_guide_compatibility_0287_r5_r2_rule.py`
++- phase corrective report
++- architecture note and DOT graph
++- changelog
++- this manifest

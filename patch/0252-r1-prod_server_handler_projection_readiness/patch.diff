@@ -1,0 +1,667 @@
+diff --git a/PHASE0252_PROD_SERVER_HANDLER_PROJECTION_READINESS_TEST_REPORT.md b/PHASE0252_PROD_SERVER_HANDLER_PROJECTION_READINESS_TEST_REPORT.md
+new file mode 100644
+index 0000000..f07cb9d
+--- /dev/null
++++ b/PHASE0252_PROD_SERVER_HANDLER_PROJECTION_READINESS_TEST_REPORT.md
+@@ -0,0 +1,25 @@
++# Phase 0252 test report - handler projection readiness
++
++## Expected validation
++
++```text
++python -m compileall -q src tests tools
++python -m pytest -q tests/context/test_prod_server_handler_projection_readiness_0252.py
++python -m pytest -q tests/tools/test_run_prod_server_handler_projection_readiness_0252.py
++python -m pytest -q tests/rules/test_prod_server_handler_projection_readiness_0252_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
++
++## Direct smoke
++
++```text
++PYTHONPATH=src:. python tools/run_prod_server_handler_projection_readiness_0252.py --check-only --format summary
++PYTHONPATH=src:. python tools/run_prod_server_handler_projection_readiness_0252.py --format summary
++```
++
++## Boundary
++
++This patch derives projection readiness only. It does not execute SQL, run
++OpenVINO, call Qdrant, write Qdrant points, dispatch handlers, call
++Scheduler.run, publish events, call GitHub, or add non-stdlib dependencies.
+diff --git a/doc/CHANGELOG_0252_PROD_SERVER_HANDLER_PROJECTION_READINESS.md b/doc/CHANGELOG_0252_PROD_SERVER_HANDLER_PROJECTION_READINESS.md
+new file mode 100644
+index 0000000..acd4937
+--- /dev/null
++++ b/doc/CHANGELOG_0252_PROD_SERVER_HANDLER_PROJECTION_READINESS.md
+@@ -0,0 +1,9 @@
++# Changelog 0252 - handler projection readiness
++
++## r1
++
++Added handler projection readiness that derives a future Qdrant projection request
++from the SQL controlled write handler frame.
++
++The patch composes SQL handler readiness, OpenVINO embedding readiness, and
++Qdrant collection readiness without running inference or writing Qdrant points.
+diff --git a/doc/architecture/PROD_SERVER_HANDLER_PROJECTION_READINESS_0252.md b/doc/architecture/PROD_SERVER_HANDLER_PROJECTION_READINESS_0252.md
+new file mode 100644
+index 0000000..02e075e
+--- /dev/null
++++ b/doc/architecture/PROD_SERVER_HANDLER_PROJECTION_READINESS_0252.md
+@@ -0,0 +1,46 @@
++# Handler projection readiness - 0252
++
++## Intent
++
++This patch derives the future projection request from the SQL controlled write
++handler frame prepared in 0251.
++
++```text
++SQL handler frame -> OpenVINO embedding -> Qdrant projection
++```
++
++No embedding is computed.
++
++No Qdrant point is written.
++
++## Projection request
++
++The readiness output carries:
++
++```text
++source_table = context_records
++text_source_field = payload_json
++sql_ref = context_records.id
++content_hash = sha256:sample-content-hash
++openvino_model_id = openvino.embedding.e5-small
++vector_dimension = 384
++qdrant_collection = autodoc_context_e5_small
++qdrant_distance = cosine
++payload.sql_ref = context_records.id
++payload.model_id = openvino.embedding.e5-small
++payload.embedding_version = 0252.r1
++payload.content_hash = sha256:sample-content-hash
++```
++
++SQL remains the durable authority. Qdrant remains a projection/recall surface.
++
++## Boundary
++
++0252 is readiness-only. It does not execute SQL, run OpenVINO inference, call
++Qdrant, write points, publish EventBus events, dispatch handlers, call
++Scheduler.run, or call GitHub.
++
++## Next step
++
++0253 can define recall readiness from Qdrant payload `sql_ref` back to SQL
++rehydration.
+diff --git a/doc/code-rules/0252_prod_server_handler_projection_readiness_rule.md b/doc/code-rules/0252_prod_server_handler_projection_readiness_rule.md
+new file mode 100644
+index 0000000..034b775
+--- /dev/null
++++ b/doc/code-rules/0252_prod_server_handler_projection_readiness_rule.md
+@@ -0,0 +1,28 @@
++# Code rule 0252 - handler projection readiness
++
++Patch 0252 may derive projection readiness from the SQL handler frame only.
++
++Required:
++
++```text
++SQL handler frame feeds projection request
++OpenVINO shape is reused
++Qdrant collection shape is reused
++payload keeps sql_ref/model_id/embedding_version/content_hash
++SQL remains durable authority
++Qdrant remains projection/recall only
++```
++
++Forbidden in this phase:
++
++```text
++executing SQL
++running OpenVINO inference
++calling Qdrant API
++writing Qdrant points
++dispatching handlers
++calling Scheduler.run
++publishing EventBus events
++calling GitHub API
++adding non-stdlib dependencies
++```
+diff --git a/doc/docs/architecture/runtime/252_prod_server_handler_projection_readiness.dot b/doc/docs/architecture/runtime/252_prod_server_handler_projection_readiness.dot
+new file mode 100644
+index 0000000..1b7560a
+--- /dev/null
++++ b/doc/docs/architecture/runtime/252_prod_server_handler_projection_readiness.dot
+@@ -0,0 +1,14 @@
++digraph prod_server_handler_projection_readiness_0252 {
++  rankdir=LR;
++
++  handler [label="0251 SQL handler frame"];
++  openvino [label="0246 OpenVINO shape"];
++  qdrant [label="0247 Qdrant shape"];
++  projection [label="0252 projection request"];
++  write [label="Qdrant not written"];
++
++  handler -> projection;
++  openvino -> projection;
++  qdrant -> projection;
++  projection -> write [style=dashed];
++}
+diff --git a/doc/manifests/MANIFEST_0252_PROD_SERVER_HANDLER_PROJECTION_READINESS_CHANGED_FILES.md b/doc/manifests/MANIFEST_0252_PROD_SERVER_HANDLER_PROJECTION_READINESS_CHANGED_FILES.md
+new file mode 100644
+index 0000000..68f179e
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0252_PROD_SERVER_HANDLER_PROJECTION_READINESS_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest 0252 - handler projection readiness
++
++- `src/context/prod_server_handler_projection_readiness_0252.py`
++- `tools/run_prod_server_handler_projection_readiness_0252.py`
++- `tests/context/test_prod_server_handler_projection_readiness_0252.py`
++- `tests/tools/test_run_prod_server_handler_projection_readiness_0252.py`
++- `tests/rules/test_prod_server_handler_projection_readiness_0252_rule.py`
++- `doc/architecture/PROD_SERVER_HANDLER_PROJECTION_READINESS_0252.md`
++- `doc/code-rules/0252_prod_server_handler_projection_readiness_rule.md`
++- `doc/docs/architecture/runtime/252_prod_server_handler_projection_readiness.dot`
++- `doc/CHANGELOG_0252_PROD_SERVER_HANDLER_PROJECTION_READINESS.md`
++- `doc/manifests/MANIFEST_0252_PROD_SERVER_HANDLER_PROJECTION_READINESS_CHANGED_FILES.md`
++- `PHASE0252_PROD_SERVER_HANDLER_PROJECTION_READINESS_TEST_REPORT.md`
+diff --git a/src/context/prod_server_handler_projection_readiness_0252.py b/src/context/prod_server_handler_projection_readiness_0252.py
+new file mode 100644
+index 0000000..e18d785
+--- /dev/null
++++ b/src/context/prod_server_handler_projection_readiness_0252.py
+@@ -0,0 +1,204 @@
++"""Handler projection readiness for phase 0252.
++
++This module derives a future SQL -> OpenVINO -> Qdrant projection request from
++the SQL controlled write handler frame prepared in phase 0251.
++
++It remains readiness-only: it does not execute SQL, run OpenVINO inference, call
++Qdrant, write points, publish EventBus events, or dispatch handlers.
++"""
++
++from __future__ import annotations
++
++import json
++from dataclasses import asdict, dataclass
++from pathlib import Path
++from typing import Any
++
++from context.prod_server_openvino_embedding_readiness_0246 import (
++    build_openvino_embedding_readiness,
++)
++from context.prod_server_qdrant_collection_readiness_0247 import (
++    build_qdrant_collection_readiness,
++)
++from context.prod_server_sql_controlled_write_handler_readiness_0251 import (
++    build_sql_controlled_write_handler_readiness,
++)
++
++
++HANDLER_PROJECTION_READINESS_VERSION = "0252.r1"
++
++
++HANDLER_PROJECTION_READINESS_BOUNDARY: dict[str, bool] = {
++    "readiness_only": True,
++    "uses_sql_controlled_write_handler_readiness": True,
++    "uses_openvino_readiness": True,
++    "uses_qdrant_readiness": True,
++    "executes_sql": False,
++    "runs_openvino_inference": False,
++    "calls_qdrant_api": False,
++    "writes_qdrant_points": False,
++    "publishes_events": False,
++    "dispatches_handler": False,
++    "calls_scheduler_run": False,
++    "calls_github_api": False,
++    "requires_non_stdlib": False,
++}
++
++
++@dataclass(frozen=True)
++class HandlerProjectionIssue:
++    """One issue preventing handler projection readiness."""
++
++    surface: str
++    field: str
++    message: str
++
++
++@dataclass(frozen=True)
++class HandlerProjectionPayloadShape:
++    """Future Qdrant payload derived from the SQL handler frame."""
++
++    sql_ref: str
++    model_id: str
++    embedding_version: str
++    content_hash: str
++    source_handler_id: str
++    source_intent_id: str
++
++
++@dataclass(frozen=True)
++class HandlerProjectionRequest:
++    """Readiness-only projection request derived from a SQL handler frame."""
++
++    projection_id: str
++    source_table: str
++    text_source_field: str
++    sql_ref: str
++    content_hash: str
++    openvino_model_id: str
++    openvino_device: str
++    vector_dimension: int
++    normalized: bool
++    qdrant_collection: str
++    qdrant_distance: str
++    payload_shape: HandlerProjectionPayloadShape
++
++
++@dataclass(frozen=True)
++class HandlerProjectionReadinessReport:
++    """JSON-compatible handler projection readiness report."""
++
++    version: str
++    server_config_path: str
++    openvino_config_path: str
++    ready: bool
++    projection_request: HandlerProjectionRequest | None
++    issues: tuple[HandlerProjectionIssue, ...]
++
++
++def build_handler_projection_readiness(*, server_config_path: Path, openvino_config_path: Path) -> HandlerProjectionReadinessReport:
++    """Build projection readiness from the SQL controlled write handler frame."""
++
++    handler = build_sql_controlled_write_handler_readiness(
++        server_config_path=server_config_path,
++        openvino_config_path=openvino_config_path,
++    )
++    openvino = build_openvino_embedding_readiness(openvino_config_path)
++    qdrant = build_qdrant_collection_readiness(
++        server_config_path=server_config_path,
++        openvino_config_path=openvino_config_path,
++    )
++    issues: list[HandlerProjectionIssue] = []
++
++    if not handler.ready:
++        for issue in handler.issues:
++            issues.append(HandlerProjectionIssue("handler", issue.field, issue.message))
++    if not openvino.ready:
++        for issue in openvino.issues:
++            issues.append(HandlerProjectionIssue("openvino", issue.field, issue.message))
++    if not qdrant.ready:
++        for issue in qdrant.issues:
++            issues.append(HandlerProjectionIssue("qdrant", issue.field, issue.message))
++
++    if handler.handler_frame is None:
++        issues.append(HandlerProjectionIssue("handler", "handler_frame", "handler frame is required"))
++    if openvino.embedding is None:
++        issues.append(HandlerProjectionIssue("openvino", "embedding", "OpenVINO embedding readiness is required"))
++    if qdrant.collection is None:
++        issues.append(HandlerProjectionIssue("qdrant", "collection", "Qdrant collection readiness is required"))
++
++    if issues or handler.handler_frame is None or openvino.embedding is None or qdrant.collection is None:
++        return HandlerProjectionReadinessReport(
++            version=HANDLER_PROJECTION_READINESS_VERSION,
++            server_config_path=str(server_config_path),
++            openvino_config_path=str(openvino_config_path),
++            ready=False,
++            projection_request=None,
++            issues=tuple(issues),
++        )
++
++    write_request = handler.handler_frame.write_request
++    embedding = openvino.embedding
++    collection = qdrant.collection
++
++    if embedding.dimension != collection.vector_dimension:
++        issues.append(HandlerProjectionIssue("projection", "vector_dimension", "OpenVINO and Qdrant dimensions must match"))
++    if embedding.qdrant_distance != collection.distance:
++        issues.append(HandlerProjectionIssue("projection", "distance", "OpenVINO and Qdrant distance must match"))
++    if "sql_ref" not in collection.required_payload:
++        issues.append(HandlerProjectionIssue("projection", "sql_ref", "Qdrant payload must include sql_ref"))
++
++    payload_shape = HandlerProjectionPayloadShape(
++        sql_ref=write_request.sql_ref,
++        model_id=embedding.model_id,
++        embedding_version=HANDLER_PROJECTION_READINESS_VERSION,
++        content_hash=write_request.content_hash,
++        source_handler_id=write_request.handler_id,
++        source_intent_id=write_request.intent_id,
++    )
++    projection_request = HandlerProjectionRequest(
++        projection_id="projection:" + write_request.request_id,
++        source_table=write_request.table,
++        text_source_field="payload_json",
++        sql_ref=write_request.sql_ref,
++        content_hash=write_request.content_hash,
++        openvino_model_id=embedding.model_id,
++        openvino_device=embedding.device,
++        vector_dimension=embedding.dimension,
++        normalized=embedding.normalized,
++        qdrant_collection=collection.collection,
++        qdrant_distance=collection.distance,
++        payload_shape=payload_shape,
++    )
++
++    return HandlerProjectionReadinessReport(
++        version=HANDLER_PROJECTION_READINESS_VERSION,
++        server_config_path=str(server_config_path),
++        openvino_config_path=str(openvino_config_path),
++        ready=not issues,
++        projection_request=projection_request,
++        issues=tuple(issues),
++    )
++
++
++def handler_projection_readiness_to_dict(report: HandlerProjectionReadinessReport) -> dict[str, Any]:
++    """Convert a handler projection readiness report to JSON-compatible data."""
++
++    return asdict(report)
++
++
++def write_handler_projection_readiness_report(*, server_config_path: Path, openvino_config_path: Path, output_path: Path) -> dict[str, Any]:
++    """Build and write the handler projection readiness report."""
++
++    report = build_handler_projection_readiness(
++        server_config_path=server_config_path,
++        openvino_config_path=openvino_config_path,
++    )
++    payload = {
++        "production_server_handler_projection_readiness_written": True,
++        "handler_projection_readiness": handler_projection_readiness_to_dict(report),
++        "boundary": dict(HANDLER_PROJECTION_READINESS_BOUNDARY),
++    }
++    output_path.parent.mkdir(parents=True, exist_ok=True)
++    output_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + chr(10), encoding="utf-8")
++    return payload
+diff --git a/tests/context/test_prod_server_handler_projection_readiness_0252.py b/tests/context/test_prod_server_handler_projection_readiness_0252.py
+new file mode 100644
+index 0000000..17a5359
+--- /dev/null
++++ b/tests/context/test_prod_server_handler_projection_readiness_0252.py
+@@ -0,0 +1,73 @@
++from pathlib import Path
++
++from context.prod_server_handler_projection_readiness_0252 import (
++    HANDLER_PROJECTION_READINESS_BOUNDARY,
++    build_handler_projection_readiness,
++    write_handler_projection_readiness_report,
++)
++
++
++ROOT = Path(__file__).resolve().parents[2]
++SERVER_CONFIG = ROOT / "doc/examples/autodoc_prod_server_initial_0241.ini"
++OPENVINO_CONFIG = ROOT / "doc/examples/autodoc_openvino_embedding_e5_small_0246.ini"
++
++
++def test_handler_projection_boundary_is_readiness_only() -> None:
++    assert HANDLER_PROJECTION_READINESS_BOUNDARY == {
++        "readiness_only": True,
++        "uses_sql_controlled_write_handler_readiness": True,
++        "uses_openvino_readiness": True,
++        "uses_qdrant_readiness": True,
++        "executes_sql": False,
++        "runs_openvino_inference": False,
++        "calls_qdrant_api": False,
++        "writes_qdrant_points": False,
++        "publishes_events": False,
++        "dispatches_handler": False,
++        "calls_scheduler_run": False,
++        "calls_github_api": False,
++        "requires_non_stdlib": False,
++    }
++
++
++def test_handler_projection_request_is_ready() -> None:
++    report = build_handler_projection_readiness(
++        server_config_path=SERVER_CONFIG,
++        openvino_config_path=OPENVINO_CONFIG,
++    )
++
++    assert report.ready is True
++    assert report.issues == ()
++    assert report.projection_request is not None
++    request = report.projection_request
++    assert request.source_table == "context_records"
++    assert request.text_source_field == "payload_json"
++    assert request.vector_dimension == 384
++    assert request.qdrant_collection == "autodoc_context_e5_small"
++    assert request.payload_shape.sql_ref == request.sql_ref
++    assert request.payload_shape.model_id == "openvino.embedding.e5-small"
++    assert request.payload_shape.embedding_version == "0252.r1"
++
++
++def test_handler_projection_uses_sql_handler_hash() -> None:
++    report = build_handler_projection_readiness(
++        server_config_path=SERVER_CONFIG,
++        openvino_config_path=OPENVINO_CONFIG,
++    )
++
++    assert report.projection_request is not None
++    assert report.projection_request.content_hash == "sha256:sample-content-hash"
++    assert report.projection_request.payload_shape.content_hash == "sha256:sample-content-hash"
++
++
++def test_write_handler_projection_readiness_report(tmp_path: Path) -> None:
++    output = tmp_path / "handler_projection_readiness.json"
++    payload = write_handler_projection_readiness_report(
++        server_config_path=SERVER_CONFIG,
++        openvino_config_path=OPENVINO_CONFIG,
++        output_path=output,
++    )
++
++    assert payload["production_server_handler_projection_readiness_written"] is True
++    assert payload["handler_projection_readiness"]["ready"] is True
++    assert output.exists()
+diff --git a/tests/rules/test_prod_server_handler_projection_readiness_0252_rule.py b/tests/rules/test_prod_server_handler_projection_readiness_0252_rule.py
+new file mode 100644
+index 0000000..01812f4
+--- /dev/null
++++ b/tests/rules/test_prod_server_handler_projection_readiness_0252_rule.py
+@@ -0,0 +1,38 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def test_0252_handler_projection_does_not_run_embedding_or_qdrant() -> None:
++    source = (ROOT / "src/context/prod_server_handler_projection_readiness_0252.py").read_text(
++        encoding="utf-8"
++    )
++    lowered = source.lower()
++
++    assert "readiness_only" in source
++    assert "uses_sql_controlled_write_handler_readiness" in source
++    assert "runs_openvino_inference" in source
++    assert "calls_qdrant_api" in source
++    assert "writes_qdrant_points" in source
++    assert "dispatches_handler" in source
++    assert "calls_scheduler_run" in source
++    assert "import openvino" not in lowered
++    assert "import qdrant" not in lowered
++    assert "psycopg" not in lowered
++    assert "subprocess.run" not in source
++    assert ".execute(" not in lowered
++    assert ".infer(" not in lowered
++    assert ".upsert(" not in lowered
++
++
++def test_0252_docs_lock_handler_projection_boundary() -> None:
++    doc = (ROOT / "doc/architecture/PROD_SERVER_HANDLER_PROJECTION_READINESS_0252.md").read_text(
++        encoding="utf-8"
++    )
++
++    assert "Handler projection readiness" in doc
++    assert "SQL handler frame -> OpenVINO embedding -> Qdrant projection" in doc
++    assert "No embedding is computed" in doc
++    assert "No Qdrant point is written" in doc
++    assert "0253" in doc
+diff --git a/tests/tools/test_run_prod_server_handler_projection_readiness_0252.py b/tests/tools/test_run_prod_server_handler_projection_readiness_0252.py
+new file mode 100644
+index 0000000..58d8f95
+--- /dev/null
++++ b/tests/tools/test_run_prod_server_handler_projection_readiness_0252.py
+@@ -0,0 +1,59 @@
++import subprocess
++import sys
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++SERVER_CONFIG = "doc/examples/autodoc_prod_server_initial_0241.ini"
++OPENVINO_CONFIG = "doc/examples/autodoc_openvino_embedding_e5_small_0246.ini"
++
++
++def test_handler_projection_readiness_tool_check_only_summary() -> None:
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/run_prod_server_handler_projection_readiness_0252.py",
++            "--server-config",
++            SERVER_CONFIG,
++            "--openvino-config",
++            OPENVINO_CONFIG,
++            "--check-only",
++            "--format",
++            "summary",
++        ],
++        cwd=ROOT,
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    assert "production_server_handler_projection_ready=True" in result.stdout
++    assert "issues=0" in result.stdout
++    assert "dimension=384" in result.stdout
++    assert "collection=autodoc_context_e5_small" in result.stdout
++
++
++def test_handler_projection_readiness_tool_writes_report(tmp_path: Path) -> None:
++    output = tmp_path / "prod_server_handler_projection_readiness_0252.json"
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/run_prod_server_handler_projection_readiness_0252.py",
++            "--server-config",
++            SERVER_CONFIG,
++            "--openvino-config",
++            OPENVINO_CONFIG,
++            "--output",
++            str(output),
++            "--format",
++            "summary",
++        ],
++        cwd=ROOT,
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    assert "production_server_handler_projection_readiness_written=True" in result.stdout
++    assert "ready=True" in result.stdout
++    assert output.exists()
+diff --git a/tools/run_prod_server_handler_projection_readiness_0252.py b/tools/run_prod_server_handler_projection_readiness_0252.py
+new file mode 100755
+index 0000000..0fa2a20
+--- /dev/null
++++ b/tools/run_prod_server_handler_projection_readiness_0252.py
+@@ -0,0 +1,92 @@
++#!/usr/bin/env python3
++"""Check phase 0252 handler projection readiness."""
++
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++
++REPO_ROOT = Path(__file__).resolve().parents[1]
++SRC_ROOT = REPO_ROOT / "src"
++for _path in (str(SRC_ROOT), str(REPO_ROOT)):
++    if _path not in sys.path:
++        sys.path.insert(0, _path)
++
++from context.prod_server_handler_projection_readiness_0252 import (  # noqa: E402
++    HANDLER_PROJECTION_READINESS_BOUNDARY,
++    build_handler_projection_readiness,
++    handler_projection_readiness_to_dict,
++    write_handler_projection_readiness_report,
++)
++
++
++def parse_args() -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--server-config", default="doc/examples/autodoc_prod_server_initial_0241.ini")
++    parser.add_argument("--openvino-config", default="doc/examples/autodoc_openvino_embedding_e5_small_0246.ini")
++    parser.add_argument(
++        "--output",
++        default=".var/reports/prod_server_handler_projection_readiness_0252.json",
++    )
++    parser.add_argument("--check-only", action="store_true")
++    parser.add_argument("--format", choices=("json", "summary"), default="json")
++    return parser.parse_args()
++
++
++def main() -> int:
++    args = parse_args()
++    server_config_path = Path(args.server_config)
++    openvino_config_path = Path(args.openvino_config)
++    output_path = Path(args.output)
++
++    if args.check_only:
++        report = build_handler_projection_readiness(
++            server_config_path=server_config_path,
++            openvino_config_path=openvino_config_path,
++        )
++        payload = {
++            "production_server_handler_projection_ready": report.ready,
++            "handler_projection_readiness": handler_projection_readiness_to_dict(report),
++            "boundary": dict(HANDLER_PROJECTION_READINESS_BOUNDARY),
++        }
++    else:
++        payload = write_handler_projection_readiness_report(
++            server_config_path=server_config_path,
++            openvino_config_path=openvino_config_path,
++            output_path=output_path,
++        )
++        report = build_handler_projection_readiness(
++            server_config_path=server_config_path,
++            openvino_config_path=openvino_config_path,
++        )
++
++    if args.format == "summary":
++        issue_count = len(report.issues)
++        if report.projection_request is None:
++            details = "collection=missing dimension=0 sql_ref=missing"
++        else:
++            details = (
++                f"collection={report.projection_request.qdrant_collection} "
++                f"dimension={report.projection_request.vector_dimension} "
++                f"sql_ref={report.projection_request.sql_ref}"
++            )
++        if args.check_only:
++            print(
++                "production_server_handler_projection_ready="
++                f"{str(report.ready)} issues={issue_count} {details}"
++            )
++        else:
++            print(
++                "production_server_handler_projection_readiness_written=True "
++                f"ready={str(report.ready)} issues={issue_count} output={output_path}"
++            )
++    else:
++        print(json.dumps(payload, indent=2, sort_keys=True))
++
++    return 0 if report.ready else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

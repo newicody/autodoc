@@ -1,0 +1,246 @@
+diff --git a/doc/architecture/SCHEDULER_MANAGED_DB_API_SQL_CONTEXT_STORE_RECORD_ADAPTER_0260.md b/doc/architecture/SCHEDULER_MANAGED_DB_API_SQL_CONTEXT_STORE_RECORD_ADAPTER_0260.md
+index dff6603..ce2e5dd 100644
+--- a/doc/architecture/SCHEDULER_MANAGED_DB_API_SQL_CONTEXT_STORE_RECORD_ADAPTER_0260.md
++++ b/doc/architecture/SCHEDULER_MANAGED_DB_API_SQL_CONTEXT_STORE_RECORD_ADAPTER_0260.md
+@@ -27,3 +27,10 @@ The real execution path reached SQLite and failed when the target database had
+ no `sql_context_records` table.  The adapter now calls an existing schema
+ bootstrap hook when the bound store exposes one.  This does not invent a schema;
+ it delegates schema readiness to the existing DbApiSqlContextStore surface.
++
++## r11
++
++The adapter now reuses the existing `build_sql_context_record` helper exposed by
++`context.sql_context_store`.  It no longer uses a generic SimpleNamespace as the
++primary record path.  Scheduler text kinds such as `passage` and `query` are
++mapped to the existing SQL kind `inference_context`.
+diff --git a/src/context/scheduler_managed_db_api_sql_context_store_record_adapter_0260.py b/src/context/scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
+index bbf813f..aceef18 100644
+--- a/src/context/scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
++++ b/src/context/scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
+@@ -13,7 +13,6 @@ from __future__ import annotations
+ 
+ from dataclasses import asdict, is_dataclass
+ import inspect
+-from types import SimpleNamespace
+ from typing import Any, Mapping
+ import uuid
+ 
+@@ -68,6 +67,10 @@ def _public_record_mapping(record: object) -> dict[str, Any]:
+         "text",
+         "text_kind",
+         "source_ref",
++        "kind",
++        "title",
++        "body",
++        "parent_ref",
+         "metadata",
+     ):
+         if hasattr(record, name):
+@@ -122,6 +125,87 @@ def _result_to_mapping(result: object, fallback_record: object | None = None) ->
+     return payload
+ 
+ 
++def _sql_record_kind(values: Mapping[str, Any]) -> str:
++    """Map Scheduler text kinds to existing SqlContextRecord allowed kinds."""
++
++    metadata = values.get("metadata")
++    preferred = ""
++    if isinstance(metadata, Mapping):
++        preferred = str(metadata.get("sql_kind") or metadata.get("kind") or "")
++    preferred = preferred or str(values.get("kind") or values.get("text_kind") or "")
++    if preferred in {
++        "source",
++        "document",
++        "chunk",
++        "fact",
++        "artifact",
++        "objective",
++        "axis",
++        "trajectory",
++        "inference_context",
++        "specialist_output",
++        "feedback",
++        "github_artifact",
++    }:
++        return preferred
++    return "inference_context"
++
++
++def _sql_record_identity(values: Mapping[str, Any]) -> str:
++    """Return a stable identity accepted by build_sql_context_record."""
++
++    for key in ("context_ref", "record_ref", "record_id", "id"):
++        value = values.get(key)
++        if value:
++            return str(value).removeprefix("sql:")
++    return uuid.uuid4().hex
++
++
++def _sql_record_title(values: Mapping[str, Any]) -> str:
++    """Return a non-empty title for the existing SqlContextRecord."""
++
++    metadata = values.get("metadata")
++    if isinstance(metadata, Mapping):
++        title = str(metadata.get("title") or "")
++        if title.strip():
++            return title
++    source_ref = str(values.get("source_ref") or "")
++    if source_ref.strip():
++        return source_ref
++    return str(values.get("context_ref") or "Scheduler-managed SQL context write")
++
++
++def _sql_record_metadata_tuple(values: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
++    """Return metadata in the tuple form expected by SqlContextRecord."""
++
++    metadata = values.get("metadata")
++    if not isinstance(metadata, Mapping):
++        return ()
++    normalized: list[tuple[str, str]] = []
++    for key, value in sorted(metadata.items()):
++        text_key = str(key)
++        text_value = str(value)
++        if text_key and text_value:
++            normalized.append((text_key, text_value))
++    return tuple(normalized)
++
++
++def _build_existing_sql_context_record_with_module(store_module: object, values: Mapping[str, Any]) -> object | None:
++    """Use the existing build_sql_context_record helper when available."""
++
++    builder = getattr(store_module, "build_sql_context_record", None)
++    if not callable(builder):
++        return None
++    return builder(
++        kind=_sql_record_kind(values),
++        identity=_sql_record_identity(values),
++        title=_sql_record_title(values),
++        body=str(values.get("body") or values.get("content") or values.get("text") or ""),
++        parent_ref=values.get("parent_ref"),
++        metadata=_sql_record_metadata_tuple(values),
++    )
++
++
+ def _construct_existing_record_class(record_class: type[Any], values: Mapping[str, Any]) -> object:
+     signature = inspect.signature(record_class)
+     kwargs: dict[str, Any] = {}
+@@ -147,6 +231,10 @@ def _construct_existing_record_class(record_class: type[Any], values: Mapping[st
+ def _build_record_for_existing_store(store: object, payload: Mapping[str, Any]) -> object:
+     values = _record_values_from_payload(payload)
+     store_module = inspect.getmodule(store.__class__)
++    if store_module is not None:
++        record = _build_existing_sql_context_record_with_module(store_module, values)
++        if record is not None:
++            return record
+     for name in (
+         "SqlContextRecord",
+         "ContextRecord",
+@@ -159,7 +247,7 @@ def _build_record_for_existing_store(store: object, payload: Mapping[str, Any])
+                 return _construct_existing_record_class(record_class, values)
+             except TypeError:
+                 continue
+-    return SimpleNamespace(**values)
++    raise TypeError("existing SQLContextStore record builder was not found")
+ 
+ 
+ def _call_existing_schema_bootstrap(store: object) -> bool:
+diff --git a/tests/context/test_scheduler_managed_db_api_sql_context_store_record_adapter_0260.py b/tests/context/test_scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
+index cd38509..4cfa596 100644
+--- a/tests/context/test_scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
++++ b/tests/context/test_scheduler_managed_db_api_sql_context_store_record_adapter_0260.py
+@@ -1,12 +1,36 @@
++from dataclasses import dataclass, field
++
+ from context.scheduler_managed_db_api_sql_context_store_record_adapter_0260 import (
+     adapt_db_api_sql_context_store_for_scheduler_usage_0260,
+ )
+ 
+ 
++@dataclass(frozen=True)
++class SqlContextRecord:
++    context_ref: str
++    kind: str
++    title: str
++    body: str
++    parent_ref: str | None = None
++    metadata: tuple[tuple[str, str], ...] = field(default_factory=tuple)
++
++
++def build_sql_context_record(*, kind, identity, title, body, parent_ref=None, metadata=()):
++    return SqlContextRecord(
++        context_ref="sql:" + kind + ":" + identity,
++        kind=kind,
++        title=title,
++        body=body,
++        parent_ref=parent_ref,
++        metadata=tuple(metadata),
++    )
++
++
+ class UpsertOnlyStore:
+     def upsert_record(self, record):
+         assert record.context_ref.startswith("sql:")
+-        assert record.content == "payload text"
++        assert record.title
++        assert record.body == "payload text"
+         return record
+ 
+ 
+@@ -15,19 +39,21 @@ class ControlledWriteStore:
+         return {"sql_ref": "sql:controlled/" + payload["intent_id"]}
+ 
+ 
+-def test_record_adapter_builds_record_for_upsert_only_store() -> None:
++def test_record_adapter_builds_existing_sql_context_record() -> None:
+     adapter = adapt_db_api_sql_context_store_for_scheduler_usage_0260(UpsertOnlyStore())
+     result = adapter.controlled_write(
+         {
+             "intent_id": "intent:0260:test",
+             "text": "payload text",
+             "text_kind": "passage",
+-            "metadata": {},
++            "metadata": {"title": "Custom title"},
+         }
+     )
+ 
+-    assert result["sql_ref"] == "sql:intent:0260:test"
+-    assert result["record"]["context_ref"] == "sql:intent:0260:test"
++    assert result["sql_ref"].startswith("sql:inference_context:")
++    assert result["record"]["kind"] == "inference_context"
++    assert result["record"]["title"] == "Custom title"
++    assert result["record"]["body"] == "payload text"
+ 
+ 
+ def test_record_adapter_delegates_controlled_write_store() -> None:
+@@ -37,24 +63,11 @@ def test_record_adapter_delegates_controlled_write_store() -> None:
+     assert result["sql_ref"] == "sql:controlled/intent:0260:test"
+ 
+ 
+-def test_record_adapter_keeps_existing_sql_typed_context_ref() -> None:
+-    adapter = adapt_db_api_sql_context_store_for_scheduler_usage_0260(UpsertOnlyStore())
+-    result = adapter.controlled_write(
+-        {
+-            "intent_id": "intent:ignored",
+-            "text": "payload text",
+-            "metadata": {"context_ref": "sql:already-typed"},
+-        }
+-    )
+-
+-    assert result["sql_ref"] == "sql:already-typed"
+-
+-
+ class SchemaBootstrapStore(UpsertOnlyStore):
+     def __init__(self) -> None:
+         self.schema_ready = False
+ 
+-    def ensure_schema(self) -> None:
++    def initialize_schema(self) -> None:
+         self.schema_ready = True
+ 
+     def upsert_record(self, record):
+@@ -74,4 +87,4 @@ def test_record_adapter_calls_existing_schema_bootstrap_hook() -> None:
+             "metadata": {},
+         }
+     )
+-    assert result["sql_ref"] == "sql:intent:0260:schema"
++    assert result["sql_ref"].startswith("sql:inference_context:")

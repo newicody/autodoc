@@ -1,0 +1,635 @@
+diff --git a/PHASE0244_PROD_SERVER_OPENRC_LAUNCHER_SURFACE_TEST_REPORT.md b/PHASE0244_PROD_SERVER_OPENRC_LAUNCHER_SURFACE_TEST_REPORT.md
+new file mode 100644
+index 0000000..eaa6dd3
+--- /dev/null
++++ b/PHASE0244_PROD_SERVER_OPENRC_LAUNCHER_SURFACE_TEST_REPORT.md
+@@ -0,0 +1,26 @@
++# Phase 0244 test report - OpenRC launcher surface
++
++## Expected validation
++
++```text
++python -m compileall -q src tests tools
++python -m pytest -q tests/context/test_prod_server_openrc_launcher_surface_0244.py
++python -m pytest -q tests/tools/test_run_prod_server_openrc_launcher_surface_0244.py
++python -m pytest -q tests/rules/test_prod_server_openrc_launcher_surface_0244_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
++
++## Direct smoke
++
++```text
++PYTHONPATH=src:. python tools/run_prod_server_openrc_launcher_surface_0244.py --check-only --format summary
++PYTHONPATH=src:. python tools/run_prod_server_openrc_launcher_surface_0244.py --format summary
++```
++
++## Boundary
++
++This patch validates the local OpenRC service surface only. It does not install
++OpenRC files, call OpenRC commands, start the launcher, create Scheduler/EventBus,
++start threads, publish events, call GitHub, execute PostgreSQL DDL/DML, create
++Qdrant collections, or add non-stdlib dependencies.
+diff --git a/doc/CHANGELOG_0244_PROD_SERVER_OPENRC_LAUNCHER_SURFACE.md b/doc/CHANGELOG_0244_PROD_SERVER_OPENRC_LAUNCHER_SURFACE.md
+new file mode 100644
+index 0000000..81811dc
+--- /dev/null
++++ b/doc/CHANGELOG_0244_PROD_SERVER_OPENRC_LAUNCHER_SURFACE.md
+@@ -0,0 +1,9 @@
++# Changelog 0244 - OpenRC launcher surface
++
++## r1
++
++Added a validation-only OpenRC launcher surface for the production server.
++
++The patch includes an example `openrc-run` service file and a validator that
++checks configtest/start/stop/status shape, supervise-daemon usage, PostgreSQL and
++Qdrant dependencies, and absence of embedded GitHub token values.
+diff --git a/doc/architecture/PROD_SERVER_OPENRC_LAUNCHER_SURFACE_0244.md b/doc/architecture/PROD_SERVER_OPENRC_LAUNCHER_SURFACE_0244.md
+new file mode 100644
+index 0000000..ce276c3
+--- /dev/null
++++ b/doc/architecture/PROD_SERVER_OPENRC_LAUNCHER_SURFACE_0244.md
+@@ -0,0 +1,54 @@
++# OpenRC launcher surface - 0244
++
++## Intent
++
++This patch defines and validates the production server OpenRC launcher surface.
++
++It validates the shape of the service file that will later live at:
++
++```text
++/etc/init.d/autodoc
++```
++
++No service is installed or started in this phase.
++
++## Required surface
++
++The OpenRC launcher surface must expose:
++
++```text
++configtest/start/stop/status
++```
++
++`configtest` calls the Autodoc launcher with `--configtest`. `start` is handled
++by OpenRC/supervise-daemon after `start_pre` validates configuration. `stop` and
++`status` remain OpenRC service operations.
++
++## Runtime boundary
++
++```text
++OpenRC -> launcher -> Scheduler
++```
++
++OpenRC owns process supervision. Scheduler remains runtime authority once the
++launcher is running. EventBus remains observation path.
++
++## Dependencies
++
++The initial service declares:
++
++```text
++need postgresql qdrant
++use net
++after firewall
++```
++
++GitHub token values must not be embedded in the service file. The service can
++inherit environment prepared by the host, but `GITHUB_TOKEN` remains an external
++secret.
++
++## Boundary
++
++This phase validates a local example service file only. It does not call OpenRC,
++install files under `/etc/init.d`, start the launcher, create Scheduler/EventBus,
++start threads, call GitHub, write PostgreSQL, or write Qdrant.
+diff --git a/doc/code-rules/0244_prod_server_openrc_launcher_surface_rule.md b/doc/code-rules/0244_prod_server_openrc_launcher_surface_rule.md
+new file mode 100644
+index 0000000..3817a41
+--- /dev/null
++++ b/doc/code-rules/0244_prod_server_openrc_launcher_surface_rule.md
+@@ -0,0 +1,30 @@
++# Code rule 0244 - OpenRC launcher surface
++
++Patch 0244 may define and validate the OpenRC launcher surface only.
++
++Required:
++
++```text
++configtest/start/stop/status surface
++configtest calls launcher --configtest
++OpenRC uses supervise-daemon
++OpenRC needs postgresql and qdrant
++Scheduler remains runtime authority
++EventBus remains observation path
++GITHUB_TOKEN is not embedded in service text
++```
++
++Forbidden in this phase:
++
++```text
++installing /etc/init.d files
++calling rc-service/openrc commands
++starting launcher
++creating Scheduler/EventBus instances
++starting threads
++publishing EventBus events
++calling GitHub API
++executing PostgreSQL DDL/DML
++creating/upserting Qdrant collections or points
++adding non-stdlib dependencies
++```
+diff --git a/doc/docs/architecture/runtime/244_prod_server_openrc_launcher_surface.dot b/doc/docs/architecture/runtime/244_prod_server_openrc_launcher_surface.dot
+new file mode 100644
+index 0000000..7a110a7
+--- /dev/null
++++ b/doc/docs/architecture/runtime/244_prod_server_openrc_launcher_surface.dot
+@@ -0,0 +1,12 @@
++digraph prod_server_openrc_launcher_surface_0244 {
++  rankdir=LR;
++
++  readiness [label="0243 readiness"];
++  initd [label="OpenRC service text"];
++  validator [label="0244 validator"];
++  launcher [label="launcher not started"];
++
++  readiness -> validator;
++  initd -> validator;
++  validator -> launcher [style=dashed];
++}
+diff --git a/doc/examples/openrc_autodoc_0244.initd b/doc/examples/openrc_autodoc_0244.initd
+new file mode 100644
+index 0000000..9cdce0f
+--- /dev/null
++++ b/doc/examples/openrc_autodoc_0244.initd
+@@ -0,0 +1,29 @@
++#!/sbin/openrc-run
++
++name="autodoc"
++description="Autodoc production launcher"
++command="/usr/bin/python"
++command_args="-m autodoc.launcher --config /etc/autodoc/autodoc.ini"
++command_user="autodoc:autodoc"
++pidfile="/run/autodoc/autodoc.pid"
++supervisor=supervise-daemon
++supervise_daemon_args="--pidfile ${pidfile} --respawn-delay 5 --respawn-max 3"
++
++extra_commands="configtest"
++description_configtest="Validate Autodoc production server configuration"
++
++ depend() {
++	need postgresql qdrant
++	use net
++	after firewall
++}
++
++configtest() {
++	/usr/bin/python -m autodoc.launcher --config /etc/autodoc/autodoc.ini --configtest
++}
++
++start_pre() {
++	checkpath --directory --owner autodoc:autodoc --mode 0750 /run/autodoc
++	checkpath --directory --owner autodoc:autodoc --mode 0750 /srv/autodoc/state
++	configtest || return 1
++}
+diff --git a/doc/manifests/MANIFEST_0244_PROD_SERVER_OPENRC_LAUNCHER_SURFACE_CHANGED_FILES.md b/doc/manifests/MANIFEST_0244_PROD_SERVER_OPENRC_LAUNCHER_SURFACE_CHANGED_FILES.md
+new file mode 100644
+index 0000000..75092c9
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0244_PROD_SERVER_OPENRC_LAUNCHER_SURFACE_CHANGED_FILES.md
+@@ -0,0 +1,14 @@
++# Manifest 0244 - OpenRC launcher surface
++
++- `src/context/prod_server_openrc_launcher_surface_0244.py`
++- `tools/run_prod_server_openrc_launcher_surface_0244.py`
++- `doc/examples/openrc_autodoc_0244.initd`
++- `tests/context/test_prod_server_openrc_launcher_surface_0244.py`
++- `tests/tools/test_run_prod_server_openrc_launcher_surface_0244.py`
++- `tests/rules/test_prod_server_openrc_launcher_surface_0244_rule.py`
++- `doc/architecture/PROD_SERVER_OPENRC_LAUNCHER_SURFACE_0244.md`
++- `doc/code-rules/0244_prod_server_openrc_launcher_surface_rule.md`
++- `doc/docs/architecture/runtime/244_prod_server_openrc_launcher_surface.dot`
++- `doc/CHANGELOG_0244_PROD_SERVER_OPENRC_LAUNCHER_SURFACE.md`
++- `doc/manifests/MANIFEST_0244_PROD_SERVER_OPENRC_LAUNCHER_SURFACE_CHANGED_FILES.md`
++- `PHASE0244_PROD_SERVER_OPENRC_LAUNCHER_SURFACE_TEST_REPORT.md`
+diff --git a/src/context/prod_server_openrc_launcher_surface_0244.py b/src/context/prod_server_openrc_launcher_surface_0244.py
+new file mode 100644
+index 0000000..6c4955e
+--- /dev/null
++++ b/src/context/prod_server_openrc_launcher_surface_0244.py
+@@ -0,0 +1,136 @@
++"""OpenRC launcher surface validation for phase 0244.
++
++This module validates a proposed OpenRC init script for the production server
++launcher. It checks that the service exposes configtest/start/stop/status shape
++without installing the service, calling OpenRC, starting the launcher, or
++creating runtime components.
++"""
++
++from __future__ import annotations
++
++import json
++from dataclasses import asdict, dataclass
++from pathlib import Path
++from typing import Any
++
++from context.prod_server_scheduler_eventbus_bootstrap_readiness_0243 import (
++    build_bootstrap_readiness,
++)
++
++
++OPENRC_LAUNCHER_SURFACE_VERSION = "0244.r1"
++
++
++OPENRC_LAUNCHER_SURFACE_BOUNDARY: dict[str, bool] = {
++    "validation_only": True,
++    "uses_bootstrap_readiness": True,
++    "installs_openrc_service": False,
++    "calls_openrc": False,
++    "starts_launcher": False,
++    "creates_scheduler": False,
++    "creates_eventbus": False,
++    "starts_threads": False,
++    "publishes_events": False,
++    "calls_github_api": False,
++    "writes_postgresql": False,
++    "writes_qdrant": False,
++    "requires_non_stdlib": False,
++}
++
++
++REQUIRED_SNIPPETS: tuple[str, ...] = (
++    "#!/sbin/openrc-run",
++    "description=",
++    "command=",
++    "command_args=",
++    "pidfile=",
++    "depend()",
++    "need postgresql qdrant",
++    "configtest()",
++    "start_pre()",
++    "--configtest",
++    "supervisor=supervise-daemon",
++)
++
++
++@dataclass(frozen=True)
++class OpenRCSurfaceIssue:
++    """One issue in the proposed OpenRC launcher surface."""
++
++    field: str
++    message: str
++
++
++@dataclass(frozen=True)
++class OpenRCSurfaceReport:
++    """JSON-compatible OpenRC launcher surface report."""
++
++    version: str
++    config_path: str
++    initd_path: str
++    valid: bool
++    bootstrap_ready: bool
++    service_name: str
++    expected_commands: tuple[str, ...]
++    issues: tuple[OpenRCSurfaceIssue, ...]
++
++
++def read_initd(path: Path) -> str:
++    """Read an OpenRC init script as text."""
++
++    return path.read_text(encoding="utf-8")
++
++
++def validate_openrc_surface(*, config_path: Path, initd_path: Path) -> OpenRCSurfaceReport:
++    """Validate the OpenRC launcher surface without installing or starting it."""
++
++    readiness = build_bootstrap_readiness(config_path)
++    text = read_initd(initd_path)
++    issues: list[OpenRCSurfaceIssue] = []
++
++    if not readiness.ready:
++        issues.append(OpenRCSurfaceIssue("bootstrap_readiness", "Scheduler/EventBus readiness must pass first"))
++
++    for snippet in REQUIRED_SNIPPETS:
++        if snippet not in text:
++            issues.append(OpenRCSurfaceIssue("initd", f"missing snippet: {snippet}"))
++
++    if "rc-service" in text:
++        issues.append(OpenRCSurfaceIssue("initd", "must not call rc-service recursively"))
++    if "GITHUB_TOKEN=" in text:
++        issues.append(OpenRCSurfaceIssue("initd", "must not embed GITHUB_TOKEN value"))
++    if "autodoc.launcher" not in text:
++        issues.append(OpenRCSurfaceIssue("command", "launcher module must be explicit"))
++    if "/etc/autodoc/autodoc.ini" not in text:
++        issues.append(OpenRCSurfaceIssue("command_args", "production config path must be explicit"))
++
++    return OpenRCSurfaceReport(
++        version=OPENRC_LAUNCHER_SURFACE_VERSION,
++        config_path=str(config_path),
++        initd_path=str(initd_path),
++        valid=not issues,
++        bootstrap_ready=readiness.ready,
++        service_name="autodoc",
++        expected_commands=("configtest", "start", "stop", "status"),
++        issues=tuple(issues),
++    )
++
++
++def openrc_surface_to_dict(report: OpenRCSurfaceReport) -> dict[str, Any]:
++    """Convert an OpenRC surface report to JSON-compatible data."""
++
++    return asdict(report)
++
++
++def write_openrc_surface_report(*, config_path: Path, initd_path: Path, output_path: Path) -> dict[str, Any]:
++    """Validate and write the OpenRC launcher surface report."""
++
++    report = validate_openrc_surface(config_path=config_path, initd_path=initd_path)
++    payload = {
++        "production_server_openrc_launcher_surface_written": True,
++        "openrc_surface": openrc_surface_to_dict(report),
++        "boundary": dict(OPENRC_LAUNCHER_SURFACE_BOUNDARY),
++    }
++    output_path.parent.mkdir(parents=True, exist_ok=True)
++    output_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + chr(10), encoding="utf-8")
++    return payload
+diff --git a/tests/context/test_prod_server_openrc_launcher_surface_0244.py b/tests/context/test_prod_server_openrc_launcher_surface_0244.py
+new file mode 100644
+index 0000000..974eb2e
+--- /dev/null
++++ b/tests/context/test_prod_server_openrc_launcher_surface_0244.py
+@@ -0,0 +1,68 @@
++from pathlib import Path
++
++from context.prod_server_openrc_launcher_surface_0244 import (
++    OPENRC_LAUNCHER_SURFACE_BOUNDARY,
++    validate_openrc_surface,
++    write_openrc_surface_report,
++)
++
++
++ROOT = Path(__file__).resolve().parents[2]
++CONFIG = ROOT / "doc/examples/autodoc_prod_server_initial_0241.ini"
++INITD = ROOT / "doc/examples/openrc_autodoc_0244.initd"
++
++
++def test_openrc_surface_boundary_is_validation_only() -> None:
++    assert OPENRC_LAUNCHER_SURFACE_BOUNDARY == {
++        "validation_only": True,
++        "uses_bootstrap_readiness": True,
++        "installs_openrc_service": False,
++        "calls_openrc": False,
++        "starts_launcher": False,
++        "creates_scheduler": False,
++        "creates_eventbus": False,
++        "starts_threads": False,
++        "publishes_events": False,
++        "calls_github_api": False,
++        "writes_postgresql": False,
++        "writes_qdrant": False,
++        "requires_non_stdlib": False,
++    }
++
++
++def test_example_openrc_surface_validates() -> None:
++    report = validate_openrc_surface(config_path=CONFIG, initd_path=INITD)
++
++    assert report.valid is True
++    assert report.bootstrap_ready is True
++    assert report.expected_commands == ("configtest", "start", "stop", "status")
++    assert report.issues == ()
++
++
++def test_openrc_surface_rejects_embedded_github_token(tmp_path: Path) -> None:
++    initd = tmp_path / "autodoc.initd"
++    initd.write_text(INITD.read_text(encoding="utf-8") + "\nGITHUB_TOKEN=secret\n", encoding="utf-8")
++
++    report = validate_openrc_surface(config_path=CONFIG, initd_path=initd)
++
++    assert report.valid is False
++    assert any(issue.message == "must not embed GITHUB_TOKEN value" for issue in report.issues)
++
++
++def test_openrc_surface_requires_configtest(tmp_path: Path) -> None:
++    initd = tmp_path / "autodoc.initd"
++    initd.write_text(INITD.read_text(encoding="utf-8").replace("configtest()", "config_check()"), encoding="utf-8")
++
++    report = validate_openrc_surface(config_path=CONFIG, initd_path=initd)
++
++    assert report.valid is False
++    assert any("configtest()" in issue.message for issue in report.issues)
++
++
++def test_write_openrc_surface_report(tmp_path: Path) -> None:
++    output = tmp_path / "openrc_surface.json"
++    payload = write_openrc_surface_report(config_path=CONFIG, initd_path=INITD, output_path=output)
++
++    assert payload["production_server_openrc_launcher_surface_written"] is True
++    assert payload["openrc_surface"]["valid"] is True
++    assert output.exists()
+diff --git a/tests/rules/test_prod_server_openrc_launcher_surface_0244_rule.py b/tests/rules/test_prod_server_openrc_launcher_surface_0244_rule.py
+new file mode 100644
+index 0000000..b81bd28
+--- /dev/null
++++ b/tests/rules/test_prod_server_openrc_launcher_surface_0244_rule.py
+@@ -0,0 +1,48 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def test_0244_openrc_surface_does_not_install_or_start_runtime() -> None:
++    source = (ROOT / "src/context/prod_server_openrc_launcher_surface_0244.py").read_text(
++        encoding="utf-8"
++    )
++    lowered = source.lower()
++
++    assert "validation_only" in source
++    assert "installs_openrc_service" in source
++    assert "calls_openrc" in source
++    assert "starts_launcher" in source
++    assert "creates_scheduler" in source
++    assert "creates_eventbus" in source
++    assert "starts_threads" in source
++    assert "calls_github_api" in source
++    assert "writes_postgresql" in source
++    assert "writes_qdrant" in source
++    assert "subprocess.run" not in source
++    assert "openrc" in lowered
++    assert "requests." not in lowered
++    assert "qdrant.upsert" not in lowered
++
++
++def test_0244_openrc_example_locks_configtest_and_dependencies() -> None:
++    initd = (ROOT / "doc/examples/openrc_autodoc_0244.initd").read_text(encoding="utf-8")
++
++    assert "#!/sbin/openrc-run" in initd
++    assert "configtest()" in initd
++    assert "start_pre()" in initd
++    assert "need postgresql qdrant" in initd
++    assert "supervisor=supervise-daemon" in initd
++    assert "GITHUB_TOKEN=" not in initd
++
++
++def test_0244_docs_lock_openrc_boundary() -> None:
++    doc = (ROOT / "doc/architecture/PROD_SERVER_OPENRC_LAUNCHER_SURFACE_0244.md").read_text(
++        encoding="utf-8"
++    )
++
++    assert "OpenRC launcher surface" in doc
++    assert "No service is installed or started" in doc
++    assert "configtest/start/stop/status" in doc
++    assert "Scheduler remains runtime authority" in doc
+diff --git a/tests/tools/test_run_prod_server_openrc_launcher_surface_0244.py b/tests/tools/test_run_prod_server_openrc_launcher_surface_0244.py
+new file mode 100644
+index 0000000..598e49e
+--- /dev/null
++++ b/tests/tools/test_run_prod_server_openrc_launcher_surface_0244.py
+@@ -0,0 +1,58 @@
++import subprocess
++import sys
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++CONFIG = "doc/examples/autodoc_prod_server_initial_0241.ini"
++INITD = "doc/examples/openrc_autodoc_0244.initd"
++
++
++def test_openrc_surface_tool_check_only_summary() -> None:
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/run_prod_server_openrc_launcher_surface_0244.py",
++            "--config",
++            CONFIG,
++            "--initd",
++            INITD,
++            "--check-only",
++            "--format",
++            "summary",
++        ],
++        cwd=ROOT,
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    assert "production_server_openrc_launcher_surface_valid=True" in result.stdout
++    assert "issues=0" in result.stdout
++    assert "configtest,start,stop,status" in result.stdout
++
++
++def test_openrc_surface_tool_writes_report(tmp_path: Path) -> None:
++    output = tmp_path / "prod_server_openrc_launcher_surface_0244.json"
++    result = subprocess.run(
++        [
++            sys.executable,
++            "tools/run_prod_server_openrc_launcher_surface_0244.py",
++            "--config",
++            CONFIG,
++            "--initd",
++            INITD,
++            "--output",
++            str(output),
++            "--format",
++            "summary",
++        ],
++        cwd=ROOT,
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++
++    assert "production_server_openrc_launcher_surface_written=True" in result.stdout
++    assert "valid=True" in result.stdout
++    assert output.exists()
+diff --git a/tools/run_prod_server_openrc_launcher_surface_0244.py b/tools/run_prod_server_openrc_launcher_surface_0244.py
+new file mode 100755
+index 0000000..395f250
+--- /dev/null
++++ b/tools/run_prod_server_openrc_launcher_surface_0244.py
+@@ -0,0 +1,79 @@
++#!/usr/bin/env python3
++"""Validate the phase 0244 OpenRC launcher surface."""
++
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++
++REPO_ROOT = Path(__file__).resolve().parents[1]
++SRC_ROOT = REPO_ROOT / "src"
++for _path in (str(SRC_ROOT), str(REPO_ROOT)):
++    if _path not in sys.path:
++        sys.path.insert(0, _path)
++
++from context.prod_server_openrc_launcher_surface_0244 import (  # noqa: E402
++    OPENRC_LAUNCHER_SURFACE_BOUNDARY,
++    openrc_surface_to_dict,
++    validate_openrc_surface,
++    write_openrc_surface_report,
++)
++
++
++def parse_args() -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--config", default="doc/examples/autodoc_prod_server_initial_0241.ini")
++    parser.add_argument("--initd", default="doc/examples/openrc_autodoc_0244.initd")
++    parser.add_argument(
++        "--output",
++        default=".var/reports/prod_server_openrc_launcher_surface_0244.json",
++    )
++    parser.add_argument("--check-only", action="store_true")
++    parser.add_argument("--format", choices=("json", "summary"), default="json")
++    return parser.parse_args()
++
++
++def main() -> int:
++    args = parse_args()
++    config_path = Path(args.config)
++    initd_path = Path(args.initd)
++    output_path = Path(args.output)
++
++    if args.check_only:
++        report = validate_openrc_surface(config_path=config_path, initd_path=initd_path)
++        payload = {
++            "production_server_openrc_launcher_surface_valid": report.valid,
++            "openrc_surface": openrc_surface_to_dict(report),
++            "boundary": dict(OPENRC_LAUNCHER_SURFACE_BOUNDARY),
++        }
++    else:
++        payload = write_openrc_surface_report(
++            config_path=config_path,
++            initd_path=initd_path,
++            output_path=output_path,
++        )
++        report = validate_openrc_surface(config_path=config_path, initd_path=initd_path)
++
++    if args.format == "summary":
++        issue_count = len(report.issues)
++        commands = ",".join(report.expected_commands)
++        if args.check_only:
++            print(
++                "production_server_openrc_launcher_surface_valid="
++                f"{str(report.valid)} issues={issue_count} commands={commands}"
++            )
++        else:
++            print(
++                "production_server_openrc_launcher_surface_written=True "
++                f"valid={str(report.valid)} issues={issue_count} output={output_path}"
++            )
++    else:
++        print(json.dumps(payload, indent=2, sort_keys=True))
++
++    return 0 if report.valid else 1
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

@@ -1,0 +1,847 @@
+diff --git a/PHASE0263_SCHEDULER_MANAGED_QDRANT_RECALL_SQL_REHYDRATE_USAGE_TEST_REPORT.md b/PHASE0263_SCHEDULER_MANAGED_QDRANT_RECALL_SQL_REHYDRATE_USAGE_TEST_REPORT.md
+new file mode 100644
+index 0000000..e99215c
+--- /dev/null
++++ b/PHASE0263_SCHEDULER_MANAGED_QDRANT_RECALL_SQL_REHYDRATE_USAGE_TEST_REPORT.md
+@@ -0,0 +1,29 @@
++# Phase 0263 test report - Scheduler-managed Qdrant recall to SQL rehydrate usage
++
++## Expected validation
++
++```text
++python -m compileall -q src tests tools
++python -m pytest -q tests/context/test_scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263.py
++python -m pytest -q tests/tools/test_run_scheduler_managed_qdrant_recall_sql_rehydrate_0263.py
++python -m pytest -q tests/rules/test_scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263_rule.py
++python -m pytest -q tests/rules
++python -m pytest -q
++```
++
++## Dry-run smoke
++
++```text
++PYTHONPATH=src:. python tools/run_scheduler_managed_qdrant_recall_sql_rehydrate_0263.py --embedding-report .var/reports/scheduler_managed_sql_ref_openvino_embedding_0261.json --projection-report .var/reports/scheduler_managed_embedding_qdrant_projection_0262.json --db-path .var/local/scheduler_managed_db_api_sql_context_store_0260.sqlite3 --output .var/reports/scheduler_managed_qdrant_recall_sql_rehydrate_0263.json --format summary
++```
++
++## Demo execute smoke
++
++```text
++PYTHONPATH=src:. python tools/run_scheduler_managed_qdrant_recall_sql_rehydrate_0263.py --embedding-report .var/reports/scheduler_managed_sql_ref_openvino_embedding_0261.json --projection-report .var/reports/scheduler_managed_embedding_qdrant_projection_0262.json --db-path .var/local/scheduler_managed_db_api_sql_context_store_0260.sqlite3 --execute --policy-decision-id policy:0263:demo --demo-qdrant --output .var/reports/scheduler_managed_qdrant_recall_sql_rehydrate_0263.json --format summary
++```
++
++## Boundary
++
++Scheduler uses Qdrant recall. Scheduler does not start Qdrant. SQL remains the
++durable authority.
+diff --git a/doc/CHANGELOG_0263_SCHEDULER_MANAGED_QDRANT_RECALL_SQL_REHYDRATE_USAGE.md b/doc/CHANGELOG_0263_SCHEDULER_MANAGED_QDRANT_RECALL_SQL_REHYDRATE_USAGE.md
+new file mode 100644
+index 0000000..4f7b07f
+--- /dev/null
++++ b/doc/CHANGELOG_0263_SCHEDULER_MANAGED_QDRANT_RECALL_SQL_REHYDRATE_USAGE.md
+@@ -0,0 +1,8 @@
++# Changelog 0263 - Scheduler-managed Qdrant recall to SQL rehydrate usage
++
++## r1
++
++Adds the 0263 recall to SQL rehydrate usage path.
++
++This patch reuses the existing Qdrant recall dataclasses and SQL context store
++read surface. Qdrant remains reference-only; SQL remains the durable authority.
+diff --git a/doc/architecture/SCHEDULER_MANAGED_QDRANT_RECALL_SQL_REHYDRATE_USAGE_0263.md b/doc/architecture/SCHEDULER_MANAGED_QDRANT_RECALL_SQL_REHYDRATE_USAGE_0263.md
+new file mode 100644
+index 0000000..04f193e
+--- /dev/null
++++ b/doc/architecture/SCHEDULER_MANAGED_QDRANT_RECALL_SQL_REHYDRATE_USAGE_0263.md
+@@ -0,0 +1,40 @@
++# Scheduler-managed Qdrant recall to SQL rehydrate usage - 0263
++
++## Intent
++
++0263 composes the next production prototype step:
++
++```text
++Qdrant recall -> sql_ref -> SQL rehydrate
++```
++
++Qdrant is recall only and carries refs. SQL remains the durable authority for
++the content body, title, metadata, and parent references.
++
++## Boundary
++
++Scheduler does not start Qdrant. Qdrant remains an external service used by an
++Autodoc recall object through an injected executor.
++
++OpenVINO is not executed in 0263. The input embedding report must already exist.
++
++No RuntimeManager is introduced. Scheduler.run is not modified.
++
++## Existing surfaces reused
++
++```text
++QdrantRecallQuery
++QdrantRecallHit
++QdrantRecallResult
++unique_sql_context_refs_from_recall
++DbApiSqlContextStore.get_record / SQLiteSqlContextStore.get_record
++```
++
++Dry-run validates the recall plan. Execute requires a `policy_decision_id` and an
++injected executor. The smoke executor returns reference-only hits derived from
++the 0262 projection report.
++
++## Next step
++
++0264 can compose the closed ResultFrame from SQL write, OpenVINO embedding,
++Qdrant projection, Qdrant recall, and SQL rehydrate.
+diff --git a/doc/code-rules/0263_scheduler_managed_qdrant_recall_sql_rehydrate_usage_rule.md b/doc/code-rules/0263_scheduler_managed_qdrant_recall_sql_rehydrate_usage_rule.md
+new file mode 100644
+index 0000000..cff839e
+--- /dev/null
++++ b/doc/code-rules/0263_scheduler_managed_qdrant_recall_sql_rehydrate_usage_rule.md
+@@ -0,0 +1,25 @@
++# Code rule 0263 - Scheduler-managed Qdrant recall to SQL rehydrate usage
++
++Required:
++
++```text
++Scheduler-managed Qdrant recall to SQL rehydrate usage
++Qdrant recall -> sql_ref -> SQL rehydrate
++Qdrant is recall only and carries refs
++SQL remains the durable authority
++execute requires policy_decision_id
++```
++
++Forbidden:
++
++```text
++SQL content authority in Qdrant
++OpenVINO execution
++Qdrant daemon start
++new RuntimeManager
++Scheduler.run modification
++PostgreSQL daemon start
++EventBus command path
++```
++
++0264 may compose the closed ResultFrame.
+diff --git a/doc/docs/architecture/runtime/263_scheduler_managed_qdrant_recall_sql_rehydrate_usage.dot b/doc/docs/architecture/runtime/263_scheduler_managed_qdrant_recall_sql_rehydrate_usage.dot
+new file mode 100644
+index 0000000..9876c67
+--- /dev/null
++++ b/doc/docs/architecture/runtime/263_scheduler_managed_qdrant_recall_sql_rehydrate_usage.dot
+@@ -0,0 +1,16 @@
++digraph scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263 {
++  rankdir=LR;
++
++  query [label="0261 embedding vector"];
++  recall [label="QdrantRecallQuery\nsearch_vector injected"];
++  hits [label="QdrantRecallHit\nsql_context_ref only"];
++  refs [label="unique_sql_context_refs_from_recall"];
++  sql [label="SQLContextStore.get_record"];
++  records [label="hydrated records"];
++
++  query -> recall;
++  recall -> hits;
++  hits -> refs;
++  refs -> sql;
++  sql -> records;
++}
+diff --git a/doc/manifests/MANIFEST_0263_SCHEDULER_MANAGED_QDRANT_RECALL_SQL_REHYDRATE_USAGE_CHANGED_FILES.md b/doc/manifests/MANIFEST_0263_SCHEDULER_MANAGED_QDRANT_RECALL_SQL_REHYDRATE_USAGE_CHANGED_FILES.md
+new file mode 100644
+index 0000000..066dfae
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0263_SCHEDULER_MANAGED_QDRANT_RECALL_SQL_REHYDRATE_USAGE_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest 0263 - Scheduler-managed Qdrant recall to SQL rehydrate usage
++
++- `src/context/scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263.py`
++- `tools/run_scheduler_managed_qdrant_recall_sql_rehydrate_0263.py`
++- `tests/context/test_scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263.py`
++- `tests/tools/test_run_scheduler_managed_qdrant_recall_sql_rehydrate_0263.py`
++- `tests/rules/test_scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263_rule.py`
++- `doc/architecture/SCHEDULER_MANAGED_QDRANT_RECALL_SQL_REHYDRATE_USAGE_0263.md`
++- `doc/code-rules/0263_scheduler_managed_qdrant_recall_sql_rehydrate_usage_rule.md`
++- `doc/docs/architecture/runtime/263_scheduler_managed_qdrant_recall_sql_rehydrate_usage.dot`
++- `doc/CHANGELOG_0263_SCHEDULER_MANAGED_QDRANT_RECALL_SQL_REHYDRATE_USAGE.md`
++- `doc/manifests/MANIFEST_0263_SCHEDULER_MANAGED_QDRANT_RECALL_SQL_REHYDRATE_USAGE_CHANGED_FILES.md`
++- `PHASE0263_SCHEDULER_MANAGED_QDRANT_RECALL_SQL_REHYDRATE_USAGE_TEST_REPORT.md`
+diff --git a/src/context/scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263.py b/src/context/scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263.py
+new file mode 100644
+index 0000000..639cc7e
+--- /dev/null
++++ b/src/context/scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263.py
+@@ -0,0 +1,315 @@
++"""Scheduler-managed Qdrant recall to SQL rehydrate usage.
++
++0263 starts from the 0261 query/embedding report, asks an injected Qdrant recall
++executor for reference-only hits, and rehydrates the returned SQL refs through
++the existing SQLContextStore.
++
++Boundary:
++- Qdrant is recall only and carries refs.
++- SQL remains the durable authority for content.
++- Scheduler uses Qdrant; Scheduler does not start Qdrant.
++- OpenVINO is not executed in 0263.
++- No RuntimeManager and no Scheduler.run modification.
++"""
++
++from __future__ import annotations
++
++from dataclasses import asdict, dataclass, field, is_dataclass
++import json
++from pathlib import Path
++from typing import Any, Mapping, Sequence
++
++from inference.qdrant_projection_adapter import (
++    QdrantProjectionPolicy,
++    QdrantProjectionTarget,
++    QdrantRecallHit,
++    QdrantRecallQuery,
++    QdrantRecallResult,
++    unique_sql_context_refs_from_recall,
++)
++
++
++DEFAULT_COLLECTION = "autodoc_context_embeddings"
++DEFAULT_DIMENSION = 384
++
++
++@dataclass(frozen=True)
++class SchedulerManagedQdrantRecallSqlRehydrateRequest:
++    """Controlled request for Scheduler-managed Qdrant recall and SQL rehydrate."""
++
++    query_ref: str
++    policy_decision_id: str = ""
++    collection_name: str = DEFAULT_COLLECTION
++    vector_dimension: int = DEFAULT_DIMENSION
++    limit: int = 8
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "query_ref": self.query_ref,
++            "policy_decision_id": self.policy_decision_id,
++            "collection_name": self.collection_name,
++            "vector_dimension": self.vector_dimension,
++            "limit": self.limit,
++        }
++
++
++@dataclass(frozen=True)
++class SchedulerManagedQdrantRecallSqlRehydrateResult:
++    """Result for Qdrant recall refs followed by SQL rehydration."""
++
++    valid: bool
++    issues: tuple[str, ...]
++    request: SchedulerManagedQdrantRecallSqlRehydrateRequest
++    execute: bool
++    dry_run: bool
++    recall: Mapping[str, Any] = field(default_factory=dict)
++    sql_refs: tuple[str, ...] = ()
++    hydrated_records: tuple[Mapping[str, Any], ...] = ()
++    missing_sql_refs: tuple[str, ...] = ()
++    scheduler_owned: bool = True
++    sql_remains_authority: bool = True
++    qdrant_recall_refs_only: bool = True
++    uses_existing_qdrant_projection_adapter: bool = True
++    uses_existing_sql_context_store: bool = True
++    starts_qdrant: bool = False
++    runs_openvino: bool = False
++    creates_runtime_manager: bool = False
++    modifies_scheduler_run: bool = False
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "scheduler_managed_qdrant_recall_sql_rehydrate_usage": True,
++            "valid": self.valid,
++            "issues": list(self.issues),
++            "execute": self.execute,
++            "dry_run": self.dry_run,
++            "request": self.request.to_mapping(),
++            "recall": dict(self.recall),
++            "sql_refs": list(self.sql_refs),
++            "hydrated_count": len(self.hydrated_records),
++            "missing_count": len(self.missing_sql_refs),
++            "hydrated_records": [dict(record) for record in self.hydrated_records],
++            "missing_sql_refs": list(self.missing_sql_refs),
++            "scheduler_owned": self.scheduler_owned,
++            "sql_remains_authority": self.sql_remains_authority,
++            "qdrant_recall_refs_only": self.qdrant_recall_refs_only,
++            "uses_existing_qdrant_projection_adapter": self.uses_existing_qdrant_projection_adapter,
++            "uses_existing_sql_context_store": self.uses_existing_sql_context_store,
++            "starts_qdrant": self.starts_qdrant,
++            "runs_openvino": self.runs_openvino,
++            "creates_runtime_manager": self.creates_runtime_manager,
++            "modifies_scheduler_run": self.modifies_scheduler_run,
++        }
++
++
++class DemoQdrantRecallExecutor:
++    """Smoke-only injected recall executor; not a Qdrant client."""
++
++    def __init__(
++        self,
++        *,
++        sql_refs: Sequence[str],
++        point_prefix: str = "qdrant-point:demo",
++        score: float = 1.0,
++    ) -> None:
++        self.sql_refs = tuple(sql_refs)
++        self.point_prefix = point_prefix
++        self.score = float(score)
++
++    def upsert_points(self, points: Sequence[Any], *, target, policy):
++        raise NotImplementedError("0263 does not implement projection writes")
++
++    def search_vector(
++        self,
++        vector: Sequence[float],
++        *,
++        target: QdrantProjectionTarget,
++        policy: QdrantProjectionPolicy,
++        query: QdrantRecallQuery,
++    ) -> QdrantRecallResult:
++        hits: list[QdrantRecallHit] = []
++        for index, sql_ref in enumerate(self.sql_refs[: query.limit]):
++            hits.append(
++                QdrantRecallHit(
++                    point_id=f"{self.point_prefix}:{index}",
++                    sql_context_ref=sql_ref,
++                    score=max(0.0, min(1.0, self.score)),
++                    source_ref=f"ctx-fragment:{sql_ref}",
++                    payload=(
++                        ("sql_context_ref", sql_ref),
++                        ("sql_ref", sql_ref),
++                        ("query_ref", query.query_ref),
++                    ),
++                )
++            )
++        return QdrantRecallResult(target=target, query=query, hits=tuple(hits), capped=False)
++
++
++def embedding_report_to_vector(report: Mapping[str, Any]) -> tuple[float, ...]:
++    """Extract the query vector from a 0261 embedding report."""
++
++    embedding = report.get("embedding", {})
++    if not isinstance(embedding, Mapping):
++        return ()
++    vector = embedding.get("vector")
++    if not isinstance(vector, list):
++        return ()
++    return tuple(float(value) for value in vector)
++
++
++def default_query_ref_from_embedding_report(report: Mapping[str, Any]) -> str:
++    """Return a typed query ref from the 0261 embedding report."""
++
++    embedding = report.get("embedding", {})
++    if isinstance(embedding, Mapping):
++        embedding_ref = str(embedding.get("embedding_ref") or "")
++        if embedding_ref:
++            return "qdrant-query:" + embedding_ref.removeprefix("embedding:")
++    return "qdrant-query:0263"
++
++
++def validate_recall_request(
++    *,
++    vector: Sequence[float],
++    request: SchedulerManagedQdrantRecallSqlRehydrateRequest,
++    execute: bool,
++    executor: Any | None,
++) -> tuple[str, ...]:
++    """Validate Qdrant recall request before execution."""
++
++    issues: list[str] = []
++    if not vector:
++        issues.append("query vector must not be empty")
++    if request.vector_dimension <= 0:
++        issues.append("vector_dimension must be > 0")
++    if vector and len(vector) != request.vector_dimension:
++        issues.append("query vector dimension must match vector_dimension")
++    if request.limit <= 0:
++        issues.append("limit must be > 0")
++    if not request.query_ref.startswith("qdrant-query:"):
++        issues.append("query_ref must start with qdrant-query:")
++    if execute and not request.policy_decision_id:
++        issues.append("execute requires policy_decision_id")
++    if execute and executor is None:
++        issues.append("execute requires an injected QdrantProjectionExecutor")
++    return tuple(issues)
++
++
++def record_to_public_mapping(record: object) -> dict[str, Any]:
++    """Convert a SqlContextRecord-like object into a serialisable mapping."""
++
++    if record is None:
++        return {}
++    if isinstance(record, Mapping):
++        return dict(record)
++    if hasattr(record, "to_mapping") and callable(record.to_mapping):
++        payload = record.to_mapping()
++        if isinstance(payload, Mapping):
++            return dict(payload)
++    if is_dataclass(record) and not isinstance(record, type):
++        return dict(asdict(record))
++    public: dict[str, Any] = {}
++    for name in ("context_ref", "kind", "title", "body", "parent_ref", "metadata"):
++        if hasattr(record, name):
++            value = getattr(record, name)
++            if isinstance(value, tuple):
++                try:
++                    value = dict(value)
++                except (TypeError, ValueError):
++                    value = list(value)
++            public[name] = value
++    return public
++
++
++def rehydrate_sql_refs(store: Any, sql_refs: Sequence[str]) -> tuple[tuple[Mapping[str, Any], ...], tuple[str, ...]]:
++    """Read recall refs back from SQL authority."""
++
++    records: list[Mapping[str, Any]] = []
++    missing: list[str] = []
++    for sql_ref in sql_refs:
++        record = store.get_record(sql_ref)
++        if record is None:
++            missing.append(sql_ref)
++        else:
++            records.append(record_to_public_mapping(record))
++    return tuple(records), tuple(missing)
++
++
++def run_scheduler_managed_qdrant_recall_sql_rehydrate_usage(
++    embedding_report: Mapping[str, Any],
++    store: Any,
++    request: SchedulerManagedQdrantRecallSqlRehydrateRequest,
++    *,
++    execute: bool = False,
++    executor: Any | None = None,
++) -> SchedulerManagedQdrantRecallSqlRehydrateResult:
++    """Run Qdrant recall through injected executor, then SQL rehydrate refs."""
++
++    vector = embedding_report_to_vector(embedding_report)
++    issues = list(
++        validate_recall_request(
++            vector=vector,
++            request=request,
++            execute=execute,
++            executor=executor,
++        )
++    )
++    if issues:
++        return SchedulerManagedQdrantRecallSqlRehydrateResult(
++            valid=False,
++            issues=tuple(issues),
++            request=request,
++            execute=execute,
++            dry_run=not execute,
++        )
++
++    target = QdrantProjectionTarget(
++        collection_name=request.collection_name,
++        vector_dimension=request.vector_dimension,
++    )
++    policy = QdrantProjectionPolicy(max_recall_hits=request.limit)
++    query = QdrantRecallQuery(query_ref=request.query_ref, limit=request.limit, role="query")
++
++    if not execute:
++        return SchedulerManagedQdrantRecallSqlRehydrateResult(
++            valid=True,
++            issues=(),
++            request=request,
++            execute=False,
++            dry_run=True,
++            recall={
++                "target": target.to_mapping(),
++                "query_ref": query.query_ref,
++                "limit": query.limit,
++                "planned": True,
++            },
++        )
++
++    recall = executor.search_vector(vector, target=target, policy=policy, query=query)
++    sql_refs = unique_sql_context_refs_from_recall(recall, max_refs=request.limit)
++    hydrated, missing = rehydrate_sql_refs(store, sql_refs)
++
++    return SchedulerManagedQdrantRecallSqlRehydrateResult(
++        valid=True,
++        issues=(),
++        request=request,
++        execute=True,
++        dry_run=False,
++        recall=recall.to_mapping(),
++        sql_refs=sql_refs,
++        hydrated_records=hydrated,
++        missing_sql_refs=missing,
++    )
++
++
++def load_json(path: Path) -> dict[str, Any]:
++    """Load a JSON object from disk."""
++
++    return json.loads(path.read_text(encoding="utf-8"))
++
++
++def write_report(output: Path, payload: Mapping[str, Any]) -> None:
++    """Write a JSON report."""
++
++    output.parent.mkdir(parents=True, exist_ok=True)
++    output.write_text(json.dumps(dict(payload), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+diff --git a/tests/context/test_scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263.py b/tests/context/test_scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263.py
+new file mode 100644
+index 0000000..93a51f3
+--- /dev/null
++++ b/tests/context/test_scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263.py
+@@ -0,0 +1,94 @@
++from dataclasses import dataclass
++
++from context.scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263 import (
++    DemoQdrantRecallExecutor,
++    SchedulerManagedQdrantRecallSqlRehydrateRequest,
++    default_query_ref_from_embedding_report,
++    run_scheduler_managed_qdrant_recall_sql_rehydrate_usage,
++)
++
++
++EMBEDDING_REPORT = {
++    "embedding": {
++        "embedding_ref": "embedding:passage:test",
++        "dimension": 3,
++        "vector": [1.0, 0.0, 0.0],
++    }
++}
++
++
++@dataclass(frozen=True)
++class Record:
++    context_ref: str = "sql:inference_context:test"
++    kind: str = "inference_context"
++    title: str = "Recall title"
++    body: str = "Recall body"
++    parent_ref: str | None = None
++    metadata: tuple[tuple[str, str], ...] = ()
++
++
++class Store:
++    def get_record(self, context_ref: str):
++        if context_ref == "sql:inference_context:test":
++            return Record()
++        return None
++
++
++def test_default_query_ref_uses_embedding_ref() -> None:
++    assert default_query_ref_from_embedding_report(EMBEDDING_REPORT) == "qdrant-query:passage:test"
++
++
++def test_recall_dry_run_plans_without_executor() -> None:
++    result = run_scheduler_managed_qdrant_recall_sql_rehydrate_usage(
++        EMBEDDING_REPORT,
++        Store(),
++        SchedulerManagedQdrantRecallSqlRehydrateRequest(
++            query_ref="qdrant-query:test",
++            vector_dimension=3,
++        ),
++    )
++    payload = result.to_mapping()
++
++    assert payload["valid"] is True
++    assert payload["dry_run"] is True
++    assert payload["recall"]["planned"] is True
++    assert payload["starts_qdrant"] is False
++    assert payload["runs_openvino"] is False
++
++
++def test_recall_execute_rehydrates_sql_records_from_hits() -> None:
++    result = run_scheduler_managed_qdrant_recall_sql_rehydrate_usage(
++        EMBEDDING_REPORT,
++        Store(),
++        SchedulerManagedQdrantRecallSqlRehydrateRequest(
++            query_ref="qdrant-query:test",
++            policy_decision_id="policy:0263:test",
++            vector_dimension=3,
++        ),
++        execute=True,
++        executor=DemoQdrantRecallExecutor(sql_refs=("sql:inference_context:test",)),
++    )
++    payload = result.to_mapping()
++
++    assert payload["valid"] is True
++    assert payload["execute"] is True
++    assert payload["sql_refs"] == ["sql:inference_context:test"]
++    assert payload["hydrated_count"] == 1
++    assert payload["missing_count"] == 0
++    assert payload["hydrated_records"][0]["context_ref"] == "sql:inference_context:test"
++
++
++def test_recall_execute_requires_policy_decision_id() -> None:
++    result = run_scheduler_managed_qdrant_recall_sql_rehydrate_usage(
++        EMBEDDING_REPORT,
++        Store(),
++        SchedulerManagedQdrantRecallSqlRehydrateRequest(
++            query_ref="qdrant-query:test",
++            vector_dimension=3,
++        ),
++        execute=True,
++        executor=DemoQdrantRecallExecutor(sql_refs=("sql:inference_context:test",)),
++    )
++
++    assert result.valid is False
++    assert "execute requires policy_decision_id" in result.issues
+diff --git a/tests/rules/test_scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263_rule.py b/tests/rules/test_scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263_rule.py
+new file mode 100644
+index 0000000..83f679f
+--- /dev/null
++++ b/tests/rules/test_scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263_rule.py
+@@ -0,0 +1,32 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def test_0263_source_locks_recall_rehydrate_boundary() -> None:
++    source = (ROOT / "src/context/scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263.py").read_text(
++        encoding="utf-8"
++    )
++
++    assert "Qdrant is recall only and carries refs" in source
++    assert "SQL remains the durable authority" in source
++    assert "Scheduler does not start Qdrant" in source
++    assert "unique_sql_context_refs_from_recall" in source
++    assert "rehydrate_sql_refs" in source
++    assert "OpenVINO is not executed in 0263" in source
++    assert "subprocess.run" not in source
++    assert "RuntimeManager(" not in source
++    assert "Scheduler.run(" not in source
++
++
++def test_0263_docs_lock_axis() -> None:
++    doc = (ROOT / "doc/architecture/SCHEDULER_MANAGED_QDRANT_RECALL_SQL_REHYDRATE_USAGE_0263.md").read_text(
++        encoding="utf-8"
++    )
++
++    assert "Scheduler-managed Qdrant recall to SQL rehydrate usage" in doc
++    assert "Qdrant recall -> sql_ref -> SQL rehydrate" in doc
++    assert "Qdrant is recall only and carries refs" in doc
++    assert "SQL remains the durable authority" in doc
++    assert "0264 can compose the closed ResultFrame" in doc
+diff --git a/tests/tools/test_run_scheduler_managed_qdrant_recall_sql_rehydrate_0263.py b/tests/tools/test_run_scheduler_managed_qdrant_recall_sql_rehydrate_0263.py
+new file mode 100644
+index 0000000..9a1f836
+--- /dev/null
++++ b/tests/tools/test_run_scheduler_managed_qdrant_recall_sql_rehydrate_0263.py
+@@ -0,0 +1,93 @@
++import json
++import subprocess
++import sys
++from pathlib import Path
++
++from context.sql_context_store import SQLiteSqlContextStore, build_sql_context_record
++
++
++ROOT = Path(__file__).resolve().parents[2]
++
++
++def test_0263_tool_dry_run_and_demo_execute(tmp_path: Path) -> None:
++    db_path = tmp_path / "context.sqlite3"
++    store = SQLiteSqlContextStore(db_path)
++    store.initialize_schema()
++    record = build_sql_context_record(
++        kind="inference_context",
++        identity="tool-0263",
++        title="Tool recall title",
++        body="Tool recall body",
++    )
++    store.upsert_record(record)
++    store.close()
++
++    embedding_report = tmp_path / "embedding.json"
++    embedding_report.write_text(
++        json.dumps(
++            {
++                "embedding": {
++                    "embedding_ref": "embedding:passage:tool",
++                    "dimension": 3,
++                    "vector": [1.0, 0.0, 0.0],
++                }
++            }
++        ),
++        encoding="utf-8",
++    )
++    projection_report = tmp_path / "projection.json"
++    projection_report.write_text(
++        json.dumps({"batch": {"sql_context_refs": [record.context_ref]}}),
++        encoding="utf-8",
++    )
++
++    dry = subprocess.run(
++        [
++            sys.executable,
++            "tools/run_scheduler_managed_qdrant_recall_sql_rehydrate_0263.py",
++            "--db-path",
++            str(db_path),
++            "--embedding-report",
++            str(embedding_report),
++            "--projection-report",
++            str(projection_report),
++            "--dimension",
++            "3",
++            "--format",
++            "summary",
++        ],
++        cwd=ROOT,
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++    assert "scheduler_managed_qdrant_recall_sql_rehydrate_valid=True" in dry.stdout
++    assert "execute=False" in dry.stdout
++
++    execute = subprocess.run(
++        [
++            sys.executable,
++            "tools/run_scheduler_managed_qdrant_recall_sql_rehydrate_0263.py",
++            "--db-path",
++            str(db_path),
++            "--embedding-report",
++            str(embedding_report),
++            "--projection-report",
++            str(projection_report),
++            "--execute",
++            "--policy-decision-id",
++            "policy:0263:test",
++            "--demo-qdrant",
++            "--dimension",
++            "3",
++            "--format",
++            "summary",
++        ],
++        cwd=ROOT,
++        text=True,
++        capture_output=True,
++        check=True,
++    )
++    assert "execute=True" in execute.stdout
++    assert "hydrated=1" in execute.stdout
++    assert "missing=0" in execute.stdout
+diff --git a/tools/run_scheduler_managed_qdrant_recall_sql_rehydrate_0263.py b/tools/run_scheduler_managed_qdrant_recall_sql_rehydrate_0263.py
+new file mode 100755
+index 0000000..5d7a84e
+--- /dev/null
++++ b/tools/run_scheduler_managed_qdrant_recall_sql_rehydrate_0263.py
+@@ -0,0 +1,116 @@
++#!/usr/bin/env python3
++"""Run Scheduler-managed Qdrant recall -> SQL rehydrate usage."""
++
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[1]
++SRC_ROOT = ROOT / "src"
++for _path in (str(SRC_ROOT), str(ROOT)):
++    if _path not in sys.path:
++        sys.path.insert(0, _path)
++
++from context.scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263 import (  # noqa: E402
++    DemoQdrantRecallExecutor,
++    SchedulerManagedQdrantRecallSqlRehydrateRequest,
++    default_query_ref_from_embedding_report,
++    load_json,
++    run_scheduler_managed_qdrant_recall_sql_rehydrate_usage,
++    write_report,
++)
++from context.sql_context_store import SQLiteSqlContextStore  # noqa: E402
++
++
++DEFAULT_DB_PATH = ROOT / ".var/local/scheduler_managed_db_api_sql_context_store_0260.sqlite3"
++DEFAULT_EMBEDDING_REPORT = ROOT / ".var/reports/scheduler_managed_sql_ref_openvino_embedding_0261.json"
++DEFAULT_PROJECTION_REPORT = ROOT / ".var/reports/scheduler_managed_embedding_qdrant_projection_0262.json"
++
++
++def parse_args() -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--db-path", default=str(DEFAULT_DB_PATH))
++    parser.add_argument("--embedding-report", default=str(DEFAULT_EMBEDDING_REPORT))
++    parser.add_argument("--projection-report", default=str(DEFAULT_PROJECTION_REPORT))
++    parser.add_argument("--output", default="")
++    parser.add_argument("--execute", action="store_true")
++    parser.add_argument("--policy-decision-id", default="")
++    parser.add_argument("--demo-qdrant", action="store_true")
++    parser.add_argument("--query-ref", default="")
++    parser.add_argument("--collection", default="autodoc_context_embeddings")
++    parser.add_argument("--dimension", type=int, default=384)
++    parser.add_argument("--limit", type=int, default=8)
++    parser.add_argument("--format", choices=("json", "summary"), default="json")
++    return parser.parse_args()
++
++
++def _sql_refs_from_projection_report(path: Path) -> tuple[str, ...]:
++    if not path.exists():
++        return ()
++    payload = load_json(path)
++    refs: list[str] = []
++    batch = payload.get("batch", {})
++    if isinstance(batch, dict):
++        for value in batch.get("sql_context_refs", []):
++            if isinstance(value, str) and value.startswith("sql:") and value not in refs:
++                refs.append(value)
++        for point in batch.get("points", []):
++            if isinstance(point, dict):
++                ref = point.get("sql_context_ref") or point.get("payload", {}).get("sql_ref", "")
++                if isinstance(ref, str) and ref.startswith("sql:") and ref not in refs:
++                    refs.append(ref)
++    return tuple(refs)
++
++
++def main() -> int:
++    args = parse_args()
++    embedding_report = load_json(Path(args.embedding_report))
++    query_ref = args.query_ref or default_query_ref_from_embedding_report(embedding_report)
++    request = SchedulerManagedQdrantRecallSqlRehydrateRequest(
++        query_ref=query_ref,
++        policy_decision_id=args.policy_decision_id,
++        collection_name=args.collection,
++        vector_dimension=args.dimension,
++        limit=args.limit,
++    )
++    store = SQLiteSqlContextStore(args.db_path)
++    store.initialize_schema()
++
++    executor = None
++    if args.demo_qdrant:
++        executor = DemoQdrantRecallExecutor(sql_refs=_sql_refs_from_projection_report(Path(args.projection_report)))
++
++    result = run_scheduler_managed_qdrant_recall_sql_rehydrate_usage(
++        embedding_report,
++        store,
++        request,
++        execute=args.execute,
++        executor=executor,
++    )
++    payload = result.to_mapping()
++
++    if args.output:
++        write_report(Path(args.output), payload)
++
++    if args.format == "summary":
++        print(
++            "scheduler_managed_qdrant_recall_sql_rehydrate_valid="
++            f"{payload['valid']} issues={len(payload['issues'])} "
++            f"execute={payload['execute']} dry_run={payload['dry_run']} "
++            f"hits={payload.get('recall', {}).get('hit_count', '-') if isinstance(payload.get('recall'), dict) else '-'} "
++            f"hydrated={payload.get('hydrated_count', '-')} "
++            f"missing={payload.get('missing_count', '-')} "
++            f"sql_refs={','.join(payload.get('sql_refs', [])) or '-'}"
++        )
++    else:
++        print(json.dumps(payload, indent=2, sort_keys=True))
++
++    store.close()
++    return 0 if payload["valid"] else 2
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())

@@ -1,0 +1,677 @@
+diff --git a/PHASE0233_DATA_SURFACE_EVENTBUS_SUPERVISOR_SOURCES_TEST_REPORT.md b/PHASE0233_DATA_SURFACE_EVENTBUS_SUPERVISOR_SOURCES_TEST_REPORT.md
+new file mode 100644
+index 0000000..f641be1
+--- /dev/null
++++ b/PHASE0233_DATA_SURFACE_EVENTBUS_SUPERVISOR_SOURCES_TEST_REPORT.md
+@@ -0,0 +1,22 @@
++# PHASE0233 test report — Data-surface EventBus supervisor sources
++
++## Scope
++
++This phase extends the existing passive bus supervisor with data-surface event
++helpers for GitHub artifact, SourceCandidate, SQL, Qdrant, rehydration, and
++pushback observation.
++
++## Validation performed in patch build harness
++
++```text
++git apply --check: OK
++git apply: OK
++compileall src tests: OK
++pytest targeted context/rules: expected OK
++```
++
++## Runtime authority boundary
++
++The patch is data-only. It does not create a new EventBus, does not call
++Scheduler.run(), does not control proxy/SHM, does not decide policy, does not
++mutate GitHub, does not read/write SQL, and does not query/upsert Qdrant.
+diff --git a/doc/CHANGELOG_0233_DATA_SURFACE_EVENTBUS_SUPERVISOR_SOURCES.md b/doc/CHANGELOG_0233_DATA_SURFACE_EVENTBUS_SUPERVISOR_SOURCES.md
+new file mode 100644
+index 0000000..cf75e0c
+--- /dev/null
++++ b/doc/CHANGELOG_0233_DATA_SURFACE_EVENTBUS_SUPERVISOR_SOURCES.md
+@@ -0,0 +1,16 @@
++# Changelog 0233 — Data-surface EventBus supervisor sources
++
++## Added
++
++- Added canonical data-surface supervision event helpers to the existing passive
++  bus supervisor module.
++- Added observed cell kinds for GitHub artifacts, SourceCandidate, SQL, Qdrant,
++  rehydration, and pushback.
++- Added tests and rules locking the observation-only boundary.
++
++## Not added
++
++- No new EventBus.
++- No GitHub/SQL/Qdrant mutation.
++- No rehydration/pushback execution.
++- No Scheduler.run() usage.
+diff --git a/doc/architecture/DATA_SURFACE_EVENTBUS_SUPERVISOR_SOURCES_0233.md b/doc/architecture/DATA_SURFACE_EVENTBUS_SUPERVISOR_SOURCES_0233.md
+new file mode 100644
+index 0000000..e6b4aca
+--- /dev/null
++++ b/doc/architecture/DATA_SURFACE_EVENTBUS_SUPERVISOR_SOURCES_0233.md
+@@ -0,0 +1,73 @@
++# 0233 — Data-surface EventBus supervisor sources
++
++This patch extends the existing passive bus supervisor module with canonical
++data-surface EventBus events.
++
++The path remains:
++
++```text
++GitHub artifact / SourceCandidate / SQL / Qdrant / Rehydration / Pushback
++  -> existing EventBus
++  -> PassiveSupervisorSink / cellular snapshot projection
++```
++
++The patch does not add a new bus and does not create a parallel runtime.
++
++## Added observed surfaces
++
++The data-surface cell kinds are:
++
++```text
++GITHUB_ARTIFACT
++SOURCE_CANDIDATE
++SQL_STORE
++QDRANT_PROJECTION
++REHYDRATION
++PUSHBACK
++```
++
++They are represented as first-class observation cells so that future GitHub,
++SQL, Qdrant, rehydration, and pushback flows can be supervised without giving
++the supervisor authority over those flows.
++
++## Authority boundary
++
++The helpers are data-only. They do not:
++
++```text
++call GitHub APIs
++mutate issues/projects/comments/labels/status
++promote/reject SourceCandidate objects
++read/write SQL
++query/upsert Qdrant
++execute rehydration
++send pushback
++call Scheduler.run()
++control proxy or SHM
++decide policy
++```
++
++## Reuse rule
++
++This patch updates the existing module:
++
++```text
++src/context/passive_bus_supervisor_cellular_snapshot.py
++```
++
++It reuses:
++
++```text
++BusSupervisorEvent
++build_cellular_snapshot
++PassiveSupervisorSink
++authority_boundary
++```
++
++No new supervisor module, bus, scheduler, persistence writer, Qdrant adapter,
++or GitHub client is introduced.
++
++## Snapshot and audit
++
++Snapshot and audit remain optional outputs. The normal runtime path is still
++EventBus -> passive supervisor, not EventBus -> events.jsonl -> supervisor.
+diff --git a/doc/code-rules/0233_data_surface_eventbus_supervisor_sources_rule.md b/doc/code-rules/0233_data_surface_eventbus_supervisor_sources_rule.md
+new file mode 100644
+index 0000000..6ff6a74
+--- /dev/null
++++ b/doc/code-rules/0233_data_surface_eventbus_supervisor_sources_rule.md
+@@ -0,0 +1,33 @@
++# 0233 data-surface EventBus supervisor sources rule
++
++Data-surface supervision must extend the existing passive bus supervisor module.
++
++Allowed:
++
++```text
++EventBus-compatible GitHub artifact event -> PassiveSupervisorSink
++EventBus-compatible SourceCandidate event -> PassiveSupervisorSink
++EventBus-compatible SQL event -> PassiveSupervisorSink
++EventBus-compatible Qdrant event -> PassiveSupervisorSink
++EventBus-compatible rehydration event -> PassiveSupervisorSink
++EventBus-compatible pushback event -> PassiveSupervisorSink
++```
++
++Forbidden:
++
++```text
++new EventBus
++new supervisor runtime
++GitHub API mutation
++SourceCandidate promotion/rejection
++SQL write/read by the supervisor
++Qdrant query/upsert by the supervisor
++rehydration execution by the supervisor
++pushback execution by the supervisor
++Scheduler.run()
++proxy or SHM mutation
++policy decision
++events.jsonl as the normal runtime path
++```
++
++All helpers must remain stdlib-only and data-only.
+diff --git a/doc/docs/architecture/runtime/233_data_surface_eventbus_supervisor_sources.dot b/doc/docs/architecture/runtime/233_data_surface_eventbus_supervisor_sources.dot
+new file mode 100644
+index 0000000..1c57faa
+--- /dev/null
++++ b/doc/docs/architecture/runtime/233_data_surface_eventbus_supervisor_sources.dot
+@@ -0,0 +1,23 @@
++digraph data_surface_eventbus_supervisor_sources_0233 {
++  rankdir=LR;
++  node [shape=box];
++
++  github [label="GitHub artifact\n(upstream event source)"];
++  candidate [label="SourceCandidate\n(upstream event source)"];
++  sql [label="SQL\n(upstream event source)"];
++  qdrant [label="Qdrant\n(upstream event source)"];
++  rehydrate [label="Rehydration\n(upstream event source)"];
++  pushback [label="Pushback\n(upstream event source)"];
++  bus [label="Existing EventBus"];
++  sink [label="PassiveSupervisorSink\ndownstream-only"];
++  state [label="CellularState / snapshot"];
++
++  github -> bus;
++  candidate -> bus;
++  sql -> bus;
++  qdrant -> bus;
++  rehydrate -> bus;
++  pushback -> bus;
++  bus -> sink;
++  sink -> state;
++}
+diff --git a/doc/manifests/MANIFEST_0233_DATA_SURFACE_EVENTBUS_SUPERVISOR_SOURCES_CHANGED_FILES.md b/doc/manifests/MANIFEST_0233_DATA_SURFACE_EVENTBUS_SUPERVISOR_SOURCES_CHANGED_FILES.md
+new file mode 100644
+index 0000000..8009c09
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0233_DATA_SURFACE_EVENTBUS_SUPERVISOR_SOURCES_CHANGED_FILES.md
+@@ -0,0 +1,13 @@
++# Manifest 0233 — changed files
++
++```text
++src/context/passive_bus_supervisor_cellular_snapshot.py
++tests/context/test_data_surface_eventbus_supervisor_sources_0233.py
++tests/rules/test_data_surface_eventbus_supervisor_sources_0233_rule.py
++doc/architecture/DATA_SURFACE_EVENTBUS_SUPERVISOR_SOURCES_0233.md
++doc/code-rules/0233_data_surface_eventbus_supervisor_sources_rule.md
++doc/docs/architecture/runtime/233_data_surface_eventbus_supervisor_sources.dot
++doc/CHANGELOG_0233_DATA_SURFACE_EVENTBUS_SUPERVISOR_SOURCES.md
++doc/manifests/MANIFEST_0233_DATA_SURFACE_EVENTBUS_SUPERVISOR_SOURCES_CHANGED_FILES.md
++PHASE0233_DATA_SURFACE_EVENTBUS_SUPERVISOR_SOURCES_TEST_REPORT.md
++```
+diff --git a/src/context/passive_bus_supervisor_cellular_snapshot.py b/src/context/passive_bus_supervisor_cellular_snapshot.py
+index 1e4a113..f41ae79 100644
+--- a/src/context/passive_bus_supervisor_cellular_snapshot.py
++++ b/src/context/passive_bus_supervisor_cellular_snapshot.py
+@@ -89,6 +89,283 @@ def scheduler_supervision_event(
+ 
+ 
+ 
++DATA_SURFACE_CELL_KINDS = frozenset(
++    {
++        "GITHUB_ARTIFACT",
++        "SOURCE_CANDIDATE",
++        "SQL_STORE",
++        "QDRANT_PROJECTION",
++        "REHYDRATION",
++        "PUSHBACK",
++    }
++)
++
++_DATA_SURFACE_PREFIX = {
++    "GITHUB_ARTIFACT": "github_artifact",
++    "SOURCE_CANDIDATE": "source_candidate",
++    "SQL_STORE": "sql_store",
++    "QDRANT_PROJECTION": "qdrant_projection",
++    "REHYDRATION": "rehydration",
++    "PUSHBACK": "pushback",
++}
++
++
++def _data_surface_cell_id(cell_kind: str, surface_ref: str) -> str:
++    prefix = _DATA_SURFACE_PREFIX.get(cell_kind, "data_surface")
++    suffix = _as_string(surface_ref).strip() or "default"
++    return f"{prefix}:{suffix}"
++
++
++def data_surface_supervision_event(
++    *,
++    event_id: str,
++    event_kind: str,
++    cell_kind: str,
++    surface_ref: str,
++    state: str,
++    observed_at: str,
++    source_ref: str = "",
++    route_ref: str = "",
++    policy_decision_id: str = "",
++    artifact_ref: str = "",
++    source_candidate_ref: str = "",
++    sql_ref: str = "",
++    qdrant_ref: str = "",
++    shm_ref: str = "",
++    error: str = "",
++    payload: Mapping[str, Any] | None = None,
++) -> BusSupervisorEvent:
++    """Create a canonical data-surface event for passive supervision.
++
++    This helper covers GitHub artifacts, SourceCandidate, SQL, Qdrant,
++    rehydration, and pushback surfaces that publish on the existing EventBus
++    path. It is data-only: it does not call GitHub, does not promote source
++    candidates, does not read or write SQL/Qdrant, and does not execute
++    rehydration or pushback.
++    """
++
++    normalized_kind = _normalize_cell_kind(cell_kind)
++    if normalized_kind not in DATA_SURFACE_CELL_KINDS:
++        raise ValueError(
++            "cell_kind must be one of GITHUB_ARTIFACT, SOURCE_CANDIDATE, "
++            "SQL_STORE, QDRANT_PROJECTION, REHYDRATION, or PUSHBACK"
++        )
++
++    surface_name = _as_string(surface_ref).strip() or "default"
++    extra_payload = dict(_as_string_mapping(payload))
++    extra_payload.setdefault("surface_ref", surface_name)
++    if source_candidate_ref:
++        extra_payload.setdefault("source_candidate_ref", _as_string(source_candidate_ref))
++    default_source_ref = _data_surface_cell_id(normalized_kind, surface_name)
++
++    return BusSupervisorEvent(
++        event_id=event_id,
++        event_kind=event_kind,
++        cell_id=default_source_ref,
++        cell_kind=normalized_kind,
++        state=state,
++        observed_at=observed_at,
++        source_ref=_as_string(source_ref).strip() or default_source_ref,
++        route_ref=route_ref,
++        policy_decision_id=policy_decision_id,
++        artifact_ref=artifact_ref,
++        sql_ref=sql_ref,
++        qdrant_ref=qdrant_ref,
++        shm_ref=shm_ref,
++        error=error,
++        payload=extra_payload,
++    )
++
++
++def github_artifact_supervision_event(
++    *,
++    event_id: str,
++    event_kind: str,
++    artifact_ref: str,
++    state: str,
++    observed_at: str,
++    source_candidate_ref: str = "",
++    sql_ref: str = "",
++    qdrant_ref: str = "",
++    error: str = "",
++    payload: Mapping[str, Any] | None = None,
++) -> BusSupervisorEvent:
++    """Create a read-only GitHub artifact supervision event."""
++
++    return data_surface_supervision_event(
++        event_id=event_id,
++        event_kind=event_kind,
++        cell_kind="GITHUB_ARTIFACT",
++        surface_ref=artifact_ref,
++        state=state,
++        observed_at=observed_at,
++        artifact_ref=artifact_ref,
++        source_candidate_ref=source_candidate_ref,
++        sql_ref=sql_ref,
++        qdrant_ref=qdrant_ref,
++        error=error,
++        payload=payload,
++    )
++
++
++def source_candidate_supervision_event(
++    *,
++    event_id: str,
++    event_kind: str,
++    source_candidate_ref: str,
++    state: str,
++    observed_at: str,
++    artifact_ref: str = "",
++    sql_ref: str = "",
++    qdrant_ref: str = "",
++    error: str = "",
++    payload: Mapping[str, Any] | None = None,
++) -> BusSupervisorEvent:
++    """Create a SourceCandidate flow supervision event."""
++
++    return data_surface_supervision_event(
++        event_id=event_id,
++        event_kind=event_kind,
++        cell_kind="SOURCE_CANDIDATE",
++        surface_ref=source_candidate_ref,
++        state=state,
++        observed_at=observed_at,
++        artifact_ref=artifact_ref,
++        source_candidate_ref=source_candidate_ref,
++        sql_ref=sql_ref,
++        qdrant_ref=qdrant_ref,
++        error=error,
++        payload=payload,
++    )
++
++
++def sql_supervision_event(
++    *,
++    event_id: str,
++    event_kind: str,
++    sql_ref: str,
++    state: str,
++    observed_at: str,
++    artifact_ref: str = "",
++    source_candidate_ref: str = "",
++    qdrant_ref: str = "",
++    error: str = "",
++    payload: Mapping[str, Any] | None = None,
++) -> BusSupervisorEvent:
++    """Create a SQL-store supervision event without reading or writing SQL."""
++
++    return data_surface_supervision_event(
++        event_id=event_id,
++        event_kind=event_kind,
++        cell_kind="SQL_STORE",
++        surface_ref=sql_ref,
++        state=state,
++        observed_at=observed_at,
++        artifact_ref=artifact_ref,
++        source_candidate_ref=source_candidate_ref,
++        sql_ref=sql_ref,
++        qdrant_ref=qdrant_ref,
++        error=error,
++        payload=payload,
++    )
++
++
++def qdrant_supervision_event(
++    *,
++    event_id: str,
++    event_kind: str,
++    qdrant_ref: str,
++    state: str,
++    observed_at: str,
++    artifact_ref: str = "",
++    source_candidate_ref: str = "",
++    sql_ref: str = "",
++    error: str = "",
++    payload: Mapping[str, Any] | None = None,
++) -> BusSupervisorEvent:
++    """Create a Qdrant projection/recall supervision event without querying Qdrant."""
++
++    return data_surface_supervision_event(
++        event_id=event_id,
++        event_kind=event_kind,
++        cell_kind="QDRANT_PROJECTION",
++        surface_ref=qdrant_ref,
++        state=state,
++        observed_at=observed_at,
++        artifact_ref=artifact_ref,
++        source_candidate_ref=source_candidate_ref,
++        sql_ref=sql_ref,
++        qdrant_ref=qdrant_ref,
++        error=error,
++        payload=payload,
++    )
++
++
++def rehydration_supervision_event(
++    *,
++    event_id: str,
++    event_kind: str,
++    rehydrate_ref: str,
++    state: str,
++    observed_at: str,
++    artifact_ref: str = "",
++    source_candidate_ref: str = "",
++    sql_ref: str = "",
++    qdrant_ref: str = "",
++    error: str = "",
++    payload: Mapping[str, Any] | None = None,
++) -> BusSupervisorEvent:
++    """Create a rehydration supervision event without executing rehydration."""
++
++    return data_surface_supervision_event(
++        event_id=event_id,
++        event_kind=event_kind,
++        cell_kind="REHYDRATION",
++        surface_ref=rehydrate_ref,
++        state=state,
++        observed_at=observed_at,
++        artifact_ref=artifact_ref,
++        source_candidate_ref=source_candidate_ref,
++        sql_ref=sql_ref,
++        qdrant_ref=qdrant_ref,
++        error=error,
++        payload=payload,
++    )
++
++
++def pushback_supervision_event(
++    *,
++    event_id: str,
++    event_kind: str,
++    pushback_ref: str,
++    state: str,
++    observed_at: str,
++    artifact_ref: str = "",
++    source_candidate_ref: str = "",
++    sql_ref: str = "",
++    qdrant_ref: str = "",
++    error: str = "",
++    payload: Mapping[str, Any] | None = None,
++) -> BusSupervisorEvent:
++    """Create a pushback supervision event without mutating GitHub."""
++
++    return data_surface_supervision_event(
++        event_id=event_id,
++        event_kind=event_kind,
++        cell_kind="PUSHBACK",
++        surface_ref=pushback_ref,
++        state=state,
++        observed_at=observed_at,
++        artifact_ref=artifact_ref,
++        source_candidate_ref=source_candidate_ref,
++        sql_ref=sql_ref,
++        qdrant_ref=qdrant_ref,
++        error=error,
++        payload=payload,
++    )
++
++
++
+ RUNTIME_SURFACE_CELL_KINDS = frozenset(
+     {"ROUTEPROXY", "CONTROLPROXY", "SHM_RING", "POLICY_GATE"}
+ )
+diff --git a/tests/context/test_data_surface_eventbus_supervisor_sources_0233.py b/tests/context/test_data_surface_eventbus_supervisor_sources_0233.py
+new file mode 100644
+index 0000000..57c9432
+--- /dev/null
++++ b/tests/context/test_data_surface_eventbus_supervisor_sources_0233.py
+@@ -0,0 +1,111 @@
++from src.context.passive_bus_supervisor_cellular_snapshot import (
++    DATA_SURFACE_CELL_KINDS,
++    build_cellular_snapshot,
++    data_surface_supervision_event,
++    github_artifact_supervision_event,
++    qdrant_supervision_event,
++    rehydration_supervision_event,
++    source_candidate_supervision_event,
++    sql_supervision_event,
++    pushback_supervision_event,
++)
++
++
++def test_data_surface_event_keeps_references_visible() -> None:
++    event = data_surface_supervision_event(
++        event_id="evt-data-1",
++        event_kind="github_artifact_seen",
++        cell_kind="GITHUB_ARTIFACT",
++        surface_ref="artifact-1",
++        state="queued",
++        observed_at="2026-07-08T00:00:00Z",
++        artifact_ref="artifact-1",
++        source_candidate_ref="candidate-1",
++        sql_ref="sql-1",
++        qdrant_ref="qdrant-1",
++        payload={"stage": "fetch"},
++    )
++
++    assert event.cell_kind == "GITHUB_ARTIFACT"
++    assert event.cell_id == "github_artifact:artifact-1"
++    assert event.artifact_ref == "artifact-1"
++    assert event.sql_ref == "sql-1"
++    assert event.qdrant_ref == "qdrant-1"
++    assert event.payload["source_candidate_ref"] == "candidate-1"
++
++    snapshot = build_cellular_snapshot(
++        [event], generated_at="2026-07-08T00:00:01Z"
++    )
++    snapshot_dict = snapshot.to_dict()
++    assert snapshot_dict["cell_count"] == 1
++    assert snapshot_dict["cells"][0]["cell_kind"] == "GITHUB_ARTIFACT"
++    assert snapshot_dict["authority_boundary"]["allows_github_mutation"] is False
++    assert snapshot_dict["authority_boundary"]["allows_sql_write"] is False
++    assert snapshot_dict["authority_boundary"]["allows_qdrant_write"] is False
++
++
++def test_data_surface_helpers_cover_planned_sources() -> None:
++    events = [
++        github_artifact_supervision_event(
++            event_id="evt-github",
++            event_kind="artifact_seen",
++            artifact_ref="artifact-1",
++            state="queued",
++            observed_at="2026-07-08T00:00:00Z",
++        ),
++        source_candidate_supervision_event(
++            event_id="evt-candidate",
++            event_kind="source_candidate_imported",
++            source_candidate_ref="candidate-1",
++            state="success",
++            observed_at="2026-07-08T00:00:01Z",
++        ),
++        sql_supervision_event(
++            event_id="evt-sql",
++            event_kind="sql_persisted",
++            sql_ref="sql-1",
++            state="success",
++            observed_at="2026-07-08T00:00:02Z",
++        ),
++        qdrant_supervision_event(
++            event_id="evt-qdrant",
++            event_kind="qdrant_projected",
++            qdrant_ref="qdrant-1",
++            state="success",
++            observed_at="2026-07-08T00:00:03Z",
++        ),
++        rehydration_supervision_event(
++            event_id="evt-rehydrate",
++            event_kind="rehydrated",
++            rehydrate_ref="rehydrate-1",
++            state="success",
++            observed_at="2026-07-08T00:00:04Z",
++        ),
++        pushback_supervision_event(
++            event_id="evt-pushback",
++            event_kind="pushback_prepared",
++            pushback_ref="pushback-1",
++            state="success",
++            observed_at="2026-07-08T00:00:05Z",
++        ),
++    ]
++
++    assert {event.cell_kind for event in events} == DATA_SURFACE_CELL_KINDS
++    assert {event.state for event in events} == {"queued", "success"}
++    assert all(event.source_ref for event in events)
++
++
++def test_data_surface_event_rejects_unknown_kind() -> None:
++    try:
++        data_surface_supervision_event(
++            event_id="evt-bad",
++            event_kind="bad",
++            cell_kind="SQL_WRITER",
++            surface_ref="sql",
++            state="unknown",
++            observed_at="2026-07-08T00:00:00Z",
++        )
++    except ValueError as exc:
++        assert "cell_kind must be one of" in str(exc)
++    else:
++        raise AssertionError("unknown data-surface kind must be rejected")
+diff --git a/tests/rules/test_data_surface_eventbus_supervisor_sources_0233_rule.py b/tests/rules/test_data_surface_eventbus_supervisor_sources_0233_rule.py
+new file mode 100644
+index 0000000..4b9f1d7
+--- /dev/null
++++ b/tests/rules/test_data_surface_eventbus_supervisor_sources_0233_rule.py
+@@ -0,0 +1,50 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = ROOT / "src/context/passive_bus_supervisor_cellular_snapshot.py"
++
++
++def test_0233_reuses_existing_passive_supervisor_module() -> None:
++    text = MODULE.read_text(encoding="utf-8")
++    assert "def data_surface_supervision_event" in text
++    assert "def github_artifact_supervision_event" in text
++    assert "class PassiveSupervisorSink" in text
++
++
++def test_0233_keeps_data_surfaces_observation_only() -> None:
++    text = MODULE.read_text(encoding="utf-8")
++    section = text.split("def data_surface_supervision_event", 1)[1]
++    section = section.split("RUNTIME_SURFACE_CELL_KINDS", 1)[0]
++    forbidden = [
++        "Scheduler.run(",
++        "requests.",
++        "github.Github",
++        "create_issue",
++        "update_issue",
++        "upsert(",
++        "execute(",
++        "write_shm",
++        "control_proxy",
++        "claim_lease",
++    ]
++    for needle in forbidden:
++        assert needle not in section
++
++
++def test_0233_keeps_audit_and_snapshot_optional() -> None:
++    text = MODULE.read_text(encoding="utf-8")
++    section = text.split("def data_surface_supervision_event", 1)[1]
++    section = section.split("RUNTIME_SURFACE_CELL_KINDS", 1)[0]
++    assert "events.jsonl" not in section
++    assert "snapshot.json" not in section
++
++
++def test_0233_data_surface_refs_are_first_class() -> None:
++    text = MODULE.read_text(encoding="utf-8")
++    section = text.split("def data_surface_supervision_event", 1)[1]
++    section = section.split("RUNTIME_SURFACE_CELL_KINDS", 1)[0]
++    assert "artifact_ref" in section
++    assert "source_candidate_ref" in section
++    assert "sql_ref" in section
++    assert "qdrant_ref" in section

@@ -1,0 +1,679 @@
+diff --git a/tools/apply_specialist_capability_growth_projects_projection_0286.py b/tools/apply_specialist_capability_growth_projects_projection_0286.py
+--- a/tools/apply_specialist_capability_growth_projects_projection_0286.py
++++ b/tools/apply_specialist_capability_growth_projects_projection_0286.py
+@@ -287,6 +287,11 @@
+     parser.add_argument("--confirm-plan-digest", default="")
+     parser.add_argument("--gh-command", default="gh")
+     parser.add_argument(
++        "--output",
++        type=Path,
++        help="write the complete r6 execution report as JSON",
++    )
++    parser.add_argument(
+         "--format",
+         choices=("json", "summary"),
+         default="summary",
+@@ -344,9 +349,11 @@
+             ),
+             "boundaries": _boundaries(),
+         }
++        _write_report(report, args.output)
+         _emit(report, args.format)
+         return 4
+ 
++    _write_report(report, args.output)
+     _emit(report, args.format)
+     result_mapping = _mapping(report["result"])
+     return 0 if result_mapping.get("valid") is True else 3
+@@ -564,6 +571,25 @@
+     return _positive_int(value, "existing_comment_id")
+ 
+ 
++def _write_report(
++    report: Mapping[str, object],
++    output: Path | None,
++) -> None:
++    if output is None:
++        return
++    output.parent.mkdir(parents=True, exist_ok=True)
++    output.write_text(
++        json.dumps(
++            report,
++            ensure_ascii=False,
++            indent=2,
++            sort_keys=True,
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++
++
+ def _emit(report: Mapping[str, object], output_format: str) -> None:
+     if output_format == "json":
+         print(
+diff --git a/tools/check_specialist_capability_growth_projects_readback_0286.py b/tools/check_specialist_capability_growth_projects_readback_0286.py
+--- a/tools/check_specialist_capability_growth_projects_readback_0286.py
++++ b/tools/check_specialist_capability_growth_projects_readback_0286.py
+@@ -199,6 +199,24 @@
+ 
+ def main(argv: Sequence[str] | None = None) -> int:
+     args = parse_args(tuple(sys.argv[1:] if argv is None else argv))
++    _require_input_file(
++        args.plan,
++        "r5 publication plan",
++        hint=(
++            "Generate a local verification set with "
++            "tools/build_specialist_capability_growth_projects_"
++            "readback_fixture_0286.py, or provide a real r5 plan."
++        ),
++    )
++    _require_input_file(
++        args.execution_result,
++        "r6 execution result",
++        hint=(
++            "Run tools/apply_specialist_capability_growth_projects_"
++            "projection_0286.py with --output after a real publication, "
++            "or use the local fixture builder."
++        ),
++    )
+     plan = load_publication_plan(args.plan)
+     execution = load_execution_result(args.execution_result)
+ 
+@@ -218,6 +236,16 @@
+                 "--issue-comments and --projectv2-fields are required "
+                 "without --execute"
+             )
++        _require_input_file(
++            args.issue_comments,
++            "Issue comment snapshot",
++            hint="Use the local fixture builder or a query-only export.",
++        )
++        _require_input_file(
++            args.projectv2_fields,
++            "ProjectV2 field snapshot",
++            hint="Use the local fixture builder or a query-only export.",
++        )
+         comments = load_issue_comments(args.issue_comments)
+         field_values = load_projectv2_fields(args.projectv2_fields)
+         source_mode = "provided_snapshots"
+@@ -362,6 +390,22 @@
+     return tuple(sorted(values))
+ 
+ 
++def _require_input_file(
++    path: Path,
++    label: str,
++    *,
++    hint: str,
++) -> None:
++    if path.is_file():
++        return
++    raise SystemExit(
++        f"{label} not found: {path}\n"
++        f"{hint}\n"
++        "The r7 verifier consumes artifacts; it does not create or publish "
++        "them."
++    )
++
++
+ def _assert_query_only_graphql(query: str) -> None:
+     compact = " ".join(query.split()).lower()
+     if not compact.startswith("query"):
+diff --git a/tools/build_specialist_capability_growth_projects_readback_fixture_0286.py b/tools/build_specialist_capability_growth_projects_readback_fixture_0286.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tools/build_specialist_capability_growth_projects_readback_fixture_0286.py
+@@ -0,0 +1,270 @@
++#!/usr/bin/env python3
++"""Build a coherent local-only artifact set for the 0286-r7 verifier.
++
++The generated files validate serialization, digest verification and query-only
++readback correlation. They are fixtures, not evidence of a real GitHub
++publication, and must never be passed to the r6 CLI with ``--execute``.
++"""
++
++from __future__ import annotations
++
++import argparse
++from hashlib import sha256
++import json
++from pathlib import Path
++import sys
++from typing import Sequence
++
++_REPO_ROOT = Path(__file__).resolve().parents[1]
++_SRC_ROOT = _REPO_ROOT / "src"
++for _path in (_REPO_ROOT, _SRC_ROOT):
++    if str(_path) not in sys.path:
++        sys.path.insert(0, str(_path))
++
++from context.specialist_capability_growth_projects_operator_authorized_adapter_0286 import (  # noqa: E402
++    SPECIALIST_CAPABILITY_GROWTH_PROJECTS_OPERATOR_ADAPTER_SCHEMA,
++    SpecialistCapabilityGrowthProjectsOperatorExecutionResult,
++)
++from context.specialist_capability_growth_projects_publication_plan_0286 import (  # noqa: E402
++    SPECIALIST_CAPABILITY_GROWTH_PROJECTS_PUBLICATION_PLAN_SCHEMA,
++    SpecialistCapabilityGrowthProjectV2FieldMutation,
++    SpecialistCapabilityGrowthProjectsPublicationPlan,
++)
++from tools.apply_specialist_capability_growth_projects_projection_0286 import (  # noqa: E402
++    ADAPTER_SCHEMA,
++    recompute_plan_digest,
++)
++
++FIXTURE_SCHEMA = (
++    "missipy.specialist.capability_growth.projects_readback_fixture.v1"
++)
++
++_FIELD_VALUES = (
++    ("Spécialiste", "specialist:fixture"),
++    ("Révision spécialiste", "revision:fixture:2"),
++    ("Capacité proposée", "technical_review"),
++    ("Action capacité", "add"),
++    ("Décision capacité", "approve"),
++    ("Statut révision", "approved_selected_observed"),
++    ("Référence SQL", "sql:fixture:revision:2"),
++    ("Digest décision", "d" * 64),
++    ("Laboratoire", "laboratory:fixture-local"),
++)
++
++
++def parse_args(argv: Sequence[str]) -> argparse.Namespace:
++    parser = argparse.ArgumentParser(
++        description=(
++            "Write a local-only r5/r6/readback fixture set. "
++            "No GitHub call or mutation is performed."
++        )
++    )
++    parser.add_argument(
++        "--output-dir",
++        type=Path,
++        default=Path(".var/reports/0286-readback-fixture"),
++    )
++    parser.add_argument(
++        "--repository",
++        default="newicody/projects",
++    )
++    parser.add_argument("--issue-number", type=int, default=1)
++    parser.add_argument("--project-id", default="PVT_fixture")
++    parser.add_argument("--project-item-id", default="PVTI_fixture")
++    return parser.parse_args(argv)
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = parse_args(tuple(sys.argv[1:] if argv is None else argv))
++    args.output_dir.mkdir(parents=True, exist_ok=True)
++
++    marker = (
++        "autodoc:specialist-capability-growth:"
++        "fixture-local-readback-only"
++    )
++    comment_body = (
++        f"<!-- {marker} -->\n"
++        "## Autodoc fixture — specialist capability growth\n\n"
++        "Local-only replay fixture. This is not real publication evidence.\n"
++    )
++    comment_digest = sha256(comment_body.encode("utf-8")).hexdigest()
++    mutations = tuple(
++        SpecialistCapabilityGrowthProjectV2FieldMutation(
++            field_name=name,
++            desired_value=value,
++            current_value=value,
++            action="replay",
++        )
++        for name, value in _FIELD_VALUES
++    )
++
++    provisional = SpecialistCapabilityGrowthProjectsPublicationPlan(
++        schema=SPECIALIST_CAPABILITY_GROWTH_PROJECTS_PUBLICATION_PLAN_SCHEMA,
++        valid=True,
++        action="replay",
++        issues=(),
++        repository=args.repository,
++        issue_number=args.issue_number,
++        project_id=args.project_id,
++        project_item_id=args.project_item_id,
++        policy_decision_id="policy:0286:r7:fixture",
++        review_ref="projects-review:fixture",
++        revision_ref="revision:fixture:2",
++        sql_ref="sql:fixture:revision:2",
++        decision_ref="decision:fixture:2",
++        projection_digest_sha256="a" * 64,
++        marker=marker,
++        comment_action="replay",
++        comment_body=comment_body,
++        comment_body_sha256=comment_digest,
++        existing_comment_id=999_999,
++        existing_comment_url=(
++            "https://example.invalid/autodoc-fixture-comment"
++        ),
++        projectv2_action="replay",
++        projectv2_field_mutations=mutations,
++        plan_digest="0" * 64,
++    )
++    plan = SpecialistCapabilityGrowthProjectsPublicationPlan(
++        schema=provisional.schema,
++        valid=provisional.valid,
++        action=provisional.action,
++        issues=provisional.issues,
++        repository=provisional.repository,
++        issue_number=provisional.issue_number,
++        project_id=provisional.project_id,
++        project_item_id=provisional.project_item_id,
++        policy_decision_id=provisional.policy_decision_id,
++        review_ref=provisional.review_ref,
++        revision_ref=provisional.revision_ref,
++        sql_ref=provisional.sql_ref,
++        decision_ref=provisional.decision_ref,
++        projection_digest_sha256=provisional.projection_digest_sha256,
++        marker=provisional.marker,
++        comment_action=provisional.comment_action,
++        comment_body=provisional.comment_body,
++        comment_body_sha256=provisional.comment_body_sha256,
++        existing_comment_id=provisional.existing_comment_id,
++        existing_comment_url=provisional.existing_comment_url,
++        projectv2_action=provisional.projectv2_action,
++        projectv2_field_mutations=provisional.projectv2_field_mutations,
++        plan_digest=recompute_plan_digest(provisional),
++    )
++
++    execution = SpecialistCapabilityGrowthProjectsOperatorExecutionResult(
++        schema=(
++            SPECIALIST_CAPABILITY_GROWTH_PROJECTS_OPERATOR_ADAPTER_SCHEMA
++        ),
++        valid=True,
++        mode="execute",
++        action="replayed",
++        issues=(),
++        plan_digest=plan.plan_digest,
++        repository=plan.repository,
++        issue_number=plan.issue_number,
++        project_id=plan.project_id,
++        project_item_id=plan.project_item_id,
++        comment_action="replayed",
++        comment_id=plan.existing_comment_id,
++        comment_url=plan.existing_comment_url,
++        projectv2_action="replayed",
++        changed_fields=(),
++        operator_decision="approve",
++        confirmed_plan_digest=plan.plan_digest,
++        remote_mutation_allowed=True,
++        github_mutation_performed=False,
++        issue_comment_published=False,
++        projectv2_mutation_performed=False,
++    )
++
++    paths = {
++        "plan": args.output_dir / "capability-growth-plan.json",
++        "execution": (
++            args.output_dir / "capability-growth-execution.json"
++        ),
++        "comments": args.output_dir / "issue-comments.json",
++        "fields": args.output_dir / "projectv2-fields.json",
++        "manifest": args.output_dir / "fixture-manifest.json",
++    }
++    _write_json(
++        paths["plan"],
++        {
++            **plan.to_mapping(),
++            "fixture_only": True,
++            "remote_execution_allowed": False,
++        },
++    )
++    _write_json(
++        paths["execution"],
++        {
++            "schema": ADAPTER_SCHEMA,
++            "result": execution.to_mapping(),
++            "performed_operations": [],
++            "partial_execution": False,
++            "fixture_only": True,
++            "boundaries": {
++                "real_github_publication_proven": False,
++                "remote_execution_allowed": False,
++            },
++        },
++    )
++    _write_json(
++        paths["comments"],
++        {
++            "fixture_only": True,
++            "comments": [
++                {
++                    "id": plan.existing_comment_id,
++                    "body": plan.comment_body,
++                    "html_url": plan.existing_comment_url,
++                }
++            ],
++        },
++    )
++    _write_json(
++        paths["fields"],
++        {
++            "fixture_only": True,
++            "field_values": dict(_FIELD_VALUES),
++        },
++    )
++    _write_json(
++        paths["manifest"],
++        {
++            "schema": FIXTURE_SCHEMA,
++            "fixture_only": True,
++            "real_github_publication_proven": False,
++            "warning": (
++                "Never pass these artifacts to the r6 CLI with --execute."
++            ),
++            "plan_digest": plan.plan_digest,
++            "files": {
++                key: str(path)
++                for key, path in paths.items()
++                if key != "manifest"
++            },
++        },
++    )
++
++    print(f"fixture_only: true")
++    print(f"plan_digest: {plan.plan_digest}")
++    for key, path in paths.items():
++        print(f"{key}: {path}")
++    return 0
++
++
++def _write_json(path: Path, payload: object) -> None:
++    path.write_text(
++        json.dumps(
++            payload,
++            ensure_ascii=False,
++            indent=2,
++            sort_keys=True,
++        )
++        + "\n",
++        encoding="utf-8",
++    )
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/tools/test_specialist_capability_growth_projects_readback_artifact_chain_0286.py b/tests/tools/test_specialist_capability_growth_projects_readback_artifact_chain_0286.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/tools/test_specialist_capability_growth_projects_readback_artifact_chain_0286.py
+@@ -0,0 +1,108 @@
++from __future__ import annotations
++
++import importlib.util
++import json
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++FIXTURE_TOOL = (
++    ROOT
++    / "tools/"
++    "build_specialist_capability_growth_projects_readback_fixture_0286.py"
++)
++READBACK_TOOL = (
++    ROOT
++    / "tools/check_specialist_capability_growth_projects_readback_0286.py"
++)
++APPLY_TOOL = (
++    ROOT
++    / "tools/apply_specialist_capability_growth_projects_projection_0286.py"
++)
++
++
++def _load(path: Path, name: str):
++    spec = importlib.util.spec_from_file_location(name, path)
++    assert spec is not None and spec.loader is not None
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
++    return module
++
++
++def test_fixture_builder_and_local_readback(tmp_path: Path) -> None:
++    fixture = _load(FIXTURE_TOOL, "fixture_builder_0286")
++    readback = _load(READBACK_TOOL, "readback_artifact_chain_0286")
++    output_dir = tmp_path / "fixture"
++    assert fixture.main(["--output-dir", str(output_dir)]) == 0
++
++    report_path = tmp_path / "readback.json"
++    status = readback.main(
++        [
++            "--plan",
++            str(output_dir / "capability-growth-plan.json"),
++            "--execution-result",
++            str(output_dir / "capability-growth-execution.json"),
++            "--issue-comments",
++            str(output_dir / "issue-comments.json"),
++            "--projectv2-fields",
++            str(output_dir / "projectv2-fields.json"),
++            "--output",
++            str(report_path),
++            "--format",
++            "summary",
++        ]
++    )
++    assert status == 0
++    report = json.loads(report_path.read_text(encoding="utf-8"))
++    evidence = report["evidence"]
++    assert evidence["valid"] is True
++    assert evidence["action"] == "snapshot_ready"
++    assert evidence["deployment_ready"] is False
++    assert evidence["remote_query_performed"] is False
++
++
++def test_r6_preview_can_write_a_json_report(tmp_path: Path) -> None:
++    fixture = _load(FIXTURE_TOOL, "fixture_builder_for_r6_0286")
++    apply_tool = _load(APPLY_TOOL, "apply_output_0286")
++    output_dir = tmp_path / "fixture"
++    fixture.main(["--output-dir", str(output_dir)])
++    report_path = tmp_path / "r6-preview.json"
++
++    status = apply_tool.main(
++        [
++            "--plan",
++            str(output_dir / "capability-growth-plan.json"),
++            "--operator-decision",
++            "approve",
++            "--output",
++            str(report_path),
++            "--format",
++            "summary",
++        ]
++    )
++    assert status == 0
++    report = json.loads(report_path.read_text(encoding="utf-8"))
++    assert report["result"]["mode"] == "preview"
++    assert report["result"]["github_mutation_performed"] is False
++
++
++def test_readback_preflight_explains_missing_plan(
++    tmp_path: Path,
++) -> None:
++    readback = _load(READBACK_TOOL, "readback_preflight_0286")
++    try:
++        readback.main(
++            [
++                "--plan",
++                str(tmp_path / "missing-plan.json"),
++                "--execution-result",
++                str(tmp_path / "missing-execution.json"),
++                "--execute",
++            ]
++        )
++    except SystemExit as exc:
++        message = str(exc)
++        assert "r5 publication plan not found" in message
++        assert "fixture" in message
++        assert "does not create or publish" in message
++    else:
++        raise AssertionError("missing plan must be rejected before GitHub")
+diff --git a/tests/rules/test_specialist_capability_growth_projects_readback_artifact_chain_0286_rule.py b/tests/rules/test_specialist_capability_growth_projects_readback_artifact_chain_0286_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_specialist_capability_growth_projects_readback_artifact_chain_0286_rule.py
+@@ -0,0 +1,47 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++APPLY = (
++    ROOT
++    / "tools/apply_specialist_capability_growth_projects_projection_0286.py"
++)
++READBACK = (
++    ROOT
++    / "tools/check_specialist_capability_growth_projects_readback_0286.py"
++)
++FIXTURE = (
++    ROOT
++    / "tools/"
++    "build_specialist_capability_growth_projects_readback_fixture_0286.py"
++)
++INSTALLATION = (
++    ROOT / "templates/github/projects-repository/INSTALLATION.md"
++)
++
++
++def test_r6_cli_persists_execution_evidence() -> None:
++    text = APPLY.read_text(encoding="utf-8")
++    assert '"--output"' in text
++    assert "_write_report(report, args.output)" in text
++
++
++def test_r7_cli_has_actionable_artifact_preflight() -> None:
++    text = READBACK.read_text(encoding="utf-8")
++    assert "_require_input_file" in text
++    assert "The r7 verifier consumes artifacts" in text
++    assert "does not create or publish" in text
++
++
++def test_fixture_is_explicitly_local_only() -> None:
++    text = FIXTURE.read_text(encoding="utf-8")
++    assert "fixture_only" in text
++    assert "must never be passed" in text
++    assert "real_github_publication_proven" in text
++    assert "subprocess" not in text
++    assert "gh api" not in text
++
++
++def test_projects_installation_remains_unchanged() -> None:
++    text = INSTALLATION.read_text(encoding="utf-8")
++    assert "Version du guide : `0286-r4`." in text
++    assert "Ne pas utiliser `--delete`" in text
+diff --git a/PHASE0286_R7_R1_SPECIALIST_CAPABILITY_GROWTH_READBACK_ARTIFACT_CHAIN_REPORT.md b/PHASE0286_R7_R1_SPECIALIST_CAPABILITY_GROWTH_READBACK_ARTIFACT_CHAIN_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0286_R7_R1_SPECIALIST_CAPABILITY_GROWTH_READBACK_ARTIFACT_CHAIN_REPORT.md
+@@ -0,0 +1,16 @@
++# Phase 0286-r7-r1 — readback artifact-chain correction
++
++Status: corrective patch complete.
++
++The original r7 invocation assumed that two prerequisite files already
++existed. The repository had no local fixture builder, and the r6 CLI could not
++persist its result. This patch closes that operational gap:
++
++- r6 accepts `--output` and writes the complete JSON report;
++- r7 checks every input path before any GitHub query;
++- a local-only fixture builder produces the four files needed to test r7;
++- fixture evidence can only establish `snapshot_ready`, never deployment
++  readiness or a real GitHub publication.
++
++`templates/github/projects-repository/INSTALLATION.md` reviewed.
++No update required: no file deployed into `newicody/projects` changes.
+diff --git a/doc/architecture/SPECIALIST_CAPABILITY_GROWTH_READBACK_ARTIFACT_CHAIN_0286.md b/doc/architecture/SPECIALIST_CAPABILITY_GROWTH_READBACK_ARTIFACT_CHAIN_0286.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/SPECIALIST_CAPABILITY_GROWTH_READBACK_ARTIFACT_CHAIN_0286.md
+@@ -0,0 +1,27 @@
++# 0286-r7-r1 — readback artifact chain
++
++## Corrected local flow
++
++```text
++local fixture builder
++→ r5 plan JSON
++→ replayed r6 result JSON
++→ Issue-comment snapshot
++→ ProjectV2-field snapshot
++→ r7 query-only verifier
++→ snapshot_ready=true
++→ deployment_ready=false
++```
++
++## Real flow
++
++```text
++real r5 plan
++→ r6 approved execution with --output
++→ live r7 --execute query-only readback
++→ deployment_ready=true only after exact correlation
++```
++
++The fixture builder never calls GitHub and marks every artifact
++`fixture_only=true`. Its files must not be passed to the r6 CLI with
++`--execute`.
+diff --git a/doc/architecture/SPECIALIST_CAPABILITY_GROWTH_READBACK_ARTIFACT_CHAIN_0286.dot b/doc/architecture/SPECIALIST_CAPABILITY_GROWTH_READBACK_ARTIFACT_CHAIN_0286.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/SPECIALIST_CAPABILITY_GROWTH_READBACK_ARTIFACT_CHAIN_0286.dot
+@@ -0,0 +1,18 @@
++digraph phase_0286_r7_r1 {
++  rankdir=LR;
++  fixture [label="local fixture builder"];
++  plan [label="r5 plan JSON"];
++  execution [label="r6 result JSON"];
++  snapshots [label="comment + fields snapshots"];
++  verifier [label="r7 verifier"];
++  local [label="snapshot_ready"];
++  live [label="deployment_ready\nlive query-only only"];
++  fixture -> plan;
++  fixture -> execution;
++  fixture -> snapshots;
++  plan -> verifier;
++  execution -> verifier;
++  snapshots -> verifier;
++  verifier -> local;
++  verifier -> live [style=dashed];
++}
+diff --git a/doc/CHANGELOG_0286_R7_R1_SPECIALIST_CAPABILITY_GROWTH_READBACK_ARTIFACT_CHAIN.md b/doc/CHANGELOG_0286_R7_R1_SPECIALIST_CAPABILITY_GROWTH_READBACK_ARTIFACT_CHAIN.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0286_R7_R1_SPECIALIST_CAPABILITY_GROWTH_READBACK_ARTIFACT_CHAIN.md
+@@ -0,0 +1,8 @@
++# Changelog 0286-r7-r1
++
++- add `--output` to the r6 operator CLI;
++- persist successful and failed r6 reports;
++- add actionable r7 input preflight;
++- add a local-only readback fixture builder;
++- separate fixture validation from live deployment readiness;
++- keep the `newicody/projects` installation bundle unchanged.
+diff --git a/doc/manifests/MANIFEST_0286_R7_R1_SPECIALIST_CAPABILITY_GROWTH_READBACK_ARTIFACT_CHAIN.md b/doc/manifests/MANIFEST_0286_R7_R1_SPECIALIST_CAPABILITY_GROWTH_READBACK_ARTIFACT_CHAIN.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0286_R7_R1_SPECIALIST_CAPABILITY_GROWTH_READBACK_ARTIFACT_CHAIN.md
+@@ -0,0 +1,16 @@
++# Manifest 0286-r7-r1
++
++Modified:
++
++- `tools/apply_specialist_capability_growth_projects_projection_0286.py`
++- `tools/check_specialist_capability_growth_projects_readback_0286.py`
++
++Added:
++
++- `tools/build_specialist_capability_growth_projects_readback_fixture_0286.py`
++- `tests/tools/test_specialist_capability_growth_projects_readback_artifact_chain_0286.py`
++- `tests/rules/test_specialist_capability_growth_projects_readback_artifact_chain_0286_rule.py`
++- phase report
++- architecture document and DOT graph
++- changelog
++- this manifest

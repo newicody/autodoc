@@ -1,0 +1,1260 @@
+diff --git a/src/context/fake_laboratory_existing_scheduler_closed_loop_smoke_0274.py b/src/context/fake_laboratory_existing_scheduler_closed_loop_smoke_0274.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/context/fake_laboratory_existing_scheduler_closed_loop_smoke_0274.py
+@@ -0,0 +1,525 @@
++"""Existing-Scheduler fake laboratory closed-loop smoke for 0274-r5.
++
++This module composes the already-existing phase surfaces:
++
++    0274-r2 laboratory deliberation
++    -> 0274-r3 SQL / passage projection / passive preview
++    -> 0274-r4 query recall / SQL rehydration / closed ResultFrame
++
++It is a smoke composition function, not a new orchestration authority.  The
++caller injects the one already-running platform Scheduler, existing SQL store,
++existing EventBus and controlled Qdrant executors.
++
++The module does not instantiate or start a Scheduler, queue, EventBus,
++registry, laboratory manager, laboratory orchestrator, SQL authority, Qdrant
++authority, renderer or GitHub client.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Mapping, Sequence
++from dataclasses import dataclass, field, replace
++from typing import Any, Callable
++
++from contracts.scheduler import SchedulerContract
++from context.fake_laboratory_closed_local_handoff_0274 import (
++    ExistingObservationBus,
++    ExistingSqlContextStore,
++    FakeLaboratoryClosedHandoffCommand,
++    FakeLaboratoryClosedHandoffResult,
++    run_fake_laboratory_closed_local_handoff,
++)
++from context.fake_laboratory_deliberation_composition_0274 import (
++    FakeLaboratoryDeliberationCommand,
++    FakeLaboratoryDeliberationResult,
++    run_fake_laboratory_deliberation,
++)
++from context.fake_laboratory_recall_closed_result_frame_0274 import (
++    LaboratoryRecallClosureCommand,
++    LaboratoryRecallClosureResult,
++    run_fake_laboratory_recall_closure,
++)
++from context.github_project_v2_source_candidate_vector_projection_0272 import (
++    EmbeddingSpaceProfile,
++)
++
++FAKE_LABORATORY_CLOSED_LOOP_SMOKE_COMMAND_SCHEMA = (
++    "missipy.laboratory.closed_loop_smoke_command.v1"
++)
++FAKE_LABORATORY_CLOSED_LOOP_SMOKE_RESULT_SCHEMA = (
++    "missipy.laboratory.closed_loop_smoke_result.v1"
++)
++FAKE_LABORATORY_CLOSED_LOOP_SMOKE_VERSION = "0274.r5"
++
++EmbeddingCallable = Callable[[str, str, str | None, str], Mapping[str, Any]]
++RecallExecutorFactory = Callable[[str], Any]
++
++
++class FakeLaboratoryClosedLoopSmokeError(RuntimeError):
++    """Raised when the r5 smoke would violate the existing architecture."""
++
++
++@dataclass(frozen=True, slots=True)
++class FakeLaboratoryClosedLoopSmokeCommand:
++    """One explicit command spanning r2, r3 and r4."""
++
++    deliberation: FakeLaboratoryDeliberationCommand
++    handoff: FakeLaboratoryClosedHandoffCommand
++    recall: LaboratoryRecallClosureCommand
++    verify_sql_replay: bool = True
++    timeout_per_visit: float | None = None
++    schema: str = FAKE_LABORATORY_CLOSED_LOOP_SMOKE_COMMAND_SCHEMA
++
++    def __post_init__(self) -> None:
++        if self.schema != FAKE_LABORATORY_CLOSED_LOOP_SMOKE_COMMAND_SCHEMA:
++            raise FakeLaboratoryClosedLoopSmokeError(
++                "unsupported fake laboratory closed-loop smoke command schema"
++            )
++        if not isinstance(
++            self.deliberation,
++            FakeLaboratoryDeliberationCommand,
++        ):
++            raise FakeLaboratoryClosedLoopSmokeError(
++                "deliberation must be FakeLaboratoryDeliberationCommand"
++            )
++        if not isinstance(self.handoff, FakeLaboratoryClosedHandoffCommand):
++            raise FakeLaboratoryClosedLoopSmokeError(
++                "handoff must be FakeLaboratoryClosedHandoffCommand"
++            )
++        if not isinstance(self.recall, LaboratoryRecallClosureCommand):
++            raise FakeLaboratoryClosedLoopSmokeError(
++                "recall must be LaboratoryRecallClosureCommand"
++            )
++        if not self.handoff.execute:
++            raise FakeLaboratoryClosedLoopSmokeError(
++                "r5 smoke requires handoff execute mode"
++            )
++        if not self.handoff.vector_execute:
++            raise FakeLaboratoryClosedLoopSmokeError(
++                "r5 smoke requires passage vector projection"
++            )
++        if not self.recall.execute:
++            raise FakeLaboratoryClosedLoopSmokeError(
++                "r5 smoke requires recall execute mode"
++            )
++        if self.timeout_per_visit is not None:
++            if self.timeout_per_visit <= 0:
++                raise FakeLaboratoryClosedLoopSmokeError(
++                    "timeout_per_visit must be > 0"
++                )
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": self.schema,
++            "deliberation": self.deliberation.to_mapping(),
++            "handoff": self.handoff.to_mapping(),
++            "recall": self.recall.to_mapping(),
++            "verify_sql_replay": self.verify_sql_replay,
++            "timeout_per_visit": self.timeout_per_visit,
++            "scheduler_supplied_by_caller": True,
++            "scheduler_created": False,
++            "scheduler_run_owned": False,
++            "parallel_orchestrator_created": False,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class FakeLaboratoryClosedLoopSmokeResult:
++    """Serializable semantic proof for the complete local fake laboratory loop."""
++
++    valid: bool
++    issues: tuple[str, ...]
++    command: FakeLaboratoryClosedLoopSmokeCommand
++    deliberation: Mapping[str, Any] = field(default_factory=dict)
++    handoff: Mapping[str, Any] = field(default_factory=dict)
++    recall: Mapping[str, Any] = field(default_factory=dict)
++    sql_replay: Mapping[str, Any] = field(default_factory=dict)
++    phase_trace: tuple[str, ...] = (
++        "0274-r2-deliberation",
++        "0274-r3-durable-passage-projection",
++        "0274-r4-query-recall-result-frame",
++    )
++    sql_ref: str = ""
++    final_ref: str = ""
++    synthesis_ref: str = ""
++    passage_profile_ref: str = ""
++    query_profile_ref: str = ""
++    closed_loop_complete: bool = False
++    sql_replay_verified: bool = False
++    specialist_output_verified: bool = False
++    visual_path_complete: bool = False
++    publication_preview_ready: bool = False
++    existing_scheduler_used: bool = True
++    scheduler_created: bool = False
++    scheduler_modified: bool = False
++    scheduler_run_owned: bool = False
++    parallel_orchestrator_created: bool = False
++    parallel_queue_created: bool = False
++    parallel_eventbus_created: bool = False
++    parallel_registry_created: bool = False
++    github_mutation_performed: bool = False
++    schema: str = FAKE_LABORATORY_CLOSED_LOOP_SMOKE_RESULT_SCHEMA
++
++    def __post_init__(self) -> None:
++        if self.schema != FAKE_LABORATORY_CLOSED_LOOP_SMOKE_RESULT_SCHEMA:
++            raise FakeLaboratoryClosedLoopSmokeError(
++                "unsupported fake laboratory closed-loop smoke result schema"
++            )
++        forbidden = (
++            not self.existing_scheduler_used,
++            self.scheduler_created,
++            self.scheduler_modified,
++            self.scheduler_run_owned,
++            self.parallel_orchestrator_created,
++            self.parallel_queue_created,
++            self.parallel_eventbus_created,
++            self.parallel_registry_created,
++            self.github_mutation_performed,
++        )
++        if any(forbidden):
++            raise FakeLaboratoryClosedLoopSmokeError(
++                "r5 smoke must preserve the single-Scheduler architecture"
++            )
++        if self.valid:
++            required = (
++                self.closed_loop_complete,
++                self.specialist_output_verified,
++                self.visual_path_complete,
++                self.publication_preview_ready,
++            )
++            if not all(required):
++                raise FakeLaboratoryClosedLoopSmokeError(
++                    "valid r5 smoke requires complete local closure"
++                )
++            if self.command.verify_sql_replay and not self.sql_replay_verified:
++                raise FakeLaboratoryClosedLoopSmokeError(
++                    "valid r5 smoke requires verified SQL replay"
++                )
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": self.schema,
++            "valid": self.valid,
++            "issues": list(self.issues),
++            "command": self.command.to_mapping(),
++            "deliberation": dict(self.deliberation),
++            "handoff": dict(self.handoff),
++            "recall": dict(self.recall),
++            "sql_replay": dict(self.sql_replay),
++            "phase_trace": list(self.phase_trace),
++            "sql_ref": self.sql_ref,
++            "final_ref": self.final_ref,
++            "synthesis_ref": self.synthesis_ref,
++            "passage_profile_ref": self.passage_profile_ref,
++            "query_profile_ref": self.query_profile_ref,
++            "closed_loop_complete": self.closed_loop_complete,
++            "sql_replay_verified": self.sql_replay_verified,
++            "specialist_output_verified": self.specialist_output_verified,
++            "visual_path_complete": self.visual_path_complete,
++            "publication_preview_ready": self.publication_preview_ready,
++            "existing_scheduler_used": self.existing_scheduler_used,
++            "scheduler_created": self.scheduler_created,
++            "scheduler_modified": self.scheduler_modified,
++            "scheduler_run_owned": self.scheduler_run_owned,
++            "parallel_orchestrator_created": (
++                self.parallel_orchestrator_created
++            ),
++            "parallel_queue_created": self.parallel_queue_created,
++            "parallel_eventbus_created": self.parallel_eventbus_created,
++            "parallel_registry_created": self.parallel_registry_created,
++            "github_mutation_performed": self.github_mutation_performed,
++            "sql_remains_authority": True,
++            "qdrant_projection_and_recall_only": True,
++            "eventbus_observation_only": True,
++            "passive_supervisor_observation_only": True,
++            "vispy_passive": True,
++            "publication_gate_required": True,
++            "live_backend_claimed": False,
++        }
++
++
++async def run_fake_laboratory_existing_scheduler_closed_loop_smoke(
++    scheduler: SchedulerContract,
++    command: FakeLaboratoryClosedLoopSmokeCommand,
++    *,
++    store: ExistingSqlContextStore,
++    passage_profile: EmbeddingSpaceProfile,
++    embedder: EmbeddingCallable,
++    projection_executor: Any,
++    recall_executor_factory: RecallExecutorFactory,
++    event_bus: ExistingObservationBus | None = None,
++) -> FakeLaboratoryClosedLoopSmokeResult:
++    """Run r2 -> r3 -> r4 using only injected existing runtime surfaces."""
++
++    if not isinstance(scheduler, SchedulerContract):
++        raise TypeError("scheduler must implement SchedulerContract")
++    if not isinstance(command, FakeLaboratoryClosedLoopSmokeCommand):
++        raise TypeError(
++            "command must be FakeLaboratoryClosedLoopSmokeCommand"
++        )
++    if not isinstance(passage_profile, EmbeddingSpaceProfile):
++        raise TypeError("passage_profile must be EmbeddingSpaceProfile")
++    if not callable(recall_executor_factory):
++        raise TypeError("recall_executor_factory must be callable")
++    if (
++        command.handoff.publish_observations
++        or command.recall.publish_observations
++    ) and event_bus is None:
++        raise FakeLaboratoryClosedLoopSmokeError(
++            "observation publication requires an existing EventBus"
++        )
++
++    issues: list[str] = []
++    deliberation = await run_fake_laboratory_deliberation(
++        scheduler,
++        command.deliberation,
++        timeout_per_visit=command.timeout_per_visit,
++    )
++    deliberation_mapping = deliberation.to_mapping()
++    issues.extend(_deliberation_issues(deliberation))
++    if issues:
++        return _result(
++            command=command,
++            issues=issues,
++            deliberation=deliberation_mapping,
++        )
++
++    handoff = await run_fake_laboratory_closed_local_handoff(
++        deliberation,
++        command.handoff,
++        store=store,
++        profile=passage_profile,
++        embedder=embedder,
++        qdrant_executor=projection_executor,
++        event_bus=event_bus,
++    )
++    handoff_mapping = handoff.to_mapping()
++    issues.extend(_handoff_issues(handoff))
++    if issues:
++        return _result(
++            command=command,
++            issues=issues,
++            deliberation=deliberation_mapping,
++            handoff=handoff_mapping,
++        )
++
++    sql_ref = str(handoff.sql_record.get("context_ref", ""))
++    recall_executor = recall_executor_factory(sql_ref)
++    recall = await run_fake_laboratory_recall_closure(
++        handoff,
++        command.recall,
++        store=store,
++        passage_profile=passage_profile,
++        embedder=embedder,
++        recall_executor=recall_executor,
++        event_bus=event_bus,
++    )
++    recall_mapping = recall.to_mapping()
++    issues.extend(_recall_issues(handoff, recall))
++
++    replay_mapping: dict[str, Any] = {}
++    replay_verified = not command.verify_sql_replay
++    if not issues and command.verify_sql_replay:
++        replay_command = replace(
++            command.handoff,
++            vector_execute=False,
++            publish_observations=False,
++        )
++        replay = await run_fake_laboratory_closed_local_handoff(
++            deliberation,
++            replay_command,
++            store=store,
++        )
++        replay_mapping = replay.to_mapping()
++        replay_verified = _verify_sql_replay(
++            expected_sql_ref=sql_ref,
++            replay=replay,
++        )
++        if not replay_verified:
++            issues.append(
++                "r3 replay did not prove immutable idempotent SQL reuse"
++            )
++
++    final_ref = str(recall.closed_frame.get("final_ref", ""))
++    synthesis_ref = str(recall.closed_frame.get("synthesis_ref", ""))
++    specialist_output_verified = (
++        recall.closed_frame.get("specialist_output_verified") is True
++    )
++    visual_path_complete = (
++        bool(recall.passive_supervisor)
++        and bool(recall.visual_read_model)
++        and bool(recall.visual_layout)
++        and recall.passive_supervisor.get("valid") is True
++    )
++    preview = handoff.github_preview
++    publication_preview_ready = (
++        bool(preview)
++        and preview.get("status") == "pending"
++        and preview.get("publication_gate_required") is True
++        and preview.get("remote_mutation_allowed") is False
++        and preview.get("github_mutation_performed") is False
++    )
++    closed_loop_complete = (
++        not issues
++        and recall.valid
++        and recall.closed_result_frame_built
++        and specialist_output_verified
++        and str(recall.closed_frame.get("sql_ref", "")) == sql_ref
++        and final_ref
++        == str(deliberation.final_artifact.final_ref)
++        and synthesis_ref
++        == str(deliberation.final_artifact.synthesis_ref)
++    )
++
++    if not specialist_output_verified:
++        issues.append("closed frame did not verify specialist_output")
++    if not visual_path_complete:
++        issues.append("passive supervisor and visual path are incomplete")
++    if not publication_preview_ready:
++        issues.append("GitHub preview is not locally gated")
++    if not closed_loop_complete and not issues:
++        issues.append("r2/r3/r4 semantic identities did not close")
++
++    return _result(
++        command=command,
++        issues=issues,
++        deliberation=deliberation_mapping,
++        handoff=handoff_mapping,
++        recall=recall_mapping,
++        sql_replay=replay_mapping,
++        sql_ref=sql_ref,
++        final_ref=final_ref,
++        synthesis_ref=synthesis_ref,
++        passage_profile_ref=str(
++            handoff.compatibility.get("profile_ref", "")
++        ),
++        query_profile_ref=str(
++            recall.query_profile.get("profile_ref", "")
++        ),
++        closed_loop_complete=closed_loop_complete,
++        sql_replay_verified=replay_verified,
++        specialist_output_verified=specialist_output_verified,
++        visual_path_complete=visual_path_complete,
++        publication_preview_ready=publication_preview_ready,
++    )
++
++
++def _deliberation_issues(
++    result: FakeLaboratoryDeliberationResult,
++) -> tuple[str, ...]:
++    issues: list[str] = []
++    if not result.publication_ready:
++        issues.append("r2 deliberation is not locally publication-ready")
++    if result.final_artifact is None or result.final_packet is None:
++        issues.append("r2 deliberation did not build final local artifacts")
++    if result.scheduler_created or result.parallel_orchestrator_created:
++        issues.append("r2 deliberation claimed a parallel authority")
++    if result.github_mutation_performed:
++        issues.append("r2 deliberation mutated GitHub")
++    return tuple(issues)
++
++
++def _handoff_issues(
++    result: FakeLaboratoryClosedHandoffResult,
++) -> tuple[str, ...]:
++    issues = list(result.issues)
++    if not result.valid:
++        issues.append("r3 closed local handoff is invalid")
++    if not result.sql_write_performed or not result.sql_readback_performed:
++        issues.append("r3 did not close SQL write/readback")
++    if not result.qdrant_write_performed:
++        issues.append("r3 did not acknowledge passage projection")
++    if result.github_mutation_performed:
++        issues.append("r3 handoff mutated GitHub")
++    return tuple(dict.fromkeys(issues))
++
++
++def _recall_issues(
++    handoff: FakeLaboratoryClosedHandoffResult,
++    result: LaboratoryRecallClosureResult,
++) -> tuple[str, ...]:
++    issues = list(result.issues)
++    sql_ref = str(handoff.sql_record.get("context_ref", ""))
++    if not result.valid:
++        issues.append("r4 recall closure is invalid")
++    if not result.qdrant_recall_performed:
++        issues.append("r4 did not execute Qdrant recall")
++    if not result.sql_rehydrate_performed:
++        issues.append("r4 did not rehydrate specialist_output from SQL")
++    if not result.closed_result_frame_built:
++        issues.append("r4 did not build closed ResultFrame")
++    if result.sql_ref != sql_ref:
++        issues.append("r4 sql_ref does not match r3 durable output")
++    if result.github_mutation_performed:
++        issues.append("r4 recall mutated GitHub")
++    return tuple(dict.fromkeys(issues))
++
++
++def _verify_sql_replay(
++    *,
++    expected_sql_ref: str,
++    replay: FakeLaboratoryClosedHandoffResult,
++) -> bool:
++    return (
++        replay.valid
++        and replay.sql_record.get("context_ref") == expected_sql_ref
++        and replay.sql_write.get("idempotent_replay") is True
++        and replay.sql_write.get("inserted") is False
++        and replay.sql_write.get("replaced") is False
++        and replay.qdrant_write_performed is False
++        and replay.github_mutation_performed is False
++    )
++
++
++def _result(
++    *,
++    command: FakeLaboratoryClosedLoopSmokeCommand,
++    issues: Sequence[str],
++    deliberation: Mapping[str, Any] | None = None,
++    handoff: Mapping[str, Any] | None = None,
++    recall: Mapping[str, Any] | None = None,
++    sql_replay: Mapping[str, Any] | None = None,
++    sql_ref: str = "",
++    final_ref: str = "",
++    synthesis_ref: str = "",
++    passage_profile_ref: str = "",
++    query_profile_ref: str = "",
++    closed_loop_complete: bool = False,
++    sql_replay_verified: bool = False,
++    specialist_output_verified: bool = False,
++    visual_path_complete: bool = False,
++    publication_preview_ready: bool = False,
++) -> FakeLaboratoryClosedLoopSmokeResult:
++    normalized = tuple(
++        dict.fromkeys(str(issue) for issue in issues if str(issue))
++    )
++    return FakeLaboratoryClosedLoopSmokeResult(
++        valid=not normalized,
++        issues=normalized,
++        command=command,
++        deliberation=dict(deliberation or {}),
++        handoff=dict(handoff or {}),
++        recall=dict(recall or {}),
++        sql_replay=dict(sql_replay or {}),
++        sql_ref=sql_ref,
++        final_ref=final_ref,
++        synthesis_ref=synthesis_ref,
++        passage_profile_ref=passage_profile_ref,
++        query_profile_ref=query_profile_ref,
++        closed_loop_complete=closed_loop_complete,
++        sql_replay_verified=sql_replay_verified,
++        specialist_output_verified=specialist_output_verified,
++        visual_path_complete=visual_path_complete,
++        publication_preview_ready=publication_preview_ready,
++    )
++
++
++__all__ = (
++    "FAKE_LABORATORY_CLOSED_LOOP_SMOKE_COMMAND_SCHEMA",
++    "FAKE_LABORATORY_CLOSED_LOOP_SMOKE_RESULT_SCHEMA",
++    "FAKE_LABORATORY_CLOSED_LOOP_SMOKE_VERSION",
++    "FakeLaboratoryClosedLoopSmokeCommand",
++    "FakeLaboratoryClosedLoopSmokeError",
++    "FakeLaboratoryClosedLoopSmokeResult",
++    "run_fake_laboratory_existing_scheduler_closed_loop_smoke",
++)
+diff --git a/tests/context/test_fake_laboratory_existing_scheduler_closed_loop_smoke_0274.py b/tests/context/test_fake_laboratory_existing_scheduler_closed_loop_smoke_0274.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/context/test_fake_laboratory_existing_scheduler_closed_loop_smoke_0274.py
+@@ -0,0 +1,303 @@
++import asyncio
++import json
++
++import pytest
++
++from context.fake_laboratory_closed_local_handoff_0274 import (
++    FakeLaboratoryClosedHandoffCommand,
++)
++from context.fake_laboratory_deliberation_composition_0274 import (
++    FAKE_LABORATORY_DELIBERATION_COMMAND_SCHEMA,
++    FakeLaboratoryDeliberationCommand,
++)
++from context.fake_laboratory_existing_scheduler_closed_loop_smoke_0274 import (
++    FakeLaboratoryClosedLoopSmokeCommand,
++    FakeLaboratoryClosedLoopSmokeError,
++    run_fake_laboratory_existing_scheduler_closed_loop_smoke,
++)
++from context.fake_laboratory_recall_closed_result_frame_0274 import (
++    LaboratoryRecallClosureCommand,
++)
++from context.github_project_v2_source_candidate_vector_projection_0272 import (
++    EmbeddingSpaceProfile,
++)
++from context.laboratory_framework_contract_0273 import (
++    LaboratoryResourceBudget,
++)
++from context.scheduler_laboratory_visit_binding_0274 import (
++    register_laboratory_visit_handler,
++)
++from context.scheduler_managed_embedding_qdrant_projection_usage_0262 import (
++    DemoQdrantProjectionExecutor,
++)
++from context.scheduler_managed_qdrant_recall_sql_rehydrate_usage_0263 import (
++    DemoQdrantRecallExecutor,
++)
++from context.scheduler_managed_sql_ref_openvino_embedding_usage_0261 import (
++    build_embedding_mapping,
++)
++from context.server_oriented_deliberation_cycle import ServerOrientation
++from context.sql_context_store import SQLiteSqlContextStore
++from kernel.dispatcher import Dispatcher
++from kernel.event_bus import EventBus
++from kernel.queue import PriorityQueue
++from kernel.registry import Registry
++from kernel.scheduler import Scheduler
++
++
++def orientation() -> ServerOrientation:
++    return ServerOrientation(
++        orientation_ref="orientation:laboratory-r5",
++        artifact_ref="artifact:github-request:r5",
++        source_ref="artifact:source-candidate:r5",
++        sql_context_ref="sql:github_artifact:r5-parent",
++        title="Smoke fermé laboratoire fictif",
++        intent="Vérifier le chemin local complet r2-r4.",
++        requested_specialist_refs=(
++            "specialist:technical",
++            "specialist:validator",
++        ),
++        requested_document_kinds=("analysis",),
++        do_directives=("Conserver les preuves.",),
++        avoid_directives=("Ne pas publier sans gate.",),
++        context_refs=("ctx:project:r5",),
++    )
++
++
++def passage_profile() -> EmbeddingSpaceProfile:
++    return EmbeddingSpaceProfile(
++        backend_ref="openvino:model:multilingual-e5-small",
++        model_ref="openvino.embedding.e5-small",
++        model_revision="local-test",
++        tokenizer_ref="transformers.multilingual-e5-small",
++        role="passage",
++        collection_name="laboratory_outputs_e5_384",
++    )
++
++
++def embedder(text, sql_ref, model_dir, device):
++    vector = [0.0] * 384
++    vector[0] = 1.0
++    role = "query" if text.startswith("query:") else "passage"
++    return build_embedding_mapping(
++        sql_ref=sql_ref,
++        role=role,
++        text=text,
++        vector=vector,
++        backend_ref="openvino:model:multilingual-e5-small",
++        model="openvino.embedding.e5-small",
++        tokenizer="transformers.multilingual-e5-small",
++        model_path=model_dir or "",
++        device=device,
++    )
++
++
++def command(
++    *,
++    scenarios: tuple[tuple[str, str], ...] = (),
++    observations: bool = False,
++    verify_sql_replay: bool = True,
++) -> FakeLaboratoryClosedLoopSmokeCommand:
++    deliberation = FakeLaboratoryDeliberationCommand(
++        schema=FAKE_LABORATORY_DELIBERATION_COMMAND_SCHEMA,
++        orientation=orientation(),
++        artifact_ref="artifact:github-request:r5",
++        source_candidate_ref="source-candidate:projectv2:r5",
++        target_ref="github:issue:newicody/ideas/45",
++        context_generation=6,
++        resource_budget=LaboratoryResourceBudget(
++            max_duration_ms=2_000,
++            max_context_refs=16,
++            max_evidence_refs=16,
++            max_followup_requests=8,
++        ),
++        scenario_by_specialist=scenarios,
++    )
++    return FakeLaboratoryClosedLoopSmokeCommand(
++        deliberation=deliberation,
++        handoff=FakeLaboratoryClosedHandoffCommand(
++            execute=True,
++            policy_decision_id="policy:0274:r5:handoff",
++            vector_execute=True,
++            publish_observations=observations,
++        ),
++        recall=LaboratoryRecallClosureCommand(
++            execute=True,
++            policy_decision_id="policy:0274:r5:recall",
++            publish_observations=observations,
++        ),
++        verify_sql_replay=verify_sql_replay,
++        timeout_per_visit=1.0,
++    )
++
++
++async def execute_smoke(
++    item: FakeLaboratoryClosedLoopSmokeCommand,
++    *,
++    event_bus: EventBus | None = None,
++    recall_factory=None,
++):
++    observation_bus = event_bus or EventBus()
++    dispatcher = Dispatcher(observation_bus)
++    register_laboratory_visit_handler(dispatcher)
++    scheduler = Scheduler(
++        queue=PriorityQueue(),
++        dispatcher=dispatcher,
++        event_bus=observation_bus,
++        registry=Registry(),
++        context_interval=60.0,
++    )
++    run_task = asyncio.create_task(scheduler.run())
++    try:
++        return await run_fake_laboratory_existing_scheduler_closed_loop_smoke(
++            scheduler,
++            item,
++            store=SQLiteSqlContextStore(),
++            passage_profile=passage_profile(),
++            embedder=embedder,
++            projection_executor=DemoQdrantProjectionExecutor(),
++            recall_executor_factory=(
++                recall_factory
++                or (
++                    lambda sql_ref: DemoQdrantRecallExecutor(
++                        sql_refs=(sql_ref,)
++                    )
++                )
++            ),
++            event_bus=observation_bus,
++        )
++    finally:
++        await scheduler.shutdown()
++        await asyncio.wait_for(run_task, timeout=1.0)
++
++
++def test_complete_smoke_closes_r2_r3_r4_and_sql_replay() -> None:
++    result = asyncio.run(execute_smoke(command()))
++    payload = result.to_mapping()
++
++    assert result.valid is True
++    assert result.phase_trace == (
++        "0274-r2-deliberation",
++        "0274-r3-durable-passage-projection",
++        "0274-r4-query-recall-result-frame",
++    )
++    assert result.closed_loop_complete is True
++    assert result.sql_replay_verified is True
++    assert result.specialist_output_verified is True
++    assert result.visual_path_complete is True
++    assert result.publication_preview_ready is True
++    assert result.sql_ref.startswith("sql:specialist_output:")
++    assert result.final_ref.startswith("artifact-final:laboratory:")
++    assert result.passage_profile_ref
++    assert result.query_profile_ref
++    assert payload["scheduler_created"] is False
++    assert payload["scheduler_run_owned"] is False
++    assert payload["parallel_orchestrator_created"] is False
++    assert payload["github_mutation_performed"] is False
++    assert payload["publication_gate_required"] is True
++    json.dumps(payload, sort_keys=True)
++
++
++def test_smoke_publishes_r3_and_r4_facts_on_existing_eventbus() -> None:
++    event_bus = EventBus()
++    observer = event_bus.subscribe()
++    result = asyncio.run(
++        execute_smoke(
++            command(observations=True),
++            event_bus=event_bus,
++        )
++    )
++
++    assert result.valid is True
++    assert result.handoff["eventbus_publish_performed"] is True
++    assert result.recall["eventbus_publish_performed"] is True
++    assert observer.qsize() >= 7
++
++
++def test_non_converged_deliberation_stops_before_durable_handoff() -> None:
++    result = asyncio.run(
++        execute_smoke(
++            command(
++                scenarios=(("specialist:technical", "needs_context"),)
++            )
++        )
++    )
++
++    assert result.valid is False
++    assert "r2 deliberation is not locally publication-ready" in result.issues
++    assert result.handoff == {}
++    assert result.recall == {}
++    assert result.closed_loop_complete is False
++
++
++def test_wrong_recall_reference_breaks_semantic_closure() -> None:
++    result = asyncio.run(
++        execute_smoke(
++            command(),
++            recall_factory=lambda _sql_ref: DemoQdrantRecallExecutor(
++                sql_refs=("sql:specialist_output:wrong-reference",)
++            ),
++        )
++    )
++
++    assert result.valid is False
++    assert result.closed_loop_complete is False
++    assert any(
++        "exact r3 specialist_output" in issue
++        or "r4 recall closure is invalid" in issue
++        for issue in result.issues
++    )
++
++
++def test_smoke_can_skip_replay_verification_explicitly() -> None:
++    result = asyncio.run(
++        execute_smoke(command(verify_sql_replay=False))
++    )
++
++    assert result.valid is True
++    assert result.sql_replay == {}
++    assert result.sql_replay_verified is True
++
++
++def test_command_requires_execute_projection_and_recall() -> None:
++    base = command()
++
++    with pytest.raises(
++        FakeLaboratoryClosedLoopSmokeError,
++        match="handoff execute mode",
++    ):
++        FakeLaboratoryClosedLoopSmokeCommand(
++            deliberation=base.deliberation,
++            handoff=FakeLaboratoryClosedHandoffCommand(),
++            recall=base.recall,
++        )
++
++    with pytest.raises(
++        FakeLaboratoryClosedLoopSmokeError,
++        match="passage vector projection",
++    ):
++        FakeLaboratoryClosedLoopSmokeCommand(
++            deliberation=base.deliberation,
++            handoff=replace_handoff_without_vector(base),
++            recall=base.recall,
++        )
++
++    with pytest.raises(
++        FakeLaboratoryClosedLoopSmokeError,
++        match="recall execute mode",
++    ):
++        FakeLaboratoryClosedLoopSmokeCommand(
++            deliberation=base.deliberation,
++            handoff=base.handoff,
++            recall=LaboratoryRecallClosureCommand(),
++        )
++
++
++def replace_handoff_without_vector(
++    base: FakeLaboratoryClosedLoopSmokeCommand,
++) -> FakeLaboratoryClosedHandoffCommand:
++    return FakeLaboratoryClosedHandoffCommand(
++        execute=True,
++        policy_decision_id=base.handoff.policy_decision_id,
++        vector_execute=False,
++    )
+diff --git a/tests/rules/test_fake_laboratory_existing_scheduler_closed_loop_smoke_0274_rule.py b/tests/rules/test_fake_laboratory_existing_scheduler_closed_loop_smoke_0274_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_fake_laboratory_existing_scheduler_closed_loop_smoke_0274_rule.py
+@@ -0,0 +1,117 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++SOURCE = ROOT / "src/context/fake_laboratory_existing_scheduler_closed_loop_smoke_0274.py"
++ARCH = ROOT / "doc/architecture/FAKE_LABORATORY_EXISTING_SCHEDULER_CLOSED_LOOP_SMOKE_0274.md"
++GRAPH = ROOT / "doc/docs/architecture/runtime/274_r5_fake_laboratory_existing_scheduler_closed_loop_smoke.dot"
++MANIFEST = ROOT / "doc/manifests/MANIFEST_0274_R5_FAKE_LABORATORY_EXISTING_SCHEDULER_CLOSED_LOOP_SMOKE_CHANGED_FILES.md"
++REPORT = ROOT / "PHASE0274_R5_FAKE_LABORATORY_EXISTING_SCHEDULER_CLOSED_LOOP_SMOKE_TEST_REPORT.md"
++
++
++def test_smoke_composes_existing_r2_r3_r4_surfaces() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    for marker in (
++        "run_fake_laboratory_deliberation",
++        "run_fake_laboratory_closed_local_handoff",
++        "run_fake_laboratory_recall_closure",
++        "FakeLaboratoryDeliberationCommand",
++        "FakeLaboratoryClosedHandoffCommand",
++        "LaboratoryRecallClosureCommand",
++        "EmbeddingSpaceProfile",
++        "recall_executor_factory",
++    ):
++        assert marker in text
++
++
++def test_smoke_does_not_create_scheduler_or_parallel_authorities() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    for forbidden in (
++        "Scheduler(",
++        "PriorityQueue(",
++        "EventBus(",
++        "Registry(",
++        "create_task(scheduler.run",
++        "await scheduler.run(",
++        "LaboratoryManager",
++        "LaboratoryOrchestrator",
++        "class LaboratoryScheduler:",
++        "import vispy",
++        "import requests",
++        "import httpx",
++    ):
++        assert forbidden not in text
++    for marker in (
++        "existing_scheduler_used: bool = True",
++        "scheduler_created: bool = False",
++        "scheduler_modified: bool = False",
++        "scheduler_run_owned: bool = False",
++        "parallel_orchestrator_created: bool = False",
++        "parallel_queue_created: bool = False",
++        "parallel_eventbus_created: bool = False",
++        "parallel_registry_created: bool = False",
++    ):
++        assert marker in text
++
++
++def test_smoke_verifies_sql_replay_and_semantic_identity() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    for marker in (
++        "verify_sql_replay",
++        "idempotent_replay",
++        "inserted",
++        "replaced",
++        "specialist_output_verified",
++        "closed_loop_complete",
++        "publication_preview_ready",
++        "visual_path_complete",
++    ):
++        assert marker in text
++
++
++def test_documentation_keeps_external_boundaries_closed() -> None:
++    architecture = ARCH.read_text(encoding="utf-8")
++    graph = GRAPH.read_text(encoding="utf-8")
++    for marker in (
++        "one existing Scheduler",
++        "No new Scheduler",
++        "SQL remains durable authority",
++        "Qdrant remains projection and recall only",
++        "EventBus remains observation-only",
++        "PassiveSupervisor",
++        "VisPy",
++        "publication gate",
++        "0275",
++        "Copilot",
++    ):
++        assert marker in architecture
++    for marker in (
++        "ExistingScheduler -> Deliberation",
++        "Deliberation -> Handoff",
++        "Handoff -> Recall",
++        "Recall -> ClosedFrame",
++        "ClosedFrame -> Facts",
++        "Facts -> PassiveSupervisor",
++        "PassiveSupervisor -> Visual",
++        "Handoff -> Preview",
++        "Preview -> PublicationGate",
++    ):
++        assert marker in graph
++
++
++def test_manifest_and_report_remain_clean() -> None:
++    manifest = MANIFEST.read_text(encoding="utf-8")
++    report = REPORT.read_text(encoding="utf-8")
++    for marker in ("__pycache__", ".pyc", ".pyo", ".svg"):
++        assert marker not in manifest
++    for marker in (
++        "scheduler_created: false",
++        "scheduler_modified: false",
++        "scheduler_run_owned: false",
++        "parallel_orchestrator_created: false",
++        "external_dependencies_added: false",
++        "sql_replay_verified: true",
++        "github_mutation_performed: false",
++        "live_path_uses_real_backend: false",
++    ):
++        assert marker in report
+diff --git a/doc/architecture/FAKE_LABORATORY_EXISTING_SCHEDULER_CLOSED_LOOP_SMOKE_0274.md b/doc/architecture/FAKE_LABORATORY_EXISTING_SCHEDULER_CLOSED_LOOP_SMOKE_0274.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/FAKE_LABORATORY_EXISTING_SCHEDULER_CLOSED_LOOP_SMOKE_0274.md
+@@ -0,0 +1,131 @@
++# Fake laboratory existing-Scheduler closed-loop smoke — 0274-r5
++
++## Purpose
++
++0274-r5 is the final local composition smoke for the fake laboratory path.
++
++It uses **one existing Scheduler** supplied by the platform:
++
++```text
++ServerOrientation
++-> r2 visits through existing Scheduler
++-> fake specialist opinions and synthesis
++-> FinalArtifactEnvelope
++-> r3 SQL specialist_output
++-> r3 E5 passage projection
++-> r4 E5 query embedding
++-> r4 Qdrant recall refs
++-> r4 SQL rehydration
++-> closed ResultFrame
++-> EventBus facts
++-> PassiveSupervisor
++-> Cell Lens / VisPy
++-> gated GitHub preview
++```
++
++No new Scheduler, queue, EventBus, registry or laboratory orchestrator is
++created by the smoke module.
++
++## Composition, not authority
++
++The r5 function receives:
++
++- an already-running `SchedulerContract`;
++- the existing SQL store;
++- a controlled passage embedding profile;
++- an embedding callable;
++- a controlled Qdrant projection executor;
++- a recall-executor factory;
++- optionally, the existing EventBus.
++
++It only calls the r2, r3 and r4 functions in order. Scheduler startup and
++shutdown remain owned by the normal platform bootstrap.
++
++## Semantic closure
++
++The smoke validates that:
++
++- r2 produced a converged `FinalArtifactEnvelope`;
++- r3 persisted one immutable `specialist_output`;
++- r3 acknowledged a passage projection;
++- r4 recalled the same `sql_ref`;
++- SQL rehydrated the exact specialist output;
++- the laboratory `ResultFrame` carries the same final and synthesis refs;
++- PassiveSupervisor and visual models are present;
++- the GitHub preview remains pending behind the publication gate.
++
++## Replay gate
++
++When enabled, r5 performs a second r3 SQL handoff without another vector write.
++
++The replay must report:
++
++```text
++idempotent_replay = true
++inserted = false
++replaced = false
++qdrant_write_performed = false
++```
++
++This proves immutable durable reuse without claiming that a remote backend is
++idempotent.
++
++## Authority boundaries
++
++- Scheduler remains the single orchestration authority.
++- SQL remains durable authority.
++- OpenVINO/E5 creates passage and query vectors only.
++- Qdrant remains projection and recall only.
++- EventBus remains observation-only.
++- PassiveSupervisor remains passive.
++- Cell Lens and VisPy remain passive renderers.
++- GitHub remains a local preview and review surface.
++- Remote mutation still requires the existing publication gate.
++
++## Runtime claim
++
++The fake provider and demo executors remain test doubles:
++
++```text
++live_path_uses_real_backend = false
++live_backend_claimed = false
++```
++
++R5 proves composition and contracts, not production backend readiness.
++
++## Next phase
++
++0275 will leave the fake-only local loop and address the real GitHub exchange:
++
++```text
++authoritative GitHub request artifact
+++ separate Copilot advisory artifact
++-> local intake and SourceCandidate
++-> laboratory path
++-> reviewed return artifact
++```
++
++The two artifacts must remain separate, and GitHub mutation must remain behind
++an explicit operator gate.
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++live_path_status: transition
++live_path_uses_real_backend: false
++context_contract_version: missipy.laboratory.v1
++context_contract_changed: false
++external_dependencies_added: false
++scheduler_created: false
++scheduler_modified: false
++scheduler_run_owned: false
++parallel_orchestrator_created: false
++parallel_queue_created: false
++parallel_eventbus_created: false
++parallel_registry_created: false
++sql_replay_verified: true
++github_mutation_performed: false
++network_added: false
++```
+diff --git a/doc/docs/architecture/runtime/274_r5_fake_laboratory_existing_scheduler_closed_loop_smoke.dot b/doc/docs/architecture/runtime/274_r5_fake_laboratory_existing_scheduler_closed_loop_smoke.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/docs/architecture/runtime/274_r5_fake_laboratory_existing_scheduler_closed_loop_smoke.dot
+@@ -0,0 +1,32 @@
++digraph FakeLaboratoryExistingSchedulerClosedLoopSmoke0274R5 {
++  rankdir=LR;
++  node [shape=box];
++
++  ExistingScheduler [label="existing platform Scheduler"];
++  Deliberation [label="0274-r2 deliberation"];
++  Handoff [label="0274-r3 SQL + passage projection"];
++  Recall [label="0274-r4 query recall + SQL rehydrate"];
++  ClosedFrame [label="laboratory closed ResultFrame"];
++  Facts [label="fact-only EventBus observations"];
++  PassiveSupervisor [label="PassiveSupervisor"];
++  Visual [label="Cell Lens / VisPy"];
++  Replay [label="SQL idempotent replay gate"];
++  Preview [label="local GitHub preview"];
++  PublicationGate [label="existing publication gate"];
++  GitHub [label="future reviewed remote return"];
++
++  ExistingScheduler -> Deliberation;
++  Deliberation -> Handoff;
++  Handoff -> Recall;
++  Recall -> ClosedFrame;
++  ClosedFrame -> Facts;
++  Facts -> PassiveSupervisor;
++  PassiveSupervisor -> Visual;
++  Handoff -> Replay;
++  Handoff -> Preview;
++  Preview -> PublicationGate;
++  PublicationGate -> GitHub [style=dashed, label="not executed in r5"];
++
++  Rejected [shape=note, label="No new Scheduler / no parallel queue / no laboratory orchestrator"];
++  ExistingScheduler -> Rejected [style=dotted, arrowhead=none];
++}
+diff --git a/doc/manifests/MANIFEST_0274_R5_FAKE_LABORATORY_EXISTING_SCHEDULER_CLOSED_LOOP_SMOKE_CHANGED_FILES.md b/doc/manifests/MANIFEST_0274_R5_FAKE_LABORATORY_EXISTING_SCHEDULER_CLOSED_LOOP_SMOKE_CHANGED_FILES.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0274_R5_FAKE_LABORATORY_EXISTING_SCHEDULER_CLOSED_LOOP_SMOKE_CHANGED_FILES.md
+@@ -0,0 +1,16 @@
++# Manifest — 0274-r5 fake laboratory existing-Scheduler closed-loop smoke
++
++Changed files:
++
++- `PHASE0274_R5_FAKE_LABORATORY_EXISTING_SCHEDULER_CLOSED_LOOP_SMOKE_TEST_REPORT.md`
++- `doc/CHANGELOG_0274_R5_FAKE_LABORATORY_EXISTING_SCHEDULER_CLOSED_LOOP_SMOKE.md`
++- `doc/architecture/FAKE_LABORATORY_EXISTING_SCHEDULER_CLOSED_LOOP_SMOKE_0274.md`
++- `doc/docs/architecture/runtime/274_r5_fake_laboratory_existing_scheduler_closed_loop_smoke.dot`
++- `doc/manifests/MANIFEST_0274_R5_FAKE_LABORATORY_EXISTING_SCHEDULER_CLOSED_LOOP_SMOKE_CHANGED_FILES.md`
++- `doc/releases/0274-r5-fake-laboratory-existing-scheduler-closed-loop-smoke.md`
++- `src/context/fake_laboratory_existing_scheduler_closed_loop_smoke_0274.py`
++- `tests/context/test_fake_laboratory_existing_scheduler_closed_loop_smoke_0274.py`
++- `tests/rules/test_fake_laboratory_existing_scheduler_closed_loop_smoke_0274_rule.py`
++
++No Scheduler, queue, EventBus, registry, SQL store, Qdrant adapter, GitHub
++adapter, runtime manager or renderer implementation is modified.
+diff --git a/doc/CHANGELOG_0274_R5_FAKE_LABORATORY_EXISTING_SCHEDULER_CLOSED_LOOP_SMOKE.md b/doc/CHANGELOG_0274_R5_FAKE_LABORATORY_EXISTING_SCHEDULER_CLOSED_LOOP_SMOKE.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0274_R5_FAKE_LABORATORY_EXISTING_SCHEDULER_CLOSED_LOOP_SMOKE.md
+@@ -0,0 +1,18 @@
++# Changelog — 0274-r5 fake laboratory existing-Scheduler closed-loop smoke
++
++## Added
++
++- one callable composition of the existing r2, r3 and r4 paths;
++- semantic identity checks across final artifact, SQL, Qdrant recall and frame;
++- immutable SQL replay verification without another vector write;
++- visual/passive-path completeness gate;
++- local GitHub-preview gate verification;
++- failure-path tests for incomplete deliberation and wrong recall references;
++- architecture, manifest, release and rule checks.
++
++## Not added
++
++- no Scheduler, queue, EventBus, registry or laboratory orchestrator;
++- no SQL/Qdrant authority;
++- no GitHub mutation;
++- no network or external dependency.
+diff --git a/doc/releases/0274-r5-fake-laboratory-existing-scheduler-closed-loop-smoke.md b/doc/releases/0274-r5-fake-laboratory-existing-scheduler-closed-loop-smoke.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/releases/0274-r5-fake-laboratory-existing-scheduler-closed-loop-smoke.md
+@@ -0,0 +1,16 @@
++# 0274-r5 — Fake laboratory existing-Scheduler closed-loop smoke
++
++The complete fake laboratory path can now be composed with injected existing
++runtime surfaces:
++
++```text
++r2 deliberation
++-> r3 durable passage projection
++-> r4 query recall and closed frame
++```
++
++The smoke verifies semantic identity, SQL replay, passive observation,
++visual-model availability and a gated GitHub preview.
++
++It does not create a Scheduler and does not claim a real laboratory, Qdrant or
++GitHub backend.
+diff --git a/PHASE0274_R5_FAKE_LABORATORY_EXISTING_SCHEDULER_CLOSED_LOOP_SMOKE_TEST_REPORT.md b/PHASE0274_R5_FAKE_LABORATORY_EXISTING_SCHEDULER_CLOSED_LOOP_SMOKE_TEST_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0274_R5_FAKE_LABORATORY_EXISTING_SCHEDULER_CLOSED_LOOP_SMOKE_TEST_REPORT.md
+@@ -0,0 +1,48 @@
++# Phase 0274-r5 test report — fake laboratory existing-Scheduler closed-loop smoke
++
++## Validation
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. python -m pytest -q tests/rules
++PYTHONPATH=src:. python -m pytest -q \
++  tests/context/test_fake_laboratory_existing_scheduler_closed_loop_smoke_0274.py
++PYTHONPATH=src:. python -m pytest -q
++```
++
++## Covered behavior
++
++- complete r2 -> r3 -> r4 semantic closure;
++- one existing Scheduler supplied by the caller;
++- SQL specialist-output persistence and exact recall/rehydration;
++- passage/query profile continuity;
++- closed ResultFrame identity;
++- passive supervision and visual-model completeness;
++- gated local GitHub preview;
++- immutable SQL replay without replacement or second vector write;
++- fact publication through the existing EventBus;
++- early stop on incomplete deliberation;
++- failure on wrong recall reference.
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++live_path_status: transition
++live_path_uses_real_backend: false
++context_contract_version: missipy.laboratory.v1
++context_contract_changed: false
++external_dependencies_added: false
++scheduler_created: false
++scheduler_modified: false
++scheduler_run_owned: false
++parallel_orchestrator_created: false
++parallel_queue_created: false
++parallel_eventbus_created: false
++parallel_registry_created: false
++sql_replay_verified: true
++provider_active: true
++github_mutation_performed: false
++network_added: false
++```

@@ -1,0 +1,262 @@
+diff --git a/PHASE0284_R1_R3_R3_GITHUB_PROJECT_CONNECTOR_TRIGGER_BOUNDARY_FIX_REPORT.md b/PHASE0284_R1_R3_R3_GITHUB_PROJECT_CONNECTOR_TRIGGER_BOUNDARY_FIX_REPORT.md
+new file mode 100644
+index 0000000..4e65545
+--- /dev/null
++++ b/PHASE0284_R1_R3_R3_GITHUB_PROJECT_CONNECTOR_TRIGGER_BOUNDARY_FIX_REPORT.md
+@@ -0,0 +1,37 @@
++# Phase 0284-r1-r3-r3 — GitHub connector trigger boundary fix
++
++## Result
++
++The configuration split now distinguishes the existing read-only artifact
++ingestion trigger from the explicit outbound Projects workflow dispatch. The
++legacy artifact scanner keeps `github_action_on_ticket_event`, which satisfies
++its existing 0165 validation contract. The dedicated dispatch configuration
++continues to target `newicody/projects` and remains disabled by default.
++
++## Boundaries
++
++```text
++scheduler_modified: false
++runtime_tool_modified: false
++legacy_artifact_loader_modified: false
++artifact_ingestion_trigger: github_action_on_ticket_event
++outbound_workflow_dispatch_separate: true
++query_only_config_contains_workflow_dispatch: false
++dispatch_example_safe_by_default: true
++sql_write_allowed: false
++qdrant_write_allowed: false
++```
++
++## Code rule review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: configuration contract correction after full-suite validation
++live_path_status: n/a
++live_path_uses_real_backend: n/a
++context_contract_version: n/a
++context_contract_changed: false
++search_commands_bounded: n/a
++external_library_added: false
++```
+diff --git a/config/github_project_push_frame.example.ini b/config/github_project_push_frame.example.ini
+index 109b741..9a0cce1 100644
+--- a/config/github_project_push_frame.example.ini
++++ b/config/github_project_push_frame.example.ini
+@@ -10,9 +10,9 @@ kind = user_project_v2
+ 
+ [artifact_source]
+ repositories = newicody/projects
+-workflow_name = autodoc-controlled-research.yml
+-artifact_name_prefix = autodoc-
+-trigger_source = github_action_dispatch
++workflow_name = autodoc-ticket-artifact.yml
++artifact_name_prefix = autodoc-ticket-artifact-
++trigger_source = github_action_on_ticket_event
+ 
+ [scan]
+ mode = fcron
+diff --git a/config/github_project_v2_query_only.example.ini b/config/github_project_v2_query_only.example.ini
+index af037a8..08b3784 100644
+--- a/config/github_project_v2_query_only.example.ini
++++ b/config/github_project_v2_query_only.example.ini
+@@ -17,9 +17,9 @@ source_mode = project_v2_query_only_snapshot
+ # Optional read-only artifact bridge for the external newicody/projects repository.
+ # The query-only snapshot path does not contact this repository.
+ repositories = newicody/projects
+-workflow_name = autodoc-controlled-research.yml
+-artifact_name_prefix = autodoc-
+-trigger_source = github_action_dispatch
++workflow_name = autodoc-ticket-artifact.yml
++artifact_name_prefix = autodoc-ticket-artifact-
++trigger_source = github_action_on_ticket_event
+ 
+ [scan]
+ mode = fcron
+@@ -59,11 +59,11 @@ history_mode = append_only
+ # Query-only readiness. ProjectV2 is mandatory; the repository-Issue Actions
+ # bridge is optional and checked only with --check-actions-bridge.
+ workflow_repository = newicody/projects
+-workflow_name = autodoc-controlled-research.yml
+-workflow_path = .github/workflows/autodoc-controlled-research.yml
+-workflow_template_path = templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml
+-builder_path = scripts/run_workflow_dispatch_authoritative_request.py
+-builder_template_path = templates/github/projects-repository/scripts/run_workflow_dispatch_authoritative_request.py
++workflow_name = autodoc-ticket-artifact.yml
++workflow_path = .github/workflows/autodoc-ticket-artifact.yml
++workflow_template_path = templates/github/autodoc-ticket-artifact.yml
++builder_path = scripts/build_autodoc_ticket_artifact.py
++builder_template_path = templates/github/scripts/build_autodoc_ticket_artifact.py
+ snapshot_tool_path = tools/run_github_project_v2_query_only_snapshot_0272.py
+ change_detection_tool_path = tools/detect_github_project_v2_snapshot_changes_0272.py
+ report_dir = .var/reports
+diff --git a/doc/CHANGELOG_0284_R1_R3_R3_GITHUB_PROJECT_CONNECTOR_TRIGGER_BOUNDARY_FIX.md b/doc/CHANGELOG_0284_R1_R3_R3_GITHUB_PROJECT_CONNECTOR_TRIGGER_BOUNDARY_FIX.md
+new file mode 100644
+index 0000000..cc1d131
+--- /dev/null
++++ b/doc/CHANGELOG_0284_R1_R3_R3_GITHUB_PROJECT_CONNECTOR_TRIGGER_BOUNDARY_FIX.md
+@@ -0,0 +1,7 @@
++# Changelog — 0284-r1-r3-r3
++
++- restored `github_action_on_ticket_event` for the read-only artifact-ingestion contract;
++- kept `workflow_dispatch` exclusively in the outbound Projects configuration;
++- restored the optional 0272 Actions-readiness template contract without restoring the embedded dispatch section;
++- updated compatibility rules and the cumulative Projects installation guide;
++- changed no runtime tool, Scheduler, SQL, OpenVINO, Qdrant or EventBus component.
+diff --git a/doc/architecture/GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_0284.dot b/doc/architecture/GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_0284.dot
+index 115b04a..f4bd2e7 100644
+--- a/doc/architecture/GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_0284.dot
++++ b/doc/architecture/GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_0284.dot
+@@ -4,11 +4,13 @@ digraph github_project_connector_config_split_0284 {
+ 
+   projectv2 [label="ProjectV2 #3"];
+   query [label="query-only config\nno remote mutation"];
++  artifacts [label="read-only artifact bridge\ngithub_action_on_ticket_event"];
+   local [label="local snapshots + change sets"];
+   dispatch [label="dispatch config\nexplicit double gate"];
+   workflow [label="newicody/projects\nworkflow_dispatch"];
+   bundle [label="projects-repository bundle\nINSTALLATION.md"];
+ 
+   projectv2 -> query -> local -> dispatch -> workflow;
++  artifacts -> local [style=dashed, label="optional read path"];
+   bundle -> workflow [style=dashed, label="copied into repository"];
+ }
+diff --git a/doc/architecture/GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_0284.md b/doc/architecture/GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_0284.md
+index ecfa56a..0716a5d 100644
+--- a/doc/architecture/GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_0284.md
++++ b/doc/architecture/GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_0284.md
+@@ -10,8 +10,13 @@ sortie : workflow_dispatch borné vers newicody/projects
+ ```
+ 
+ Le fichier query-only ne porte plus de section autorisant une mutation distante.
+-Le dispatch dispose de sa propre configuration, sûre par défaut, et nécessite
+-toujours `--execute`, un `policy_decision_id` et deux verrous locaux.
++Son bloc `artifact_source` reste un contrat de lecture d'artefacts et conserve
++`trigger_source = github_action_on_ticket_event`. Cette valeur ne déclenche
++aucune commande sortante.
++
++Le dispatch dispose de sa propre configuration, sûre par défaut, utilise
++`workflow_dispatch` vers `newicody/projects` et nécessite toujours `--execute`,
++un `policy_decision_id` et deux verrous locaux.
+ 
+ Le bundle `templates/github/projects-repository/` reste une source à copier. Son
+ `INSTALLATION.md` est le guide cumulatif de déploiement du dépôt Projects.
+diff --git a/doc/manifests/MANIFEST_0284_R1_R3_R3_GITHUB_PROJECT_CONNECTOR_TRIGGER_BOUNDARY_FIX.md b/doc/manifests/MANIFEST_0284_R1_R3_R3_GITHUB_PROJECT_CONNECTOR_TRIGGER_BOUNDARY_FIX.md
+new file mode 100644
+index 0000000..cd6fec9
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0284_R1_R3_R3_GITHUB_PROJECT_CONNECTOR_TRIGGER_BOUNDARY_FIX.md
+@@ -0,0 +1,17 @@
++# Manifest — 0284-r1-r3-r3
++
++## Modified
++
++- `config/github_project_v2_query_only.example.ini`
++- `config/github_project_push_frame.example.ini`
++- `tests/rules/test_github_project_v2_0272_config_compatibility_0275_r8_r1_rule.py`
++- `tests/rules/test_github_project_connector_config_split_0284_rule.py`
++- `templates/github/projects-repository/INSTALLATION.md`
++- `doc/architecture/GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_0284.md`
++- `doc/architecture/GITHUB_PROJECT_CONNECTOR_CONFIG_SPLIT_0284.dot`
++
++## Added
++
++- `PHASE0284_R1_R3_R3_GITHUB_PROJECT_CONNECTOR_TRIGGER_BOUNDARY_FIX_REPORT.md`
++- `doc/CHANGELOG_0284_R1_R3_R3_GITHUB_PROJECT_CONNECTOR_TRIGGER_BOUNDARY_FIX.md`
++- `doc/manifests/MANIFEST_0284_R1_R3_R3_GITHUB_PROJECT_CONNECTOR_TRIGGER_BOUNDARY_FIX.md`
+diff --git a/templates/github/projects-repository/INSTALLATION.md b/templates/github/projects-repository/INSTALLATION.md
+index 315944e..be5f86d 100644
+--- a/templates/github/projects-repository/INSTALLATION.md
++++ b/templates/github/projects-repository/INSTALLATION.md
+@@ -4,7 +4,7 @@ Ce document est le mode opératoire cumulatif du bundle GitHub fourni par
+ Autodoc. Il doit être mis à jour chaque fois que la copie, les Actions, les
+ variables, les secrets, les vues ou les contrats du dépôt Projects évoluent.
+ 
+-Version du guide : `0284-r1-r3`.
++Version du guide : `0284-r1-r3-r3`.
+ 
+ ## Frontière
+ 
+@@ -119,7 +119,14 @@ alors complété.
+ ## 5. Configurer les connecteurs locaux Autodoc
+ 
+ La lecture ProjectV2 et l'écriture `workflow_dispatch` utilisent désormais des
+-fichiers séparés :
++fichiers séparés. Deux déclencheurs distincts ne doivent pas être confondus :
++
++- `github_action_on_ticket_event` décrit le pont de lecture d'artefacts et ne
++  donne aucune autorisation de mutation ;
++- `workflow_dispatch` est la commande sortante explicite vers
++  `newicody/projects`, portée uniquement par sa configuration dédiée.
++
++Fichiers à préparer :
+ 
+ ```bash
+ cd /home/eric/projet/git/autodoc
+@@ -203,3 +210,4 @@ newicody/projects/.github/workflows/autodoc-controlled-research.yml
+ | Phase | Évolution |
+ |---|---|
+ | `0284-r1-r3` | Création du guide cumulatif et séparation query-only / dispatch. |
++| `0284-r1-r3-r3` | Distinction explicite entre ingestion d’artefacts et dispatch sortant. |
+diff --git a/tests/rules/test_github_project_connector_config_split_0284_rule.py b/tests/rules/test_github_project_connector_config_split_0284_rule.py
+index 1db2141..d7adec8 100644
+--- a/tests/rules/test_github_project_connector_config_split_0284_rule.py
++++ b/tests/rules/test_github_project_connector_config_split_0284_rule.py
+@@ -37,6 +37,19 @@ def test_examples_no_longer_reference_retired_repository() -> None:
+     assert "repositories = newicody/projects" in combined
+ 
+ 
++def test_artifact_ingestion_and_outbound_dispatch_keep_distinct_triggers() -> None:
++    query = QUERY_CONFIG.read_text(encoding="utf-8")
++    push_frame = PUSH_FRAME_CONFIG.read_text(encoding="utf-8")
++    dispatch = DISPATCH_CONFIG.read_text(encoding="utf-8")
++
++    assert "workflow_name = autodoc-ticket-artifact.yml" in query
++    assert "trigger_source = github_action_on_ticket_event" in query
++    assert "workflow_name = autodoc-ticket-artifact.yml" in push_frame
++    assert "trigger_source = github_action_on_ticket_event" in push_frame
++    assert "workflow_name = autodoc-controlled-research.yml" in dispatch
++    assert "trigger_source" not in dispatch
++
++
+ def test_projects_bundle_has_cumulative_installation_guide() -> None:
+     readme = BUNDLE_README.read_text(encoding="utf-8")
+     installation = INSTALLATION.read_text(encoding="utf-8")
+diff --git a/tests/rules/test_github_project_v2_0272_config_compatibility_0275_r8_r1_rule.py b/tests/rules/test_github_project_v2_0272_config_compatibility_0275_r8_r1_rule.py
+index 9e5bb12..e861428 100644
+--- a/tests/rules/test_github_project_v2_0272_config_compatibility_0275_r8_r1_rule.py
++++ b/tests/rules/test_github_project_v2_0272_config_compatibility_0275_r8_r1_rule.py
+@@ -28,15 +28,15 @@ def test_0275_r8_r1_preserves_the_locked_0272_scan_contract() -> None:
+     assert parser["artifact_source"]["repositories"] == "newicody/projects"
+     assert (
+         parser["artifact_source"]["workflow_name"]
+-        == "autodoc-controlled-research.yml"
++        == "autodoc-ticket-artifact.yml"
+     )
+     assert (
+         parser["artifact_source"]["artifact_name_prefix"]
+-        == "autodoc-"
++        == "autodoc-ticket-artifact-"
+     )
+     assert (
+         parser["artifact_source"]["trigger_source"]
+-        == "github_action_dispatch"
++        == "github_action_on_ticket_event"
+     )
+     assert parser["scan"].getint("interval_minutes") == 10
+     assert (
+@@ -56,10 +56,10 @@ def test_0275_r8_r1_preserves_0272_readiness_and_safety_defaults() -> None:
+     )
+     readiness = parser["deployment_readiness"]
+     assert readiness["workflow_repository"] == "newicody/projects"
+-    assert readiness["workflow_name"] == "autodoc-controlled-research.yml"
++    assert readiness["workflow_name"] == "autodoc-ticket-artifact.yml"
+     assert (
+         readiness["workflow_path"]
+-        == ".github/workflows/autodoc-controlled-research.yml"
++        == ".github/workflows/autodoc-ticket-artifact.yml"
+     )
+ 
+ 

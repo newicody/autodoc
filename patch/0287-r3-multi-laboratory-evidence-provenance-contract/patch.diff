@@ -1,0 +1,1035 @@
+diff --git a/tests/rules/test_multi_laboratory_evidence_aggregation_contract_0287_rule.py b/tests/rules/test_multi_laboratory_evidence_aggregation_contract_0287_rule.py
+--- a/tests/rules/test_multi_laboratory_evidence_aggregation_contract_0287_rule.py
++++ b/tests/rules/test_multi_laboratory_evidence_aggregation_contract_0287_rule.py
+@@ -70,17 +70,21 @@
+         assert marker in text
+ 
+ 
+-def test_actual_audit_advances_to_r3() -> None:
++def test_actual_audit_progresses_cumulatively_after_r2() -> None:
+     result = audit_multi_laboratory_evidence_aggregation_reuse(
+         load_audit_sources(ROOT)
+     )
++    r3 = "0287-r3-multi-laboratory-evidence-provenance-contract"
+     assert (
+         "0287-r2-multi-laboratory-evidence-aggregation-contract"
+         in result.completed_phases
+     )
+-    assert result.next_recommended_patch == (
+-        "0287-r3-multi-laboratory-evidence-provenance-contract"
+-    )
++    if r3 in result.completed_phases:
++        assert result.next_recommended_patch == (
++            "0287-r4-multi-laboratory-evidence-digest-deduplication"
++        )
++    else:
++        assert result.next_recommended_patch == r3
+ 
+ 
+ def test_installation_was_reviewed_without_change() -> None:
+diff --git a/tests/rules/test_multi_laboratory_evidence_aggregation_reuse_audit_0287_rule.py b/tests/rules/test_multi_laboratory_evidence_aggregation_reuse_audit_0287_rule.py
+--- a/tests/rules/test_multi_laboratory_evidence_aggregation_reuse_audit_0287_rule.py
++++ b/tests/rules/test_multi_laboratory_evidence_aggregation_reuse_audit_0287_rule.py
+@@ -55,10 +55,13 @@
+     )
+     r2 = "0287-r2-multi-laboratory-evidence-aggregation-contract"
+     assert result.valid is True
+-    if r2 in result.completed_phases:
++    r3 = "0287-r3-multi-laboratory-evidence-provenance-contract"
++    if r3 in result.completed_phases:
+         assert result.next_recommended_patch == (
+-            "0287-r3-multi-laboratory-evidence-provenance-contract"
++            "0287-r4-multi-laboratory-evidence-digest-deduplication"
+         )
++    elif r2 in result.completed_phases:
++        assert result.next_recommended_patch == r3
+     else:
+         assert result.next_recommended_patch == r2
+ 
+diff --git a/PHASE0287_R3_MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT_REPORT.md b/PHASE0287_R3_MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT_REPORT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/PHASE0287_R3_MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT_REPORT.md
+@@ -0,0 +1,21 @@
++# Phase 0287-r3 — multi-laboratory evidence provenance contract
++
++Status: immutable provenance contract complete.
++
++Each r2 evidence item can now be bound to an existing laboratory visit. The
++factory reuses `validate_laboratory_visit_result`, requires a completed visit,
++checks the specialist identity and requires the evidence reference to be
++present in the visit result.
++
++For cross-laboratory visits, the complete existing specialist transfer request,
++visit plan and result are mandatory and are checked with
++`validate_specialist_transfer_chain`. Aggregate validation now proves at least
++two distinct `laboratory_ref` values rather than merely two opaque provenance
++references.
++
++Deduplication, contradictions, weighting, SQL history, Scheduler selection and
++observation remain outside r3.
++
++INSTALLATION.md reviewed.
++No update required for 0287-r3: no workflow, Issue form, ProjectV2 field/view,
++secret, variable or file deployed into `newicody/projects` changes.
+diff --git a/doc/CHANGELOG_0287_R3_MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT.md b/doc/CHANGELOG_0287_R3_MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/CHANGELOG_0287_R3_MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT.md
+@@ -0,0 +1,10 @@
++# Changelog 0287-r3
++
++- add immutable `MultiLaboratoryEvidenceProvenance`;
++- bind evidence to existing laboratory visit request/result contracts;
++- reuse existing specialist transfer continuity validation;
++- require evidence presence and specialist identity continuity;
++- validate at least two distinct laboratories per aggregate;
++- add deterministic provenance and validation digests;
++- keep r4+ responsibilities and all authority boundaries closed;
++- make historical r1/r2 progression rules cumulative.
+diff --git a/doc/architecture/MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT_0287.dot b/doc/architecture/MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT_0287.dot
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT_0287.dot
+@@ -0,0 +1,14 @@
++digraph phase_0287_r3 {
++  rankdir=LR;
++  item [label="r2 evidence item"];
++  visit [label="visit request/result"];
++  transfer [label="optional transfer chain"];
++  provenance [label="provenance contract\nprovenance_digest"];
++  aggregate [label="r2 aggregate"];
++  validation [label="provenance validation\n2+ laboratories"];
++  item -> provenance;
++  visit -> provenance;
++  transfer -> provenance;
++  provenance -> validation;
++  aggregate -> validation;
++}
+diff --git a/doc/architecture/MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT_0287.md b/doc/architecture/MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT_0287.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/architecture/MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT_0287.md
+@@ -0,0 +1,29 @@
++# Multi-laboratory evidence provenance contract
++
++## Binding
++
++```text
++r2 evidence item
+++ LaboratoryVisitRequest
+++ LaboratoryVisitResult
++→ validated laboratory/visit/specialist/source provenance
++```
++
++For a cross-laboratory target visit:
++
++```text
++SpecialistTransferRequest
+++ SpecialistTransferVisitPlan
+++ SpecialistTransferResult
+++ target LaboratoryVisitRequest/Result
++→ transfer-continuous provenance
++```
++
++## Aggregate validation
++
++Every r2 item must have exactly one provenance with matching `evidence_ref`,
++`specialist_ref` and `source_ref`. The aggregate is multi-laboratory only when
++at least two distinct `laboratory_ref` values are present.
++
++R3 validates provenance but does not deduplicate content, interpret claims,
++weight evidence, write SQL or authorize Scheduler selection.
+diff --git a/doc/manifests/MANIFEST_0287_R3_MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT.md b/doc/manifests/MANIFEST_0287_R3_MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT.md
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0287_R3_MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT.md
+@@ -0,0 +1,16 @@
++# Manifest 0287-r3
++
++Added:
++
++- `src/context/multi_laboratory_evidence_provenance_contract_0287.py`
++- `tests/context/test_multi_laboratory_evidence_provenance_contract_0287.py`
++- `tests/rules/test_multi_laboratory_evidence_provenance_contract_0287_rule.py`
++- phase report
++- architecture document and DOT graph
++- changelog
++- this manifest
++
++Modified:
++
++- r1 audit progression rule, cumulative through r3;
++- r2 contract progression rule, cumulative through r3.
+diff --git a/src/context/multi_laboratory_evidence_provenance_contract_0287.py b/src/context/multi_laboratory_evidence_provenance_contract_0287.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/src/context/multi_laboratory_evidence_provenance_contract_0287.py
+@@ -0,0 +1,492 @@
++"""Immutable multi-laboratory evidence provenance for phase 0287-r3.
++
++The contract binds each r2 evidence item to an existing laboratory visit and,
++when needed, to the existing specialist transfer chain. It validates identity
++and continuity only. Deduplication, contradiction detection, weighting,
++durable history, Scheduler selection and observation remain later phases.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Sequence
++from dataclasses import dataclass, field
++from hashlib import sha256
++import json
++import re
++from typing import Literal
++
++from context.laboratory_framework_contract_0273 import (
++    LaboratoryVisitRequest,
++    LaboratoryVisitResult,
++    validate_laboratory_visit_result,
++)
++from context.multi_laboratory_evidence_aggregation_contract_0287 import (
++    MultiLaboratoryEvidenceAggregate,
++    MultiLaboratoryEvidenceItem,
++)
++from context.specialist_laboratory_transfer_contract_0284 import (
++    SpecialistTransferRequest,
++    SpecialistTransferResult,
++    SpecialistTransferVisitPlan,
++    validate_specialist_transfer_chain,
++)
++
++MULTI_LABORATORY_EVIDENCE_PROVENANCE_SCHEMA = (
++    "missipy.multi_laboratory.evidence_provenance.v1"
++)
++MULTI_LABORATORY_EVIDENCE_PROVENANCE_VALIDATION_SCHEMA = (
++    "missipy.multi_laboratory.evidence_provenance_validation.v1"
++)
++MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT_VERSION = "0287.r3"
++
++MultiLaboratoryEvidenceVisitStatus = Literal[
++    "completed", "failed", "needs_context", "needs_specialist", "rejected"
++]
++
++_TYPED_REF_RE = re.compile(r"^[a-z][a-z0-9-]*:[^\\s].*$")
++_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
++_PROVENANCE_PREFIXES = ("provenance:",)
++_EVIDENCE_PREFIXES = (
++    "artifact:", "evidence:", "observation:", "report:", "result:",
++    "sql:", "test:", "validation:", "ctx:", "ctx-result:",
++    "ctx-fragment:",
++)
++_LABORATORY_PREFIXES = ("laboratory:",)
++_VISIT_PREFIXES = ("laboratory-visit:",)
++_SPECIALIST_PREFIXES = ("specialist:", "llm:")
++_SOURCE_PREFIXES = (
++    "artifact:", "conversation:", "event:", "github:", "observation:",
++    "report:", "result:", "sql:", "test:", "validation:", "ctx:",
++    "ctx-result:", "ctx-fragment:",
++)
++_CONVERSATION_PREFIXES = ("laboratory-conversation:", "conversation:")
++_TRANSFER_PREFIXES = ("specialist-transfer:",)
++_ALLOWED_VISIT_STATUSES = frozenset(
++    {"completed", "failed", "needs_context", "needs_specialist", "rejected"}
++)
++
++
++class MultiLaboratoryEvidenceProvenanceContractError(ValueError):
++    """Raised when evidence provenance is malformed or inconsistent."""
++
++
++@dataclass(frozen=True, slots=True)
++class MultiLaboratoryEvidenceProvenance:
++    """One immutable evidence-to-laboratory provenance chain."""
++
++    schema: str
++    provenance_ref: str
++    evidence_ref: str
++    laboratory_ref: str
++    visit_ref: str
++    specialist_ref: str
++    source_ref: str
++    visit_status: MultiLaboratoryEvidenceVisitStatus
++    origin_laboratory_ref: str
++    target_laboratory_ref: str
++    conversation_ref: str | None = None
++    parent_visit_ref: str | None = None
++    transfer_ref: str | None = None
++    metadata: tuple[tuple[str, str], ...] = field(default_factory=tuple)
++
++    def __post_init__(self) -> None:
++        if self.schema != MULTI_LABORATORY_EVIDENCE_PROVENANCE_SCHEMA:
++            raise MultiLaboratoryEvidenceProvenanceContractError(
++                "unsupported evidence provenance schema"
++            )
++        _require_ref("provenance_ref", self.provenance_ref, _PROVENANCE_PREFIXES)
++        _require_ref("evidence_ref", self.evidence_ref, _EVIDENCE_PREFIXES)
++        _require_ref("laboratory_ref", self.laboratory_ref, _LABORATORY_PREFIXES)
++        _require_ref("visit_ref", self.visit_ref, _VISIT_PREFIXES)
++        _require_ref("specialist_ref", self.specialist_ref, _SPECIALIST_PREFIXES)
++        _require_ref("source_ref", self.source_ref, _SOURCE_PREFIXES)
++        if self.visit_status not in _ALLOWED_VISIT_STATUSES:
++            raise MultiLaboratoryEvidenceProvenanceContractError(
++                "unsupported visit_status"
++            )
++        _require_ref(
++            "origin_laboratory_ref", self.origin_laboratory_ref,
++            _LABORATORY_PREFIXES,
++        )
++        _require_ref(
++            "target_laboratory_ref", self.target_laboratory_ref,
++            _LABORATORY_PREFIXES,
++        )
++        if self.target_laboratory_ref != self.laboratory_ref:
++            raise MultiLaboratoryEvidenceProvenanceContractError(
++                "target_laboratory_ref must equal laboratory_ref"
++            )
++        cross_laboratory = (
++            self.origin_laboratory_ref != self.target_laboratory_ref
++        )
++        if self.conversation_ref is not None:
++            _require_ref(
++                "conversation_ref", self.conversation_ref,
++                _CONVERSATION_PREFIXES,
++            )
++        if self.parent_visit_ref is not None:
++            _require_ref("parent_visit_ref", self.parent_visit_ref, _VISIT_PREFIXES)
++            if self.parent_visit_ref == self.visit_ref:
++                raise MultiLaboratoryEvidenceProvenanceContractError(
++                    "parent_visit_ref must differ from visit_ref"
++                )
++        if self.transfer_ref is not None:
++            _require_ref("transfer_ref", self.transfer_ref, _TRANSFER_PREFIXES)
++        if cross_laboratory and (
++            self.conversation_ref is None
++            or self.parent_visit_ref is None
++            or self.transfer_ref is None
++        ):
++            raise MultiLaboratoryEvidenceProvenanceContractError(
++                "cross-laboratory provenance requires conversation, parent visit and transfer"
++            )
++        if not cross_laboratory and self.transfer_ref is not None:
++            raise MultiLaboratoryEvidenceProvenanceContractError(
++                "same-laboratory provenance cannot carry transfer_ref"
++            )
++        object.__setattr__(self, "metadata", _normalize_metadata(self.metadata))
++
++    @property
++    def cross_laboratory(self) -> bool:
++        return self.origin_laboratory_ref != self.target_laboratory_ref
++
++    @property
++    def provenance_digest(self) -> str:
++        payload = json.dumps(
++            self.to_mapping(include_provenance_digest=False),
++            ensure_ascii=False,
++            separators=(",", ":"),
++            sort_keys=True,
++        ).encode("utf-8")
++        return sha256(payload).hexdigest()
++
++    def to_mapping(
++        self, *, include_provenance_digest: bool = True
++    ) -> dict[str, object]:
++        mapping: dict[str, object] = {
++            "schema": self.schema,
++            "provenance_ref": self.provenance_ref,
++            "evidence_ref": self.evidence_ref,
++            "laboratory_ref": self.laboratory_ref,
++            "visit_ref": self.visit_ref,
++            "specialist_ref": self.specialist_ref,
++            "source_ref": self.source_ref,
++            "visit_status": self.visit_status,
++            "origin_laboratory_ref": self.origin_laboratory_ref,
++            "target_laboratory_ref": self.target_laboratory_ref,
++            "conversation_ref": self.conversation_ref,
++            "parent_visit_ref": self.parent_visit_ref,
++            "transfer_ref": self.transfer_ref,
++            "cross_laboratory": self.cross_laboratory,
++            "metadata": dict(self.metadata),
++            "authoritative": False,
++            "approved": False,
++            "deduplication_performed": False,
++            "contradiction_detection_performed": False,
++            "weighting_authorized": False,
++            "durable_state_written": False,
++            "scheduler_selection_allowed": False,
++        }
++        if include_provenance_digest:
++            mapping["provenance_digest"] = self.provenance_digest
++        return mapping
++
++
++@dataclass(frozen=True, slots=True)
++class MultiLaboratoryEvidenceProvenanceValidationResult:
++    """Pure validation result for one r2 aggregate and its provenances."""
++
++    schema: str
++    valid: bool
++    issues: tuple[str, ...]
++    aggregation_ref: str
++    aggregation_digest: str
++    evidence_refs: tuple[str, ...]
++    provenance_refs: tuple[str, ...]
++    laboratory_refs: tuple[str, ...]
++    visit_refs: tuple[str, ...]
++    specialist_refs: tuple[str, ...]
++    source_refs: tuple[str, ...]
++    provenance_digests: tuple[str, ...]
++    multi_laboratory_confirmed: bool
++    transfer_continuity_validated: bool
++    provenance_chain_validated: bool
++    validation_digest: str
++    authoritative: bool = field(default=False, init=False)
++    approved: bool = field(default=False, init=False)
++    deduplication_performed: bool = field(default=False, init=False)
++    contradiction_detection_performed: bool = field(default=False, init=False)
++    weighting_authorized: bool = field(default=False, init=False)
++    durable_state_written: bool = field(default=False, init=False)
++    scheduler_selection_allowed: bool = field(default=False, init=False)
++    laboratory_self_authorization_allowed: bool = field(default=False, init=False)
++    specialist_self_authorization_allowed: bool = field(default=False, init=False)
++    sql_remains_durable_authority: bool = field(default=True, init=False)
++    scheduler_remains_only_orchestrator: bool = field(default=True, init=False)
++    qdrant_authoritative: bool = field(default=False, init=False)
++    github_projects_authoritative: bool = field(default=False, init=False)
++
++    def __post_init__(self) -> None:
++        if self.schema != MULTI_LABORATORY_EVIDENCE_PROVENANCE_VALIDATION_SCHEMA:
++            raise MultiLaboratoryEvidenceProvenanceContractError(
++                "unsupported provenance validation schema"
++            )
++        if self.valid != (
++            not self.issues
++            and self.multi_laboratory_confirmed
++            and self.provenance_chain_validated
++        ):
++            raise MultiLaboratoryEvidenceProvenanceContractError(
++                "valid flag does not match provenance validation state"
++            )
++        if not _SHA256_RE.fullmatch(self.aggregation_digest):
++            raise MultiLaboratoryEvidenceProvenanceContractError(
++                "aggregation_digest must be SHA-256"
++            )
++        if not _SHA256_RE.fullmatch(self.validation_digest):
++            raise MultiLaboratoryEvidenceProvenanceContractError(
++                "validation_digest must be SHA-256"
++            )
++        object.__setattr__(self, "issues", tuple(self.issues))
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": self.schema,
++            "valid": self.valid,
++            "issues": list(self.issues),
++            "aggregation_ref": self.aggregation_ref,
++            "aggregation_digest": self.aggregation_digest,
++            "evidence_refs": list(self.evidence_refs),
++            "provenance_refs": list(self.provenance_refs),
++            "laboratory_refs": list(self.laboratory_refs),
++            "visit_refs": list(self.visit_refs),
++            "specialist_refs": list(self.specialist_refs),
++            "source_refs": list(self.source_refs),
++            "provenance_digests": list(self.provenance_digests),
++            "multi_laboratory_confirmed": self.multi_laboratory_confirmed,
++            "transfer_continuity_validated": self.transfer_continuity_validated,
++            "provenance_chain_validated": self.provenance_chain_validated,
++            "validation_digest": self.validation_digest,
++            "authoritative": False,
++            "approved": False,
++            "deduplication_performed": False,
++            "contradiction_detection_performed": False,
++            "weighting_authorized": False,
++            "durable_state_written": False,
++            "scheduler_selection_allowed": False,
++            "laboratory_self_authorization_allowed": False,
++            "specialist_self_authorization_allowed": False,
++            "sql_remains_durable_authority": True,
++            "scheduler_remains_only_orchestrator": True,
++            "qdrant_authoritative": False,
++            "github_projects_authoritative": False,
++        }
++
++
++def multi_laboratory_evidence_provenance_from_visit(
++    item: MultiLaboratoryEvidenceItem,
++    request: LaboratoryVisitRequest,
++    result: LaboratoryVisitResult,
++    *,
++    transfer_request: SpecialistTransferRequest | None = None,
++    transfer_plan: SpecialistTransferVisitPlan | None = None,
++    transfer_result: SpecialistTransferResult | None = None,
++) -> MultiLaboratoryEvidenceProvenance:
++    """Bind one r2 item to an existing visit and optional transfer chain."""
++
++    if not isinstance(item, MultiLaboratoryEvidenceItem):
++        raise TypeError("item must be MultiLaboratoryEvidenceItem")
++    issues = list(validate_laboratory_visit_result(request, result))
++    if result.status != "completed":
++        issues.append("evidence provenance requires a completed visit")
++    if item.evidence_ref not in result.evidence_refs:
++        issues.append("evidence_ref must be present in the visit result")
++    if item.specialist_ref != result.specialist_ref:
++        issues.append("item specialist_ref must match the visit result")
++
++    cross_laboratory = (
++        request.origin_laboratory_ref != request.target_laboratory_ref
++    )
++    transfer_ref: str | None = None
++    transfer_values = (transfer_request, transfer_plan, transfer_result)
++    if cross_laboratory:
++        if any(value is None for value in transfer_values):
++            issues.append(
++                "cross-laboratory visit requires the complete transfer chain"
++            )
++        else:
++            assert transfer_request is not None
++            assert transfer_plan is not None
++            assert transfer_result is not None
++            issues.extend(
++                validate_specialist_transfer_chain(
++                    transfer_request, transfer_plan, transfer_result
++                )
++            )
++            transfer_ref = transfer_request.transfer_ref
++            if transfer_plan.target_visit_ref != request.visit_ref:
++                issues.append("transfer target visit must match visit request")
++            if transfer_result.target_visit_ref != request.visit_ref:
++                issues.append("transfer result target visit must match visit request")
++            if transfer_result.target_laboratory_ref != request.laboratory_ref:
++                issues.append("transfer target laboratory must match visit request")
++            if transfer_result.status not in {"accepted", "completed"}:
++                issues.append("transfer result must be accepted or completed")
++            if item.evidence_ref not in transfer_result.evidence_refs:
++                issues.append("evidence_ref must be present in transfer result")
++    elif any(value is not None for value in transfer_values):
++        issues.append("same-laboratory visit cannot carry a transfer chain")
++
++    if issues:
++        raise MultiLaboratoryEvidenceProvenanceContractError(
++            "; ".join(dict.fromkeys(issues))
++        )
++    return MultiLaboratoryEvidenceProvenance(
++        schema=MULTI_LABORATORY_EVIDENCE_PROVENANCE_SCHEMA,
++        provenance_ref=item.provenance_ref,
++        evidence_ref=item.evidence_ref,
++        laboratory_ref=request.laboratory_ref,
++        visit_ref=request.visit_ref,
++        specialist_ref=result.specialist_ref,
++        source_ref=item.source_ref,
++        visit_status=result.status,
++        origin_laboratory_ref=request.origin_laboratory_ref,
++        target_laboratory_ref=request.target_laboratory_ref,
++        conversation_ref=request.conversation_ref,
++        parent_visit_ref=request.parent_visit_ref,
++        transfer_ref=transfer_ref,
++        metadata=(("source_contract", result.output_contract_ref),),
++    )
++
++
++def validate_multi_laboratory_evidence_provenance(
++    aggregate: MultiLaboratoryEvidenceAggregate,
++    provenances: Sequence[MultiLaboratoryEvidenceProvenance],
++) -> MultiLaboratoryEvidenceProvenanceValidationResult:
++    """Validate exact evidence/provenance bindings for one r2 aggregate."""
++
++    if not isinstance(aggregate, MultiLaboratoryEvidenceAggregate):
++        raise TypeError("aggregate must be MultiLaboratoryEvidenceAggregate")
++    values = tuple(provenances)
++    issues: list[str] = []
++    if not all(isinstance(value, MultiLaboratoryEvidenceProvenance) for value in values):
++        raise TypeError("provenances must contain provenance contracts")
++    refs = tuple(value.provenance_ref for value in values)
++    if len(set(refs)) != len(refs):
++        issues.append("provenance_ref values must be unique")
++    evidence_refs = tuple(value.evidence_ref for value in values)
++    if len(set(evidence_refs)) != len(evidence_refs):
++        issues.append("each evidence_ref must have one provenance")
++
++    by_ref = {value.provenance_ref: value for value in values}
++    for item in aggregate.evidence_items:
++        provenance = by_ref.get(item.provenance_ref)
++        if provenance is None:
++            issues.append(f"missing provenance: {item.provenance_ref}")
++            continue
++        if provenance.evidence_ref != item.evidence_ref:
++            issues.append(f"evidence_ref mismatch: {item.evidence_ref}")
++        if provenance.specialist_ref != item.specialist_ref:
++            issues.append(f"specialist_ref mismatch: {item.evidence_ref}")
++        if provenance.source_ref != item.source_ref:
++            issues.append(f"source_ref mismatch: {item.evidence_ref}")
++        if provenance.visit_status != "completed":
++            issues.append(f"visit not completed: {item.evidence_ref}")
++    expected_refs = set(aggregate.provenance_refs)
++    extra_refs = set(by_ref) - expected_refs
++    if extra_refs:
++        issues.append("unexpected provenance refs: " + ", ".join(sorted(extra_refs)))
++
++    laboratory_refs = tuple(sorted({value.laboratory_ref for value in values}))
++    multi_laboratory_confirmed = len(laboratory_refs) >= 2
++    if not multi_laboratory_confirmed:
++        issues.append("at least two distinct laboratory_ref values are required")
++    transfer_continuity_validated = all(
++        not value.cross_laboratory or value.transfer_ref is not None
++        for value in values
++    )
++    if not transfer_continuity_validated:
++        issues.append("cross-laboratory transfer continuity is incomplete")
++
++    issues = list(dict.fromkeys(issues))
++    provenance_chain_validated = not issues
++    digest = _validation_digest(aggregate, values, issues)
++    return MultiLaboratoryEvidenceProvenanceValidationResult(
++        schema=MULTI_LABORATORY_EVIDENCE_PROVENANCE_VALIDATION_SCHEMA,
++        valid=not issues and multi_laboratory_confirmed,
++        issues=tuple(issues),
++        aggregation_ref=aggregate.aggregation_ref,
++        aggregation_digest=aggregate.aggregation_digest,
++        evidence_refs=tuple(sorted(evidence_refs)),
++        provenance_refs=tuple(sorted(refs)),
++        laboratory_refs=laboratory_refs,
++        visit_refs=tuple(sorted({value.visit_ref for value in values})),
++        specialist_refs=tuple(sorted({value.specialist_ref for value in values})),
++        source_refs=tuple(sorted({value.source_ref for value in values})),
++        provenance_digests=tuple(
++            sorted(value.provenance_digest for value in values)
++        ),
++        multi_laboratory_confirmed=multi_laboratory_confirmed,
++        transfer_continuity_validated=transfer_continuity_validated,
++        provenance_chain_validated=provenance_chain_validated,
++        validation_digest=digest,
++    )
++
++
++def _validation_digest(
++    aggregate: MultiLaboratoryEvidenceAggregate,
++    values: Sequence[MultiLaboratoryEvidenceProvenance],
++    issues: Sequence[str],
++) -> str:
++    payload = {
++        "schema": MULTI_LABORATORY_EVIDENCE_PROVENANCE_VALIDATION_SCHEMA,
++        "aggregation_ref": aggregate.aggregation_ref,
++        "aggregation_digest": aggregate.aggregation_digest,
++        "provenance_digests": sorted(value.provenance_digest for value in values),
++        "issues": list(issues),
++    }
++    encoded = json.dumps(
++        payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True
++    ).encode("utf-8")
++    return sha256(encoded).hexdigest()
++
++
++def _require_ref(name: str, value: str, prefixes: tuple[str, ...]) -> None:
++    if not isinstance(value, str) or not _TYPED_REF_RE.fullmatch(value):
++        raise MultiLaboratoryEvidenceProvenanceContractError(
++            f"{name} must be a typed reference"
++        )
++    if not value.startswith(prefixes):
++        raise MultiLaboratoryEvidenceProvenanceContractError(
++            f"{name} must start with one of: {', '.join(prefixes)}"
++        )
++
++
++def _normalize_metadata(
++    values: Sequence[tuple[str, str]],
++) -> tuple[tuple[str, str], ...]:
++    normalized: dict[str, str] = {}
++    for key, value in values:
++        if not isinstance(key, str) or not key.strip():
++            raise MultiLaboratoryEvidenceProvenanceContractError(
++                "metadata key must be non-empty"
++            )
++        if not isinstance(value, str) or not value.strip():
++            raise MultiLaboratoryEvidenceProvenanceContractError(
++                "metadata value must be non-empty"
++            )
++        normalized[key.strip()] = value.strip()
++    return tuple(sorted(normalized.items()))
++
++
++__all__ = (
++    "MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT_VERSION",
++    "MULTI_LABORATORY_EVIDENCE_PROVENANCE_SCHEMA",
++    "MULTI_LABORATORY_EVIDENCE_PROVENANCE_VALIDATION_SCHEMA",
++    "MultiLaboratoryEvidenceProvenance",
++    "MultiLaboratoryEvidenceProvenanceContractError",
++    "MultiLaboratoryEvidenceProvenanceValidationResult",
++    "MultiLaboratoryEvidenceVisitStatus",
++    "multi_laboratory_evidence_provenance_from_visit",
++    "validate_multi_laboratory_evidence_provenance",
++)
+diff --git a/tests/context/test_multi_laboratory_evidence_provenance_contract_0287.py b/tests/context/test_multi_laboratory_evidence_provenance_contract_0287.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/context/test_multi_laboratory_evidence_provenance_contract_0287.py
+@@ -0,0 +1,281 @@
++from __future__ import annotations
++
++from hashlib import sha256
++
++import pytest
++
++from context.laboratory_framework_contract_0273 import (
++    LABORATORY_VISIT_REQUEST_SCHEMA,
++    LABORATORY_VISIT_RESULT_SCHEMA,
++    LaboratoryResourceBudget,
++    LaboratoryVisitRequest,
++    LaboratoryVisitResult,
++)
++from context.multi_laboratory_evidence_aggregation_contract_0287 import (
++    MULTI_LABORATORY_EVIDENCE_AGGREGATE_SCHEMA,
++    MULTI_LABORATORY_EVIDENCE_ITEM_SCHEMA,
++    MultiLaboratoryEvidenceAggregate,
++    MultiLaboratoryEvidenceItem,
++)
++from context.multi_laboratory_evidence_provenance_contract_0287 import (
++    MULTI_LABORATORY_EVIDENCE_PROVENANCE_SCHEMA,
++    MultiLaboratoryEvidenceProvenance,
++    MultiLaboratoryEvidenceProvenanceContractError,
++    multi_laboratory_evidence_provenance_from_visit,
++    validate_multi_laboratory_evidence_provenance,
++)
++from context.specialist_laboratory_transfer_contract_0284 import (
++    SPECIALIST_TRANSFER_REQUEST_SCHEMA,
++    SPECIALIST_TRANSFER_RESULT_SCHEMA,
++    SPECIALIST_TRANSFER_VISIT_PLAN_SCHEMA,
++    SpecialistTransferRequest,
++    SpecialistTransferResult,
++    SpecialistTransferVisitPlan,
++)
++
++
++def _item(index: int) -> MultiLaboratoryEvidenceItem:
++    return MultiLaboratoryEvidenceItem(
++        schema=MULTI_LABORATORY_EVIDENCE_ITEM_SCHEMA,
++        evidence_ref=f"artifact:evidence-{index}",
++        evidence_kind="execution_result",
++        subject_ref="requirement:chalouf-drive",
++        specialist_ref=f"specialist:technical-{index}",
++        capability="technical.review",
++        source_ref=f"result:visit-{index}",
++        provenance_ref=f"provenance:visit-{index}",
++        digest_sha256=sha256(f"content-{index}".encode()).hexdigest(),
++        claim_key="technical.review",
++        claim_value=f"claim {index}",
++        claim_relation="supports",
++    )
++
++
++def _aggregate() -> MultiLaboratoryEvidenceAggregate:
++    return MultiLaboratoryEvidenceAggregate(
++        schema=MULTI_LABORATORY_EVIDENCE_AGGREGATE_SCHEMA,
++        aggregation_ref="aggregation:chalouf-drive:1",
++        subject_ref="requirement:chalouf-drive",
++        conversation_ref="conversation:chalouf-drive",
++        context_refs=("context:design",),
++        evidence_items=(_item(1), _item(2)),
++        aggregation_policy_ref="policy:multi-laboratory-evidence:v1",
++    )
++
++
++def _visit(index: int, laboratory: str) -> tuple[LaboratoryVisitRequest, LaboratoryVisitResult]:
++    request = LaboratoryVisitRequest(
++        schema=LABORATORY_VISIT_REQUEST_SCHEMA,
++        visit_ref=f"laboratory-visit:{index}",
++        laboratory_ref=laboratory,
++        specialist_ref=f"specialist:technical-{index}",
++        objective_ref="objective:technical-review",
++        source_candidate_ref="candidate:chalouf-drive",
++        context_generation=1,
++        input_contract_ref="contract:technical-input:v1",
++        expected_output_contract_ref="contract:technical-output:v1",
++        resource_budget=LaboratoryResourceBudget(),
++        return_route_ref="route:scheduler",
++        context_refs=("ctx:design",),
++    )
++    result = LaboratoryVisitResult(
++        schema=LABORATORY_VISIT_RESULT_SCHEMA,
++        visit_ref=request.visit_ref,
++        laboratory_ref=laboratory,
++        specialist_ref=request.specialist_ref,
++        status="completed",
++        output_contract_ref=request.expected_output_contract_ref,
++        machine_result={"claim": index},
++        human_representation=f"claim {index}",
++        confidence=0.8,
++        evidence_refs=(f"artifact:evidence-{index}",),
++    )
++    return request, result
++
++
++def test_visit_factory_binds_existing_visit_contract() -> None:
++    request, result = _visit(1, "laboratory:local-a")
++    provenance = multi_laboratory_evidence_provenance_from_visit(
++        _item(1), request, result
++    )
++    assert provenance.schema == MULTI_LABORATORY_EVIDENCE_PROVENANCE_SCHEMA
++    assert provenance.laboratory_ref == "laboratory:local-a"
++    assert provenance.visit_ref == "laboratory-visit:1"
++    assert provenance.evidence_ref == "artifact:evidence-1"
++    assert provenance.cross_laboratory is False
++    assert len(provenance.provenance_digest) == 64
++
++
++def test_factory_rejects_evidence_absent_from_visit_result() -> None:
++    request, result = _visit(1, "laboratory:local-a")
++    wrong = LaboratoryVisitResult(
++        schema=result.schema,
++        visit_ref=result.visit_ref,
++        laboratory_ref=result.laboratory_ref,
++        specialist_ref=result.specialist_ref,
++        status=result.status,
++        output_contract_ref=result.output_contract_ref,
++        machine_result=result.machine_result,
++        human_representation=result.human_representation,
++        confidence=result.confidence,
++        evidence_refs=("artifact:other",),
++    )
++    with pytest.raises(MultiLaboratoryEvidenceProvenanceContractError, match="present"):
++        multi_laboratory_evidence_provenance_from_visit(_item(1), request, wrong)
++
++
++def test_two_distinct_laboratories_validate_the_aggregate() -> None:
++    p1 = multi_laboratory_evidence_provenance_from_visit(
++        _item(1), *_visit(1, "laboratory:local-a")
++    )
++    p2 = multi_laboratory_evidence_provenance_from_visit(
++        _item(2), *_visit(2, "laboratory:local-b")
++    )
++    result = validate_multi_laboratory_evidence_provenance(_aggregate(), (p2, p1))
++    assert result.valid is True
++    assert result.multi_laboratory_confirmed is True
++    assert result.provenance_chain_validated is True
++    assert result.laboratory_refs == (
++        "laboratory:local-a", "laboratory:local-b"
++    )
++    assert len(result.validation_digest) == 64
++
++
++def test_two_provenance_refs_from_one_laboratory_are_not_multi_laboratory() -> None:
++    p1 = multi_laboratory_evidence_provenance_from_visit(
++        _item(1), *_visit(1, "laboratory:local-a")
++    )
++    p2 = multi_laboratory_evidence_provenance_from_visit(
++        _item(2), *_visit(2, "laboratory:local-a")
++    )
++    result = validate_multi_laboratory_evidence_provenance(_aggregate(), (p1, p2))
++    assert result.valid is False
++    assert result.multi_laboratory_confirmed is False
++
++
++def test_missing_provenance_is_detected() -> None:
++    p1 = multi_laboratory_evidence_provenance_from_visit(
++        _item(1), *_visit(1, "laboratory:local-a")
++    )
++    result = validate_multi_laboratory_evidence_provenance(_aggregate(), (p1,))
++    assert result.valid is False
++    assert any("missing provenance" in issue for issue in result.issues)
++
++
++def test_cross_laboratory_visit_reuses_transfer_chain() -> None:
++    item = _item(2)
++    transfer_request = SpecialistTransferRequest(
++        schema=SPECIALIST_TRANSFER_REQUEST_SCHEMA,
++        transfer_ref="specialist-transfer:1",
++        mode="transfer",
++        specialist_ref=item.specialist_ref,
++        conversation_ref="laboratory-conversation:chalouf",
++        source_visit_ref="laboratory-visit:1",
++        requested_by_message_ref="laboratory-message:1",
++        origin_laboratory_ref="laboratory:local-a",
++        target_laboratory_ref="laboratory:local-b",
++        input_contract_ref="contract:technical-input:v1",
++        expected_output_contract_ref="contract:technical-output:v1",
++        return_route_ref="route:scheduler",
++        context_refs=("ctx:design",),
++        evidence_refs=(item.evidence_ref,),
++    )
++    plan = SpecialistTransferVisitPlan(
++        schema=SPECIALIST_TRANSFER_VISIT_PLAN_SCHEMA,
++        transfer_ref=transfer_request.transfer_ref,
++        target_visit_ref="laboratory-visit:2",
++        specialist_ref=item.specialist_ref,
++        laboratory_ref="laboratory:local-b",
++        origin_laboratory_ref="laboratory:local-a",
++        target_laboratory_ref="laboratory:local-b",
++        conversation_ref=transfer_request.conversation_ref,
++        parent_visit_ref=transfer_request.source_visit_ref,
++        input_contract_ref=transfer_request.input_contract_ref,
++        expected_output_contract_ref=transfer_request.expected_output_contract_ref,
++        return_route_ref=transfer_request.return_route_ref,
++        visit_mode="transfer",
++        context_refs=transfer_request.context_refs,
++        evidence_refs=transfer_request.evidence_refs,
++    )
++    transfer_result = SpecialistTransferResult(
++        schema=SPECIALIST_TRANSFER_RESULT_SCHEMA,
++        transfer_ref=transfer_request.transfer_ref,
++        mode="transfer",
++        status="completed",
++        specialist_ref=item.specialist_ref,
++        conversation_ref=transfer_request.conversation_ref,
++        source_visit_ref=transfer_request.source_visit_ref,
++        target_visit_ref=plan.target_visit_ref,
++        origin_laboratory_ref="laboratory:local-a",
++        target_laboratory_ref="laboratory:local-b",
++        active_laboratory_ref="laboratory:local-b",
++        return_route_ref=transfer_request.return_route_ref,
++        reason="validated transfer",
++        context_refs=transfer_request.context_refs,
++        evidence_refs=(item.evidence_ref,),
++    )
++    request = LaboratoryVisitRequest(
++        schema=LABORATORY_VISIT_REQUEST_SCHEMA,
++        visit_ref=plan.target_visit_ref,
++        laboratory_ref="laboratory:local-b",
++        specialist_ref=item.specialist_ref,
++        objective_ref="objective:technical-review",
++        source_candidate_ref="candidate:chalouf-drive",
++        context_generation=2,
++        input_contract_ref=plan.input_contract_ref,
++        expected_output_contract_ref=plan.expected_output_contract_ref,
++        resource_budget=LaboratoryResourceBudget(),
++        return_route_ref=plan.return_route_ref,
++        context_refs=("ctx:design",),
++        origin_laboratory_ref="laboratory:local-a",
++        target_laboratory_ref="laboratory:local-b",
++        conversation_ref=plan.conversation_ref,
++        parent_visit_ref=plan.parent_visit_ref,
++    )
++    result = LaboratoryVisitResult(
++        schema=LABORATORY_VISIT_RESULT_SCHEMA,
++        visit_ref=request.visit_ref,
++        laboratory_ref=request.laboratory_ref,
++        specialist_ref=request.specialist_ref,
++        status="completed",
++        output_contract_ref=request.expected_output_contract_ref,
++        machine_result={"claim": 2},
++        human_representation="claim 2",
++        confidence=0.9,
++        evidence_refs=(item.evidence_ref,),
++        conversation_ref=request.conversation_ref,
++        parent_visit_ref=request.parent_visit_ref,
++    )
++    provenance = multi_laboratory_evidence_provenance_from_visit(
++        item,
++        request,
++        result,
++        transfer_request=transfer_request,
++        transfer_plan=plan,
++        transfer_result=transfer_result,
++    )
++    assert provenance.cross_laboratory is True
++    assert provenance.transfer_ref == "specialist-transfer:1"
++    assert provenance.parent_visit_ref == "laboratory-visit:1"
++
++
++def test_mapping_keeps_later_phase_boundaries_closed() -> None:
++    p1 = multi_laboratory_evidence_provenance_from_visit(
++        _item(1), *_visit(1, "laboratory:local-a")
++    )
++    p2 = multi_laboratory_evidence_provenance_from_visit(
++        _item(2), *_visit(2, "laboratory:local-b")
++    )
++    mapping = validate_multi_laboratory_evidence_provenance(
++        _aggregate(), (p1, p2)
++    ).to_mapping()
++    assert mapping["provenance_chain_validated"] is True
++    assert mapping["authoritative"] is False
++    assert mapping["approved"] is False
++    assert mapping["deduplication_performed"] is False
++    assert mapping["contradiction_detection_performed"] is False
++    assert mapping["weighting_authorized"] is False
++    assert mapping["durable_state_written"] is False
++    assert mapping["scheduler_selection_allowed"] is False
++    assert mapping["sql_remains_durable_authority"] is True
++    assert mapping["scheduler_remains_only_orchestrator"] is True
+diff --git a/tests/rules/test_multi_laboratory_evidence_provenance_contract_0287_rule.py b/tests/rules/test_multi_laboratory_evidence_provenance_contract_0287_rule.py
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/tests/rules/test_multi_laboratory_evidence_provenance_contract_0287_rule.py
+@@ -0,0 +1,76 @@
++from pathlib import Path
++
++from context.multi_laboratory_evidence_aggregation_reuse_audit_0287 import (
++    audit_multi_laboratory_evidence_aggregation_reuse,
++    load_audit_sources,
++)
++
++ROOT = Path(__file__).resolve().parents[2]
++SOURCE = ROOT / "src/context/multi_laboratory_evidence_provenance_contract_0287.py"
++INSTALLATION = ROOT / "templates/github/projects-repository/INSTALLATION.md"
++REPORT = ROOT / "PHASE0287_R3_MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT_REPORT.md"
++ARCH = ROOT / "doc/architecture/MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT_0287.md"
++DOT = ROOT / "doc/architecture/MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT_0287.dot"
++CHANGELOG = ROOT / "doc/CHANGELOG_0287_R3_MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT.md"
++MANIFEST = ROOT / "doc/manifests/MANIFEST_0287_R3_MULTI_LABORATORY_EVIDENCE_PROVENANCE_CONTRACT.md"
++
++
++def test_r3_reuses_visit_and_transfer_contracts() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    assert "LaboratoryVisitRequest" in text
++    assert "LaboratoryVisitResult" in text
++    assert "validate_laboratory_visit_result" in text
++    assert "SpecialistTransferRequest" in text
++    assert "validate_specialist_transfer_chain" in text
++
++
++def test_r3_exposes_audit_markers() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    for marker in (
++        "class MultiLaboratoryEvidenceProvenance",
++        "laboratory_ref",
++        "visit_ref",
++        "specialist_ref",
++        "source_ref",
++    ):
++        assert marker in text
++
++
++def test_r3_has_no_backend_or_parallel_authority() -> None:
++    text = SOURCE.read_text(encoding="utf-8")
++    for forbidden in (
++        "import subprocess", "import requests", "import urllib", "import httpx",
++        "Scheduler(", "EventBus(", "LaboratoryManager", "QdrantClient",
++    ):
++        assert forbidden not in text
++    for marker in (
++        "deduplication_performed", "contradiction_detection_performed",
++        "weighting_authorized", "durable_state_written",
++        "scheduler_selection_allowed", "sql_remains_durable_authority",
++        "scheduler_remains_only_orchestrator",
++    ):
++        assert marker in text
++
++
++def test_actual_audit_advances_to_r4() -> None:
++    result = audit_multi_laboratory_evidence_aggregation_reuse(
++        load_audit_sources(ROOT)
++    )
++    assert "0287-r3-multi-laboratory-evidence-provenance-contract" in result.completed_phases
++    assert result.next_recommended_patch == (
++        "0287-r4-multi-laboratory-evidence-digest-deduplication"
++    )
++
++
++def test_installation_was_reviewed_without_change() -> None:
++    text = INSTALLATION.read_text(encoding="utf-8")
++    assert "Version du guide : `0286-r4`." in text
++    assert "Ne pas utiliser `--delete`" in text
++    report = REPORT.read_text(encoding="utf-8")
++    assert "INSTALLATION.md reviewed" in report
++    assert "No update required for 0287-r3" in report
++
++
++def test_systematic_deliverables_exist() -> None:
++    for path in (SOURCE, REPORT, ARCH, DOT, CHANGELOG, MANIFEST):
++        assert path.is_file(), path

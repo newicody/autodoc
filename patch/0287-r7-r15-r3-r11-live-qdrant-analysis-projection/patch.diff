@@ -1,0 +1,1121 @@
+diff --git a/PHASE0287_R7_R15_R3_R11_LIVE_QDRANT_ANALYSIS_PROJECTION_REPORT.md b/PHASE0287_R7_R15_R3_R11_LIVE_QDRANT_ANALYSIS_PROJECTION_REPORT.md
+new file mode 100644
+index 0000000..dd3ba57
+--- /dev/null
++++ b/PHASE0287_R7_R15_R3_R11_LIVE_QDRANT_ANALYSIS_PROJECTION_REPORT.md
+@@ -0,0 +1,18 @@
++# Phase 0287-r7-r15-r3-r11 — Live Qdrant analysis projection
++
++## Result
++
++One already-persisted SQL authority object can now be projected asynchronously through the installed E5 pipeline and the existing qdrant-client membrane.
++
++- dense passage vector: `dense_e5_v1`, 384 dimensions, normalized;
++- sparse lexical vector: `sparse_lexical_v1`, built by the exact retrieval-side lexical function;
++- physical collection: `autodoc_context_e5_384_hybrid_v1`;
++- one deterministic point upsert behind the existing write gate;
++- reference-only payload;
++- reconstructible projection metadata stored separately in SQL.
++
++No Scheduler, collection lifecycle, alias mutation or SQL connection is created here.
++
++## Next
++
++Compose one controlled live projection command that opens the existing PostgreSQL authority, installed E5 pipeline and Qdrant executor, then verifies readback and SQL rehydration for one point.
+diff --git a/doc/CHANGELOG_0287_R7_R15_R3_R11_LIVE_QDRANT_ANALYSIS_PROJECTION.md b/doc/CHANGELOG_0287_R7_R15_R3_R11_LIVE_QDRANT_ANALYSIS_PROJECTION.md
+new file mode 100644
+index 0000000..6474d0c
+--- /dev/null
++++ b/doc/CHANGELOG_0287_R7_R15_R3_R11_LIVE_QDRANT_ANALYSIS_PROJECTION.md
+@@ -0,0 +1,8 @@
++# Changelog 0287-r7-r15-r3-r11
++
++- Added one gated named dense+sparse Qdrant upsert to the existing SDK membrane.
++- Added asynchronous live analysis projection around the existing E5 pipeline.
++- Reused the retrieval-side sparse lexical builder without a second algorithm.
++- Added deterministic point/projection references.
++- Kept authoritative text out of Qdrant payloads and serialized receipts.
++- Added focused contract, effect-gate and source-rule tests.
+diff --git a/doc/architecture/LIVE_QDRANT_ANALYSIS_PROJECTION_0287_R7_R15_R3_R11.dot b/doc/architecture/LIVE_QDRANT_ANALYSIS_PROJECTION_0287_R7_R15_R3_R11.dot
+new file mode 100644
+index 0000000..4fc59d7
+--- /dev/null
++++ b/doc/architecture/LIVE_QDRANT_ANALYSIS_PROJECTION_0287_R7_R15_R3_R11.dot
+@@ -0,0 +1,16 @@
++digraph live_qdrant_analysis_projection_0287_r7_r15_r3_r11 {
++  rankdir=LR;
++  sql [label="SQL authority object"];
++  e5 [label="Existing async OpenVINO E5\npassage: / 384-d"];
++  sparse [label="Existing sparse lexical builder"];
++  membrane [label="Existing qdrant-client membrane\nwrite gate"];
++  qdrant [label="Named dense+sparse Qdrant point\nreference-only payload"];
++  hydrate [label="Later SQL rehydration"];
++  sql -> e5;
++  sql -> sparse;
++  e5 -> membrane;
++  sparse -> membrane;
++  membrane -> qdrant;
++  qdrant -> hydrate;
++  hydrate -> sql;
++}
+diff --git a/doc/architecture/LIVE_QDRANT_ANALYSIS_PROJECTION_0287_R7_R15_R3_R11.md b/doc/architecture/LIVE_QDRANT_ANALYSIS_PROJECTION_0287_R7_R15_R3_R11.md
+new file mode 100644
+index 0000000..f66a47a
+--- /dev/null
++++ b/doc/architecture/LIVE_QDRANT_ANALYSIS_PROJECTION_0287_R7_R15_R3_R11.md
+@@ -0,0 +1,22 @@
++# Live Qdrant analysis projection
++
++```text
++SQL ContextAuthorityObject (authoritative body)
++        |
++        +--> passage: text --> existing async OpenVINO E5 pipeline
++        |                         --> dense_e5_v1 / 384 / normalized
++        |
++        +--> exact build_sparse_lexical_query()
++                                  --> sparse_lexical_v1
++        |
++        v
++existing QdrantClientProjectionExecutor
++        | gated upsert of one named-vector point
++        v
++autodoc_context_e5_384_hybrid_v1
++        | payload: refs, digest, scope, validity only
++        v
++SQL-authoritative later rehydration
++```
++
++The async adapter does not introduce an event loop. Its caller must await it inside the Scheduler-owned execution path.
+diff --git a/doc/manifests/MANIFEST_0287_R7_R15_R3_R11_LIVE_QDRANT_ANALYSIS_PROJECTION.md b/doc/manifests/MANIFEST_0287_R7_R15_R3_R11_LIVE_QDRANT_ANALYSIS_PROJECTION.md
+new file mode 100644
+index 0000000..939f0cb
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0287_R7_R15_R3_R11_LIVE_QDRANT_ANALYSIS_PROJECTION.md
+@@ -0,0 +1,23 @@
++# Manifest 0287-r7-r15-r3-r11
++
++## Modified
++
++- `src/inference/qdrant_client_projection_executor.py`
++
++## Added
++
++- `src/context/love_qdrant_live_analysis_projection_0287.py`
++- `tests/context/test_qdrant_client_named_hybrid_projection_0287_r7_r15_r3_r11.py`
++- `tests/context/test_love_qdrant_live_analysis_projection_0287_r7_r15_r3_r11.py`
++- `tests/rules/test_love_qdrant_live_analysis_projection_0287_r7_r15_r3_r11_rule.py`
++- phase report, changelog, architecture Markdown/DOT and this manifest.
++
++## Boundaries
++
++- SQL remains durable authority;
++- Qdrant payload is reference-only;
++- exact existing sparse query algorithm reused;
++- existing qdrant-client executor extended, not replaced;
++- one point per call, explicit write gate;
++- no collection or alias mutation;
++- no Scheduler or event-loop construction.
+diff --git a/src/context/love_qdrant_live_analysis_projection_0287.py b/src/context/love_qdrant_live_analysis_projection_0287.py
+new file mode 100644
+index 0000000..145b695
+--- /dev/null
++++ b/src/context/love_qdrant_live_analysis_projection_0287.py
+@@ -0,0 +1,359 @@
++"""Async live projection of SQL authority analyses to named Qdrant vectors.
++
++The adapter reuses the installed asynchronous OpenVINO E5 pipeline, the exact
++sparse lexical builder used by hybrid retrieval and the existing qdrant-client
++execution membrane.  SQL remains authoritative: Qdrant receives only stable
++references, scope fields, content digest and reconstructible vectors.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Callable, Mapping
++from dataclasses import dataclass
++import hashlib
++import math
++from typing import Any, Protocol, runtime_checkable
++
++from context.context_revision_sql_authority_0287 import (
++    VECTOR_PROJECTION_METADATA_SCHEMA,
++    ContextAuthorityObject,
++    ContextRevision,
++    VectorProjectionMetadata,
++)
++from context.hybrid_retrieval_sql_rehydration_0287 import build_sparse_lexical_query
++from context.love_openvino_e5_async_query_adapter_0287 import AsyncEmbeddingPipeline
++
++LOVE_QDRANT_LIVE_ANALYSIS_PROJECTION_SCHEMA = (
++    "missipy.love.qdrant_live_analysis_projection.v1"
++)
++LOVE_ANALYSIS_PROJECTION_RECEIPT_SCHEMA = (
++    "missipy.love.analysis_projection_receipt.v1"
++)
++
++
++class LoveQdrantLiveAnalysisProjectionError(RuntimeError):
++    """Raised when live projection violates SQL, E5 or Qdrant boundaries."""
++
++
++@runtime_checkable
++class NamedHybridProjectionWriter(Protocol):
++    """Narrow injected write subset of the existing Qdrant executor."""
++
++    def upsert_named_hybrid_point(
++        self,
++        *,
++        collection_name: str,
++        point_id: str,
++        dense_vector_name: str,
++        dense_values: tuple[float, ...],
++        sparse_vector_name: str,
++        sparse_indices: tuple[int, ...],
++        sparse_values: tuple[float, ...],
++        payload: Mapping[str, object],
++        dense_dimension: int = 384,
++    ) -> Any: ...
++
++
++@dataclass(frozen=True, slots=True)
++class LoveQdrantLiveAnalysisProjectionSettings:
++    """Locked identities for one installed E5/Qdrant projection surface."""
++
++    schema: str = LOVE_QDRANT_LIVE_ANALYSIS_PROJECTION_SCHEMA
++    collection_name: str = "autodoc_context_e5_384_hybrid_v1"
++    dense_vector_name: str = "dense_e5_v1"
++    sparse_vector_name: str = "sparse_lexical_v1"
++    embedding_profile_ref: str = (
++        "embedding-profile:multilingual-e5-small-passage"
++    )
++    model_ref: str = "model:multilingual-e5-small"
++    model_revision: str = "installed"
++    backend_ref: str = "openvino:multilingual-e5-small"
++    passage_prefix: str = "passage:"
++    dimension: int = 384
++
++    def __post_init__(self) -> None:
++        if self.schema != LOVE_QDRANT_LIVE_ANALYSIS_PROJECTION_SCHEMA:
++            raise LoveQdrantLiveAnalysisProjectionError(
++                "unsupported live projection settings schema"
++            )
++        for name in ("embedding_profile_ref", "model_ref", "backend_ref"):
++            _require_typed_ref(name, getattr(self, name))
++        for name in ("dense_vector_name", "sparse_vector_name"):
++            _require_identifier(name, getattr(self, name))
++        if self.dense_vector_name == self.sparse_vector_name:
++            raise LoveQdrantLiveAnalysisProjectionError(
++                "dense and sparse vector names must differ"
++            )
++        if not self.collection_name.strip():
++            raise LoveQdrantLiveAnalysisProjectionError(
++                "collection_name must not be empty"
++            )
++        if not self.model_revision.strip():
++            raise LoveQdrantLiveAnalysisProjectionError(
++                "model_revision must not be empty"
++            )
++        if not self.passage_prefix.strip():
++            raise LoveQdrantLiveAnalysisProjectionError(
++                "passage_prefix must not be empty"
++            )
++        if self.dimension != 384:
++            raise LoveQdrantLiveAnalysisProjectionError(
++                "multilingual-e5-small dimension must be 384"
++            )
++
++
++class LoveQdrantLiveAnalysisProjection:
++    """Project one already-persisted SQL authority object through real ports."""
++
++    def __init__(
++        self,
++        *,
++        pipeline: AsyncEmbeddingPipeline,
++        writer: NamedHybridProjectionWriter,
++        settings: LoveQdrantLiveAnalysisProjectionSettings | None = None,
++        receipt_factory: Callable[..., Any] | None = None,
++    ) -> None:
++        if not isinstance(pipeline, AsyncEmbeddingPipeline):
++            raise LoveQdrantLiveAnalysisProjectionError(
++                "pipeline must expose async embed_text()"
++            )
++        if not isinstance(writer, NamedHybridProjectionWriter):
++            raise LoveQdrantLiveAnalysisProjectionError(
++                "writer must expose upsert_named_hybrid_point()"
++            )
++        self._pipeline = pipeline
++        self._writer = writer
++        self._settings = settings or LoveQdrantLiveAnalysisProjectionSettings()
++        self._receipt_factory = receipt_factory or _default_receipt_factory
++
++    @property
++    def settings(self) -> LoveQdrantLiveAnalysisProjectionSettings:
++        return self._settings
++
++    async def project(
++        self,
++        authority_object: ContextAuthorityObject,
++        *,
++        revision: ContextRevision,
++        branch_ref: str,
++        project_ref: str,
++        conversation_ref: str,
++        specialist_ref: str,
++        laboratory_ref: str,
++        security_scope: str,
++        projected_at: str | None = None,
++    ) -> Any:
++        """Embed one SQL object and upsert one named dense+sparse Qdrant point."""
++
++        for name, value in (
++            ("branch_ref", branch_ref),
++            ("project_ref", project_ref),
++            ("conversation_ref", conversation_ref),
++            ("specialist_ref", specialist_ref),
++            ("laboratory_ref", laboratory_ref),
++            ("security_scope", security_scope),
++        ):
++            _require_typed_ref(name, value)
++        _require_active_membership(authority_object, revision)
++        if not authority_object.body.strip():
++            raise LoveQdrantLiveAnalysisProjectionError(
++                "live analysis projection requires SQL-authoritative text body"
++            )
++
++        projection_ref = _digest_ref(
++            "vector-projection:",
++            authority_object.object_ref,
++            authority_object.content_digest,
++            revision.revision_ref,
++            self._settings.collection_name,
++        )
++        point_id = _digest_ref(
++            "qdrant-point:", projection_ref, self._settings.collection_name
++        )
++        plain_text = f"{authority_object.title.strip()}\n\n{authority_object.body.strip()}"
++        passage_text = _prefixed_passage(
++            plain_text, self._settings.passage_prefix
++        )
++        result = await self._pipeline.embed_text(passage_text)
++        dense_values = _validated_dense_values(
++            result, expected_dimension=self._settings.dimension
++        )
++        sparse = build_sparse_lexical_query(
++            plain_text,
++            query_ref=projection_ref,
++            vector_name=self._settings.sparse_vector_name,
++        )
++        contribution_kind = str(
++            authority_object.metadata.get(
++                "contribution_kind", authority_object.object_kind
++            )
++        )
++        _require_identifier("contribution_kind", contribution_kind)
++        payload: dict[str, object] = {
++            "point_id": point_id,
++            "sql_ref": authority_object.object_ref,
++            "source_ref": authority_object.object_ref,
++            "source_content_digest": authority_object.content_digest,
++            "context_revision_ref": revision.revision_ref,
++            "branch_ref": branch_ref,
++            "project_ref": project_ref,
++            "conversation_ref": conversation_ref,
++            "artifact_kind": authority_object.object_kind,
++            "contribution_kind": contribution_kind,
++            "specialist_ref": specialist_ref,
++            "laboratory_ref": laboratory_ref,
++            "security_scope": security_scope,
++            "valid": True,
++            "superseded_by": "",
++        }
++        write_result = self._writer.upsert_named_hybrid_point(
++            collection_name=self._settings.collection_name,
++            point_id=point_id,
++            dense_vector_name=self._settings.dense_vector_name,
++            dense_values=dense_values,
++            sparse_vector_name=self._settings.sparse_vector_name,
++            sparse_indices=sparse.indices,
++            sparse_values=sparse.weights,
++            payload=payload,
++            dense_dimension=self._settings.dimension,
++        )
++        if getattr(write_result, "acknowledged", False) is not True:
++            raise LoveQdrantLiveAnalysisProjectionError(
++                "Qdrant named hybrid write was not acknowledged"
++            )
++        if getattr(write_result, "point_id", point_id) != point_id:
++            raise LoveQdrantLiveAnalysisProjectionError(
++                "Qdrant write receipt point_id mismatch"
++            )
++
++        projection = VectorProjectionMetadata(
++            schema=VECTOR_PROJECTION_METADATA_SCHEMA,
++            projection_ref=projection_ref,
++            source_ref=authority_object.object_ref,
++            source_content_digest=authority_object.content_digest,
++            embedding_profile_ref=self._settings.embedding_profile_ref,
++            model_ref=self._settings.model_ref,
++            model_revision=self._settings.model_revision,
++            dimension=self._settings.dimension,
++            normalized=True,
++            vector_name=self._settings.dense_vector_name,
++            collection_name=self._settings.collection_name,
++            point_id=point_id,
++            projection_state="active",
++            projected_at=projected_at,
++            metadata={
++                "backend_ref": self._settings.backend_ref,
++                "sparse_vector_name": self._settings.sparse_vector_name,
++                "sparse_term_count": len(sparse.indices),
++                "passage_prefix_applied": True,
++                "reference_only_payload": True,
++                "authoritative_body_in_qdrant": False,
++            },
++        )
++        return self._receipt_factory(
++            schema=LOVE_ANALYSIS_PROJECTION_RECEIPT_SCHEMA,
++            projection=projection,
++            openvino_e5_used=True,
++            qdrant_write_performed=True,
++            qdrant_returns_references_only=True,
++            sql_remains_authority=True,
++        )
++
++
++def _default_receipt_factory(**kwargs: object) -> Any:
++    from context.love_memory_evidence_liaison_synthesis_0287 import (
++        LoveAnalysisProjectionReceipt,
++    )
++
++    return LoveAnalysisProjectionReceipt(**kwargs)
++
++
++def _require_active_membership(
++    authority_object: ContextAuthorityObject,
++    revision: ContextRevision,
++) -> None:
++    membership = next(
++        (
++            item
++            for item in revision.memberships
++            if item.object_ref == authority_object.object_ref
++        ),
++        None,
++    )
++    if membership is None or membership.state != "active":
++        raise LoveQdrantLiveAnalysisProjectionError(
++            "authority object must be an active member of the revision"
++        )
++
++
++def _validated_dense_values(
++    result: object,
++    *,
++    expected_dimension: int,
++) -> tuple[float, ...]:
++    vector = getattr(result, "vector", None)
++    if vector is None:
++        raise LoveQdrantLiveAnalysisProjectionError(
++            "embedding pipeline result must expose vector"
++        )
++    values = tuple(float(value) for value in getattr(vector, "values", ()))
++    dimension = getattr(vector, "dimension", len(values))
++    normalized = getattr(vector, "normalized", False)
++    if dimension != expected_dimension or len(values) != expected_dimension:
++        raise LoveQdrantLiveAnalysisProjectionError(
++            "E5 passage vector dimension differs from configured dimension"
++        )
++    if normalized is not True or any(not math.isfinite(value) for value in values):
++        raise LoveQdrantLiveAnalysisProjectionError(
++            "E5 passage vector must be finite and normalized"
++        )
++    norm = math.sqrt(sum(value * value for value in values))
++    if not math.isclose(norm, 1.0, rel_tol=1e-4, abs_tol=1e-4):
++        raise LoveQdrantLiveAnalysisProjectionError(
++            "E5 passage vector must have unit norm"
++        )
++    return values
++
++
++def _prefixed_passage(text: str, prefix: str) -> str:
++    plain = text.strip()
++    marker = prefix.strip()
++    if plain == marker or plain.startswith(marker + " "):
++        return plain
++    return f"{marker} {plain}"
++
++
++def _digest_ref(prefix: str, *parts: str) -> str:
++    digest = hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()
++    return prefix + digest[:24]
++
++
++def _require_typed_ref(name: str, value: object) -> None:
++    if not isinstance(value, str) or ":" not in value or not value.strip():
++        raise LoveQdrantLiveAnalysisProjectionError(
++            f"{name} must be a typed reference"
++        )
++
++
++def _require_identifier(name: str, value: object) -> None:
++    if (
++        not isinstance(value, str)
++        or not value
++        or not value[0].islower()
++        or any(
++            not (character.islower() or character.isdigit() or character in "_.-")
++            for character in value
++        )
++    ):
++        raise LoveQdrantLiveAnalysisProjectionError(
++            f"{name} must be a stable identifier"
++        )
++
++
++__all__ = (
++    "LOVE_QDRANT_LIVE_ANALYSIS_PROJECTION_SCHEMA",
++    "LoveQdrantLiveAnalysisProjection",
++    "LoveQdrantLiveAnalysisProjectionError",
++    "LoveQdrantLiveAnalysisProjectionSettings",
++    "NamedHybridProjectionWriter",
++)
+diff --git a/src/inference/qdrant_client_projection_executor.py b/src/inference/qdrant_client_projection_executor.py
+index e9c62f2..bd8bf78 100644
+--- a/src/inference/qdrant_client_projection_executor.py
++++ b/src/inference/qdrant_client_projection_executor.py
+@@ -178,6 +178,46 @@ class QdrantClientReferenceHit:
+         }
+ 
+ 
++@dataclass(frozen=True, slots=True)
++class QdrantNamedHybridProjectionResult:
++    """Reference-only receipt for one named dense+sparse point upsert."""
++
++    collection_name: str
++    point_id: str
++    dense_vector_name: str
++    sparse_vector_name: str
++    acknowledged: bool = True
++
++    def __post_init__(self) -> None:
++        if not self.collection_name.strip():
++            raise ValueError("collection_name must not be empty")
++        if not _is_typed_ref(self.point_id):
++            raise ValueError("point_id must be a typed reference")
++        for name in ("dense_vector_name", "sparse_vector_name"):
++            if not _is_identifier(getattr(self, name)):
++                raise ValueError(f"{name} must be a stable identifier")
++        if self.dense_vector_name == self.sparse_vector_name:
++            raise ValueError("dense and sparse vector names must differ")
++        if not self.acknowledged:
++            raise ValueError("named hybrid projection must be acknowledged")
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": "missipy.qdrant.named_hybrid_projection_result.v1",
++            "collection_name": self.collection_name,
++            "point_id": self.point_id,
++            "dense_vector_name": self.dense_vector_name,
++            "sparse_vector_name": self.sparse_vector_name,
++            "acknowledged": self.acknowledged,
++            "boundaries": {
++                "reference_only_receipt": True,
++                "vectors_serialized": False,
++                "authoritative_content_serialized": False,
++                "sql_remains_authority": True,
++            },
++        }
++
++
+ class QdrantClientProjectionExecutor:
+     """Implement the existing QdrantProjectionExecutor with qdrant-client."""
+ 
+@@ -243,6 +283,82 @@ class QdrantClientProjectionExecutor:
+             acknowledged=True,
+         )
+ 
++    def upsert_named_hybrid_point(
++        self,
++        *,
++        collection_name: str,
++        point_id: str,
++        dense_vector_name: str,
++        dense_values: Sequence[float],
++        sparse_vector_name: str,
++        sparse_indices: Sequence[int],
++        sparse_values: Sequence[float],
++        payload: Mapping[str, object],
++        dense_dimension: int = 384,
++    ) -> QdrantNamedHybridProjectionResult:
++        """Upsert one canonical named dense+sparse point behind the write gate."""
++
++        operation = "upsert_named_hybrid"
++        self._require_allowed(operation, self._gate.allow_write)
++        if not collection_name or not collection_name.strip():
++            raise self._failure(operation, "invalid_collection", "collection_name is required")
++        if not _is_typed_ref(point_id):
++            raise self._failure(operation, "invalid_point_id", "point_id must be typed")
++        if not _is_identifier(dense_vector_name) or not _is_identifier(sparse_vector_name):
++            raise self._failure(operation, "invalid_vector_name", "named vectors require stable identifiers")
++        if dense_vector_name == sparse_vector_name:
++            raise self._failure(operation, "invalid_vector_name", "dense and sparse vector names must differ")
++        if dense_dimension != 384:
++            raise self._failure(operation, "dimension_mismatch", "multilingual-e5-small dimension must be 384")
++
++        dense = tuple(float(value) for value in dense_values)
++        if len(dense) != dense_dimension or any(not math.isfinite(value) for value in dense):
++            raise self._failure(operation, "invalid_dense_vector", "dense vector must contain 384 finite values")
++        dense_norm = math.sqrt(sum(value * value for value in dense))
++        if not math.isclose(dense_norm, 1.0, rel_tol=1e-4, abs_tol=1e-4):
++            raise self._failure(operation, "invalid_dense_vector", "dense vector must have unit norm")
++
++        indices = tuple(int(index) for index in sparse_indices)
++        values = tuple(float(value) for value in sparse_values)
++        if (
++            not indices
++            or len(indices) != len(values)
++            or len(set(indices)) != len(indices)
++            or any(index < 0 for index in indices)
++            or any(not math.isfinite(value) or value <= 0 for value in values)
++        ):
++            raise self._failure(operation, "invalid_sparse_vector", "sparse indices and values must be aligned and valid")
++
++        compact_payload = _canonical_named_projection_payload(payload, point_id=point_id)
++        point = self._models.PointStruct(
++            id=_qdrant_storage_id(point_id),
++            vector={
++                dense_vector_name: list(dense),
++                sparse_vector_name: self._models.SparseVector(
++                    indices=list(indices),
++                    values=list(values),
++                ),
++            },
++            payload=compact_payload,
++        )
++        try:
++            response = self._client.upsert(
++                collection_name=collection_name,
++                points=[point],
++                wait=self._config.wait_for_write,
++            )
++        except Exception as exc:
++            raise self._wrapped_failure(operation, exc) from exc
++        if not _write_acknowledged(response):
++            raise self._failure(operation, "not_acknowledged", "Qdrant did not acknowledge the named hybrid write")
++        return QdrantNamedHybridProjectionResult(
++            collection_name=collection_name,
++            point_id=point_id,
++            dense_vector_name=dense_vector_name,
++            sparse_vector_name=sparse_vector_name,
++            acknowledged=True,
++        )
++
+     def search_vector(
+         self,
+         vector: Sequence[float],
+@@ -592,6 +708,105 @@ def _is_typed_ref(value: object) -> bool:
+     prefix, suffix = value.split(":", 1)
+     return bool(prefix) and bool(suffix) and prefix[0].islower()
+ 
++
++_NAMED_PROJECTION_REQUIRED_FIELDS = frozenset(
++    {
++        "point_id",
++        "sql_ref",
++        "source_ref",
++        "source_content_digest",
++        "context_revision_ref",
++        "branch_ref",
++        "project_ref",
++        "conversation_ref",
++        "artifact_kind",
++        "contribution_kind",
++        "specialist_ref",
++        "laboratory_ref",
++        "security_scope",
++        "valid",
++        "superseded_by",
++    }
++)
++
++
++def _canonical_named_projection_payload(
++    payload: Mapping[str, object],
++    *,
++    point_id: str,
++) -> dict[str, object]:
++    compact = _reference_payload(payload)
++    keys = frozenset(compact)
++    missing = _NAMED_PROJECTION_REQUIRED_FIELDS.difference(keys)
++    unknown = keys.difference(_NAMED_PROJECTION_REQUIRED_FIELDS)
++    if missing:
++        raise QdrantClientProjectionExecutor._failure(
++            "upsert_named_hybrid",
++            "missing_payload_fields",
++            "canonical projection payload misses: " + ", ".join(sorted(missing)),
++        )
++    if unknown:
++        raise QdrantClientProjectionExecutor._failure(
++            "upsert_named_hybrid",
++            "unknown_payload_fields",
++            "canonical projection payload has unknown fields: " + ", ".join(sorted(unknown)),
++        )
++    if compact["point_id"] != point_id:
++        raise QdrantClientProjectionExecutor._failure(
++            "upsert_named_hybrid", "point_id_mismatch", "payload point_id differs from point_id"
++        )
++    for field_name in (
++        "point_id",
++        "sql_ref",
++        "source_ref",
++        "context_revision_ref",
++        "branch_ref",
++        "project_ref",
++        "conversation_ref",
++        "specialist_ref",
++        "laboratory_ref",
++        "security_scope",
++    ):
++        if not _is_typed_ref(compact[field_name]):
++            raise QdrantClientProjectionExecutor._failure(
++                "upsert_named_hybrid", "invalid_payload_ref", f"{field_name} must be typed"
++            )
++    superseded_by = compact["superseded_by"]
++    if superseded_by not in ("", None) and not _is_typed_ref(superseded_by):
++        raise QdrantClientProjectionExecutor._failure(
++            "upsert_named_hybrid", "invalid_payload_ref", "superseded_by must be empty or typed"
++        )
++    digest = compact["source_content_digest"]
++    if not isinstance(digest, str) or len(digest) != 71 or not digest.startswith("sha256:"):
++        raise QdrantClientProjectionExecutor._failure(
++            "upsert_named_hybrid", "invalid_digest", "source_content_digest must be sha256:*"
++        )
++    try:
++        int(digest[7:], 16)
++    except ValueError as exc:
++        raise QdrantClientProjectionExecutor._failure(
++            "upsert_named_hybrid", "invalid_digest", "source_content_digest must be hexadecimal"
++        ) from exc
++    for field_name in ("artifact_kind", "contribution_kind"):
++        if not _is_identifier(compact[field_name]):
++            raise QdrantClientProjectionExecutor._failure(
++                "upsert_named_hybrid", "invalid_payload_identifier", f"{field_name} must be stable"
++            )
++    if not isinstance(compact["valid"], bool):
++        raise QdrantClientProjectionExecutor._failure(
++            "upsert_named_hybrid", "invalid_payload_validity", "valid must be a boolean"
++        )
++    return compact
++
++
++def _is_identifier(value: object) -> bool:
++    if not isinstance(value, str) or not value:
++        return False
++    return value[0].islower() and all(
++        character.islower() or character.isdigit() or character in "_.-"
++        for character in value
++    )
++
+ def _bounded_score(raw_score: float, distance: str) -> float:
+     if not math.isfinite(raw_score):
+         raise QdrantClientProjectionExecutor._failure("search", "invalid_score", "Qdrant score must be finite")
+diff --git a/tests/context/test_love_qdrant_live_analysis_projection_0287_r7_r15_r3_r11.py b/tests/context/test_love_qdrant_live_analysis_projection_0287_r7_r15_r3_r11.py
+new file mode 100644
+index 0000000..36cafc1
+--- /dev/null
++++ b/tests/context/test_love_qdrant_live_analysis_projection_0287_r7_r15_r3_r11.py
+@@ -0,0 +1,213 @@
++import asyncio
++from dataclasses import dataclass
++from types import SimpleNamespace
++
++import pytest
++
++from context.context_revision_sql_authority_0287 import (
++    CONTEXT_AUTHORITY_OBJECT_SCHEMA,
++    CONTEXT_REVISION_MEMBERSHIP_SCHEMA,
++    CONTEXT_REVISION_SCHEMA,
++    ContextAuthorityObject,
++    ContextRevision,
++    ContextRevisionMembership,
++)
++from context.hybrid_retrieval_sql_rehydration_0287 import build_sparse_lexical_query
++from context.love_qdrant_live_analysis_projection_0287 import (
++    LoveQdrantLiveAnalysisProjection,
++    LoveQdrantLiveAnalysisProjectionError,
++)
++
++
++@dataclass(frozen=True)
++class _Receipt:
++    schema: str
++    projection: object
++    openvino_e5_used: bool
++    qdrant_write_performed: bool
++    qdrant_returns_references_only: bool
++    sql_remains_authority: bool
++
++    def to_mapping(self) -> dict[str, object]:
++        return {
++            "schema": self.schema,
++            "projection": self.projection.to_mapping(),
++            "openvino_e5_used": self.openvino_e5_used,
++            "qdrant_write_performed": self.qdrant_write_performed,
++            "qdrant_returns_references_only": self.qdrant_returns_references_only,
++            "sql_remains_authority": self.sql_remains_authority,
++        }
++
++
++class _Pipeline:
++    def __init__(self) -> None:
++        self.texts: list[str] = []
++
++    async def embed_text(self, text: str) -> object:
++        self.texts.append(text)
++        vector = SimpleNamespace(
++            values=(1.0,) + (0.0,) * 383,
++            dimension=384,
++            normalized=True,
++        )
++        return SimpleNamespace(vector=vector)
++
++
++class _Writer:
++    def __init__(self) -> None:
++        self.calls: list[dict[str, object]] = []
++
++    def upsert_named_hybrid_point(self, **kwargs: object) -> object:
++        self.calls.append(dict(kwargs))
++        return SimpleNamespace(
++            acknowledged=True,
++            point_id=kwargs["point_id"],
++        )
++
++
++def _object() -> ContextAuthorityObject:
++    body = '{"concepts":["attachement"],"affects":["confiance"]}'
++    return ContextAuthorityObject(
++        schema=CONTEXT_AUTHORITY_OBJECT_SCHEMA,
++        object_ref="sql:love-analysis:test",
++        object_kind="specialist_analysis",
++        content_schema_ref="missipy.love.analysis.v1",
++        content_digest="sha256:" + "b" * 64,
++        title="Analyse conceptuelle",
++        body=body,
++        media_type="application/json",
++        byte_count=len(body.encode()),
++        metadata={"contribution_kind": "concept_affect_analysis"},
++    )
++
++
++def _revision(*, state: str = "active") -> ContextRevision:
++    return ContextRevision(
++        schema=CONTEXT_REVISION_SCHEMA,
++        revision_ref="context-revision:analysis-test",
++        context_ref="context:love-study-test",
++        parent_revision_refs=(),
++        memberships=(
++            ContextRevisionMembership(
++                schema=CONTEXT_REVISION_MEMBERSHIP_SCHEMA,
++                object_ref="sql:love-analysis:test",
++                state=state,
++            ),
++        ),
++        validation_status="accepted",
++        significance="material",
++        created_at="2026-07-17T18:00:00+02:00",
++    )
++
++
++def _project(adapter: LoveQdrantLiveAnalysisProjection, **overrides: object) -> object:
++    values = {
++        "revision": _revision(),
++        "branch_ref": "branch:main",
++        "project_ref": "project:autodoc",
++        "conversation_ref": "conversation:love-test",
++        "specialist_ref": "specialist:love-concept-affect",
++        "laboratory_ref": "laboratory:love-studies",
++        "security_scope": "security-scope:project",
++        "projected_at": "2026-07-17T18:00:00+02:00",
++    }
++    values.update(overrides)
++    return asyncio.run(adapter.project(_object(), **values))
++
++
++def test_projects_passage_dense_and_same_sparse_lexical_scheme() -> None:
++    pipeline = _Pipeline()
++    writer = _Writer()
++    adapter = LoveQdrantLiveAnalysisProjection(
++        pipeline=pipeline,
++        writer=writer,
++        receipt_factory=_Receipt,
++    )
++
++    receipt = _project(adapter)
++
++    assert pipeline.texts[0].startswith("passage: Analyse conceptuelle")
++    call = writer.calls[0]
++    plain = pipeline.texts[0].removeprefix("passage: ")
++    expected_sparse = build_sparse_lexical_query(
++        plain,
++        query_ref=receipt.projection.projection_ref,
++        vector_name="sparse_lexical_v1",
++    )
++    assert call["sparse_indices"] == expected_sparse.indices
++    assert call["sparse_values"] == expected_sparse.weights
++    assert call["dense_values"] == (1.0,) + (0.0,) * 383
++    assert receipt.projection.dimension == 384
++    assert receipt.projection.normalized is True
++
++
++def test_qdrant_payload_contains_references_but_not_sql_body() -> None:
++    writer = _Writer()
++    adapter = LoveQdrantLiveAnalysisProjection(
++        pipeline=_Pipeline(),
++        writer=writer,
++        receipt_factory=_Receipt,
++    )
++
++    receipt = _project(adapter)
++    payload = writer.calls[0]["payload"]
++    mapping = receipt.to_mapping()
++
++    assert payload["sql_ref"] == "sql:love-analysis:test"
++    assert payload["source_content_digest"] == "sha256:" + "b" * 64
++    assert "body" not in payload
++    assert "content" not in payload
++    assert mapping["projection"]["vector_values_stored"] is False
++    assert "raw_vector" not in mapping["projection"]["metadata"]
++
++
++def test_passage_prefix_is_not_duplicated() -> None:
++    pipeline = _Pipeline()
++    adapter = LoveQdrantLiveAnalysisProjection(
++        pipeline=pipeline,
++        writer=_Writer(),
++        receipt_factory=_Receipt,
++    )
++    authority = _object()
++    prefixed = ContextAuthorityObject(
++        schema=authority.schema,
++        object_ref=authority.object_ref,
++        object_kind=authority.object_kind,
++        content_schema_ref=authority.content_schema_ref,
++        content_digest=authority.content_digest,
++        title="passage: Analyse conceptuelle",
++        body=authority.body,
++        media_type=authority.media_type,
++        byte_count=authority.byte_count,
++        metadata=authority.metadata,
++    )
++    asyncio.run(
++        adapter.project(
++            prefixed,
++            revision=_revision(),
++            branch_ref="branch:main",
++            project_ref="project:autodoc",
++            conversation_ref="conversation:love-test",
++            specialist_ref="specialist:love-concept-affect",
++            laboratory_ref="laboratory:love-studies",
++            security_scope="security-scope:project",
++        )
++    )
++    assert pipeline.texts[0].count("passage:") == 1
++
++
++def test_inactive_revision_membership_fails_before_embedding() -> None:
++    pipeline = _Pipeline()
++    writer = _Writer()
++    adapter = LoveQdrantLiveAnalysisProjection(
++        pipeline=pipeline,
++        writer=writer,
++        receipt_factory=_Receipt,
++    )
++    with pytest.raises(
++        LoveQdrantLiveAnalysisProjectionError,
++        match="active member",
++    ):
++        _project(adapter, revision=_revision(state="invalidated"))
++    assert pipeline.texts == []
++    assert writer.calls == []
+diff --git a/tests/context/test_qdrant_client_named_hybrid_projection_0287_r7_r15_r3_r11.py b/tests/context/test_qdrant_client_named_hybrid_projection_0287_r7_r15_r3_r11.py
+new file mode 100644
+index 0000000..7e51956
+--- /dev/null
++++ b/tests/context/test_qdrant_client_named_hybrid_projection_0287_r7_r15_r3_r11.py
+@@ -0,0 +1,122 @@
++from types import SimpleNamespace
++
++import pytest
++
++from inference.qdrant_client_projection_executor import (
++    QdrantClientConnectionConfig,
++    QdrantClientEffectGate,
++    QdrantClientExecutionError,
++    QdrantClientProjectionExecutor,
++)
++
++
++class _PointStruct:
++    def __init__(self, **kwargs: object) -> None:
++        self.__dict__.update(kwargs)
++
++
++class _SparseVector:
++    def __init__(self, **kwargs: object) -> None:
++        self.__dict__.update(kwargs)
++
++
++class _Client:
++    def __init__(self) -> None:
++        self.calls: list[dict[str, object]] = []
++
++    def upsert(self, **kwargs: object) -> object:
++        self.calls.append(dict(kwargs))
++        return SimpleNamespace(status="completed")
++
++
++def _payload() -> dict[str, object]:
++    return {
++        "point_id": "qdrant-point:test",
++        "sql_ref": "sql:analysis:test",
++        "source_ref": "sql:analysis:test",
++        "source_content_digest": "sha256:" + "a" * 64,
++        "context_revision_ref": "context-revision:test",
++        "branch_ref": "branch:main",
++        "project_ref": "project:test",
++        "conversation_ref": "conversation:test",
++        "artifact_kind": "specialist_analysis",
++        "contribution_kind": "concept_affect_analysis",
++        "specialist_ref": "specialist:test",
++        "laboratory_ref": "laboratory:test",
++        "security_scope": "security-scope:test",
++        "valid": True,
++        "superseded_by": "",
++    }
++
++
++def _executor(*, allow_write: bool = True) -> tuple[QdrantClientProjectionExecutor, _Client]:
++    client = _Client()
++    models = SimpleNamespace(PointStruct=_PointStruct, SparseVector=_SparseVector)
++    executor = QdrantClientProjectionExecutor(
++        client=client,
++        models_module=models,
++        config=QdrantClientConnectionConfig(),
++        gate=QdrantClientEffectGate(
++            policy_decision_id="policy:r11-test",
++            allow_write=allow_write,
++        ),
++    )
++    return executor, client
++
++
++def test_upserts_one_named_dense_sparse_point_without_content() -> None:
++    executor, client = _executor()
++    result = executor.upsert_named_hybrid_point(
++        collection_name="autodoc_context_e5_384_hybrid_v1",
++        point_id="qdrant-point:test",
++        dense_vector_name="dense_e5_v1",
++        dense_values=(1.0,) + (0.0,) * 383,
++        sparse_vector_name="sparse_lexical_v1",
++        sparse_indices=(7, 11),
++        sparse_values=(0.6, 0.8),
++        payload=_payload(),
++    )
++
++    assert result.acknowledged is True
++    assert result.to_mapping()["boundaries"]["vectors_serialized"] is False
++    call = client.calls[0]
++    point = call["points"][0]
++    assert tuple(point.vector) == ("dense_e5_v1", "sparse_lexical_v1")
++    assert point.vector["dense_e5_v1"] == [1.0] + [0.0] * 383
++    assert point.vector["sparse_lexical_v1"].indices == [7, 11]
++    assert "body" not in point.payload
++    assert "content" not in point.payload
++
++
++def test_named_hybrid_upsert_requires_explicit_write_gate() -> None:
++    executor, client = _executor(allow_write=False)
++    with pytest.raises(QdrantClientExecutionError, match="gate_denied"):
++        executor.upsert_named_hybrid_point(
++            collection_name="autodoc_context_e5_384_hybrid_v1",
++            point_id="qdrant-point:test",
++            dense_vector_name="dense_e5_v1",
++            dense_values=(1.0,) + (0.0,) * 383,
++            sparse_vector_name="sparse_lexical_v1",
++            sparse_indices=(7,),
++            sparse_values=(1.0,),
++            payload=_payload(),
++        )
++    assert client.calls == []
++
++
++def test_named_hybrid_upsert_rejects_authoritative_body() -> None:
++    executor, client = _executor()
++    payload = _payload()
++    payload["body"] = "must remain in SQL"
++    with pytest.raises(QdrantClientExecutionError, match="forbidden_payload"):
++        executor.upsert_named_hybrid_point(
++            collection_name="autodoc_context_e5_384_hybrid_v1",
++            point_id="qdrant-point:test",
++            dense_vector_name="dense_e5_v1",
++            dense_values=(1.0,) + (0.0,) * 383,
++            sparse_vector_name="sparse_lexical_v1",
++            sparse_indices=(7,),
++            sparse_values=(1.0,),
++            payload=payload,
++        )
++    assert client.calls == []
+diff --git a/tests/rules/test_love_qdrant_live_analysis_projection_0287_r7_r15_r3_r11_rule.py b/tests/rules/test_love_qdrant_live_analysis_projection_0287_r7_r15_r3_r11_rule.py
+new file mode 100644
+index 0000000..3d2ce22
+--- /dev/null
++++ b/tests/rules/test_love_qdrant_live_analysis_projection_0287_r7_r15_r3_r11_rule.py
+@@ -0,0 +1,46 @@
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++SOURCE = ROOT / "src/context/love_qdrant_live_analysis_projection_0287.py"
++EXECUTOR = ROOT / "src/inference/qdrant_client_projection_executor.py"
++
++
++def test_r11_reuses_existing_ports_and_keeps_authority_boundaries() -> None:
++    source = SOURCE.read_text(encoding="utf-8")
++    executor = EXECUTOR.read_text(encoding="utf-8")
++
++    for required in (
++        "AsyncEmbeddingPipeline",
++        "build_sparse_lexical_query",
++        "await self._pipeline.embed_text",
++        'passage_prefix: str = "passage:"',
++        'dense_vector_name: str = "dense_e5_v1"',
++        'sparse_vector_name: str = "sparse_lexical_v1"',
++        'collection_name: str = "autodoc_context_e5_384_hybrid_v1"',
++        "VectorProjectionMetadata",
++        "reference_only_payload",
++        "authoritative_body_in_qdrant",
++    ):
++        assert required in source
++
++    for required in (
++        "def upsert_named_hybrid_point",
++        "self._models.PointStruct",
++        "self._models.SparseVector",
++        "self._gate.allow_write",
++        "_canonical_named_projection_payload",
++        "with_vectors=False",
++    ):
++        assert required in executor
++
++    combined = source + executor
++    for forbidden in (
++        "Scheduler(",
++        "LaboratoryManager",
++        "asyncio.run(",
++        "psycopg.connect",
++        "create_collection(",
++        "delete_collection(",
++        "update_collection_aliases(",
++    ):
++        assert forbidden not in combined

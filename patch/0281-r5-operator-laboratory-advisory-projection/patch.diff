@@ -1,0 +1,1085 @@
+diff --git a/PHASE0281_R5_OPERATOR_LABORATORY_ADVISORY_PROJECTION_REPORT.md b/PHASE0281_R5_OPERATOR_LABORATORY_ADVISORY_PROJECTION_REPORT.md
+new file mode 100644
+index 0000000..a39994a
+--- /dev/null
++++ b/PHASE0281_R5_OPERATOR_LABORATORY_ADVISORY_PROJECTION_REPORT.md
+@@ -0,0 +1,52 @@
++# Phase 0281-r5 report — operator/laboratory advisory projection
++
++## Result
++
++A validated Copilot advisory can now be projected into the existing
++operator-approved fake laboratory path as a typed hint-only context.
++
++The projection preserves the complete human-readable advisory fields for
++operator and laboratory review, while the authoritative request and
++SourceCandidate remain unchanged.
++
++## Validation
++
++```bash
++PYTHONPATH=src:. python -m pytest -q \
++  tests/context/test_github_operator_laboratory_advisory_projection_0281.py \
++  tests/rules/test_github_operator_laboratory_advisory_projection_0281_rule.py
++
++PYTHONPATH=src:. python -m pytest -q tests/rules
++PYTHONPATH=src:. python -m pytest -q
++```
++
++## Phase review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: existing 0275 intake/laboratory composition and 0274 Scheduler path are reused
++live_path_status: transition
++context_contract_version: missipy.github.operator_laboratory_advisory_projection.v1
++context_contract_changed: true
++external_dependencies_added: false
++scheduler_modified: false
++scheduler_run_modified: false
++parallel_orchestrator_added: false
++network_added: false
++github_api_added: false
++github_mutation_added: false
++sql_surface_changed: false
++qdrant_surface_changed: false
++projects_repository_change_required: false
++projects_repository_change_reason: newicody/projects already emits the validated advisory artifact
++```
++
++```text
++newicody/projects: no modification required
++```
++
++The next phase is `0281-r6-controlled-advisory-issue-publication`.
++That phase is expected to require a `newicody/projects` change only when the
++controlled publication adapter is deployed with `issues: write`; the Autodoc
++contract itself must remain gated and mutation-closed by default.
+diff --git a/doc/architecture/GITHUB_OPERATOR_LABORATORY_ADVISORY_PROJECTION_0281.md b/doc/architecture/GITHUB_OPERATOR_LABORATORY_ADVISORY_PROJECTION_0281.md
+new file mode 100644
+index 0000000..591670c
+--- /dev/null
++++ b/doc/architecture/GITHUB_OPERATOR_LABORATORY_ADVISORY_PROJECTION_0281.md
+@@ -0,0 +1,70 @@
++# GitHub operator/laboratory advisory projection — 0281-r5
++
++## Purpose
++
++Project the complete, validated Copilot advisory into the existing fake
++laboratory path without changing authority or orchestration.
++
++```text
++0275 intake
++-> explicit promote/merge operator decision
++-> hint-only advisory context projection
++-> existing 0275 laboratory smoke
++-> existing Scheduler
++-> existing 0274 fake laboratory closed loop
++-> local publication preview
++```
++
++## Projection
++
++The advisory is retained as a structured mapping containing its summary,
++suggested route, assumptions, questions, risks, confidence, producer and
++correlation identifiers.
++
++A deterministic typed reference is derived:
++
++```text
++ctx:github-advisory:<digest>
++```
++
++The reference is added to `ServerOrientation.context_refs`. The orientation
++also receives two explicit directives:
++
++- use the advisory only as a consultative hypothesis;
++- never interpret it as authority, validation, policy approval or publication
++  authorization.
++
++The full advisory remains available in the result mapping and raw artifact.
++It is not copied into the authoritative request or SourceCandidate body.
++
++## Existing path reuse
++
++This phase reuses:
++
++- `run_github_dual_artifact_source_candidate_intake` from 0275;
++- `GitHubDualArtifactLaboratorySmokeCommand` from 0275;
++- `run_github_dual_artifact_laboratory_smoke` from 0275;
++- the existing Scheduler and fake laboratory closed loop from 0274.
++
++No Scheduler, queue, EventBus, manager, registry or laboratory orchestrator is
++created.
++
++## Operator boundary
++
++Only `promote` or `merge` decisions may enter this path. The immutable
++`policy_decision_id` must start with `policy:`.
++
++The resulting publication content is still only a local preview. Remote
++mutation remains forbidden until 0281-r6 reuses the 0276 controlled publication
++boundary and collision guard.
++
++## Repository impact
++
++```text
++newicody/autodoc: modification required
++newicody/projects: no modification required
++projects_repository_change_required: false
++```
++
++The GitHub workflow already emits the complete advisory. This patch is entirely
++inside the local Autodoc context/laboratory composition.
+diff --git a/doc/manifests/MANIFEST_0281_R5_OPERATOR_LABORATORY_ADVISORY_PROJECTION.md b/doc/manifests/MANIFEST_0281_R5_OPERATOR_LABORATORY_ADVISORY_PROJECTION.md
+new file mode 100644
+index 0000000..e6d7276
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0281_R5_OPERATOR_LABORATORY_ADVISORY_PROJECTION.md
+@@ -0,0 +1,21 @@
++# Manifest 0281-r5 — operator/laboratory advisory projection
++
++Changed files:
++
++- `src/context/github_operator_laboratory_advisory_projection_0281.py`
++- `tests/context/test_github_operator_laboratory_advisory_projection_0281.py`
++- `tests/rules/test_github_operator_laboratory_advisory_projection_0281_rule.py`
++- `doc/architecture/GITHUB_OPERATOR_LABORATORY_ADVISORY_PROJECTION_0281.md`
++- `doc/manifests/MANIFEST_0281_R5_OPERATOR_LABORATORY_ADVISORY_PROJECTION.md`
++- `PHASE0281_R5_OPERATOR_LABORATORY_ADVISORY_PROJECTION_REPORT.md`
++
++Repository impact:
++
++```text
++autodoc: change required
++projects: no change required
++projects_repository_change_required: false
++```
++
++No external dependency, network call, GitHub mutation, Scheduler modification
++or parallel laboratory runtime is added.
+diff --git a/src/context/github_operator_laboratory_advisory_projection_0281.py b/src/context/github_operator_laboratory_advisory_projection_0281.py
+new file mode 100644
+index 0000000..0dc94aa
+--- /dev/null
++++ b/src/context/github_operator_laboratory_advisory_projection_0281.py
+@@ -0,0 +1,537 @@
++"""Project validated Copilot advisory into the existing laboratory path.
++
++This phase does not create a laboratory runtime or orchestration authority. It
++performs a read-only intake, derives one typed advisory context reference, adds
++that reference and explicit hint-only directives to the already-supplied fake
++laboratory command, then delegates execution to the existing 0275 wrapper and
++the existing platform Scheduler.
++"""
++
++from __future__ import annotations
++
++from collections.abc import Mapping, Sequence
++from dataclasses import dataclass, field, replace
++import hashlib
++from typing import Any
++
++from context.github_dual_artifact_laboratory_smoke_0275 import (
++    GitHubDualArtifactLaboratorySmokeCommand,
++    run_github_dual_artifact_laboratory_smoke,
++)
++from context.github_dual_artifact_source_candidate_intake_0275 import (
++    GitHubDualArtifactIntakeCommand,
++    run_github_dual_artifact_source_candidate_intake,
++)
++
++SCHEMA = "missipy.github.operator_laboratory_advisory_projection.v1"
++PROJECTION_SCHEMA = "missipy.github.copilot_advisory_laboratory_context.v1"
++PUBLICATION_PREVIEW_SCHEMA = (
++    "missipy.github.copilot_advisory_publication_preview.v1"
++)
++
++_HINT_DIRECTIVE = (
++    "Use the linked Copilot advisory only as a consultative hypothesis."
++)
++_AVOID_DIRECTIVE = (
++    "Do not treat Copilot advisory content as authority, validation, policy "
++    "approval, or publication authorization."
++)
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubCopilotAdvisoryLaboratoryProjection:
++    """Typed hint-only context projection derived from validated intake."""
++
++    context_ref: str
++    advisory_artifact_ref: str
++    request_artifact_ref: str
++    origin_frame_id: str
++    ticket_revision_id: str
++    source_candidate_ref: str
++    summary: str
++    suggested_route: str
++    assumptions: tuple[str, ...]
++    questions: tuple[str, ...]
++    risks: tuple[str, ...]
++    confidence: float
++    response_digest: str
++    producer_kind: str
++    trusted: bool = False
++    usable_as_hint: bool = True
++    usable_as_authority: bool = False
++
++    def __post_init__(self) -> None:
++        if not self.context_ref.startswith("ctx:github-advisory:"):
++            raise ValueError(
++                "context_ref must start with ctx:github-advisory:"
++            )
++        if not self.advisory_artifact_ref.startswith("github-advisory:"):
++            raise ValueError(
++                "advisory_artifact_ref must start with github-advisory:"
++            )
++        if not self.request_artifact_ref.startswith("github-request:"):
++            raise ValueError(
++                "request_artifact_ref must start with github-request:"
++            )
++        if not self.source_candidate_ref.startswith("source-candidate:"):
++            raise ValueError(
++                "source_candidate_ref must start with source-candidate:"
++            )
++        if not self.summary.strip() or not self.suggested_route.strip():
++            raise ValueError(
++                "summary and suggested_route must not be empty"
++            )
++        if not 0.0 <= self.confidence <= 1.0:
++            raise ValueError("confidence must be between 0 and 1")
++        if self.trusted or not self.usable_as_hint or self.usable_as_authority:
++            raise ValueError("advisory authority flags are locked")
++        for name in ("assumptions", "questions", "risks"):
++            values = getattr(self, name)
++            if not isinstance(values, tuple):
++                object.__setattr__(self, name, tuple(values))
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": PROJECTION_SCHEMA,
++            "context_ref": self.context_ref,
++            "advisory_artifact_ref": self.advisory_artifact_ref,
++            "request_artifact_ref": self.request_artifact_ref,
++            "origin_frame_id": self.origin_frame_id,
++            "ticket_revision_id": self.ticket_revision_id,
++            "source_candidate_ref": self.source_candidate_ref,
++            "summary": self.summary,
++            "suggested_route": self.suggested_route,
++            "assumptions": list(self.assumptions),
++            "questions": list(self.questions),
++            "risks": list(self.risks),
++            "confidence": self.confidence,
++            "response_digest": self.response_digest,
++            "producer_kind": self.producer_kind,
++            "trusted": False,
++            "usable_as_hint": True,
++            "usable_as_authority": False,
++            "content_retained_for_operator_and_laboratory": True,
++            "content_copied_into_authoritative_request": False,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubOperatorLaboratoryAdvisoryProjectionCommand:
++    """Operator-authorized composition over the existing 0275 smoke."""
++
++    smoke: GitHubDualArtifactLaboratorySmokeCommand
++    require_advisory: bool = True
++    inject_context_ref: bool = True
++    increment_context_generation: bool = True
++
++    def __post_init__(self) -> None:
++        if not isinstance(
++            self.smoke,
++            GitHubDualArtifactLaboratorySmokeCommand,
++        ):
++            raise TypeError(
++                "smoke must be GitHubDualArtifactLaboratorySmokeCommand"
++            )
++        if self.smoke.decision.action not in {"promote", "merge"}:
++            raise ValueError(
++                "operator laboratory projection requires promote or merge"
++            )
++        if not self.smoke.policy_decision_id.startswith("policy:"):
++            raise ValueError(
++                "policy_decision_id must start with policy:"
++            )
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubOperatorLaboratoryAdvisoryProjectionResult:
++    """Stable result preserving authority and orchestration boundaries."""
++
++    valid: bool
++    issues: tuple[str, ...]
++    intake: Mapping[str, Any] = field(default_factory=dict)
++    advisory_projection: Mapping[str, Any] = field(default_factory=dict)
++    operator_decision: Mapping[str, Any] = field(default_factory=dict)
++    effective_laboratory_command: Mapping[str, Any] = field(
++        default_factory=dict
++    )
++    laboratory: Mapping[str, Any] = field(default_factory=dict)
++    publication_preview: Mapping[str, Any] = field(default_factory=dict)
++    advisory_present: bool = False
++    advisory_injected: bool = False
++    request_authoritative: bool = True
++    advisory_used_as_hint_only: bool = True
++    existing_scheduler_used: bool = True
++    scheduler_created: bool = False
++    scheduler_modified: bool = False
++    parallel_orchestrator_created: bool = False
++    github_mutation_performed: bool = False
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": SCHEMA,
++            "valid": self.valid,
++            "issues": list(self.issues),
++            "intake": dict(self.intake),
++            "advisory_projection": dict(self.advisory_projection),
++            "operator_decision": dict(self.operator_decision),
++            "effective_laboratory_command": dict(
++                self.effective_laboratory_command
++            ),
++            "laboratory": dict(self.laboratory),
++            "publication_preview": dict(self.publication_preview),
++            "advisory_present": self.advisory_present,
++            "advisory_injected": self.advisory_injected,
++            "request_authoritative": True,
++            "advisory_used_as_hint_only": True,
++            "existing_scheduler_used": True,
++            "scheduler_created": False,
++            "scheduler_modified": False,
++            "parallel_orchestrator_created": False,
++            "github_mutation_performed": False,
++            "publication_gate_required": True,
++        }
++
++
++async def run_github_operator_laboratory_advisory_projection(
++    scheduler: Any,
++    request_bytes: bytes,
++    manifest_bytes: bytes,
++    advisory_bytes: bytes | None,
++    command: GitHubOperatorLaboratoryAdvisoryProjectionCommand,
++    **laboratory_dependencies: Any,
++) -> GitHubOperatorLaboratoryAdvisoryProjectionResult:
++    """Project advisory context and run the existing laboratory smoke."""
++
++    intake = run_github_dual_artifact_source_candidate_intake(
++        request_bytes,
++        manifest_bytes,
++        advisory_bytes,
++        command=GitHubDualArtifactIntakeCommand(
++            allow_missing_advisory=not command.require_advisory,
++            policy_decision_id=command.smoke.policy_decision_id,
++        ),
++    )
++    intake_mapping = intake.to_mapping()
++    if not intake.valid:
++        return _result(
++            issues=intake.issues,
++            intake=intake_mapping,
++            command=command,
++        )
++
++    advisory = _mapping(intake_mapping.get("advisory"))
++    if not advisory:
++        if command.require_advisory:
++            return _result(
++                issues=("validated Copilot advisory is required",),
++                intake=intake_mapping,
++                command=command,
++            )
++        effective_smoke = command.smoke
++        projection = None
++    else:
++        try:
++            projection = build_copilot_advisory_laboratory_projection(
++                intake_mapping
++            )
++            effective_smoke = _project_into_smoke_command(
++                command.smoke,
++                projection,
++                inject_context_ref=command.inject_context_ref,
++                increment_context_generation=(
++                    command.increment_context_generation
++                ),
++            )
++        except (TypeError, ValueError) as exc:
++            return _result(
++                issues=(str(exc),),
++                intake=intake_mapping,
++                command=command,
++            )
++
++    laboratory_result = await run_github_dual_artifact_laboratory_smoke(
++        scheduler,
++        request_bytes,
++        manifest_bytes,
++        advisory_bytes,
++        effective_smoke,
++        **laboratory_dependencies,
++    )
++    laboratory_mapping = laboratory_result.to_mapping()
++    issues = list(getattr(laboratory_result, "issues", ()))
++    if not getattr(laboratory_result, "valid", False):
++        issues.append("existing 0275 laboratory smoke is invalid")
++    if laboratory_mapping.get("github_mutation_performed") is True:
++        issues.append("laboratory smoke mutated GitHub")
++    if laboratory_mapping.get("scheduler_created") is True:
++        issues.append("laboratory smoke created a Scheduler")
++    if laboratory_mapping.get("parallel_orchestrator_created") is True:
++        issues.append("laboratory smoke created a parallel orchestrator")
++
++    projection_mapping = (
++        {} if projection is None else projection.to_mapping()
++    )
++    preview = _publication_preview(
++        intake_mapping=intake_mapping,
++        projection=projection,
++        laboratory_mapping=laboratory_mapping,
++    )
++    return GitHubOperatorLaboratoryAdvisoryProjectionResult(
++        valid=not issues,
++        issues=_unique_text(issues),
++        intake=intake_mapping,
++        advisory_projection=projection_mapping,
++        operator_decision=command.smoke.decision.to_json_dict(),
++        effective_laboratory_command=effective_smoke.laboratory.to_mapping(),
++        laboratory=laboratory_mapping,
++        publication_preview=preview,
++        advisory_present=bool(advisory),
++        advisory_injected=(
++            projection is not None and command.inject_context_ref
++        ),
++    )
++
++
++def build_copilot_advisory_laboratory_projection(
++    intake_mapping: Mapping[str, Any],
++) -> GitHubCopilotAdvisoryLaboratoryProjection:
++    """Build one typed context projection from a validated 0275 intake."""
++
++    if intake_mapping.get("valid") is not True:
++        raise ValueError("intake must be valid before advisory projection")
++    if intake_mapping.get("request_authoritative") is not True:
++        raise ValueError("request must remain authoritative")
++    if intake_mapping.get("advisory_used_as_hint_only") is not True:
++        raise ValueError("advisory must remain hint-only")
++
++    request = _mapping(intake_mapping.get("request"))
++    advisory = _mapping(intake_mapping.get("advisory"))
++    candidate = _mapping(intake_mapping.get("source_candidate"))
++    if not request or not advisory or not candidate:
++        raise ValueError(
++            "request, advisory and source_candidate are required"
++        )
++    if advisory.get("trusted") is not False:
++        raise ValueError("advisory trusted flag must remain false")
++    if advisory.get("usable_as_hint") is not True:
++        raise ValueError("advisory must be usable as hint")
++    if advisory.get("usable_as_authority") is not False:
++        raise ValueError("advisory must not be usable as authority")
++    if advisory.get("request_artifact_ref") != request.get("artifact_ref"):
++        raise ValueError("advisory/request correlation mismatch")
++
++    candidate_id = _required_text(
++        "source_candidate.candidate_id",
++        candidate.get("candidate_id"),
++    )
++    advisory_ref = _required_text(
++        "advisory.artifact_ref",
++        advisory.get("artifact_ref"),
++    )
++    response_digest = _required_text(
++        "advisory.response_digest",
++        advisory.get("response_digest"),
++    )
++    identity = "\0".join(
++        (
++            advisory_ref,
++            response_digest,
++            candidate_id,
++        )
++    )
++    context_ref = (
++        "ctx:github-advisory:"
++        + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
++    )
++    return GitHubCopilotAdvisoryLaboratoryProjection(
++        context_ref=context_ref,
++        advisory_artifact_ref=advisory_ref,
++        request_artifact_ref=_required_text(
++            "request.artifact_ref",
++            request.get("artifact_ref"),
++        ),
++        origin_frame_id=_required_text(
++            "advisory.origin_frame_id",
++            advisory.get("origin_frame_id"),
++        ),
++        ticket_revision_id=_required_text(
++            "advisory.ticket_revision_id",
++            advisory.get("ticket_revision_id"),
++        ),
++        source_candidate_ref=f"source-candidate:{candidate_id}",
++        summary=_required_text("advisory.summary", advisory.get("summary")),
++        suggested_route=_required_text(
++            "advisory.suggested_route",
++            advisory.get("suggested_route"),
++        ),
++        assumptions=_string_tuple(advisory.get("assumptions")),
++        questions=_string_tuple(advisory.get("questions")),
++        risks=_string_tuple(advisory.get("risks")),
++        confidence=float(advisory.get("confidence", 0.0)),
++        response_digest=response_digest,
++        producer_kind=str(
++            advisory.get("producer_kind", "github_copilot_cli")
++        ),
++    )
++
++
++def _project_into_smoke_command(
++    smoke: GitHubDualArtifactLaboratorySmokeCommand,
++    projection: GitHubCopilotAdvisoryLaboratoryProjection,
++    *,
++    inject_context_ref: bool,
++    increment_context_generation: bool,
++) -> GitHubDualArtifactLaboratorySmokeCommand:
++    laboratory = smoke.laboratory
++    deliberation = laboratory.deliberation
++    orientation = deliberation.orientation
++
++    context_refs = tuple(orientation.context_refs)
++    newly_injected = (
++        inject_context_ref
++        and projection.context_ref not in context_refs
++    )
++    if newly_injected:
++        context_refs = (*context_refs, projection.context_ref)
++
++    metadata = dict(orientation.metadata)
++    metadata.update(
++        {
++            "copilot_advisory_context_ref": projection.context_ref,
++            "copilot_advisory_artifact_ref": (
++                projection.advisory_artifact_ref
++            ),
++            "copilot_advisory_hint_only": "true",
++            "copilot_advisory_response_digest": (
++                projection.response_digest
++            ),
++        }
++    )
++    effective_orientation = replace(
++        orientation,
++        context_refs=context_refs,
++        do_directives=_unique_text(
++            (*orientation.do_directives, _HINT_DIRECTIVE)
++        ),
++        avoid_directives=_unique_text(
++            (*orientation.avoid_directives, _AVOID_DIRECTIVE)
++        ),
++        metadata=tuple(metadata.items()),
++    )
++    generation_increment = (
++        1
++        if newly_injected and increment_context_generation
++        else 0
++    )
++    effective_deliberation = replace(
++        deliberation,
++        orientation=effective_orientation,
++        source_candidate_ref=projection.source_candidate_ref,
++        context_generation=(
++            deliberation.context_generation + generation_increment
++        ),
++    )
++    effective_laboratory = replace(
++        laboratory,
++        deliberation=effective_deliberation,
++    )
++    return replace(smoke, laboratory=effective_laboratory)
++
++
++def _publication_preview(
++    *,
++    intake_mapping: Mapping[str, Any],
++    projection: GitHubCopilotAdvisoryLaboratoryProjection | None,
++    laboratory_mapping: Mapping[str, Any],
++) -> dict[str, Any]:
++    candidate = _mapping(intake_mapping.get("source_candidate"))
++    laboratory_preview = _mapping(
++        laboratory_mapping.get("publication_preview")
++    )
++    return {
++        "schema": PUBLICATION_PREVIEW_SCHEMA,
++        "source_candidate_ref": candidate.get("candidate_id", ""),
++        "advisory_context_ref": (
++            "" if projection is None else projection.context_ref
++        ),
++        "advisory_artifact_ref": (
++            "" if projection is None else projection.advisory_artifact_ref
++        ),
++        "summary": "" if projection is None else projection.summary,
++        "suggested_route": (
++            "" if projection is None else projection.suggested_route
++        ),
++        "questions": (
++            [] if projection is None else list(projection.questions)
++        ),
++        "risks": [] if projection is None else list(projection.risks),
++        "confidence": (
++            None if projection is None else projection.confidence
++        ),
++        "laboratory_source_sql_ref": laboratory_preview.get(
++            "source_sql_ref",
++            "",
++        ),
++        "laboratory_source_final_ref": laboratory_preview.get(
++            "source_final_ref",
++            "",
++        ),
++        "advisory_is_authority": False,
++        "operator_decision_required": True,
++        "publication_gate_required": True,
++        "remote_mutation_allowed": False,
++        "github_mutation_performed": False,
++    }
++
++
++def _result(
++    *,
++    issues: Sequence[str],
++    intake: Mapping[str, Any],
++    command: GitHubOperatorLaboratoryAdvisoryProjectionCommand,
++) -> GitHubOperatorLaboratoryAdvisoryProjectionResult:
++    return GitHubOperatorLaboratoryAdvisoryProjectionResult(
++        valid=False,
++        issues=_unique_text(issues),
++        intake=dict(intake),
++        operator_decision=command.smoke.decision.to_json_dict(),
++        advisory_present=bool(_mapping(intake.get("advisory"))),
++    )
++
++
++def _mapping(value: object) -> Mapping[str, Any]:
++    return value if isinstance(value, Mapping) else {}
++
++
++def _required_text(name: str, value: object) -> str:
++    if not isinstance(value, str) or not value.strip():
++        raise ValueError(f"{name} must be non-empty")
++    return value.strip()
++
++
++def _string_tuple(value: object) -> tuple[str, ...]:
++    if not isinstance(value, (list, tuple)):
++        return ()
++    return tuple(
++        dict.fromkeys(
++            item.strip()
++            for item in value
++            if isinstance(item, str) and item.strip()
++        )
++    )
++
++
++def _unique_text(values: Sequence[str]) -> tuple[str, ...]:
++    return tuple(dict.fromkeys(value for value in values if value))
++
++
++__all__ = (
++    "PROJECTION_SCHEMA",
++    "PUBLICATION_PREVIEW_SCHEMA",
++    "SCHEMA",
++    "GitHubCopilotAdvisoryLaboratoryProjection",
++    "GitHubOperatorLaboratoryAdvisoryProjectionCommand",
++    "GitHubOperatorLaboratoryAdvisoryProjectionResult",
++    "build_copilot_advisory_laboratory_projection",
++    "run_github_operator_laboratory_advisory_projection",
++)
+diff --git a/tests/context/test_github_operator_laboratory_advisory_projection_0281.py b/tests/context/test_github_operator_laboratory_advisory_projection_0281.py
+new file mode 100644
+index 0000000..5f36ff7
+--- /dev/null
++++ b/tests/context/test_github_operator_laboratory_advisory_projection_0281.py
+@@ -0,0 +1,312 @@
++from __future__ import annotations
++
++import asyncio
++from dataclasses import dataclass, field
++from types import SimpleNamespace
++from typing import Any
++
++import context.github_operator_laboratory_advisory_projection_0281 as subject
++from context.github_dual_artifact_laboratory_smoke_0275 import (
++    GitHubDualArtifactLaboratorySmokeCommand,
++)
++
++
++@dataclass(frozen=True, slots=True)
++class Decision:
++    action: str = "promote"
++    reason: str = "operator approved"
++
++    def to_json_dict(self) -> dict[str, object]:
++        return {
++            "action": self.action,
++            "reason": self.reason,
++            "resulting_status": "promoted",
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class Orientation:
++    context_refs: tuple[str, ...] = ("sql:context:1",)
++    do_directives: tuple[str, ...] = ()
++    avoid_directives: tuple[str, ...] = ()
++    metadata: tuple[tuple[str, str], ...] = ()
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "context_refs": list(self.context_refs),
++            "do_directives": list(self.do_directives),
++            "avoid_directives": list(self.avoid_directives),
++            "metadata": dict(self.metadata),
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class Deliberation:
++    orientation: Orientation = Orientation()
++    source_candidate_ref: str = "source-candidate:old"
++    context_generation: int = 0
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "orientation": self.orientation.to_mapping(),
++            "source_candidate_ref": self.source_candidate_ref,
++            "context_generation": self.context_generation,
++        }
++
++
++@dataclass(frozen=True, slots=True)
++class Laboratory:
++    deliberation: Deliberation = Deliberation()
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {"deliberation": self.deliberation.to_mapping()}
++
++
++@dataclass(frozen=True, slots=True)
++class IntakeResult:
++    valid: bool
++    issues: tuple[str, ...]
++    mapping: dict[str, Any]
++
++    def to_mapping(self) -> dict[str, Any]:
++        return self.mapping
++
++
++@dataclass(frozen=True, slots=True)
++class LaboratoryResult:
++    valid: bool = True
++    issues: tuple[str, ...] = ()
++    mapping: dict[str, Any] = field(default_factory=lambda: {
++        "valid": True,
++        "github_mutation_performed": False,
++        "scheduler_created": False,
++        "parallel_orchestrator_created": False,
++        "publication_preview": {
++            "source_sql_ref": "sql:lab:1",
++            "source_final_ref": "artifact-final:lab:1",
++        },
++    })
++
++    def to_mapping(self) -> dict[str, Any]:
++        return self.mapping
++
++
++def _intake_mapping(with_advisory: bool = True) -> dict[str, Any]:
++    advisory = {
++        "schema": "missipy.github.copilot_advisory.v1",
++        "origin_frame_id": "github-frame:newicody/projects:15:42",
++        "ticket_revision_id": "github-ticket-revision:abc",
++        "artifact_ref": "github-advisory:abc",
++        "request_artifact_ref": "github-request:newicody/projects:15:def",
++        "response_digest": "a" * 64,
++        "summary": "Comparer les contraintes avant de produire.",
++        "suggested_route": "Demander un audit puis une synthèse.",
++        "assumptions": ["Le ticket est complet."],
++        "questions": ["Quel niveau de preuve est requis ?"],
++        "risks": ["Contexte incomplet."],
++        "confidence": 0.72,
++        "producer_kind": "github_copilot_cli",
++        "trusted": False,
++        "usable_as_hint": True,
++        "usable_as_authority": False,
++    } if with_advisory else {}
++    return {
++        "schema": "missipy.github.dual_artifact_source_candidate_intake.v1",
++        "valid": True,
++        "issues": [],
++        "request": {
++            "artifact_ref": "github-request:newicody/projects:15:def",
++        },
++        "advisory": advisory,
++        "manifest": {},
++        "source_candidate": {
++            "candidate_id": "github-request-0123456789abcdef",
++            "title": "Research",
++        },
++        "request_authoritative": True,
++        "advisory_used_as_hint_only": True,
++    }
++
++
++def _command() -> subject.GitHubOperatorLaboratoryAdvisoryProjectionCommand:
++    smoke = GitHubDualArtifactLaboratorySmokeCommand(
++        decision=Decision(),
++        laboratory=Laboratory(),
++        policy_decision_id="policy:test:0281-r5",
++    )
++    return subject.GitHubOperatorLaboratoryAdvisoryProjectionCommand(
++        smoke=smoke,
++    )
++
++
++def test_projection_retains_full_advisory_and_locks_authority() -> None:
++    projection = subject.build_copilot_advisory_laboratory_projection(
++        _intake_mapping()
++    )
++    mapping = projection.to_mapping()
++
++    assert mapping["context_ref"].startswith("ctx:github-advisory:")
++    assert mapping["summary"] == "Comparer les contraintes avant de produire."
++    assert mapping["questions"] == ["Quel niveau de preuve est requis ?"]
++    assert mapping["risks"] == ["Contexte incomplet."]
++    assert mapping["trusted"] is False
++    assert mapping["usable_as_hint"] is True
++    assert mapping["usable_as_authority"] is False
++    assert mapping["content_retained_for_operator_and_laboratory"] is True
++    assert mapping["content_copied_into_authoritative_request"] is False
++
++
++def test_projection_updates_existing_laboratory_command_idempotently() -> None:
++    projection = subject.build_copilot_advisory_laboratory_projection(
++        _intake_mapping()
++    )
++    smoke = _command().smoke
++
++    first = subject._project_into_smoke_command(
++        smoke,
++        projection,
++        inject_context_ref=True,
++        increment_context_generation=True,
++    )
++    second = subject._project_into_smoke_command(
++        first,
++        projection,
++        inject_context_ref=True,
++        increment_context_generation=True,
++    )
++
++    first_deliberation = first.laboratory.deliberation
++    second_deliberation = second.laboratory.deliberation
++    assert projection.context_ref in first_deliberation.orientation.context_refs
++    assert first_deliberation.context_generation == 1
++    assert second_deliberation.context_generation == 1
++    assert second_deliberation.orientation.context_refs.count(
++        projection.context_ref
++    ) == 1
++    assert (
++        first_deliberation.source_candidate_ref
++        == "source-candidate:github-request-0123456789abcdef"
++    )
++    assert any(
++        "consultative hypothesis" in directive
++        for directive in first_deliberation.orientation.do_directives
++    )
++    assert any(
++        "publication authorization" in directive
++        for directive in first_deliberation.orientation.avoid_directives
++    )
++
++
++def test_operator_projection_delegates_to_existing_smoke(
++    monkeypatch,
++) -> None:
++    captured: dict[str, Any] = {}
++
++    def fake_intake(*args, **kwargs):
++        return IntakeResult(True, (), _intake_mapping())
++
++    async def fake_laboratory(*args, **kwargs):
++        captured["command"] = args[4]
++        return LaboratoryResult()
++
++    monkeypatch.setattr(
++        subject,
++        "run_github_dual_artifact_source_candidate_intake",
++        fake_intake,
++    )
++    monkeypatch.setattr(
++        subject,
++        "run_github_dual_artifact_laboratory_smoke",
++        fake_laboratory,
++    )
++
++    result = asyncio.run(
++        subject.run_github_operator_laboratory_advisory_projection(
++            object(),
++            b"request",
++            b"manifest",
++            b"advisory",
++            _command(),
++            store=object(),
++        )
++    )
++
++    assert result.valid is True
++    assert result.advisory_present is True
++    assert result.advisory_injected is True
++    assert result.github_mutation_performed is False
++    assert result.scheduler_created is False
++    assert result.publication_preview["publication_gate_required"] is True
++    assert result.publication_preview["summary"].startswith("Comparer")
++    effective = captured["command"]
++    assert effective is not _command().smoke
++    assert effective.policy_decision_id == "policy:test:0281-r5"
++
++
++def test_required_missing_advisory_blocks_before_laboratory(
++    monkeypatch,
++) -> None:
++    called = False
++
++    def fake_intake(*args, **kwargs):
++        return IntakeResult(True, (), _intake_mapping(with_advisory=False))
++
++    async def fail_laboratory(*args, **kwargs):
++        nonlocal called
++        called = True
++        raise AssertionError("laboratory must not run")
++
++    monkeypatch.setattr(
++        subject,
++        "run_github_dual_artifact_source_candidate_intake",
++        fake_intake,
++    )
++    monkeypatch.setattr(
++        subject,
++        "run_github_dual_artifact_laboratory_smoke",
++        fail_laboratory,
++    )
++
++    result = asyncio.run(
++        subject.run_github_operator_laboratory_advisory_projection(
++            object(),
++            b"request",
++            b"manifest",
++            None,
++            _command(),
++        )
++    )
++
++    assert result.valid is False
++    assert result.issues == ("validated Copilot advisory is required",)
++    assert called is False
++
++
++def test_command_requires_operator_policy_and_promote_or_merge() -> None:
++    bad_policy = GitHubDualArtifactLaboratorySmokeCommand(
++        decision=Decision(),
++        laboratory=Laboratory(),
++        policy_decision_id="not-policy",
++    )
++    try:
++        subject.GitHubOperatorLaboratoryAdvisoryProjectionCommand(
++            smoke=bad_policy
++        )
++    except ValueError as exc:
++        assert "policy:" in str(exc)
++    else:
++        raise AssertionError("bad policy id must be rejected")
++
++    inspect = GitHubDualArtifactLaboratorySmokeCommand(
++        decision=Decision(action="inspect"),
++        laboratory=Laboratory(),
++        policy_decision_id="policy:test",
++    )
++    try:
++        subject.GitHubOperatorLaboratoryAdvisoryProjectionCommand(
++            smoke=inspect
++        )
++    except ValueError as exc:
++        assert "promote or merge" in str(exc)
++    else:
++        raise AssertionError("inspect must not enter laboratory execution")
+diff --git a/tests/rules/test_github_operator_laboratory_advisory_projection_0281_rule.py b/tests/rules/test_github_operator_laboratory_advisory_projection_0281_rule.py
+new file mode 100644
+index 0000000..c98b402
+--- /dev/null
++++ b/tests/rules/test_github_operator_laboratory_advisory_projection_0281_rule.py
+@@ -0,0 +1,57 @@
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++MODULE = (
++    ROOT
++    / "src/context/github_operator_laboratory_advisory_projection_0281.py"
++)
++ARCHITECTURE = (
++    ROOT
++    / "doc/architecture/GITHUB_OPERATOR_LABORATORY_ADVISORY_PROJECTION_0281.md"
++)
++REPORT = (
++    ROOT
++    / "PHASE0281_R5_OPERATOR_LABORATORY_ADVISORY_PROJECTION_REPORT.md"
++)
++
++
++def test_projection_reuses_existing_intake_smoke_and_scheduler_path() -> None:
++    text = MODULE.read_text(encoding="utf-8")
++
++    for required in (
++        "run_github_dual_artifact_source_candidate_intake",
++        "run_github_dual_artifact_laboratory_smoke",
++        "GitHubDualArtifactLaboratorySmokeCommand",
++        "ctx:github-advisory:",
++        "usable_as_hint",
++        "usable_as_authority",
++        "publication_gate_required",
++        "existing_scheduler_used",
++        "scheduler_created",
++        "parallel_orchestrator_created",
++        "github_mutation_performed",
++    ):
++        assert required in text
++
++    for forbidden in (
++        "Scheduler(",
++        "SchedulerContract(",
++        "asyncio.Queue(",
++        "EventBus(",
++        "QdrantClient(",
++        "requests.",
++        "urlopen(",
++        "gh api",
++        "issue comment",
++    ):
++        assert forbidden not in text
++
++
++def test_projects_repository_change_is_explicitly_false() -> None:
++    combined = (
++        ARCHITECTURE.read_text(encoding="utf-8")
++        + REPORT.read_text(encoding="utf-8")
++    )
++    assert "projects_repository_change_required: false" in combined
++    assert "newicody/projects: no modification required" in combined

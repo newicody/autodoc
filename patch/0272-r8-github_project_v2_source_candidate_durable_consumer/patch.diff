@@ -1,0 +1,1230 @@
+diff --git a/PHASE0272_R8_GITHUB_PROJECT_V2_DURABLE_CONSUMER_TEST_REPORT.md b/PHASE0272_R8_GITHUB_PROJECT_V2_DURABLE_CONSUMER_TEST_REPORT.md
+new file mode 100644
+index 0000000..5c142cf
+--- /dev/null
++++ b/PHASE0272_R8_GITHUB_PROJECT_V2_DURABLE_CONSUMER_TEST_REPORT.md
+@@ -0,0 +1,45 @@
++# Phase 0272-r8 test report — ProjectV2 durable consumer
++
++## Scope
++
++- approved r7 gate validation ;
++- existing SQL record builder reuse ;
++- SQL insert-if-absent and mandatory readback ;
++- immutable collision refusal ;
++- idempotent replay ;
++- laboratory-neutral durable metadata ;
++- OpenVINO/Qdrant/GitHub/Scheduler/SHM boundaries closed.
++
++## Review
++
++```text
++code_rule_review: done
++code_rule_update_required: false
++code_rule_reason: typed immutable command/plan/result and injected SQL effect reuse existing rules
++live_path_status: transition
++live_path_uses_real_backend: existing DB-API SQL store; SQLite local test binding
++context_contract_version: missipy.github.project_v2_source_candidate_durable_consumer_report.v1
++context_contract_changed: true
++search_commands_bounded: n/a
++non_stdlib_dependency_added: false
++```
++
++## Validation commands
++
++```bash
++PYTHONPATH=src:. python -m compileall -q src tests tools
++PYTHONPATH=src:. python -m pytest -q tests/rules
++PYTHONPATH=src:. python -m pytest -q \
++  tests/context/test_github_project_v2_source_candidate_durable_consumer_0272.py \
++  tests/tools/test_consume_github_project_v2_source_candidate_gate_0272.py
++```
++
++## Construction validation
++
++```text
++compileall added Python files: OK
++git diff --check: OK
++DOT syntax: checked when graphviz dot is available
++full repository suite: to run on the target checkout at c8ec121
++network calls in r8 tests: none
++```
+diff --git a/doc/CHANGELOG_0272_R8_GITHUB_PROJECT_V2_DURABLE_CONSUMER.md b/doc/CHANGELOG_0272_R8_GITHUB_PROJECT_V2_DURABLE_CONSUMER.md
+new file mode 100644
+index 0000000..6da533a
+--- /dev/null
++++ b/doc/CHANGELOG_0272_R8_GITHUB_PROJECT_V2_DURABLE_CONSUMER.md
+@@ -0,0 +1,20 @@
++# Changelog — 0272-r8 ProjectV2 durable consumer
++
++## Added
++
++- validation stricte d'un gate record r7 approuvé ;
++- construction d'un `SqlContextRecord` déterministe `github_artifact` ;
++- consommation SQL insert-if-absent avec replay idempotent ;
++- readback SQL obligatoire ;
++- CLI `consume_github_project_v2_source_candidate_gate_0272.py` ;
++- tests de contrat, outil et règles ;
++- documentation de la suite vectorielle et laboratoire.
++
++## Boundaries
++
++- aucune exécution OpenVINO/E5 ;
++- aucune écriture Qdrant ;
++- aucune mutation GitHub ;
++- aucun changement Scheduler/SHM ;
++- aucune dépendance non-stdlib ;
++- aucun nouveau manager/orchestrateur/store.
+diff --git a/doc/architecture/GITHUB_PROJECT_V2_SOURCE_CANDIDATE_DURABLE_CONSUMER_0272.md b/doc/architecture/GITHUB_PROJECT_V2_SOURCE_CANDIDATE_DURABLE_CONSUMER_0272.md
+new file mode 100644
+index 0000000..7fa9996
+--- /dev/null
++++ b/doc/architecture/GITHUB_PROJECT_V2_SOURCE_CANDIDATE_DURABLE_CONSUMER_0272.md
+@@ -0,0 +1,126 @@
++# Consommateur durable des SourceCandidate ProjectV2 — 0272-r8
++
++## Décision
++
++0272-r8 ferme la transition entre le gate opérateur r7 et l'autorité SQL.
++Il consomme uniquement un gate record immuable dont la décision est `promote`
++ou `merge`, puis construit un enregistrement SQL déterministe de type
++`github_artifact`.
++
++```text
++handoff r6
++-> gate opérateur r7
++-> gate record immuable
++-> validation r8
++-> SqlContextRecord existant
++-> écriture SQL insert-if-absent
++-> readback SQL obligatoire
++-> DurableSourceCandidate laboratory-neutral
++```
++
++Aucun nouveau store, manager, orchestrateur, worker ou bus n'est ajouté.
++Le chemin réutilise `context.sql_context_store`, le builder
++`build_sql_context_record` et la découverte/binding 0260 de
++`DbApiSqlContextStore`.
++
++## Sémantique durable
++
++Le `context_ref` SQL est dérivé du `gate_ref`. Une seconde consommation du même
++gate devient un replay idempotent. Un contenu différent sous le même
++`context_ref` est refusé comme collision immuable au lieu d'écraser l'autorité
++locale.
++
++Le mode `merge` est conservé avec son `target_context_id` dans les métadonnées.
++0272-r8 ne fusionne pas silencieusement le contenu dans la cible : cette
++opération nécessite un traitement de contexte explicite ultérieur.
++
++L'enregistrement durable porte aussi deux états de transition :
++
++```text
++embedding_projection_state = pending
++laboratory_assignment_state = unassigned
++```
++
++Ils ne déclenchent aucun effet. Ils indiquent seulement que la candidate durable
++peut être projetée puis orientée plus tard.
++
++## Frontières
++
++0272-r8 autorise uniquement l'effet SQL explicite :
++
++```text
++SQL write/readback        = autorisé en --execute
++OpenVINO/E5               = fermé
++Qdrant                    = fermé
++GitHub mutation           = fermée
++Scheduler.run             = inchangé
++ControlProxy / RouteProxy = inchangés
++EventBus                  = non sollicité dans r8
++laboratoire               = non sélectionné dans r8
++```
++
++SQL reste l'autorité durable. Le record produit est neutre vis-à-vis du futur
++framework de laboratoire.
++
++## Suite verrouillée
++
++### 0272-r9 — profil vectoriel et projection contrôlée
++
++La prochaine étape doit réutiliser 0261, 0262, 0263 et 0271 pour ajouter un
++`EmbeddingSpaceProfile` explicite : modèle/révision, tokenizer, pooling,
++normalisation, dimension, métrique, rôle E5 et collection cible. Le gate de
++compatibilité doit refuser tout mélange d'espaces vectoriels avant Qdrant.
++
++```text
++SQL r8
++-> EmbeddingSpaceProfile
++-> OpenVINO/E5 passage
++-> VectorCompatibilityGate
++-> Qdrant payload.sql_ref
++-> recall
++-> SQL rehydrate
++```
++
++### 0272-r10 — smoke ProjectV2 durable + vectoriel
++
++Le smoke doit composer r6, r7, r8 et r9 avec replay idempotent et vérification
++SQL après recall.
++
++### 0273-r1 — audit de réutilisation laboratoire
++
++Avant tout contrat ou provider de laboratoire, auditer :
++
++- `specialist_kernel_boundary` ;
++- `server_oriented_deliberation_cycle` ;
++- `scheduler_deliberation_route_contract` ;
++- registres 0242/0257/0258 ;
++- variation de contexte 0114-0115 ;
++- spécialiste factice et adapter LLM ;
++- liaison/synthèse 0123-r2 ;
++- RouteProxy/ControlProxy/SHM ;
++- ResultFrame/EventBus/PassiveSupervisor/VisPy.
++
++### 0273-r2/r3 — frontière puis laboratoire fictif
++
++Ajouter seulement les identifiants et capacités réellement absents, attachés
++aux registres existants. Le premier laboratoire fictif sera local,
++déterministe, stdlib-only et devra composer les contrats spécialistes déjà
++présents. Aucun `LaboratoryManager` ni orchestrateur parallèle ne sera créé.
++
++## Chaîne fonctionnelle visée
++
++```text
++GitHub ProjectV2 / repository Issue
++-> artefact demande + futur artefact Copilot advisory
++-> SourceCandidate
++-> gate r7
++-> SQL r8
++-> espace vectoriel contrôlé r9
++-> orientation
++-> laboratoire fictif
++-> spécialistes / validation / synthèse
++-> FinalArtifactEnvelope
++-> EventBus / PassiveSupervisor / VisPy
++-> gate de publication
++-> remontée GitHub contrôlée
++```
+diff --git a/doc/docs/architecture/runtime/272_r8_github_project_v2_durable_consumer.dot b/doc/docs/architecture/runtime/272_r8_github_project_v2_durable_consumer.dot
+new file mode 100644
+index 0000000..f3e3e10
+--- /dev/null
++++ b/doc/docs/architecture/runtime/272_r8_github_project_v2_durable_consumer.dot
+@@ -0,0 +1,17 @@
++digraph GitHubProjectV2DurableConsumer0272R8 {
++  rankdir=LR;
++  node [shape=box];
++
++  GateR7 [label="r7 immutable operator gate"];
++  Validate [label="r8 approval + boundary validation"];
++  DurableR8 [label="existing SQL authority\ngithub_artifact"];
++  Readback [label="mandatory SQL readback"];
++  VectorR9 [label="0272-r9 EmbeddingSpaceProfile\nOpenVINO/E5 -> Qdrant sql_ref", style=dashed];
++  LaboratoryAudit0273 [label="0273-r1 laboratory reuse audit", style=dashed];
++
++  GateR7 -> Validate;
++  Validate -> DurableR8;
++  DurableR8 -> Readback;
++  DurableR8 -> VectorR9;
++  DurableR8 -> LaboratoryAudit0273;
++}
+diff --git a/doc/manifests/MANIFEST_0272_R8_GITHUB_PROJECT_V2_DURABLE_CONSUMER_CHANGED_FILES.md b/doc/manifests/MANIFEST_0272_R8_GITHUB_PROJECT_V2_DURABLE_CONSUMER_CHANGED_FILES.md
+new file mode 100644
+index 0000000..17c93e8
+--- /dev/null
++++ b/doc/manifests/MANIFEST_0272_R8_GITHUB_PROJECT_V2_DURABLE_CONSUMER_CHANGED_FILES.md
+@@ -0,0 +1,28 @@
++# Manifest — 0272-r8 ProjectV2 durable consumer
++
++## Added files
++
++```text
++PHASE0272_R8_GITHUB_PROJECT_V2_DURABLE_CONSUMER_TEST_REPORT.md
++doc/CHANGELOG_0272_R8_GITHUB_PROJECT_V2_DURABLE_CONSUMER.md
++doc/architecture/GITHUB_PROJECT_V2_SOURCE_CANDIDATE_DURABLE_CONSUMER_0272.md
++doc/docs/architecture/runtime/272_r8_github_project_v2_durable_consumer.dot
++doc/manifests/MANIFEST_0272_R8_GITHUB_PROJECT_V2_DURABLE_CONSUMER_CHANGED_FILES.md
++doc/releases/0272-r8-github-project-v2-durable-consumer.md
++src/context/github_project_v2_source_candidate_durable_consumer_0272.py
++tests/context/test_github_project_v2_source_candidate_durable_consumer_0272.py
++tests/rules/test_github_project_v2_source_candidate_durable_consumer_0272_rule.py
++tests/tools/test_consume_github_project_v2_source_candidate_gate_0272.py
++tools/consume_github_project_v2_source_candidate_gate_0272.py
++```
++
++## Existing surfaces reused
++
++```text
++context.github_project_v2_source_candidate_gate_0272.GATE_RECORD_SCHEMA
++context.sql_context_store.SqlContextRecord
++context.sql_context_store.build_sql_context_record
++context.scheduler_managed_db_api_sql_context_store_binding_0260
++```
++
++No existing runtime, Scheduler, SHM, Qdrant or OpenVINO module is modified.
+diff --git a/doc/releases/0272-r8-github-project-v2-durable-consumer.md b/doc/releases/0272-r8-github-project-v2-durable-consumer.md
+new file mode 100644
+index 0000000..0685123
+--- /dev/null
++++ b/doc/releases/0272-r8-github-project-v2-durable-consumer.md
+@@ -0,0 +1,8 @@
++# 0272-r8 — ProjectV2 durable consumer
++
++This release consumes an approved immutable r7 gate record into the existing SQL
++context authority. It preserves idempotence, performs mandatory SQL readback and
++keeps OpenVINO, Qdrant, GitHub mutation, Scheduler and SHM boundaries closed.
++
++The durable record is intentionally laboratory-neutral. Vector compatibility is
++reserved for 0272-r9; laboratory reuse audit is reserved for 0273-r1.
+diff --git a/src/context/github_project_v2_source_candidate_durable_consumer_0272.py b/src/context/github_project_v2_source_candidate_durable_consumer_0272.py
+new file mode 100644
+index 0000000..c6b0da4
+--- /dev/null
++++ b/src/context/github_project_v2_source_candidate_durable_consumer_0272.py
+@@ -0,0 +1,438 @@
++"""Durably consume one approved ProjectV2 SourceCandidate gate record.
++
++0272-r8 is the first durable consumer after the local r7 operator gate. It
++reuses the existing SQL context-store contract and writes one immutable
++``github_artifact`` record addressed from the gate reference.
++
++Boundaries:
++- only ``promote`` and ``merge`` gate records are accepted;
++- SQL is the durable authority;
++- OpenVINO/E5 and Qdrant remain closed in this phase;
++- GitHub remains read-only and no network call is performed;
++- Scheduler.run and SHM surfaces are not modified;
++- the persisted record is laboratory-neutral and can be oriented later.
++"""
++
++from __future__ import annotations
++
++from dataclasses import asdict, dataclass, field, is_dataclass
++import hashlib
++import json
++from typing import Any, Mapping, Protocol, Sequence
++
++from context.github_project_v2_source_candidate_gate_0272 import GATE_RECORD_SCHEMA
++from context.sql_context_store import SqlContextRecord, build_sql_context_record
++
++DURABLE_CONSUMER_REPORT_SCHEMA = (
++    "missipy.github.project_v2_source_candidate_durable_consumer_report.v1"
++)
++_ALLOWED_INGESTION_MODES = frozenset({"promote", "merge"})
++_EXPECTED_STATUS = {"promote": "promoted", "merge": "merged"}
++
++
++class ExistingSqlContextStore(Protocol):
++    """Existing SQLContextStore surface used by dependency injection."""
++
++    def initialize_schema(self) -> None: ...
++
++    def upsert_record(self, record: SqlContextRecord) -> object: ...
++
++    def get_record(self, context_ref: str) -> object | None: ...
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubProjectV2DurableConsumerCommand:
++    """Controlled durable-consumption command."""
++
++    execute: bool = False
++    policy_decision_id: str = ""
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubProjectV2DurableConsumerPlan:
++    """Pure plan built before SQL access."""
++
++    valid: bool
++    issues: tuple[str, ...]
++    execute: bool
++    policy_decision_id: str
++    gate_record_path: str
++    boundaries: Mapping[str, bool]
++
++
++@dataclass(frozen=True, slots=True)
++class GitHubProjectV2DurableConsumerResult:
++    """Serializable result of the r8 durable-consumption gate."""
++
++    valid: bool
++    issues: tuple[str, ...]
++    execute: bool
++    policy_decision_id: str
++    gate_ref: str
++    candidate_id: str
++    ingestion_mode: str
++    target_context_id: str
++    sql_ref: str
++    durable_record: Mapping[str, Any] = field(default_factory=dict)
++    readback_record: Mapping[str, Any] = field(default_factory=dict)
++    sql_write_performed: bool = False
++    idempotent_replay: bool = False
++    rehydrated: bool = False
++    boundaries: Mapping[str, bool] = field(default_factory=dict)
++
++    def to_json_dict(self) -> dict[str, Any]:
++        return {
++            "schema": DURABLE_CONSUMER_REPORT_SCHEMA,
++            "valid": self.valid,
++            "issues": list(self.issues),
++            "execute": self.execute,
++            "policy_decision_id": self.policy_decision_id,
++            "gate_ref": self.gate_ref,
++            "candidate_id": self.candidate_id,
++            "ingestion_mode": self.ingestion_mode,
++            "target_context_id": self.target_context_id,
++            "sql_ref": self.sql_ref,
++            "durable_record": dict(self.durable_record),
++            "readback_record": dict(self.readback_record),
++            "sql_write_performed": self.sql_write_performed,
++            "idempotent_replay": self.idempotent_replay,
++            "rehydrated": self.rehydrated,
++            "boundaries": dict(self.boundaries),
++        }
++
++    def to_summary(self) -> str:
++        return " ".join(
++            (
++                f"github_project_v2_durable_consumer_valid={self.valid}",
++                f"issues={len(self.issues)}",
++                f"execute={self.execute}",
++                f"candidate_id={self.candidate_id or '-'}",
++                f"ingestion_mode={self.ingestion_mode or '-'}",
++                f"sql_ref={self.sql_ref or '-'}",
++                f"sql_write_performed={self.sql_write_performed}",
++                f"idempotent_replay={self.idempotent_replay}",
++                f"rehydrated={self.rehydrated}",
++                "openvino_call_performed=False",
++                "qdrant_write_performed=False",
++                "remote_mutation_allowed=False",
++            )
++        )
++
++
++def build_durable_consumer_plan(
++    command: GitHubProjectV2DurableConsumerCommand,
++    *,
++    gate_record_path: str,
++) -> GitHubProjectV2DurableConsumerPlan:
++    """Build a pure execution plan before reading or writing SQL."""
++
++    issues: list[str] = []
++    if not gate_record_path.strip():
++        issues.append("gate record path is required")
++    if command.execute and not command.policy_decision_id.strip():
++        issues.append("policy_decision_id is required for execute mode")
++    return GitHubProjectV2DurableConsumerPlan(
++        valid=not issues,
++        issues=tuple(issues),
++        execute=command.execute,
++        policy_decision_id=command.policy_decision_id,
++        gate_record_path=gate_record_path,
++        boundaries=_boundaries(sql_write_allowed=command.execute),
++    )
++
++
++def validate_approved_gate_record(gate_record: Mapping[str, Any]) -> tuple[str, ...]:
++    """Validate that one immutable r7 record authorizes durable ingestion."""
++
++    issues: list[str] = []
++    if str(gate_record.get("schema", "")) != GATE_RECORD_SCHEMA:
++        issues.append("gate record schema mismatch")
++    if not str(gate_record.get("gate_ref", "")).startswith(
++        "github-project-v2-source-candidate-gate:"
++    ):
++        issues.append("gate_ref is invalid")
++
++    decision = _mapping(gate_record.get("decision"))
++    approval = _mapping(gate_record.get("approval"))
++    candidate_after = _mapping(gate_record.get("candidate_after"))
++    boundaries = _mapping(gate_record.get("boundaries"))
++
++    action = str(decision.get("action", ""))
++    if action not in _ALLOWED_INGESTION_MODES:
++        issues.append("gate action must be promote or merge")
++    if approval.get("durable_ingestion_allowed") is not True:
++        issues.append("gate must explicitly allow durable ingestion")
++    if approval.get("durable_ingestion_performed") is not False:
++        issues.append("r7 gate must not have performed durable ingestion")
++    if str(approval.get("ingestion_mode", "")) != action:
++        issues.append("approval ingestion_mode must match decision action")
++    if str(candidate_after.get("status", "")) != _EXPECTED_STATUS.get(action, ""):
++        issues.append("candidate_after status does not match approved action")
++    if str(candidate_after.get("candidate_id", "")) != str(
++        gate_record.get("candidate_id", "")
++    ):
++        issues.append("candidate_id mismatch between gate and candidate_after")
++    if action == "merge" and not str(
++        approval.get("target_context_id", "")
++    ).strip():
++        issues.append("merge approval requires target_context_id")
++
++    for key in (
++        "sql_write_allowed",
++        "sql_write_performed",
++        "qdrant_write_allowed",
++        "qdrant_write_performed",
++        "remote_mutation_allowed",
++    ):
++        if boundaries.get(key) is not False:
++            issues.append(f"r7 boundary must keep {key} false")
++    return tuple(dict.fromkeys(issues))
++
++
++def build_durable_sql_record(gate_record: Mapping[str, Any]) -> SqlContextRecord:
++    """Build one deterministic, laboratory-neutral SQL authority record."""
++
++    issues = validate_approved_gate_record(gate_record)
++    if issues:
++        raise ValueError("; ".join(issues))
++
++    candidate = _mapping(gate_record.get("candidate_after"))
++    decision = _mapping(gate_record.get("decision"))
++    approval = _mapping(gate_record.get("approval"))
++    origin = _mapping(candidate.get("origin"))
++    gate_ref = str(gate_record.get("gate_ref", ""))
++    candidate_id = str(candidate.get("candidate_id", ""))
++    title = str(candidate.get("title", "")).strip()
++    body = str(candidate.get("body", ""))
++    if not body.strip():
++        body = title
++
++    content_digest = hashlib.sha256(
++        _canonical_json(candidate).encode("utf-8")
++    ).hexdigest()
++    metadata = _metadata_tuple(
++        {
++            "source": "github_project_v2_source_candidate_gate_0272",
++            "gate_ref": gate_ref,
++            "candidate_id": candidate_id,
++            "handoff_ref": str(gate_record.get("handoff_ref", "")),
++            "handoff_batch_ref": str(gate_record.get("handoff_batch_ref", "")),
++            "change_kind": str(gate_record.get("change_kind", "")),
++            "decision_action": str(decision.get("action", "")),
++            "target_context_id": str(approval.get("target_context_id", "") or ""),
++            "origin_kind": str(origin.get("kind", "")),
++            "origin_reference": str(origin.get("reference", "")),
++            "origin_repository": str(origin.get("repository", "") or ""),
++            "content_digest": f"sha256:{content_digest}",
++            "embedding_projection_state": "pending",
++            "laboratory_assignment_state": "unassigned",
++        }
++    )
++    return build_sql_context_record(
++        kind="github_artifact",
++        identity=gate_ref,
++        title=title,
++        body=body,
++        metadata=metadata,
++    )
++
++
++def consume_approved_gate_record(
++    gate_record: Mapping[str, Any],
++    command: GitHubProjectV2DurableConsumerCommand,
++    *,
++    store: ExistingSqlContextStore | None = None,
++) -> GitHubProjectV2DurableConsumerResult:
++    """Plan or execute one immutable SQL ingestion from an approved r7 gate."""
++
++    issues = list(validate_approved_gate_record(gate_record))
++    if command.execute and not command.policy_decision_id.strip():
++        issues.append("policy_decision_id is required for execute mode")
++    if command.execute and store is None:
++        issues.append("execute mode requires an existing SQLContextStore object")
++
++    gate_ref = str(gate_record.get("gate_ref", ""))
++    candidate_id = str(gate_record.get("candidate_id", ""))
++    approval = _mapping(gate_record.get("approval"))
++    ingestion_mode = str(approval.get("ingestion_mode", ""))
++    target_context_id = str(approval.get("target_context_id", "") or "")
++
++    durable_record: Mapping[str, Any] = {}
++    try:
++        if not issues:
++            durable_record = build_durable_sql_record(gate_record).to_mapping()
++    except ValueError as exc:
++        issues.append(str(exc))
++
++    if issues or not command.execute:
++        return GitHubProjectV2DurableConsumerResult(
++            valid=not issues,
++            issues=tuple(dict.fromkeys(issues)),
++            execute=command.execute,
++            policy_decision_id=command.policy_decision_id,
++            gate_ref=gate_ref,
++            candidate_id=candidate_id,
++            ingestion_mode=ingestion_mode,
++            target_context_id=target_context_id,
++            sql_ref=str(durable_record.get("context_ref", "")),
++            durable_record=durable_record,
++            boundaries=_boundaries(sql_write_allowed=command.execute),
++        )
++
++    assert store is not None
++    record = build_durable_sql_record(gate_record)
++    _initialize_existing_schema(store)
++    existing = store.get_record(record.context_ref)
++    write_performed = False
++    idempotent_replay = False
++
++    if existing is None:
++        store.upsert_record(record)
++        write_performed = True
++    else:
++        existing_mapping = _public_mapping(existing)
++        if existing_mapping != record.to_mapping():
++            issues.append("immutable durable-record collision")
++        else:
++            idempotent_replay = True
++
++    readback = store.get_record(record.context_ref)
++    readback_mapping = _public_mapping(readback)
++    rehydrated = readback_mapping == record.to_mapping()
++    if not rehydrated:
++        issues.append("SQL readback does not match the durable record")
++
++    return GitHubProjectV2DurableConsumerResult(
++        valid=not issues,
++        issues=tuple(dict.fromkeys(issues)),
++        execute=True,
++        policy_decision_id=command.policy_decision_id,
++        gate_ref=gate_ref,
++        candidate_id=candidate_id,
++        ingestion_mode=ingestion_mode,
++        target_context_id=target_context_id,
++        sql_ref=record.context_ref,
++        durable_record=record.to_mapping(),
++        readback_record=readback_mapping,
++        sql_write_performed=write_performed,
++        idempotent_replay=idempotent_replay,
++        rehydrated=rehydrated,
++        boundaries=_boundaries(
++            sql_write_allowed=True,
++            sql_write_performed=write_performed,
++        ),
++    )
++
++
++def close_durable_consumer_result(
++    plan: GitHubProjectV2DurableConsumerPlan,
++    *,
++    result: GitHubProjectV2DurableConsumerResult | None,
++    errors: Sequence[str] = (),
++) -> GitHubProjectV2DurableConsumerResult:
++    """Close plan and execution errors into one stable result."""
++
++    issues = list(plan.issues)
++    issues.extend(str(error) for error in errors if str(error))
++    if result is not None:
++        issues.extend(result.issues)
++        payload = result
++    else:
++        payload = GitHubProjectV2DurableConsumerResult(
++            valid=False,
++            issues=(),
++            execute=plan.execute,
++            policy_decision_id=plan.policy_decision_id,
++            gate_ref="",
++            candidate_id="",
++            ingestion_mode="",
++            target_context_id="",
++            sql_ref="",
++            boundaries=_boundaries(sql_write_allowed=plan.execute),
++        )
++    if plan.execute and result is None:
++        issues.append("execute mode must produce a durable-consumer result")
++    return GitHubProjectV2DurableConsumerResult(
++        valid=not issues and payload.valid,
++        issues=tuple(dict.fromkeys(issues)),
++        execute=payload.execute,
++        policy_decision_id=payload.policy_decision_id,
++        gate_ref=payload.gate_ref,
++        candidate_id=payload.candidate_id,
++        ingestion_mode=payload.ingestion_mode,
++        target_context_id=payload.target_context_id,
++        sql_ref=payload.sql_ref,
++        durable_record=payload.durable_record,
++        readback_record=payload.readback_record,
++        sql_write_performed=payload.sql_write_performed,
++        idempotent_replay=payload.idempotent_replay,
++        rehydrated=payload.rehydrated,
++        boundaries=payload.boundaries,
++    )
++
++
++def _initialize_existing_schema(store: ExistingSqlContextStore) -> None:
++    initialize = getattr(store, "initialize_schema", None)
++    if not callable(initialize):
++        raise TypeError("existing SQLContextStore must expose initialize_schema")
++    initialize()
++
++
++def _public_mapping(value: object | None) -> dict[str, Any]:
++    if value is None:
++        return {}
++    if isinstance(value, Mapping):
++        return dict(value)
++    to_mapping = getattr(value, "to_mapping", None)
++    if callable(to_mapping):
++        payload = to_mapping()
++        if isinstance(payload, Mapping):
++            return dict(payload)
++    if is_dataclass(value) and not isinstance(value, type):
++        return dict(asdict(value))
++    raise TypeError("SQL record must expose to_mapping or be a mapping/dataclass")
++
++
++def _metadata_tuple(values: Mapping[str, object]) -> tuple[tuple[str, str], ...]:
++    return tuple(
++        sorted(
++            (str(key), str(value))
++            for key, value in values.items()
++            if str(key).strip() and str(value).strip()
++        )
++    )
++
++
++def _mapping(value: object) -> Mapping[str, Any]:
++    return value if isinstance(value, Mapping) else {}
++
++
++def _canonical_json(value: object) -> str:
++    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
++
++
++def _boundaries(
++    *,
++    sql_write_allowed: bool,
++    sql_write_performed: bool = False,
++) -> dict[str, bool]:
++    return {
++        "existing_sql_context_store_reused": True,
++        "r7_gate_record_required": True,
++        "durable_ingestion_allowed": sql_write_allowed,
++        "sql_write_allowed": sql_write_allowed,
++        "sql_write_performed": sql_write_performed,
++        "sql_readback_required": True,
++        "openvino_call_allowed": False,
++        "openvino_call_performed": False,
++        "qdrant_write_allowed": False,
++        "qdrant_write_performed": False,
++        "external_call_performed": False,
++        "graphql_query_performed": False,
++        "graphql_mutation_allowed": False,
++        "remote_mutation_allowed": False,
++        "scheduler_modified": False,
++        "shm_modified": False,
++        "laboratory_neutral_record": True,
++        "local_authority_preserved": True,
++    }
+diff --git a/tests/context/test_github_project_v2_source_candidate_durable_consumer_0272.py b/tests/context/test_github_project_v2_source_candidate_durable_consumer_0272.py
+new file mode 100644
+index 0000000..33f2bd6
+--- /dev/null
++++ b/tests/context/test_github_project_v2_source_candidate_durable_consumer_0272.py
+@@ -0,0 +1,183 @@
++from __future__ import annotations
++
++from context.github_project_v2_change_handoff_0272 import (
++    GitHubProjectV2ChangeHandoffPolicy,
++    build_change_handoff_batch,
++)
++from context.github_project_v2_snapshot_change_detection_0272 import CHANGE_SET_SCHEMA
++from context.github_project_v2_source_candidate_durable_consumer_0272 import (
++    GitHubProjectV2DurableConsumerCommand,
++    build_durable_consumer_plan,
++    build_durable_sql_record,
++    consume_approved_gate_record,
++    validate_approved_gate_record,
++)
++from context.github_project_v2_source_candidate_gate_0272 import (
++    GitHubProjectV2SourceCandidateGateCommand,
++    build_gate_record,
++)
++from context.sql_context_store import SQLiteSqlContextStore
++
++
++def _change_set() -> dict[str, object]:
++    return {
++        "schema": CHANGE_SET_SCHEMA,
++        "kind": "github_project_v2_snapshot_change_set",
++        "baseline": False,
++        "change_set_ref": "github-project-v2-change-set:0123456789abcdef",
++        "previous_snapshot_ref": "github-project-v2-snapshot:previous",
++        "current_snapshot_ref": "github-project-v2-snapshot:current",
++        "project": {
++            "id": "PVT_test",
++            "owner": "newicody",
++            "number": 2,
++            "title": "idea",
++            "url": "https://github.com/users/newicody/projects/2",
++        },
++        "items": {
++            "added": [
++                {
++                    "item_id": "PVTI_chalouf",
++                    "item_type": "DRAFT_ISSUE",
++                    "content_id": "DI_chalouf",
++                    "title": "Construire un chalouf",
++                    "body": "Préparer une demande durable avant laboratoire.",
++                    "status": "Todo",
++                    "repository": "",
++                    "number": 0,
++                    "url": "",
++                }
++            ],
++            "changed": [],
++            "removed": [],
++            "unchanged_ids": [],
++        },
++        "counts": {
++            "added_count": 1,
++            "changed_count": 0,
++            "removed_count": 0,
++            "unchanged_count": 0,
++        },
++        "boundaries": {
++            "external_call_performed": False,
++            "remote_mutation_allowed": False,
++            "sql_write_allowed": False,
++            "qdrant_write_allowed": False,
++        },
++    }
++
++
++def _approved_gate(*, action: str = "promote") -> dict[str, object]:
++    batch = build_change_handoff_batch(
++        change_set=_change_set(),
++        policy=GitHubProjectV2ChangeHandoffPolicy(),
++    )
++    handoff = batch["handoffs"][0]
++    candidate_id = handoff["candidate"]["candidate_id"]
++    command = GitHubProjectV2SourceCandidateGateCommand(
++        candidate_id=str(candidate_id),
++        action=action,
++        target_context_id="sql:inference_context:existing" if action == "merge" else None,
++        reason="validation opérateur",
++        execute=True,
++        policy_decision_id=f"policy:0272:r8:{action}",
++    )
++    return build_gate_record(handoff_batch=batch, command=command)
++
++
++def test_approved_promote_gate_builds_laboratory_neutral_sql_record() -> None:
++    gate = _approved_gate()
++    assert validate_approved_gate_record(gate) == ()
++    record = build_durable_sql_record(gate)
++    payload = record.to_mapping()
++    assert payload["kind"] == "github_artifact"
++    assert payload["title"] == "Construire un chalouf"
++    assert payload["metadata"]["embedding_projection_state"] == "pending"
++    assert payload["metadata"]["laboratory_assignment_state"] == "unassigned"
++    assert payload["context_ref"].startswith("sql:github_artifact:")
++
++
++def test_execute_writes_and_rehydrates_existing_sql_store() -> None:
++    gate = _approved_gate()
++    store = SQLiteSqlContextStore(":memory:")
++    result = consume_approved_gate_record(
++        gate,
++        GitHubProjectV2DurableConsumerCommand(
++            execute=True,
++            policy_decision_id="policy:0272:r8:execute",
++        ),
++        store=store,
++    )
++    assert result.valid is True
++    assert result.sql_write_performed is True
++    assert result.idempotent_replay is False
++    assert result.rehydrated is True
++    assert result.boundaries["qdrant_write_performed"] is False
++    assert result.boundaries["openvino_call_performed"] is False
++    assert store.get_record(result.sql_ref) is not None
++
++
++def test_replay_is_idempotent_and_does_not_rewrite() -> None:
++    gate = _approved_gate()
++    store = SQLiteSqlContextStore(":memory:")
++    command = GitHubProjectV2DurableConsumerCommand(
++        execute=True,
++        policy_decision_id="policy:0272:r8:replay",
++    )
++    first = consume_approved_gate_record(gate, command, store=store)
++    second = consume_approved_gate_record(gate, command, store=store)
++    assert first.valid is True
++    assert first.sql_write_performed is True
++    assert second.valid is True
++    assert second.sql_write_performed is False
++    assert second.idempotent_replay is True
++    assert second.sql_ref == first.sql_ref
++
++
++def test_merge_preserves_target_context_without_collapsing_it() -> None:
++    gate = _approved_gate(action="merge")
++    record = build_durable_sql_record(gate).to_mapping()
++    assert record["metadata"]["decision_action"] == "merge"
++    assert record["metadata"]["target_context_id"] == (
++        "sql:inference_context:existing"
++    )
++    assert record["parent_ref"] is None
++
++
++def test_non_approving_gate_is_rejected() -> None:
++    batch = build_change_handoff_batch(
++        change_set=_change_set(),
++        policy=GitHubProjectV2ChangeHandoffPolicy(),
++    )
++    candidate_id = batch["handoffs"][0]["candidate"]["candidate_id"]
++    gate = build_gate_record(
++        handoff_batch=batch,
++        command=GitHubProjectV2SourceCandidateGateCommand(
++            candidate_id=str(candidate_id),
++            action="inspect",
++            execute=True,
++            policy_decision_id="policy:0272:r8:inspect",
++        ),
++    )
++    issues = validate_approved_gate_record(gate)
++    assert "gate action must be promote or merge" in issues
++    result = consume_approved_gate_record(
++        gate,
++        GitHubProjectV2DurableConsumerCommand(execute=False),
++    )
++    assert result.valid is False
++    assert result.sql_write_performed is False
++
++
++def test_plan_requires_policy_decision_only_for_execute() -> None:
++    dry = build_durable_consumer_plan(
++        GitHubProjectV2DurableConsumerCommand(execute=False),
++        gate_record_path="gate.json",
++    )
++    assert dry.valid is True
++    live = build_durable_consumer_plan(
++        GitHubProjectV2DurableConsumerCommand(execute=True),
++        gate_record_path="gate.json",
++    )
++    assert live.valid is False
++    assert "policy_decision_id is required for execute mode" in live.issues
+diff --git a/tests/rules/test_github_project_v2_source_candidate_durable_consumer_0272_rule.py b/tests/rules/test_github_project_v2_source_candidate_durable_consumer_0272_rule.py
+new file mode 100644
+index 0000000..6f6cf00
+--- /dev/null
++++ b/tests/rules/test_github_project_v2_source_candidate_durable_consumer_0272_rule.py
+@@ -0,0 +1,57 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++ROOT = Path(__file__).resolve().parents[2]
++CORE = (
++    ROOT
++    / "src/context/github_project_v2_source_candidate_durable_consumer_0272.py"
++)
++CLI = ROOT / "tools/consume_github_project_v2_source_candidate_gate_0272.py"
++ARCH = (
++    ROOT
++    / "doc/architecture/GITHUB_PROJECT_V2_SOURCE_CANDIDATE_DURABLE_CONSUMER_0272.md"
++)
++RUNTIME = (
++    ROOT
++    / "doc/docs/architecture/runtime/272_r8_github_project_v2_durable_consumer.dot"
++)
++
++
++def test_r8_reuses_sql_and_keeps_vector_and_remote_boundaries_closed() -> None:
++    core = CORE.read_text(encoding="utf-8")
++    cli = CLI.read_text(encoding="utf-8")
++    assert "build_sql_context_record" in core
++    assert "build_db_api_sql_context_store_binding_report" in cli
++    assert "laboratory_assignment_state" in core
++    assert "embedding_projection_state" in core
++    forbidden = (
++        "import qdrant_client",
++        "from qdrant_client",
++        "import openvino",
++        "from openvino",
++        "import urllib",
++        "from urllib",
++        "import requests",
++        "from requests",
++        "import scheduler",
++        "from scheduler",
++        "RuntimeManager",
++        "LaboratoryManager",
++        "LaboratoryOrchestrator",
++    )
++    for token in forbidden:
++        assert token not in core
++        assert token not in cli
++
++
++def test_r8_documentation_keeps_r9_and_laboratory_sequence_explicit() -> None:
++    architecture = ARCH.read_text(encoding="utf-8")
++    graph = RUNTIME.read_text(encoding="utf-8")
++    assert "0272-r9" in architecture
++    assert "EmbeddingSpaceProfile" in architecture
++    assert "0273-r1" in architecture
++    assert "laboratoire fictif" in architecture
++    assert "GateR7 -> DurableR8" in graph
++    assert "DurableR8 -> VectorR9" in graph
++    assert "DurableR8 -> LaboratoryAudit0273" in graph
+diff --git a/tests/tools/test_consume_github_project_v2_source_candidate_gate_0272.py b/tests/tools/test_consume_github_project_v2_source_candidate_gate_0272.py
+new file mode 100644
+index 0000000..8fe040b
+--- /dev/null
++++ b/tests/tools/test_consume_github_project_v2_source_candidate_gate_0272.py
+@@ -0,0 +1,123 @@
++from __future__ import annotations
++
++import importlib.util
++import json
++from pathlib import Path
++
++from context.github_project_v2_change_handoff_0272 import (
++    GitHubProjectV2ChangeHandoffPolicy,
++    build_change_handoff_batch,
++)
++from context.github_project_v2_snapshot_change_detection_0272 import CHANGE_SET_SCHEMA
++from context.github_project_v2_source_candidate_gate_0272 import (
++    GitHubProjectV2SourceCandidateGateCommand,
++    build_gate_record,
++)
++
++ROOT = Path(__file__).resolve().parents[2]
++TOOL = ROOT / "tools/consume_github_project_v2_source_candidate_gate_0272.py"
++
++
++def _load_tool():
++    spec = importlib.util.spec_from_file_location("durable_consumer_tool_0272", TOOL)
++    assert spec is not None and spec.loader is not None
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
++    return module
++
++
++def _gate_record() -> dict[str, object]:
++    change_set = {
++        "schema": CHANGE_SET_SCHEMA,
++        "kind": "github_project_v2_snapshot_change_set",
++        "baseline": False,
++        "change_set_ref": "github-project-v2-change-set:0123456789abcdef",
++        "previous_snapshot_ref": "github-project-v2-snapshot:previous",
++        "current_snapshot_ref": "github-project-v2-snapshot:current",
++        "project": {
++            "id": "PVT_test",
++            "owner": "newicody",
++            "number": 2,
++            "title": "idea",
++            "url": "https://github.com/users/newicody/projects/2",
++        },
++        "items": {
++            "added": [
++                {
++                    "item_id": "PVTI_added",
++                    "item_type": "DRAFT_ISSUE",
++                    "content_id": "DI_added",
++                    "title": "Demande laboratoire",
++                    "body": "Fermer la chaîne durable avant laboratoire.",
++                    "status": "Todo",
++                    "repository": "",
++                    "number": 0,
++                    "url": "",
++                }
++            ],
++            "changed": [],
++            "removed": [],
++            "unchanged_ids": [],
++        },
++        "counts": {
++            "added_count": 1,
++            "changed_count": 0,
++            "removed_count": 0,
++            "unchanged_count": 0,
++        },
++        "boundaries": {
++            "external_call_performed": False,
++            "remote_mutation_allowed": False,
++            "sql_write_allowed": False,
++            "qdrant_write_allowed": False,
++        },
++    }
++    batch = build_change_handoff_batch(
++        change_set=change_set,
++        policy=GitHubProjectV2ChangeHandoffPolicy(),
++    )
++    candidate_id = batch["handoffs"][0]["candidate"]["candidate_id"]
++    return build_gate_record(
++        handoff_batch=batch,
++        command=GitHubProjectV2SourceCandidateGateCommand(
++            candidate_id=str(candidate_id),
++            action="promote",
++            execute=True,
++            policy_decision_id="policy:0272:r8:tool-gate",
++        ),
++    )
++
++
++def test_tool_executes_existing_store_binding_and_writes_report(
++    tmp_path: Path,
++    capsys,
++) -> None:
++    module = _load_tool()
++    gate_path = tmp_path / "gate.json"
++    output = tmp_path / "report.json"
++    db_path = tmp_path / "context.sqlite3"
++    gate_path.write_text(json.dumps(_gate_record()), encoding="utf-8")
++
++    rc = module.main(
++        (
++            "--gate-record",
++            str(gate_path),
++            "--db-path",
++            str(db_path),
++            "--execute",
++            "--policy-decision-id",
++            "policy:0272:r8:tool",
++            "--output",
++            str(output),
++            "--format",
++            "summary",
++        )
++    )
++    captured = capsys.readouterr()
++    payload = json.loads(output.read_text(encoding="utf-8"))
++    assert rc == 0
++    assert "durable_consumer_valid=True" in captured.out
++    assert payload["valid"] is True
++    assert payload["sql_write_performed"] is True
++    assert payload["rehydrated"] is True
++    assert payload["binding"]["uses_existing_store_object"] is True
+diff --git a/tools/consume_github_project_v2_source_candidate_gate_0272.py b/tools/consume_github_project_v2_source_candidate_gate_0272.py
+new file mode 100755
+index 0000000..4ab87dc
+--- /dev/null
++++ b/tools/consume_github_project_v2_source_candidate_gate_0272.py
+@@ -0,0 +1,119 @@
++#!/usr/bin/env python3
++"""Consume one approved ProjectV2 gate record into the existing SQL authority."""
++
++from __future__ import annotations
++
++import argparse
++import json
++from pathlib import Path
++import sys
++from typing import Any, Mapping, Sequence
++
++_REPO_ROOT = Path(__file__).resolve().parents[1]
++_SRC_ROOT = _REPO_ROOT / "src"
++if str(_SRC_ROOT) not in sys.path:
++    sys.path.insert(0, str(_SRC_ROOT))
++
++from context.github_project_v2_source_candidate_durable_consumer_0272 import (  # noqa: E402
++    GitHubProjectV2DurableConsumerCommand,
++    build_durable_consumer_plan,
++    close_durable_consumer_result,
++    consume_approved_gate_record,
++)
++from context.scheduler_managed_db_api_sql_context_store_binding_0260 import (  # noqa: E402
++    build_db_api_sql_context_store_binding_report,
++)
++
++_DEFAULT_DB_PATH = Path(".var/local/sql_context_store.sqlite3")
++_DEFAULT_OUTPUT = Path(
++    ".var/reports/github_project_v2_source_candidate_durable_consumer_0272.json"
++)
++
++
++def parse_args(argv: Sequence[str]) -> argparse.Namespace:
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument("--gate-record", type=Path, required=True)
++    parser.add_argument("--db-path", type=Path, default=_DEFAULT_DB_PATH)
++    parser.add_argument("--execute", action="store_true")
++    parser.add_argument("--policy-decision-id", default="")
++    parser.add_argument("--output", type=Path, default=_DEFAULT_OUTPUT)
++    parser.add_argument("--format", choices=("summary", "json"), default="summary")
++    return parser.parse_args(argv)
++
++
++def main(argv: Sequence[str] | None = None) -> int:
++    args = parse_args(tuple(sys.argv[1:] if argv is None else argv))
++    gate_path = _repo_path(args.gate_record)
++    command = GitHubProjectV2DurableConsumerCommand(
++        execute=args.execute,
++        policy_decision_id=args.policy_decision_id,
++    )
++    plan = build_durable_consumer_plan(command, gate_record_path=str(gate_path))
++    errors: list[str] = []
++    result = None
++    binding_payload: Mapping[str, Any] = {}
++
++    if plan.valid:
++        try:
++            gate_record = _read_json(gate_path)
++            store = None
++            if args.execute:
++                binding, store = build_db_api_sql_context_store_binding_report(
++                    _REPO_ROOT,
++                    db_path=_repo_path(args.db_path),
++                    construct=True,
++                )
++                binding_payload = binding.to_dict()
++                if binding.issues:
++                    errors.extend(binding.issues)
++            else:
++                binding, _ = build_db_api_sql_context_store_binding_report(
++                    _REPO_ROOT,
++                    construct=False,
++                )
++                binding_payload = binding.to_dict()
++            if not errors:
++                result = consume_approved_gate_record(
++                    gate_record,
++                    command,
++                    store=store,
++                )
++        except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
++            errors.append(f"{type(exc).__name__}:{exc}")
++
++    closed = close_durable_consumer_result(plan, result=result, errors=errors)
++    payload = closed.to_json_dict()
++    payload["binding"] = dict(binding_payload)
++    _write_json_atomic(_repo_path(args.output), payload)
++    print(
++        json.dumps(payload, indent=2, sort_keys=True)
++        if args.format == "json"
++        else closed.to_summary()
++    )
++    return 0 if closed.valid else 2
++
++
++def _read_json(path: Path) -> Mapping[str, Any]:
++    payload = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(payload, Mapping):
++        raise ValueError(f"gate record must be a JSON object: {path}")
++    return payload
++
++
++def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
++    path.parent.mkdir(parents=True, exist_ok=True)
++    temporary = path.with_suffix(path.suffix + ".tmp")
++    temporary.write_text(
++        json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True) + "\n",
++        encoding="utf-8",
++    )
++    temporary.replace(path)
++
++
++def _repo_path(value: Path) -> Path:
++    path = value.expanduser()
++    return path if path.is_absolute() else _REPO_ROOT / path
++
++
++if __name__ == "__main__":  # pragma: no cover
++    raise SystemExit(main())
