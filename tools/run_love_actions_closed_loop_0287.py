@@ -46,8 +46,10 @@ from context.love_full_deterministic_local_smoke_0287 import (  # noqa: E402
     run_love_full_deterministic_local_smoke,
 )
 from context.love_imported_actions_runtime_contract_0287 import (  # noqa: E402
+    ImportedActionsRuntimeLease,
     ImportedActionsRuntimeContractError,
     ImportedActionsRuntimeFactory,
+    acquire_imported_actions_runtime_lease,
     validate_imported_actions_runtime_ports,
 )
 from context.human_readable_artifact_identity_0287 import (  # noqa: E402
@@ -442,7 +444,7 @@ def execute_love_actions_closed_loop_preview(
         )
     )
 
-    runtime = validate_imported_actions_runtime_ports(
+    runtime_lease = _acquire_imported_actions_runtime_lease(
         runtime_factory(
             repository=command.repository,
             run_id=command.run_id,
@@ -458,42 +460,51 @@ def execute_love_actions_closed_loop_preview(
             created_at=created_at,
         )
     )
-    r14_command = LoveFullDeterministicLocalSmokeCommand(
-        schema=LOVE_FULL_DETERMINISTIC_LOCAL_SMOKE_COMMAND_SCHEMA,
-        repository=command.repository,
-        run_id=command.run_id,
-        members=tuple(members),
-        operator_decision=SourceCandidateDecision(
-            action=command.candidate_decision,
-            reason=command.operator_reason,
-            target_context_id=(
-                command.target_context_id
-                if command.candidate_decision == "merge"
-                else None
+    runtime = runtime_lease.ports
+    try:
+        r14_command = LoveFullDeterministicLocalSmokeCommand(
+            schema=LOVE_FULL_DETERMINISTIC_LOCAL_SMOKE_COMMAND_SCHEMA,
+            repository=command.repository,
+            run_id=command.run_id,
+            members=tuple(members),
+            operator_decision=SourceCandidateDecision(
+                action=command.candidate_decision,
+                reason=command.operator_reason,
+                target_context_id=(
+                    command.target_context_id
+                    if command.candidate_decision == "merge"
+                    else None
+                ),
             ),
-        ),
-        conversation_ref=(
-            f"laboratory-conversation:actions-run-{command.run_id}"
-        ),
-        return_route_ref=f"route:github-issue-{issue_number}",
-        context_generation=command.context_generation,
-        base_revision_ref=runtime.base_revision_ref,
-        branch_ref=command.branch_ref,
-        project_ref=command.project_ref,
-        security_scope=command.security_scope,
-        artifact_storage_ref=command.artifact_storage_ref,
-        created_at=created_at,
-        policy_decision_id=command.policy_decision_id,
-        project_item_id=project_target.project_item_id,
-        project_field_ref=project_target.field_ref,
-        project_field_name=project_target.field_name,
-        project_status_value=command.project_status_value,
-        context_refs=(f"ctx:github-actions-run:{command.run_id}",),
-        evidence_refs=(f"evidence:github-actions-run:{command.run_id}",),
-    )
-    r14_result = asyncio.run(
-        _run_r14_on_existing_scheduler(r14_command, runtime)
-    )
+            conversation_ref=(
+                f"laboratory-conversation:actions-run-{command.run_id}"
+            ),
+            return_route_ref=f"route:github-issue-{issue_number}",
+            context_generation=command.context_generation,
+            base_revision_ref=runtime.base_revision_ref,
+            branch_ref=command.branch_ref,
+            project_ref=command.project_ref,
+            security_scope=command.security_scope,
+            artifact_storage_ref=command.artifact_storage_ref,
+            created_at=created_at,
+            policy_decision_id=command.policy_decision_id,
+            project_item_id=project_target.project_item_id,
+            project_field_ref=project_target.field_ref,
+            project_field_name=project_target.field_name,
+            project_status_value=command.project_status_value,
+            context_refs=(f"ctx:github-actions-run:{command.run_id}",),
+            evidence_refs=(f"evidence:github-actions-run:{command.run_id}",),
+        )
+        r14_result = asyncio.run(
+            _run_r14_on_existing_scheduler(
+                r14_command,
+                runtime,
+                runtime_lease=runtime_lease,
+            )
+        )
+    except BaseException:
+        _close_tool_bounded_runtime_lease(runtime, runtime_lease)
+        raise
     r14_mapping = r14_result.to_mapping()
 
     preview_command = LoveFinalDeliverableRemotePublicationCommand(
@@ -538,6 +549,7 @@ def execute_love_actions_closed_loop_preview(
         )
     output = correlated.to_mapping()
     output["_r15_resolution"] = project_target.to_mapping()
+    output["_r15_runtime_lease"] = runtime_lease.to_readback_mapping()
     _write_json_atomic(command.output_path, output)
     return output
 
@@ -545,6 +557,8 @@ def execute_love_actions_closed_loop_preview(
 async def _run_r14_on_existing_scheduler(
     command: LoveFullDeterministicLocalSmokeCommand,
     runtime: Any,
+    *,
+    runtime_lease: ImportedActionsRuntimeLease | None = None,
 ) -> Any:
     """Run r14 without stealing an externally managed Scheduler lifecycle."""
 
@@ -571,27 +585,72 @@ async def _run_r14_on_existing_scheduler(
         execute_r14(),
         name=f"love-r15-r2-r14-{command.run_id}",
     )
-    done, _ = await asyncio.wait(
-        {scheduler_task, r14_task},
-        return_when=asyncio.FIRST_COMPLETED,
-    )
-    if scheduler_task in done and not r14_task.done():
-        scheduler_error = scheduler_task.exception()
-        r14_task.cancel()
-        await asyncio.gather(r14_task, return_exceptions=True)
-        if scheduler_error is not None:
-            raise LoveActionsClosedLoopPreviewError(
-                "injected Scheduler failed before r14 completed"
-            ) from scheduler_error
-        raise LoveActionsClosedLoopPreviewError(
-            "injected Scheduler stopped before r14 completed"
-        )
+    scheduler_completion_consumed = False
     try:
+        done, _ = await asyncio.wait(
+            {scheduler_task, r14_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if scheduler_task in done and not r14_task.done():
+            scheduler_error = scheduler_task.exception()
+            scheduler_completion_consumed = True
+            r14_task.cancel()
+            await asyncio.gather(r14_task, return_exceptions=True)
+            if scheduler_error is not None:
+                raise LoveActionsClosedLoopPreviewError(
+                    "injected Scheduler failed before r14 completed"
+                ) from scheduler_error
+            raise LoveActionsClosedLoopPreviewError(
+                "injected Scheduler stopped before r14 completed"
+            )
         return await r14_task
     finally:
-        if not scheduler_task.done():
-            await runtime.scheduler.shutdown()
-        await scheduler_task
+        try:
+            if not r14_task.done():
+                r14_task.cancel()
+                await asyncio.gather(r14_task, return_exceptions=True)
+            if not scheduler_task.done():
+                await runtime.scheduler.shutdown()
+            if scheduler_completion_consumed:
+                await asyncio.gather(
+                    scheduler_task,
+                    return_exceptions=True,
+                )
+            else:
+                try:
+                    await scheduler_task
+                except Exception as exc:
+                    raise LoveActionsClosedLoopPreviewError(
+                        "injected Scheduler failed during r14 lifecycle"
+                    ) from exc
+        finally:
+            if runtime_lease is not None:
+                _close_tool_bounded_runtime_lease(runtime, runtime_lease)
+
+
+def _acquire_imported_actions_runtime_lease(
+    value: object,
+) -> ImportedActionsRuntimeLease:
+    """Inject process identity and preserve the historical ports gate."""
+
+    lease = acquire_imported_actions_runtime_lease(
+        value,
+        current_process_id=os.getpid(),
+    )
+    validate_imported_actions_runtime_ports(lease.ports)
+    return lease
+
+
+def _close_tool_bounded_runtime_lease(
+    runtime: Any,
+    runtime_lease: ImportedActionsRuntimeLease,
+) -> None:
+    """Close only resources explicitly owned by a tool-bounded runtime."""
+
+    if runtime.scheduler_lifecycle == "tool-bounded":
+        runtime_lease.close(
+            current_process_id=os.getpid(),
+        )
 
 
 def _load_runtime_factory(reference: str) -> ImportedActionsRuntimeFactory:
