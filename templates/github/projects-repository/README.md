@@ -16,12 +16,25 @@ Le bundle contient actuellement :
 .github/ISSUE_TEMPLATE/specialist-capability-growth.yml
 .github/ISSUE_TEMPLATE/config.yml
 .github/workflows/autodoc-controlled-research.yml
+scripts/audit_projects_bundle_drift.py
+scripts/build_copilot_advisory_publication_preview.py
+scripts/build_copilot_advisory_v2_publication_preview.py
+scripts/build_human_readable_artifact_identity.py
 scripts/build_workflow_dispatch_issue_event.py
-scripts/run_workflow_dispatch_authoritative_request.py
-scripts/reconcile_projectv2_configuration.py
+scripts/check_projects_bundle_readiness.py
 scripts/project_copilot_advisory_fields.py
+scripts/project_copilot_advisory_from_run.py
+scripts/project_copilot_advisory_v2_fields.py
+scripts/projects_bundle_manifest_contract.py
+scripts/projects_bundle_readiness_contract.py
+scripts/reconcile_projectv2_configuration.py
+scripts/run_workflow_dispatch_authoritative_request.py
 projectv2_views.json
+projects_bundle_manifest.json
+COPILOT_ADVISORY_PUBLICATION.md
+COPILOT_ADVISORY_V2.md
 INSTALLATION.md
+PROJECTS_BUNDLE_DRIFT_AUDIT.md
 PROJECT_BOARD_TEMPLATE.md
 RESULT_UPDATE_PRESENTATION_CONTRACT.md
 ```
@@ -76,3 +89,11 @@ AUTODOC_COPILOT_ADVISORY_ENABLED=true
 Aucun secret Copilot durable n'est attendu. La création des champs/vues et la
 projection ProjectV2 utilisent un PAT classique distinct, uniquement lors
 d'une opération explicitement approuvée.
+
+
+## Manifest géré et audit de dérive
+
+`projects_bundle_manifest.json` définit les chemins actifs et retirés.
+`scripts/audit_projects_bundle_drift.py` compare leurs SHA-256 sans mutation.
+Le mode opératoire complet est dans `PROJECTS_BUNDLE_DRIFT_AUDIT.md`.
+`rsync --delete` reste interdit et les fichiers inconnus restent soumis à revue.

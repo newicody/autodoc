@@ -40,8 +40,7 @@ rsync -aiv --exclude README.md "$SRC"/ "$DST"/
 cp "$SRC/README.md" "$DST/AUTODOC_PROJECTS_BUNDLE.md"
 ```
 
-**Ne pas utiliser `--delete`** : le dépôt Projects peut contenir des fichiers
-qui ne viennent pas d’Autodoc.
+**Ne pas utiliser `--delete`** : voir `PROJECTS_BUNDLE_DRIFT_AUDIT.md` (`projects_bundle_manifest.json`, `audit_projects_bundle_drift.py`, `safe_delete_candidates`).
 
 Contrôler et publier :
 
