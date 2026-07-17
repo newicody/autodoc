@@ -467,6 +467,44 @@ def run_love_memory_evidence_liaison_synthesis(
         executor=executor,
         authority_store=authority_store,
     )
+    return finalize_love_memory_evidence_liaison_synthesis(
+        command,
+        authority_store=authority_store,
+        first_analysis=first_analysis,
+        second_analysis=second_analysis,
+        analysis_revision=analysis_revision,
+        first_object=first_object,
+        second_object=second_object,
+        first_artifact=first_artifact,
+        second_artifact=second_artifact,
+        projection_receipts=projection_receipts,
+        retrieval=retrieval,
+    )
+
+
+def finalize_love_memory_evidence_liaison_synthesis(
+    command: LoveMemoryEvidenceSynthesisCommand,
+    *,
+    authority_store: Any,
+    first_analysis: LoveConceptAffectAnalysis,
+    second_analysis: LoveRelationalDynamicsAnalysis,
+    analysis_revision: ContextRevision,
+    first_object: ContextAuthorityObject,
+    second_object: ContextAuthorityObject,
+    first_artifact: ContextArtifactDescriptor,
+    second_artifact: ContextArtifactDescriptor,
+    projection_receipts: tuple[
+        LoveAnalysisProjectionReceipt,
+        LoveAnalysisProjectionReceipt,
+    ],
+    retrieval: HybridRetrievalResult,
+) -> LoveMemoryEvidenceSynthesisResult:
+    """Finalize mutualization and liaison synthesis from recalled SQL evidence.
+
+    Both the legacy synchronous composition and the installed asynchronous
+    retrieval path call this function. Analysis persistence and projection must
+    already be complete before entry.
+    """
     expected_refs = {first_object.object_ref, second_object.object_ref}
     if {item.sql_ref for item in retrieval.items} != expected_refs:
         raise LoveMemoryEvidenceSynthesisError("hybrid recall did not rehydrate both analyses")
@@ -854,5 +892,6 @@ __all__ = (
     "LoveMemoryEvidenceSynthesisCommand",
     "LoveMemoryEvidenceSynthesisError",
     "LoveMemoryEvidenceSynthesisResult",
+    "finalize_love_memory_evidence_liaison_synthesis",
     "run_love_memory_evidence_liaison_synthesis",
 )
