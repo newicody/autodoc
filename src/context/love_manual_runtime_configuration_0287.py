@@ -138,6 +138,11 @@ class QdrantRuntimeSettings:
     dimension: int
     distance: str
     timeout_seconds: float = 5.0
+    physical_collection: str = ""
+    collection_alias: str = ""
+    dense_vector_name: str = "dense_e5_v1"
+    sparse_vector_name: str = "sparse_lexical_v1"
+    named_vectors_enabled: bool = False
 
     def __post_init__(self) -> None:
         parsed = urlparse(self.url)
@@ -148,10 +153,55 @@ class QdrantRuntimeSettings:
             raise ManualRuntimeConfigurationError(
                 "qdrant grpc_port and timeout must be positive"
             )
-        if not self.collection.strip():
+        collection = self.collection.strip()
+        if not collection:
             raise ManualRuntimeConfigurationError(
                 "qdrant collection or alias must be non-empty"
             )
+        object.__setattr__(
+            self,
+            "physical_collection",
+            self.physical_collection.strip() or collection,
+        )
+        object.__setattr__(
+            self,
+            "collection_alias",
+            self.collection_alias.strip() or collection,
+        )
+        object.__setattr__(
+            self,
+            "dense_vector_name",
+            self.dense_vector_name.strip()
+            or self.vector_name.strip()
+            or "dense_e5_v1",
+        )
+        object.__setattr__(
+            self,
+            "sparse_vector_name",
+            self.sparse_vector_name.strip() or "sparse_lexical_v1",
+        )
+        for name in ("collection", "physical_collection", "collection_alias"):
+            if not getattr(self, name).strip():
+                raise ManualRuntimeConfigurationError(
+                    f"qdrant {name} must be non-empty"
+                )
+        if not isinstance(self.named_vectors_enabled, bool):
+            raise ManualRuntimeConfigurationError(
+                "qdrant named_vectors_enabled must be boolean"
+            )
+        if self.named_vectors_enabled:
+            if not self.dense_vector_name.strip() or not self.sparse_vector_name.strip():
+                raise ManualRuntimeConfigurationError(
+                    "qdrant named dense and sparse vector names are required"
+                )
+            if self.dense_vector_name == self.sparse_vector_name:
+                raise ManualRuntimeConfigurationError(
+                    "qdrant dense and sparse vector names must differ"
+                )
+            if self.vector_name and self.vector_name != self.dense_vector_name:
+                raise ManualRuntimeConfigurationError(
+                    "legacy qdrant vector_name must be empty or match dense_vector_name"
+                )
         if self.dimension != 384:
             raise ManualRuntimeConfigurationError(
                 "qdrant collection must use E5 dimension 384"
@@ -172,7 +222,12 @@ class QdrantRuntimeSettings:
                 ),
                 "secret_value_serialized": False,
                 "collection": self.collection,
+                "physical_collection": self.physical_collection,
+                "collection_alias": self.collection_alias,
                 "vector_name": self.vector_name,
+                "dense_vector_name": self.dense_vector_name,
+                "sparse_vector_name": self.sparse_vector_name,
+                "named_vectors_enabled": self.named_vectors_enabled,
                 "dimension": self.dimension,
                 "distance": "Cosine",
                 "timeout_seconds": self.timeout_seconds,
@@ -339,12 +394,40 @@ def load_manual_installed_runtime_settings(
             fallback=5,
         ),
     )
+    collection = _required(parser, "qdrant", "collection")
+    vector_name = parser.get("qdrant", "vector_name", fallback="").strip()
+    has_dense_name = parser.has_option("qdrant", "dense_vector_name")
+    has_sparse_name = parser.has_option("qdrant", "sparse_vector_name")
+    if has_dense_name != has_sparse_name:
+        raise ManualRuntimeConfigurationError(
+            "qdrant dense_vector_name and sparse_vector_name must be configured together"
+        )
+    named_vectors_enabled = has_dense_name and has_sparse_name
+    dense_vector_name = parser.get(
+        "qdrant",
+        "dense_vector_name",
+        fallback=vector_name or "dense_e5_v1",
+    ).strip()
+    sparse_vector_name = parser.get(
+        "qdrant",
+        "sparse_vector_name",
+        fallback="sparse_lexical_v1",
+    ).strip()
     qdrant = QdrantRuntimeSettings(
         url=_required(parser, "qdrant", "url").rstrip("/"),
         grpc_port=_positive_int(parser, "qdrant", "grpc_port", fallback=6334),
         api_key_env=parser.get("qdrant", "api_key_env", fallback="").strip(),
-        collection=_required(parser, "qdrant", "collection"),
-        vector_name=parser.get("qdrant", "vector_name", fallback="").strip(),
+        collection=collection,
+        physical_collection=parser.get(
+            "qdrant", "physical_collection", fallback=collection
+        ).strip(),
+        collection_alias=parser.get(
+            "qdrant", "collection_alias", fallback=collection
+        ).strip(),
+        vector_name=vector_name,
+        dense_vector_name=dense_vector_name,
+        sparse_vector_name=sparse_vector_name,
+        named_vectors_enabled=named_vectors_enabled,
         dimension=_positive_int(parser, "qdrant", "dimension", fallback=384),
         distance=parser.get("qdrant", "distance", fallback="Cosine").strip(),
         timeout_seconds=_positive_float(

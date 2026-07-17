@@ -238,6 +238,11 @@ def inspect_qdrant_readiness(
     health_status = 0
     collection_status = 0
     payload: Mapping[str, Any] = {}
+    collection_name = (
+        cfg.physical_collection
+        if cfg.named_vectors_enabled
+        else cfg.collection
+    )
     try:
         health_status, health_body, _ = loader(
             _qdrant_request(settings, "/readyz"),
@@ -248,7 +253,7 @@ def inspect_qdrant_readiness(
         collection_status, collection_body, _ = loader(
             _qdrant_request(
                 settings,
-                "/collections/" + quote(cfg.collection, safe=""),
+                "/collections/" + quote(collection_name, safe=""),
             ),
             timeout=cfg.timeout_seconds,
         )
@@ -258,25 +263,50 @@ def inspect_qdrant_readiness(
     except (HTTPError, URLError, OSError, TimeoutError, ValueError) as exc:
         issues.append(f"Qdrant read-only readiness failed: {_safe_error(exc)}")
 
-    vectors = payload.get("config", {})
-    if isinstance(vectors, Mapping):
-        vectors = vectors.get("params", {})
-    if isinstance(vectors, Mapping):
-        vectors = vectors.get("vectors", {})
+    config = payload.get("config", {}) if isinstance(payload, Mapping) else {}
+    params = config.get("params", {}) if isinstance(config, Mapping) else {}
+    vectors = params.get("vectors", {}) if isinstance(params, Mapping) else {}
+    sparse_vectors = (
+        params.get("sparse_vectors", {})
+        if isinstance(params, Mapping)
+        else {}
+    )
     if not isinstance(vectors, Mapping):
         vectors = {}
+    if not isinstance(sparse_vectors, Mapping):
+        sparse_vectors = {}
 
-    if cfg.vector_name:
+    dense_config: Mapping[str, Any]
+    sparse_config: Mapping[str, Any]
+    dense_present = True
+    sparse_present = False
+    if cfg.named_vectors_enabled:
+        dense_present = cfg.dense_vector_name in vectors
+        sparse_present = cfg.sparse_vector_name in sparse_vectors
+        selected_dense = vectors.get(cfg.dense_vector_name)
+        selected_sparse = sparse_vectors.get(cfg.sparse_vector_name)
+        dense_config = (
+            selected_dense if isinstance(selected_dense, Mapping) else {}
+        )
+        sparse_config = (
+            selected_sparse if isinstance(selected_sparse, Mapping) else {}
+        )
+    elif cfg.vector_name:
+        dense_present = cfg.vector_name in vectors
         selected = vectors.get(cfg.vector_name)
-        vector_config = selected if isinstance(selected, Mapping) else {}
+        dense_config = selected if isinstance(selected, Mapping) else {}
+        sparse_config = {}
     else:
-        vector_config = vectors
-    size = vector_config.get("size") if isinstance(vector_config, Mapping) else None
+        dense_config = vectors
+        sparse_config = {}
+
+    size = dense_config.get("size") if isinstance(dense_config, Mapping) else None
     distance = (
-        vector_config.get("distance") if isinstance(vector_config, Mapping) else None
+        dense_config.get("distance")
+        if isinstance(dense_config, Mapping)
+        else None
     )
     status = payload.get("status") if isinstance(payload, Mapping) else None
-
     if not issues:
         if collection_status != 200:
             issues.append("Qdrant collection readback did not return HTTP 200")
@@ -286,6 +316,10 @@ def inspect_qdrant_readiness(
             issues.append("Qdrant vector dimension differs from 384")
         if str(distance or "").casefold() != cfg.distance.casefold():
             issues.append("Qdrant distance differs from Cosine")
+        if cfg.named_vectors_enabled and not dense_present:
+            issues.append("Qdrant named dense vector is missing")
+        if cfg.named_vectors_enabled and not sparse_present:
+            issues.append("Qdrant named sparse vector is missing")
 
     return BackendReadiness(
         backend="qdrant",
@@ -295,9 +329,15 @@ def inspect_qdrant_readiness(
             "url": cfg.url,
             "grpc_port": cfg.grpc_port,
             "collection": cfg.collection,
+            "physical_collection": collection_name,
+            "collection_alias": cfg.collection_alias,
             "vector_name": cfg.vector_name,
+            "dense_vector_name": cfg.dense_vector_name,
+            "sparse_vector_name": cfg.sparse_vector_name,
+            "named_vectors_enabled": cfg.named_vectors_enabled,
             "dimension": size,
             "distance": distance,
+            "sparse_configured": sparse_present,
             "status": status,
             "points_count": payload.get("points_count"),
             "readyz_http_status": health_status,
@@ -311,7 +351,6 @@ def inspect_qdrant_readiness(
             "write_performed": False,
         },
     )
-
 
 def _default_openvino_inspector(
     settings: ManualInstalledRuntimeSettings,
@@ -457,3 +496,4 @@ __all__ = (
     "inspect_postgresql_readiness",
     "inspect_qdrant_readiness",
 )
+# r10-r1 keeps legacy unnamed settings compatible before this readiness boundary.
