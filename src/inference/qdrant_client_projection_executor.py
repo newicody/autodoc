@@ -178,6 +178,46 @@ class QdrantClientReferenceHit:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class QdrantNamedHybridProjectionResult:
+    """Reference-only receipt for one named dense+sparse point upsert."""
+
+    collection_name: str
+    point_id: str
+    dense_vector_name: str
+    sparse_vector_name: str
+    acknowledged: bool = True
+
+    def __post_init__(self) -> None:
+        if not self.collection_name.strip():
+            raise ValueError("collection_name must not be empty")
+        if not _is_typed_ref(self.point_id):
+            raise ValueError("point_id must be a typed reference")
+        for name in ("dense_vector_name", "sparse_vector_name"):
+            if not _is_identifier(getattr(self, name)):
+                raise ValueError(f"{name} must be a stable identifier")
+        if self.dense_vector_name == self.sparse_vector_name:
+            raise ValueError("dense and sparse vector names must differ")
+        if not self.acknowledged:
+            raise ValueError("named hybrid projection must be acknowledged")
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "schema": "missipy.qdrant.named_hybrid_projection_result.v1",
+            "collection_name": self.collection_name,
+            "point_id": self.point_id,
+            "dense_vector_name": self.dense_vector_name,
+            "sparse_vector_name": self.sparse_vector_name,
+            "acknowledged": self.acknowledged,
+            "boundaries": {
+                "reference_only_receipt": True,
+                "vectors_serialized": False,
+                "authoritative_content_serialized": False,
+                "sql_remains_authority": True,
+            },
+        }
+
+
 class QdrantClientProjectionExecutor:
     """Implement the existing QdrantProjectionExecutor with qdrant-client."""
 
@@ -240,6 +280,82 @@ class QdrantClientProjectionExecutor:
         return QdrantProjectionWriteResult(
             target=target,
             point_ids=tuple(point.point_id for point in bounded),
+            acknowledged=True,
+        )
+
+    def upsert_named_hybrid_point(
+        self,
+        *,
+        collection_name: str,
+        point_id: str,
+        dense_vector_name: str,
+        dense_values: Sequence[float],
+        sparse_vector_name: str,
+        sparse_indices: Sequence[int],
+        sparse_values: Sequence[float],
+        payload: Mapping[str, object],
+        dense_dimension: int = 384,
+    ) -> QdrantNamedHybridProjectionResult:
+        """Upsert one canonical named dense+sparse point behind the write gate."""
+
+        operation = "upsert_named_hybrid"
+        self._require_allowed(operation, self._gate.allow_write)
+        if not collection_name or not collection_name.strip():
+            raise self._failure(operation, "invalid_collection", "collection_name is required")
+        if not _is_typed_ref(point_id):
+            raise self._failure(operation, "invalid_point_id", "point_id must be typed")
+        if not _is_identifier(dense_vector_name) or not _is_identifier(sparse_vector_name):
+            raise self._failure(operation, "invalid_vector_name", "named vectors require stable identifiers")
+        if dense_vector_name == sparse_vector_name:
+            raise self._failure(operation, "invalid_vector_name", "dense and sparse vector names must differ")
+        if dense_dimension != 384:
+            raise self._failure(operation, "dimension_mismatch", "multilingual-e5-small dimension must be 384")
+
+        dense = tuple(float(value) for value in dense_values)
+        if len(dense) != dense_dimension or any(not math.isfinite(value) for value in dense):
+            raise self._failure(operation, "invalid_dense_vector", "dense vector must contain 384 finite values")
+        dense_norm = math.sqrt(sum(value * value for value in dense))
+        if not math.isclose(dense_norm, 1.0, rel_tol=1e-4, abs_tol=1e-4):
+            raise self._failure(operation, "invalid_dense_vector", "dense vector must have unit norm")
+
+        indices = tuple(int(index) for index in sparse_indices)
+        values = tuple(float(value) for value in sparse_values)
+        if (
+            not indices
+            or len(indices) != len(values)
+            or len(set(indices)) != len(indices)
+            or any(index < 0 for index in indices)
+            or any(not math.isfinite(value) or value <= 0 for value in values)
+        ):
+            raise self._failure(operation, "invalid_sparse_vector", "sparse indices and values must be aligned and valid")
+
+        compact_payload = _canonical_named_projection_payload(payload, point_id=point_id)
+        point = self._models.PointStruct(
+            id=_qdrant_storage_id(point_id),
+            vector={
+                dense_vector_name: list(dense),
+                sparse_vector_name: self._models.SparseVector(
+                    indices=list(indices),
+                    values=list(values),
+                ),
+            },
+            payload=compact_payload,
+        )
+        try:
+            response = self._client.upsert(
+                collection_name=collection_name,
+                points=[point],
+                wait=self._config.wait_for_write,
+            )
+        except Exception as exc:
+            raise self._wrapped_failure(operation, exc) from exc
+        if not _write_acknowledged(response):
+            raise self._failure(operation, "not_acknowledged", "Qdrant did not acknowledge the named hybrid write")
+        return QdrantNamedHybridProjectionResult(
+            collection_name=collection_name,
+            point_id=point_id,
+            dense_vector_name=dense_vector_name,
+            sparse_vector_name=sparse_vector_name,
             acknowledged=True,
         )
 
@@ -591,6 +707,105 @@ def _is_typed_ref(value: object) -> bool:
         return False
     prefix, suffix = value.split(":", 1)
     return bool(prefix) and bool(suffix) and prefix[0].islower()
+
+
+_NAMED_PROJECTION_REQUIRED_FIELDS = frozenset(
+    {
+        "point_id",
+        "sql_ref",
+        "source_ref",
+        "source_content_digest",
+        "context_revision_ref",
+        "branch_ref",
+        "project_ref",
+        "conversation_ref",
+        "artifact_kind",
+        "contribution_kind",
+        "specialist_ref",
+        "laboratory_ref",
+        "security_scope",
+        "valid",
+        "superseded_by",
+    }
+)
+
+
+def _canonical_named_projection_payload(
+    payload: Mapping[str, object],
+    *,
+    point_id: str,
+) -> dict[str, object]:
+    compact = _reference_payload(payload)
+    keys = frozenset(compact)
+    missing = _NAMED_PROJECTION_REQUIRED_FIELDS.difference(keys)
+    unknown = keys.difference(_NAMED_PROJECTION_REQUIRED_FIELDS)
+    if missing:
+        raise QdrantClientProjectionExecutor._failure(
+            "upsert_named_hybrid",
+            "missing_payload_fields",
+            "canonical projection payload misses: " + ", ".join(sorted(missing)),
+        )
+    if unknown:
+        raise QdrantClientProjectionExecutor._failure(
+            "upsert_named_hybrid",
+            "unknown_payload_fields",
+            "canonical projection payload has unknown fields: " + ", ".join(sorted(unknown)),
+        )
+    if compact["point_id"] != point_id:
+        raise QdrantClientProjectionExecutor._failure(
+            "upsert_named_hybrid", "point_id_mismatch", "payload point_id differs from point_id"
+        )
+    for field_name in (
+        "point_id",
+        "sql_ref",
+        "source_ref",
+        "context_revision_ref",
+        "branch_ref",
+        "project_ref",
+        "conversation_ref",
+        "specialist_ref",
+        "laboratory_ref",
+        "security_scope",
+    ):
+        if not _is_typed_ref(compact[field_name]):
+            raise QdrantClientProjectionExecutor._failure(
+                "upsert_named_hybrid", "invalid_payload_ref", f"{field_name} must be typed"
+            )
+    superseded_by = compact["superseded_by"]
+    if superseded_by not in ("", None) and not _is_typed_ref(superseded_by):
+        raise QdrantClientProjectionExecutor._failure(
+            "upsert_named_hybrid", "invalid_payload_ref", "superseded_by must be empty or typed"
+        )
+    digest = compact["source_content_digest"]
+    if not isinstance(digest, str) or len(digest) != 71 or not digest.startswith("sha256:"):
+        raise QdrantClientProjectionExecutor._failure(
+            "upsert_named_hybrid", "invalid_digest", "source_content_digest must be sha256:*"
+        )
+    try:
+        int(digest[7:], 16)
+    except ValueError as exc:
+        raise QdrantClientProjectionExecutor._failure(
+            "upsert_named_hybrid", "invalid_digest", "source_content_digest must be hexadecimal"
+        ) from exc
+    for field_name in ("artifact_kind", "contribution_kind"):
+        if not _is_identifier(compact[field_name]):
+            raise QdrantClientProjectionExecutor._failure(
+                "upsert_named_hybrid", "invalid_payload_identifier", f"{field_name} must be stable"
+            )
+    if not isinstance(compact["valid"], bool):
+        raise QdrantClientProjectionExecutor._failure(
+            "upsert_named_hybrid", "invalid_payload_validity", "valid must be a boolean"
+        )
+    return compact
+
+
+def _is_identifier(value: object) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    return value[0].islower() and all(
+        character.islower() or character.isdigit() or character in "_.-"
+        for character in value
+    )
 
 def _bounded_score(raw_score: float, distance: str) -> float:
     if not math.isfinite(raw_score):
