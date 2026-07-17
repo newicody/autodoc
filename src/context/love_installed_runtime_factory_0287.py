@@ -33,6 +33,10 @@ DEFAULT_INSTALLED_RUNTIME_CONFIG = Path(
     ".var/config/love_installed_runtime.ini"
 )
 INSTALLED_RUNTIME_CONFIG_ENV = "AUTODOC_LOVE_INSTALLED_RUNTIME_CONFIG"
+DEFAULT_INSTALLED_RUNTIME_PROVIDER = (
+    "context.love_manual_installed_runtime_provider_0287:"
+    "build_installed_runtime_ports"
+)
 
 
 class InstalledRuntimeFactoryError(ValueError):
@@ -208,7 +212,10 @@ def load_installed_runtime_factory_settings(
             "runtime", "schema", fallback=INSTALLED_RUNTIME_FACTORY_SCHEMA
         ).strip(),
         config_path=str(path),
-        provider_ref=_required(parser, "provider", "factory"),
+        provider_ref=(
+            parser.get("provider", "factory", fallback="").strip()
+            or DEFAULT_INSTALLED_RUNTIME_PROVIDER
+        ),
         runtime_ref=_required(parser, "runtime", "runtime_ref"),
         scheduler_ref=_required(parser, "scheduler", "scheduler_ref"),
         scheduler_lifecycle=parser.get(
@@ -406,6 +413,7 @@ def build_runtime(
 
 __all__ = [
     "DEFAULT_INSTALLED_RUNTIME_CONFIG",
+    "DEFAULT_INSTALLED_RUNTIME_PROVIDER",
     "INSTALLED_RUNTIME_CONFIG_ENV",
     "INSTALLED_RUNTIME_FACTORY_SCHEMA",
     "InstalledRuntimeFactoryError",

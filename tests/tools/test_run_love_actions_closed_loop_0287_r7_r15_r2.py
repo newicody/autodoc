@@ -430,13 +430,15 @@ def test_missing_runtime_configuration_has_operator_facing_error(
         "run_love_actions_closed_loop_missing_runtime",
         "run_love_actions_closed_loop_0287.py",
     )
+    local = tmp_path / "love.ini"
+    local.write_text("", encoding="utf-8")
     project = tmp_path / "project.ini"
     project.write_text(
         "[project]\nowner = newicody\nnumber = 3\n",
         encoding="utf-8",
     )
     args = SimpleNamespace(
-        config=None,
+        config=str(local),
         project_config=str(project),
         project_owner=None,
         project_number=None,
