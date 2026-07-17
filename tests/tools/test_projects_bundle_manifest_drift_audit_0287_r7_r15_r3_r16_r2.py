@@ -167,3 +167,87 @@ def test_manifest_rejects_path_traversal(tmp_path: Path) -> None:
         match="normalized relative path",
     ):
         contract.load_projects_bundle_manifest(manifest)
+
+
+def test_python_transients_are_reported_but_do_not_require_review(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    (source / "scripts").mkdir(parents=True)
+    (destination / "scripts/__pycache__").mkdir(parents=True)
+    for root in (source, destination):
+        (root / "scripts/managed.py").write_text(
+            "same\n", encoding="utf-8"
+        )
+    (destination / "scripts/__pycache__/managed.cpython-314.pyc").write_bytes(
+        b"cache"
+    )
+    (destination / "scripts/helper.pyc").write_bytes(b"cache")
+    (destination / "scripts/helper.pyo").write_bytes(b"cache")
+    manifest = source / "projects_bundle_manifest.json"
+    _write_manifest(manifest)
+
+    result = contract.audit_projects_bundle_drift(
+        contract.ProjectsBundleDriftAuditCommand(
+            source_root=source,
+            destination_root=destination,
+            manifest_path=manifest,
+        )
+    )
+
+    assert result.managed_exact is True
+    assert result.review_required is False
+    assert result.unknown_extra_files == ()
+    assert result.ignored_transient_files == (
+        "scripts/__pycache__/managed.cpython-314.pyc",
+        "scripts/helper.pyc",
+        "scripts/helper.pyo",
+    )
+    mapping = result.to_mapping()
+    assert mapping["ignored_transient_files"] == [
+        "scripts/__pycache__/managed.cpython-314.pyc",
+        "scripts/helper.pyc",
+        "scripts/helper.pyo",
+    ]
+    assert mapping["boundaries"][
+        "transient_python_artifacts_ignored"
+    ] is True
+
+
+def test_non_transient_file_inside_scripts_still_requires_review(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    (source / "scripts").mkdir(parents=True)
+    (destination / "scripts/__pycache__").mkdir(parents=True)
+    for root in (source, destination):
+        (root / "scripts/managed.py").write_text(
+            "same\n", encoding="utf-8"
+        )
+    (destination / "scripts/__pycache__/cache.pyc").write_bytes(
+        b"cache"
+    )
+    (destination / "scripts/manual-note.txt").write_text(
+        "review\n", encoding="utf-8"
+    )
+    manifest = source / "projects_bundle_manifest.json"
+    _write_manifest(manifest)
+
+    result = contract.audit_projects_bundle_drift(
+        contract.ProjectsBundleDriftAuditCommand(
+            source_root=source,
+            destination_root=destination,
+            manifest_path=manifest,
+        )
+    )
+
+    assert result.managed_exact is True
+    assert result.review_required is True
+    assert result.unknown_extra_files == (
+        "scripts/manual-note.txt",
+    )
+    assert result.ignored_transient_files == (
+        "scripts/__pycache__/cache.pyc",
+    )

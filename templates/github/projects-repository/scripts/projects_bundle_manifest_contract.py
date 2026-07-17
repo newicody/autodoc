@@ -13,6 +13,8 @@ PROJECTS_BUNDLE_MANIFEST_SCHEMA = "missipy.projects_bundle_manifest.v1"
 PROJECTS_BUNDLE_DRIFT_RESULT_SCHEMA = (
     "missipy.projects_bundle_drift_audit_result.v1"
 )
+TRANSIENT_PYTHON_DIRECTORY_NAMES = frozenset({"__pycache__"})
+TRANSIENT_PYTHON_FILE_SUFFIXES = frozenset({".pyc", ".pyo"})
 
 
 class ProjectsBundleManifestError(ValueError):
@@ -225,6 +227,7 @@ class ProjectsBundleDriftAuditResult:
     active_files: tuple[BundleFileAudit, ...]
     retired_files: tuple[RetiredFileAudit, ...]
     unknown_extra_files: tuple[str, ...]
+    ignored_transient_files: tuple[str, ...]
     copy_candidates: tuple[str, ...]
     safe_delete_candidates: tuple[str, ...]
     source_valid: bool
@@ -266,6 +269,9 @@ class ProjectsBundleDriftAuditResult:
                 item.to_mapping() for item in self.retired_files
             ],
             "unknown_extra_files": list(self.unknown_extra_files),
+            "ignored_transient_files": list(
+                self.ignored_transient_files
+            ),
             "copy_candidates": list(self.copy_candidates),
             "safe_delete_candidates": list(
                 self.safe_delete_candidates
@@ -277,6 +283,13 @@ class ProjectsBundleDriftAuditResult:
                 "mutation_performed": self.mutation_performed,
                 "remote_access_performed": self.remote_access_performed,
                 "unknown_extra_files_are_delete_candidates": False,
+                "transient_python_artifacts_ignored": True,
+                "transient_python_directory_names": sorted(
+                    TRANSIENT_PYTHON_DIRECTORY_NAMES
+                ),
+                "transient_python_file_suffixes": sorted(
+                    TRANSIENT_PYTHON_FILE_SUFFIXES
+                ),
                 "safe_delete_scope": "retired_entries-only",
                 "rsync_delete_allowed": False,
             },
@@ -301,6 +314,10 @@ class ProjectsBundleDriftAuditResult:
                 (
                     "unknown_extra_files: "
                     f"{len(self.unknown_extra_files)}"
+                ),
+                (
+                    "ignored_transient_files: "
+                    f"{len(self.ignored_transient_files)}"
                 ),
                 (
                     "safe_delete_candidates: "
@@ -425,16 +442,15 @@ def audit_projects_bundle_drift(
     }.union(
         item.destination_path for item in manifest.retired_entries
     )
-    unknown = (
-        _scan_unknown_extra_files(
+    if effective.scan_unknown_extras:
+        unknown, ignored_transient = _scan_unknown_extra_files(
             command.destination_root,
             manifest.managed_roots,
             known_destinations,
             effective.max_unknown_files,
         )
-        if effective.scan_unknown_extras
-        else ()
-    )
+    else:
+        unknown, ignored_transient = (), ()
 
     copy_candidates = tuple(
         item.destination_path
@@ -484,6 +500,7 @@ def audit_projects_bundle_drift(
         active_files=active_audits,
         retired_files=retired_audits,
         unknown_extra_files=unknown,
+        ignored_transient_files=ignored_transient,
         copy_candidates=copy_candidates,
         safe_delete_candidates=safe_delete_candidates,
         source_valid=source_valid,
@@ -566,8 +583,9 @@ def _scan_unknown_extra_files(
     managed_roots: tuple[str, ...],
     known_destinations: set[str],
     maximum: int,
-) -> tuple[str, ...]:
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
     extras: list[str] = []
+    ignored_transient: list[str] = []
     for root_text in managed_roots:
         root = _resolve_child(destination_root, root_text)
         if not root.is_dir():
@@ -578,12 +596,26 @@ def _scan_unknown_extra_files(
             relative = path.relative_to(destination_root).as_posix()
             if relative in known_destinations:
                 continue
+            if _is_transient_python_artifact(path):
+                ignored_transient.append(relative)
+                continue
             extras.append(relative)
             if len(extras) > maximum:
                 raise ProjectsBundleManifestError(
                     "unknown file count exceeds the explicit audit bound"
                 )
-    return tuple(extras)
+    return tuple(extras), tuple(ignored_transient)
+
+
+def _is_transient_python_artifact(path: Path) -> bool:
+    return (
+        bool(
+            TRANSIENT_PYTHON_DIRECTORY_NAMES.intersection(
+                path.parts
+            )
+        )
+        or path.suffix.casefold() in TRANSIENT_PYTHON_FILE_SUFFIXES
+    )
 
 
 def _required_text(
@@ -632,6 +664,8 @@ def _sha256(path: Path) -> str:
 __all__ = (
     "PROJECTS_BUNDLE_DRIFT_RESULT_SCHEMA",
     "PROJECTS_BUNDLE_MANIFEST_SCHEMA",
+    "TRANSIENT_PYTHON_DIRECTORY_NAMES",
+    "TRANSIENT_PYTHON_FILE_SUFFIXES",
     "BundleFileAudit",
     "ManagedBundleEntry",
     "ProjectsBundleDriftAuditCommand",

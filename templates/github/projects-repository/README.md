@@ -96,4 +96,5 @@ d'une opération explicitement approuvée.
 `projects_bundle_manifest.json` définit les chemins actifs et retirés.
 `scripts/audit_projects_bundle_drift.py` compare leurs SHA-256 sans mutation.
 Le mode opératoire complet est dans `PROJECTS_BUNDLE_DRIFT_AUDIT.md`.
-`rsync --delete` reste interdit et les fichiers inconnus restent soumis à revue.
+Les caches `__pycache__`, `*.pyc` et `*.pyo` sont signalés séparément dans
+`ignored_transient_files`; les autres fichiers inconnus restent soumis à revue.

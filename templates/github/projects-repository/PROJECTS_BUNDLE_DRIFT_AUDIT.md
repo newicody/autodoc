@@ -35,6 +35,7 @@ jq '{
   copy_candidates,
   safe_delete_candidates,
   unknown_extra_files,
+  ignored_transient_files,
   plan_digest,
   boundaries
 }' /tmp/projects-bundle-drift-before.json
@@ -47,6 +48,8 @@ jq '{
   marqués `retired` dans le manifest ;
 - `unknown_extra_files` contient des fichiers à examiner, jamais des candidats
   automatiques à la suppression ;
+- `ignored_transient_files` contient uniquement les caches Python
+  `__pycache__`, `*.pyc` et `*.pyo`; ils ne déclenchent aucune revue ;
 - `source_missing` indique une incohérence du bundle Autodoc ;
 - `modified` exige une revue avant écrasement ;
 - `identical` confirme un SHA-256 source/destination identique.
@@ -101,8 +104,8 @@ copy_candidates = []
 safe_delete_candidates = []
 ```
 
-`unknown_extra_files` peut rester non vide : ces fichiers peuvent appartenir
-directement au dépôt `newicody/projects`.
+`ignored_transient_files` peut rester non vide après l'exécution de scripts
+Python. `unknown_extra_files` doit rester réservé aux vrais fichiers à revoir.
 
 ## Contrôler et publier
 
