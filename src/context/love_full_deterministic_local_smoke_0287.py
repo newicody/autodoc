@@ -56,6 +56,14 @@ from context.love_memory_evidence_liaison_synthesis_0287 import (
     LoveMemoryEvidenceSynthesisResult,
     run_love_memory_evidence_liaison_synthesis,
 )
+from context.love_async_hybrid_recall_liaison_synthesis_0287 import (
+    LoveAsyncHybridRecallLiaisonSynthesisResult,
+    run_love_async_hybrid_recall_liaison_synthesis,
+)
+from context.love_specialist_live_projection_binding_0287 import (
+    LoveSpecialistLiveProjectionBindingResult,
+    bind_love_specialist_analyses_live,
+)
 from context.love_study_contracts_0287 import (
     LOVE_CONCEPT_AFFECT_ANALYSIS_CONTRACT_REF,
     LOVE_CONCEPT_AFFECT_SPECIALIST_REF,
@@ -256,6 +264,9 @@ class LoveFullDeterministicLocalSmokeResult:
     publication_plan: LoveFinalDeliverablePublicationPlan
     readback: FinalDeliverablePublicationReadbackResult
     stage_refs: tuple[str, ...]
+    live_binding: LoveSpecialistLiveProjectionBindingResult | None = None
+    async_continuation: LoveAsyncHybridRecallLiaisonSynthesisResult | None = None
+    live_path_used: bool = False
     issue_fixture_exercised: bool = True
     three_artifacts_assembled: bool = True
     explicit_operator_gate_used: bool = True
@@ -305,6 +316,37 @@ class LoveFullDeterministicLocalSmokeResult:
             raise LoveFullDeterministicLocalSmokeError(
                 "simulated publication readback is not exact"
             )
+        if self.live_path_used:
+            if not isinstance(
+                self.live_binding,
+                LoveSpecialistLiveProjectionBindingResult,
+            ):
+                raise LoveFullDeterministicLocalSmokeError(
+                    "live path requires the r12 specialist projection binding"
+                )
+            if not isinstance(
+                self.async_continuation,
+                LoveAsyncHybridRecallLiaisonSynthesisResult,
+            ):
+                raise LoveFullDeterministicLocalSmokeError(
+                    "live path requires the r13 async recall continuation"
+                )
+            if self.async_continuation.binding != self.live_binding:
+                raise LoveFullDeterministicLocalSmokeError(
+                    "r13 continuation does not preserve the r12 binding"
+                )
+            if self.async_continuation.synthesis != self.synthesis_result:
+                raise LoveFullDeterministicLocalSmokeError(
+                    "result synthesis differs from the r13 continuation"
+                )
+            if self.async_continuation.analysis_reprojected:
+                raise LoveFullDeterministicLocalSmokeError(
+                    "live local smoke reprojected specialist analyses"
+                )
+        elif self.live_binding is not None or self.async_continuation is not None:
+            raise LoveFullDeterministicLocalSmokeError(
+                "deterministic path cannot claim live r12/r13 evidence"
+            )
         forbidden = (
             not self.issue_fixture_exercised,
             not self.three_artifacts_assembled,
@@ -338,7 +380,21 @@ class LoveFullDeterministicLocalSmokeResult:
             "publication_plan": self.publication_plan.to_mapping(),
             "readback": self.readback.to_mapping(),
             "stage_refs": list(self.stage_refs),
+            "live_binding": (
+                self.live_binding.to_mapping()
+                if self.live_binding is not None
+                else None
+            ),
+            "async_continuation": (
+                self.async_continuation.to_mapping()
+                if self.async_continuation is not None
+                else None
+            ),
             "boundaries": {
+                "live_path_used": self.live_path_used,
+                "r12_live_binding_used": self.live_path_used,
+                "r13_async_recall_used": self.live_path_used,
+                "analyses_reprojected": False,
                 "issue_fixture_exercised": True,
                 "three_artifacts_assembled": True,
                 "request_authoritative": True,
@@ -367,6 +423,7 @@ async def run_love_full_deterministic_local_smoke(
     collection: QdrantCollectionProfile,
     embedder: Any,
     executor: Any,
+    live_async: bool = False,
 ) -> LoveFullDeterministicLocalSmokeResult:
     """Execute the complete r14 proof through existing local boundaries."""
 
@@ -459,30 +516,44 @@ async def run_love_full_deterministic_local_smoke(
 
     issue_number = int(package["source_issue"]["number"])
     target_ref = f"github:issue:{command.repository}#{issue_number}"
-    synthesis_result = run_love_memory_evidence_liaison_synthesis(
-        LoveMemoryEvidenceSynthesisCommand(
-            schema=LOVE_MEMORY_EVIDENCE_SYNTHESIS_COMMAND_SCHEMA,
-            command_ref=_digest_ref(
-                "love-synthesis-command:",
-                package["work_package_ref"],
-                collaboration.second_analysis.analysis_ref,
-            ),
-            study=study,
-            collaboration=collaboration,
-            base_revision_ref=command.base_revision_ref,
-            branch_ref=command.branch_ref,
-            project_ref=command.project_ref,
-            security_scope=command.security_scope,
-            target_ref=target_ref,
-            artifact_storage_ref=command.artifact_storage_ref,
-            created_at=command.created_at,
+    synthesis_command = LoveMemoryEvidenceSynthesisCommand(
+        schema=LOVE_MEMORY_EVIDENCE_SYNTHESIS_COMMAND_SCHEMA,
+        command_ref=_digest_ref(
+            "love-synthesis-command:",
+            package["work_package_ref"],
+            collaboration.second_analysis.analysis_ref,
         ),
-        authority_store=authority_store,
-        projection_port=projection_port,
-        collection=collection,
-        embedder=embedder,
-        executor=executor,
+        study=study,
+        collaboration=collaboration,
+        base_revision_ref=command.base_revision_ref,
+        branch_ref=command.branch_ref,
+        project_ref=command.project_ref,
+        security_scope=command.security_scope,
+        target_ref=target_ref,
+        artifact_storage_ref=command.artifact_storage_ref,
+        created_at=command.created_at,
     )
+    live_binding: LoveSpecialistLiveProjectionBindingResult | None = None
+    async_continuation: LoveAsyncHybridRecallLiaisonSynthesisResult | None = None
+    if live_async:
+        live_binding, async_continuation = await _run_live_synthesis_path(
+            synthesis_command,
+            authority_store=authority_store,
+            projection_port=projection_port,
+            collection=collection,
+            embedder=embedder,
+            executor=executor,
+        )
+        synthesis_result = async_continuation.synthesis
+    else:
+        synthesis_result = run_love_memory_evidence_liaison_synthesis(
+            synthesis_command,
+            authority_store=authority_store,
+            projection_port=projection_port,
+            collection=collection,
+            embedder=embedder,
+            executor=executor,
+        )
 
     source_issue_ref = (
         f"github-frame:{command.repository}/issues/{issue_number}"
@@ -551,6 +622,7 @@ async def run_love_full_deterministic_local_smoke(
         "candidate_status": decided_candidate.status,
         "publication_plan_digest": publication_plan.plan_digest,
         "readback_action": readback.action,
+        "live_path_used": live_async,
     }
     proof_digest = hashlib.sha256(
         _canonical_json(proof_payload).encode("utf-8")
@@ -572,6 +644,73 @@ async def run_love_full_deterministic_local_smoke(
         publication_plan=publication_plan,
         readback=readback,
         stage_refs=stage_refs,
+        live_binding=live_binding,
+        async_continuation=async_continuation,
+        live_path_used=live_async,
+    )
+
+
+async def _run_live_synthesis_path(
+    command: LoveMemoryEvidenceSynthesisCommand,
+    *,
+    authority_store: Any,
+    projection_port: Any,
+    collection: QdrantCollectionProfile,
+    embedder: Any,
+    executor: Any,
+) -> tuple[
+    LoveSpecialistLiveProjectionBindingResult,
+    LoveAsyncHybridRecallLiaisonSynthesisResult,
+]:
+    """Run r12 then r13 without reprojecting either specialist analysis."""
+
+    binding = await bind_love_specialist_analyses_live(
+        command,
+        authority_store=authority_store,
+        projection_port=projection_port,
+    )
+    continuation = await run_love_async_hybrid_recall_liaison_synthesis(
+        command,
+        binding=binding,
+        collection=collection,
+        embedder=embedder,
+        executor=executor,
+        authority_store=authority_store,
+    )
+    if continuation.binding != binding:
+        raise LoveFullDeterministicLocalSmokeError(
+            "r13 continuation did not preserve the r12 binding"
+        )
+    if continuation.analysis_reprojected:
+        raise LoveFullDeterministicLocalSmokeError(
+            "r13 continuation reprojected specialist analyses"
+        )
+    return binding, continuation
+
+
+async def run_love_full_live_local_smoke(
+    command: LoveFullDeterministicLocalSmokeCommand,
+    *,
+    scheduler: SchedulerContract,
+    dispatcher: NativeLoveCollaborationVisitDispatcher,
+    authority_store: Any,
+    projection_port: Any,
+    collection: QdrantCollectionProfile,
+    embedder: Any,
+    executor: Any,
+) -> LoveFullDeterministicLocalSmokeResult:
+    """Execute the full local chain through the real async r12/r13 path."""
+
+    return await run_love_full_deterministic_local_smoke(
+        command,
+        scheduler=scheduler,
+        dispatcher=dispatcher,
+        authority_store=authority_store,
+        projection_port=projection_port,
+        collection=collection,
+        embedder=embedder,
+        executor=executor,
+        live_async=True,
     )
 
 
@@ -747,4 +886,5 @@ __all__ = (
     "LoveFullDeterministicLocalSmokeError",
     "LoveFullDeterministicLocalSmokeResult",
     "run_love_full_deterministic_local_smoke",
+    "run_love_full_live_local_smoke",
 )
