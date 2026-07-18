@@ -11,7 +11,12 @@ from tools import run_github_research_love_closed_loop_0287 as tool
 
 class FakeLease:
     def __init__(self) -> None:
-        self.ports = SimpleNamespace(runtime_ref="runtime:test")
+        self.ports = SimpleNamespace(
+            runtime_ref="runtime:test",
+            projection_port=SimpleNamespace(
+                read_named_reference_point=lambda **kwargs: None,
+            ),
+        )
         self.closed = False
 
     def close(self, *, current_process_id: int):
@@ -79,14 +84,6 @@ def test_prepare_writes_digest_and_closes_runtime(
         "_acquire_runtime",
         lambda **kwargs: lease,
     )
-    monkeypatch.setattr(
-        tool,
-        "_load_callable",
-        lambda path: (
-            lambda **kwargs: SimpleNamespace(read_named_reference_point=True)
-        ),
-    )
-
     async def fake_prepare(command):
         return prepared
 
@@ -105,8 +102,8 @@ def test_prepare_writes_digest_and_closes_runtime(
             "29622831972",
             "--runtime-factory",
             "runtime_factory:create",
-            "--reference-point-reader-factory",
-            "runtime_factory:create_reader",
+            "--policy-decision-id",
+            "policy:github-love-operational-test",
             "--project-item-id",
             "PVTI_test",
             "--project-field-ref",
@@ -145,6 +142,9 @@ def test_complete_reuses_prepared_json_without_recomputing_local_stages(
                 "input": {
                     "repository": "newicody/projects",
                     "run_id": "29622831972",
+                    "policy_decision_id": (
+                        "policy:github-love-operational-test"
+                    ),
                     "ready_run": {
                         "repository": "newicody/projects",
                         "run_id": "29622831972",
@@ -284,6 +284,9 @@ def test_wrong_digest_is_blocked_before_runtime_acquisition(
                 "input": {
                     "repository": "newicody/projects",
                     "run_id": "1",
+                    "policy_decision_id": (
+                        "policy:github-love-operational-test"
+                    ),
                     "ready_run": {
                         "repository": "newicody/projects",
                         "run_id": "1",
@@ -341,6 +344,9 @@ def test_tool_reuses_existing_adapters_and_creates_no_runtime_infrastructure() -
     assert "acquire_imported_actions_runtime_lease(" in source
     assert "GitHubCliFinalDeliverablePublicationAdapter(" in source
     assert "artifact_loader._load_ready_run_contents(" in source
+    assert "lease.ports.projection_port" in source
+    assert '"policy_decision_id": _policy_decision_id(' in source
+    assert "AUTODOC_LOVE_INSTALLED_RUNTIME_CONFIG" in source
 
     for forbidden in (
         "Scheduler(",

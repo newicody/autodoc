@@ -173,3 +173,38 @@ cycle_closed=true
 ```
 
 La commande `complete` ne recalcule pas les analyses locales.
+
+
+### Câblage tool-bounded r16-r20-r1
+
+La fabrique opérationnelle du lanceur est :
+
+```text
+context.love_installed_runtime_factory_0287:build_runtime
+```
+
+La préparation exige désormais :
+
+```text
+--policy-decision-id policy:...
+```
+
+Le lecteur de relecture Qdrant est fourni par le port de projection existant;
+`--reference-point-reader-factory` n’est plus utilisé.
+
+Pour le provider autonome tool-bounded :
+
+```bash
+export AUTODOC_QDRANT_POINT_WRITE_ALLOWED=true
+export AUTODOC_QDRANT_SEARCH_ALLOWED=true
+```
+
+Le fichier `.var/config/love_installed_runtime.ini` doit contenir :
+
+```ini
+[provider]
+factory = context.love_tool_bounded_installed_runtime_composer_0287:build_tool_bounded_installed_runtime
+
+[scheduler]
+lifecycle = tool-bounded
+```

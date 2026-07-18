@@ -22,7 +22,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 import importlib
 import json
@@ -87,15 +88,12 @@ def _parser() -> argparse.ArgumentParser:
         required=True,
         help="import path module:function implementing ImportedActionsRuntimeFactory",
     )
-    prepare.add_argument(
-        "--reference-point-reader-factory",
-        required=True,
-        help=(
-            "import path module:function returning the existing reference-point "
-            "reader for the acquired runtime"
-        ),
-    )
     prepare.add_argument("--runtime-config", type=Path)
+    prepare.add_argument(
+        "--policy-decision-id",
+        required=True,
+        help="typed policy reference passed to the installed runtime",
+    )
     prepare.add_argument("--state-path", type=Path)
     prepare.add_argument(
         "--max-artifact-bytes",
@@ -199,6 +197,9 @@ def _run_prepare(args: argparse.Namespace) -> dict[str, Any]:
     runtime_context = {
         "schema": "missipy.github.research_love_operational_runtime_context.v1",
         "mode": "prepare",
+        "policy_decision_id": _policy_decision_id(
+            args.policy_decision_id
+        ),
         "fetch_cycle_report": str(
             _absolute_input(args.fetch_cycle_report)
         ),
@@ -215,28 +216,29 @@ def _run_prepare(args: argparse.Namespace) -> dict[str, Any]:
         ),
     }
 
-    lease = _acquire_runtime(
-        factory_path=str(args.runtime_factory),
-        repository=repository,
-        run_id=run_id,
-        request_payload=ready_run,
-        runtime_context=runtime_context,
-        created_at=created_at,
-    )
-    prepared = None
-    close_payload: Mapping[str, Any] | None = None
-    try:
-        reader_factory = _load_callable(
-            str(args.reference_point_reader_factory)
-        )
-        reference_point_reader = reader_factory(
-            runtime_ports=lease.ports,
+    with _runtime_config_scope(args.runtime_config):
+        lease = _acquire_runtime(
+            factory_path=str(args.runtime_factory),
+            repository=repository,
+            run_id=run_id,
+            request_payload=ready_run,
             runtime_context=runtime_context,
             created_at=created_at,
         )
-        if reference_point_reader is None:
+    prepared = None
+    close_payload: Mapping[str, Any] | None = None
+    try:
+        reference_point_reader = lease.ports.projection_port
+        if not callable(
+            getattr(
+                reference_point_reader,
+                "read_named_reference_point",
+                None,
+            )
+        ):
             raise OperationalClosedLoopError(
-                "reference-point reader factory returned None"
+                "installed projection port does not expose "
+                "reference-only Qdrant readback"
             )
 
         prepared = asyncio.run(
@@ -290,6 +292,9 @@ def _run_prepare(args: argparse.Namespace) -> dict[str, Any]:
                 _absolute_input(args.fetch_cycle_report)
             ),
             "created_at": created_at,
+            "policy_decision_id": runtime_context[
+                "policy_decision_id"
+            ],
             "runtime_factory": str(args.runtime_factory),
             "runtime_config": runtime_context["runtime_config"],
         },
@@ -348,6 +353,9 @@ def _run_complete(args: argparse.Namespace) -> dict[str, Any]:
     runtime_context = {
         "schema": "missipy.github.research_love_operational_runtime_context.v1",
         "mode": "complete",
+        "policy_decision_id": _policy_decision_id(
+            _required_text(input_mapping, "policy_decision_id")
+        ),
         "prepared_report": str(report_path),
         "runtime_config": (
             ""
@@ -357,14 +365,15 @@ def _run_complete(args: argparse.Namespace) -> dict[str, Any]:
         "output": str(_absolute_output(args.output)),
         "publication_plan_digest": expected_digest,
     }
-    lease = _acquire_runtime(
-        factory_path=str(args.runtime_factory),
-        repository=repository,
-        run_id=run_id,
-        request_payload=ready_run,
-        runtime_context=runtime_context,
-        created_at=closed_at,
-    )
+    with _runtime_config_scope(args.runtime_config):
+        lease = _acquire_runtime(
+            factory_path=str(args.runtime_factory),
+            repository=repository,
+            run_id=run_id,
+            request_payload=ready_run,
+            runtime_context=runtime_context,
+            created_at=closed_at,
+        )
 
     remote = None
     closure = None
@@ -654,6 +663,40 @@ def _validate_prepared_report(value: Mapping[str, Any]) -> None:
         raise OperationalClosedLoopError(
             "embedded prepared result must be valid"
         )
+
+
+def _policy_decision_id(value: object) -> str:
+    normalized = str(value).strip()
+    if not normalized.startswith("policy:"):
+        raise OperationalClosedLoopError(
+            "policy-decision-id must start with policy:"
+        )
+    return normalized
+
+
+@contextmanager
+def _runtime_config_scope(
+    path: Path | None,
+) -> Iterator[None]:
+    if path is None:
+        yield
+        return
+
+    resolved = _absolute_input(path)
+    if not resolved.is_file():
+        raise OperationalClosedLoopError(
+            f"runtime config not found: {resolved}"
+        )
+    variable = "AUTODOC_LOVE_INSTALLED_RUNTIME_CONFIG"
+    previous = os.environ.get(variable)
+    os.environ[variable] = str(resolved)
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop(variable, None)
+        else:
+            os.environ[variable] = previous
 
 
 def _load_callable(path: str) -> Callable[..., object]:

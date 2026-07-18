@@ -130,6 +130,24 @@ class LoveQdrantLiveAnalysisProjection:
     def settings(self) -> LoveQdrantLiveAnalysisProjectionSettings:
         return self._settings
 
+    def read_named_reference_point(
+        self,
+        *,
+        collection_name: str,
+        point_id: str,
+    ) -> object | None:
+        """Delegate exact reference-only readback to the existing writer."""
+
+        reader = getattr(self._writer, "read_named_reference_point", None)
+        if not callable(reader):
+            raise LoveQdrantLiveAnalysisProjectionError(
+                "writer does not expose reference-only point readback"
+            )
+        return reader(
+            collection_name=collection_name,
+            point_id=point_id,
+        )
+
     async def project(
         self,
         authority_object: ContextAuthorityObject,
