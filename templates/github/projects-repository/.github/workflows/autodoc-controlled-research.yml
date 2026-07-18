@@ -183,3 +183,80 @@ jobs:
             out/dual_artifact_manifest.json
             out/artifact_identity.json
           if-no-files-found: error
+
+      # Projects owns the first advisory publication. The default GITHUB_TOKEN
+      # remains read-only for Issues; only this bounded step receives the
+      # dedicated repository secret with Issues: read/write permission.
+      - name: Require Projects Issue comment token
+        if: ${{ hashFiles('out/copilot_advisory.json') != '' }}
+        shell: bash
+        env:
+          AUTODOC_ISSUE_COMMENT_TOKEN: ${{ secrets.AUTODOC_ISSUE_COMMENT_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$AUTODOC_ISSUE_COMMENT_TOKEN"
+
+      - name: Build Projects-owned Copilot advisory preview
+        if: ${{ hashFiles('out/copilot_advisory.json') != '' }}
+        shell: bash
+        env:
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: |
+          set -euo pipefail
+          python \
+            autodoc-runtime/templates/github/projects-repository/scripts/build_copilot_advisory_v2_publication_preview.py \
+            --advisory out/copilot_advisory.json \
+            --request out/authoritative_request.json \
+            --manifest out/dual_artifact_manifest.json \
+            --run-id "$GITHUB_RUN_ID" \
+            --repository "$GITHUB_REPOSITORY" \
+            --issue-number "$ISSUE_NUMBER" \
+            --output out/copilot_advisory_v2_publication_preview.json
+
+      - name: Plan Projects-owned Copilot advisory comment
+        if: ${{ hashFiles('out/copilot_advisory.json') != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.AUTODOC_ISSUE_COMMENT_TOKEN }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+        run: |
+          set -euo pipefail
+          python \
+            autodoc-runtime/tools/publish_github_copilot_advisory_v2_issue_comment_0287.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --issue-number "$ISSUE_NUMBER" \
+            --preview out/copilot_advisory_v2_publication_preview.json \
+            --policy-decision-id "policy:projects:copilot-advisory:${GITHUB_RUN_ID}" \
+            --operator-decision approve \
+            --format json \
+            > out/copilot_issue_comment_plan.json
+          jq -e '.plan.valid == true' out/copilot_issue_comment_plan.json >/dev/null
+          jq -er '.plan.plan_digest' out/copilot_issue_comment_plan.json \
+            > out/copilot_issue_comment_plan_digest.txt
+
+      - name: Publish Projects-owned Copilot advisory comment
+        if: ${{ hashFiles('out/copilot_advisory.json') != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.AUTODOC_ISSUE_COMMENT_TOKEN }}
+          ISSUE_NUMBER: ${{ inputs.issue_number }}
+          AUTODOC_REMOTE_MUTATION_ALLOWED: "true"
+          AUTODOC_ISSUE_PUBLICATION_ALLOWED: "true"
+        run: |
+          set -euo pipefail
+          plan_digest="$(cat out/copilot_issue_comment_plan_digest.txt)"
+          python \
+            autodoc-runtime/tools/publish_github_copilot_advisory_v2_issue_comment_0287.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --issue-number "$ISSUE_NUMBER" \
+            --preview out/copilot_advisory_v2_publication_preview.json \
+            --policy-decision-id "policy:projects:copilot-advisory:${GITHUB_RUN_ID}" \
+            --operator-decision approve \
+            --execute \
+            --confirm-plan-digest "$plan_digest" \
+            --format json \
+            > out/copilot_issue_comment_execute.json
+          jq -e '
+            .readback_verified == true
+            and (.mutation_action == "created" or .mutation_action == "replay-noop")
+          ' out/copilot_issue_comment_execute.json >/dev/null
