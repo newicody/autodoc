@@ -82,3 +82,94 @@ La fermeture réussie produit une révision SQL dont les métadonnées contienne
 cycle_status=closed
 closure_reason=final-publication-readback-verified
 ```
+
+
+## Exécution opérationnelle r16-r20
+
+Le lanceur complet est :
+
+```text
+tools/run_github_research_love_closed_loop_0287.py
+```
+
+### Fabriques requises
+
+Le runtime réel est injecté sans être recréé par le lanceur :
+
+```text
+--runtime-factory module:function
+--reference-point-reader-factory module:function
+```
+
+La fabrique principale doit respecter `ImportedActionsRuntimeFactory`. La
+seconde retourne le lecteur de point de référence lié à la même collection.
+
+### Préparer le cycle
+
+```bash
+python tools/run_github_research_love_closed_loop_0287.py prepare \
+  --fetch-cycle-report /tmp/autodoc-fetch-cycle.json \
+  --run-id 29622831972 \
+  --runtime-factory '<MODULE>:<FACTORY>' \
+  --reference-point-reader-factory '<MODULE>:<READER_FACTORY>' \
+  --runtime-config .var/config/love_installed_runtime.ini \
+  --project-item-id '<PROJECT_ITEM_ID>' \
+  --project-field-ref '<RESUME_FIELD_ID>' \
+  --project-field-name 'Résumé' \
+  --output /tmp/github-love-prepared.json \
+  --format summary
+```
+
+Le résultat doit indiquer :
+
+```text
+valid=true
+status=publication-confirmation-required
+plan_digest=sha256:...
+```
+
+### Contrôler le livrable local
+
+Avant toute mutation, inspecter :
+
+```bash
+jq '.prepared.stages.liaison_synthesis' \
+  /tmp/github-love-prepared.json
+
+jq '.prepared.stages.final_deliverable_sql' \
+  /tmp/github-love-prepared.json
+
+jq '.prepared.stages.publication_plan' \
+  /tmp/github-love-prepared.json
+```
+
+### Publier et fermer
+
+```bash
+PLAN_DIGEST="$(
+  jq -r '.publication_plan_digest' \
+    /tmp/github-love-prepared.json
+)"
+
+export AUTODOC_REMOTE_MUTATION_ALLOWED=true
+export AUTODOC_ISSUE_PUBLICATION_ALLOWED=true
+export AUTODOC_PROJECT_PROJECTION_ALLOWED=true
+
+python tools/run_github_research_love_closed_loop_0287.py complete \
+  --prepared-report /tmp/github-love-prepared.json \
+  --confirm-plan-digest "$PLAN_DIGEST" \
+  --runtime-factory '<MODULE>:<FACTORY>' \
+  --runtime-config .var/config/love_installed_runtime.ini \
+  --output /tmp/github-love-completed.json \
+  --format summary
+```
+
+La réussite finale doit produire :
+
+```text
+valid=true
+status=closed
+cycle_closed=true
+```
+
+La commande `complete` ne recalcule pas les analyses locales.
