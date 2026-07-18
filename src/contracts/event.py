@@ -43,6 +43,9 @@ class EventType(Enum):
     LABORATORY_VISIT_REQUEST = auto()
     LABORATORY_VISIT_RESULT = auto()
 
+    # Route autorisée vers le Scheduler — Phase 0287 r16-r9
+    SCHEDULER_ROUTE_REQUEST = auto()
+
     # Politique kernel
     POLICY_DENIED = auto()
 
