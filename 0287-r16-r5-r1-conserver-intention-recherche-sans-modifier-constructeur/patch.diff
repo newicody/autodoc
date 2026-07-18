@@ -1,0 +1,423 @@
+diff --git a/PHASE0287_R16_R5_R1_TEST_REPORT.md b/PHASE0287_R16_R5_R1_TEST_REPORT.md
+new file mode 100644
+index 0000000..ceec39a
+--- /dev/null
++++ b/PHASE0287_R16_R5_R1_TEST_REPORT.md
+@@ -0,0 +1,22 @@
++# Rapport 0287 r16-r5-r1
++
++## Objet
++
++Conserver l'intention contrôlée de recherche sans modifier le constructeur
++générique conflictuel.
++
++## Résultat
++
++- nouveau script stdlib-only d'enrichissement ;
++- étape workflow explicite avant Copilot et le manifeste ;
++- conservation du schéma autoritatif v1 ;
++- validation repository, Issue, statut, mode et collisions ;
++- aucune dépendance au Scheduler, à SQL, Qdrant ou OpenVINO.
++
++## Tests ciblés
++
++```bash
++/home/eric/python/bin/python -m pytest -q \
++  tests/context/test_authoritative_request_research_intention_enrichment_0287_r16_r5_r1.py \
++  tests/rules/test_authoritative_request_research_intention_enrichment_0287_r16_r5_r1_rule.py
++```
+diff --git a/doc/architecture/AUTHORITATIVE_RESEARCH_INTENTION_ENRICHMENT_0287.md b/doc/architecture/AUTHORITATIVE_RESEARCH_INTENTION_ENRICHMENT_0287.md
+new file mode 100644
+index 0000000..d499e80
+--- /dev/null
++++ b/doc/architecture/AUTHORITATIVE_RESEARCH_INTENTION_ENRICHMENT_0287.md
+@@ -0,0 +1,43 @@
++# Conservation de l'intention de recherche
++
++## Problème
++
++Le constructeur générique de demande autoritative connaît l'Issue GitHub mais ne
++doit pas devenir responsable des choix de workflow propres à `newicody/projects`.
++Le workflow contrôlé possède pourtant trois informations nécessaires au serveur :
++
++```text
++requested_status
++request_mode
++parent_event_ref
++```
++
++## Solution
++
++Une étape explicite, exécutée immédiatement après la construction de la demande,
++valide l'événement contrôlé puis ajoute ces valeurs dans le dictionnaire
++`metadata` déjà prévu par le schéma v1.
++
++```text
++Issue lue
++→ événement contrôlé
++→ demande autoritative générique
++→ enrichissement de provenance
++→ avis Copilot
++→ manifeste
++→ artefacts
++```
++
++L'enrichissement refuse :
++
++- un dépôt différent ;
++- un numéro d'Issue différent ;
++- un statut ou un mode inconnu ;
++- une valeur de métadonnée déjà présente mais contradictoire.
++
++## Frontières
++
++Cette unité ne modifie pas le constructeur générique et ne touche ni au
++Scheduler, ni au laboratoire, ni à SQL, ni à Qdrant. Elle ne décide pas encore
++si une demande est admissible : elle fournit seulement une provenance explicite
++et vérifiée à l'unité suivante.
+diff --git a/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml b/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml
+index 89b04fa..a900f1e 100644
+--- a/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml
++++ b/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml
+@@ -127,6 +127,15 @@ jobs:
+           python
+           autodoc-runtime/templates/github/projects-repository/scripts/run_workflow_dispatch_authoritative_request.py
+ 
++      - name: Preserve controlled research intention
++        env:
++          AUTODOC_REQUEST: ${{ github.workspace }}/out/authoritative_request.json
++          AUTODOC_EVENT_PATH: ${{ github.workspace }}/out/autodoc_issue_event.json
++          AUTODOC_OUTPUT: ${{ github.workspace }}/out/authoritative_request.json
++        run: >
++          python
++          autodoc-runtime/templates/github/projects-repository/scripts/enrich_authoritative_request_research_intention.py
++
+       - name: Restore pinned Copilot CLI
+         id: autodoc-copilot-cli-cache
+         if: >-
+diff --git a/templates/github/projects-repository/scripts/enrich_authoritative_request_research_intention.py b/templates/github/projects-repository/scripts/enrich_authoritative_request_research_intention.py
+new file mode 100755
+index 0000000..d28617d
+--- /dev/null
++++ b/templates/github/projects-repository/scripts/enrich_authoritative_request_research_intention.py
+@@ -0,0 +1,134 @@
++#!/usr/bin/env python3
++
++"""Attach the controlled research intention to an authoritative request."""
++
++from __future__ import annotations
++
++from pathlib import Path
++import json
++import os
++from typing import Any, Mapping
++
++
++_ALLOWED_REQUESTED_STATUSES = frozenset(
++    {"Recherche", "Développement", "Production"}
++)
++_ALLOWED_REQUEST_MODES = frozenset({"initial", "continuation", "transversal"})
++
++
++def _load_mapping(path: Path, *, name: str) -> dict[str, Any]:
++    payload = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(payload, dict):
++        raise ValueError(f"{name} must be a JSON object")
++    return payload
++
++
++def _mapping(value: object, *, name: str) -> Mapping[str, Any]:
++    if not isinstance(value, dict):
++        raise ValueError(f"{name} must be a JSON object")
++    return value
++
++
++def _nonempty_text(value: object, *, name: str) -> str:
++    text = str(value or "").strip()
++    if not text:
++        raise ValueError(f"{name} must be non-empty")
++    return text
++
++
++def _set_consistent(metadata: dict[str, Any], key: str, value: str) -> None:
++    previous = metadata.get(key)
++    if previous is not None and str(previous) != value:
++        raise ValueError(f"authoritative metadata collision for {key}")
++    metadata[key] = value
++
++
++def enrich_authoritative_request(
++    request: Mapping[str, Any],
++    event: Mapping[str, Any],
++) -> dict[str, Any]:
++    """Return the request with validated dispatch provenance in metadata."""
++
++    if request.get("schema") != "missipy.github.authoritative_request.v1":
++        raise ValueError("unsupported authoritative request schema")
++    if request.get("authoritative") is not True:
++        raise ValueError("request must remain authoritative")
++
++    repository = _nonempty_text(request.get("repository"), name="repository")
++    issue_number = int(request.get("issue_number") or 0)
++    if issue_number <= 0:
++        raise ValueError("issue_number must be positive")
++
++    event_repository = _mapping(
++        event.get("repository"),
++        name="controlled event repository",
++    )
++    event_repository_name = _nonempty_text(
++        event_repository.get("full_name"),
++        name="controlled event repository full_name",
++    )
++    if event_repository_name != repository:
++        raise ValueError("controlled event repository does not match request")
++
++    dispatch = _mapping(
++        event.get("autodoc_dispatch"),
++        name="controlled event autodoc_dispatch",
++    )
++    dispatch_issue_number = int(dispatch.get("issue_number") or 0)
++    if dispatch_issue_number != issue_number:
++        raise ValueError("controlled event issue_number does not match request")
++
++    requested_status = _nonempty_text(
++        dispatch.get("requested_status"),
++        name="requested_status",
++    )
++    if requested_status not in _ALLOWED_REQUESTED_STATUSES:
++        raise ValueError("unsupported requested_status")
++
++    request_mode = _nonempty_text(dispatch.get("request_mode"), name="request_mode")
++    if request_mode not in _ALLOWED_REQUEST_MODES:
++        raise ValueError("unsupported request_mode")
++
++    parent_event_ref = str(dispatch.get("parent_event_ref") or "").strip()
++    raw_metadata = request.get("metadata") or {}
++    metadata = dict(_mapping(raw_metadata, name="authoritative request metadata"))
++    _set_consistent(metadata, "requested_status", requested_status)
++    _set_consistent(metadata, "request_mode", request_mode)
++    _set_consistent(metadata, "parent_event_ref", parent_event_ref)
++
++    enriched = dict(request)
++    enriched["metadata"] = metadata
++    return enriched
++
++
++def _canonical(payload: Mapping[str, Any]) -> str:
++    return json.dumps(
++        payload,
++        ensure_ascii=False,
++        sort_keys=True,
++        separators=(",", ":"),
++    ) + "\n"
++
++
++def main() -> int:
++    request_path = Path(
++        os.environ.get("AUTODOC_REQUEST", "out/authoritative_request.json")
++    )
++    event_path = Path(
++        os.environ.get("AUTODOC_EVENT_PATH", "out/autodoc_issue_event.json")
++    )
++    output_path = Path(os.environ.get("AUTODOC_OUTPUT", str(request_path)))
++
++    enriched = enrich_authoritative_request(
++        _load_mapping(request_path, name="authoritative request"),
++        _load_mapping(event_path, name="controlled event"),
++    )
++    output_path.parent.mkdir(parents=True, exist_ok=True)
++    temporary_path = output_path.with_name(f".{output_path.name}.tmp")
++    temporary_path.write_text(_canonical(enriched), encoding="utf-8")
++    temporary_path.replace(output_path)
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tests/context/test_authoritative_request_research_intention_enrichment_0287_r16_r5_r1.py b/tests/context/test_authoritative_request_research_intention_enrichment_0287_r16_r5_r1.py
+new file mode 100644
+index 0000000..2458982
+--- /dev/null
++++ b/tests/context/test_authoritative_request_research_intention_enrichment_0287_r16_r5_r1.py
+@@ -0,0 +1,124 @@
++from __future__ import annotations
++
++import importlib.util
++import json
++from pathlib import Path
++from types import ModuleType
++
++import pytest
++
++
++ROOT = Path(__file__).resolve().parents[2]
++SCRIPT = (
++    ROOT
++    / "templates/github/projects-repository/scripts/"
++    / "enrich_authoritative_request_research_intention.py"
++)
++
++
++def _load() -> ModuleType:
++    spec = importlib.util.spec_from_file_location(
++        "enrich_authoritative_request_research_intention_r16_r5_r1",
++        SCRIPT,
++    )
++    assert spec is not None and spec.loader is not None
++    module = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(module)
++    return module
++
++
++def _request() -> dict[str, object]:
++    return {
++        "schema": "missipy.github.authoritative_request.v1",
++        "repository": "newicody/projects",
++        "issue_number": 42,
++        "metadata": {"github_sha": "abc123"},
++        "authoritative": True,
++        "advisory_content_embedded": False,
++        "remote_mutation_requested": False,
++    }
++
++
++def _event() -> dict[str, object]:
++    return {
++        "repository": {"full_name": "newicody/projects"},
++        "autodoc_dispatch": {
++            "issue_number": 42,
++            "requested_status": "Recherche",
++            "request_mode": "initial",
++            "parent_event_ref": "",
++        },
++    }
++
++
++def test_enrichment_preserves_authority_and_existing_metadata() -> None:
++    module = _load()
++    enriched = module.enrich_authoritative_request(_request(), _event())
++
++    assert enriched["schema"] == "missipy.github.authoritative_request.v1"
++    assert enriched["authoritative"] is True
++    assert enriched["metadata"] == {
++        "github_sha": "abc123",
++        "requested_status": "Recherche",
++        "request_mode": "initial",
++        "parent_event_ref": "",
++    }
++
++
++def test_main_rewrites_the_request_atomically(
++    tmp_path: Path,
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    module = _load()
++    request_path = tmp_path / "authoritative_request.json"
++    event_path = tmp_path / "controlled_event.json"
++    request_path.write_text(json.dumps(_request()), encoding="utf-8")
++    event_path.write_text(json.dumps(_event()), encoding="utf-8")
++
++    monkeypatch.setenv("AUTODOC_REQUEST", str(request_path))
++    monkeypatch.setenv("AUTODOC_EVENT_PATH", str(event_path))
++    monkeypatch.setenv("AUTODOC_OUTPUT", str(request_path))
++
++    assert module.main() == 0
++    payload = json.loads(request_path.read_text(encoding="utf-8"))
++    assert payload["metadata"]["requested_status"] == "Recherche"
++    assert not (tmp_path / ".authoritative_request.json.tmp").exists()
++
++
++@pytest.mark.parametrize(
++    ("target", "field", "value", "message"),
++    (
++        ("event", "repository", {"full_name": "other/repository"}, "repository"),
++        ("dispatch", "issue_number", 43, "issue_number"),
++        ("dispatch", "requested_status", "Drop", "requested_status"),
++        ("dispatch", "request_mode", "implicit", "request_mode"),
++    ),
++)
++def test_invalid_or_mismatched_provenance_fails_closed(
++    target: str,
++    field: str,
++    value: object,
++    message: str,
++) -> None:
++    module = _load()
++    event = _event()
++    if target == "event":
++        event[field] = value
++    else:
++        dispatch = event["autodoc_dispatch"]
++        assert isinstance(dispatch, dict)
++        dispatch[field] = value
++
++    with pytest.raises(ValueError, match=message):
++        module.enrich_authoritative_request(_request(), event)
++
++
++def test_existing_conflicting_metadata_is_rejected() -> None:
++    module = _load()
++    request = _request()
++    metadata = request["metadata"]
++    assert isinstance(metadata, dict)
++    metadata["requested_status"] = "Production"
++
++    with pytest.raises(ValueError, match="collision"):
++        module.enrich_authoritative_request(request, _event())
+diff --git a/tests/rules/test_authoritative_request_research_intention_enrichment_0287_r16_r5_r1_rule.py b/tests/rules/test_authoritative_request_research_intention_enrichment_0287_r16_r5_r1_rule.py
+new file mode 100644
+index 0000000..55fea03
+--- /dev/null
++++ b/tests/rules/test_authoritative_request_research_intention_enrichment_0287_r16_r5_r1_rule.py
+@@ -0,0 +1,50 @@
++from __future__ import annotations
++
++from pathlib import Path
++
++
++ROOT = Path(__file__).resolve().parents[2]
++WORKFLOW = (
++    ROOT
++    / "templates/github/projects-repository/.github/workflows/"
++    / "autodoc-controlled-research.yml"
++)
++ENRICHER = (
++    ROOT
++    / "templates/github/projects-repository/scripts/"
++    / "enrich_authoritative_request_research_intention.py"
++)
++BUILDER = ROOT / "templates/github/scripts/build_autodoc_authoritative_request.py"
++
++
++def test_workflow_enriches_before_copilot_and_manifest() -> None:
++    workflow = WORKFLOW.read_text(encoding="utf-8")
++    step = "Preserve controlled research intention"
++    script = "enrich_authoritative_request_research_intention.py"
++
++    assert step in workflow
++    assert script in workflow
++    assert workflow.index(step) < workflow.index("Restore pinned Copilot CLI")
++    assert workflow.index(step) < workflow.index("Build linking manifest")
++    assert "AUTODOC_EVENT_PATH:" in workflow
++    assert "AUTODOC_REQUEST:" in workflow
++
++
++def test_enrichment_is_separate_from_the_generic_builder() -> None:
++    enricher = ENRICHER.read_text(encoding="utf-8")
++    builder = BUILDER.read_text(encoding="utf-8")
++
++    for marker in (
++        '"requested_status"',
++        '"request_mode"',
++        '"parent_event_ref"',
++        '"missipy.github.authoritative_request.v1"',
++        "authoritative metadata collision",
++    ):
++        assert marker in enricher
++
++    assert "enrich_authoritative_request_research_intention" not in builder
++    assert "Scheduler" not in enricher
++    assert "qdrant" not in enricher.lower()
++    assert "psycopg" not in enricher.lower()
++    assert "subprocess" not in enricher
