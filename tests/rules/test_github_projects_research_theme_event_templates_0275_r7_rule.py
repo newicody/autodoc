@@ -54,12 +54,15 @@ def test_0275_r7_group_and_update_forms_replace_transversal_event() -> None:
     assert LEGACY_EVENT.exists() is False
 
 
-def test_0275_r7_workflow_is_explicit_read_only_and_not_issue_triggered() -> None:
+def test_0275_r7_workflow_keeps_read_only_permissions_with_research_trigger() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     trigger_block = text.split("permissions:", 1)[0]
 
     assert "workflow_dispatch:" in trigger_block
-    assert "\n  issues:" not in trigger_block
+    assert "\n  issues:" in trigger_block
+    assert "types:\n      - opened" in trigger_block
+    assert "github.repository == 'newicody/projects'" in text
+    assert "startsWith(github.event.issue.title, '[Recherche] ')" in text
     assert "requested_status:" in text
     assert "request_mode:" in text
     assert "parent_event_ref:" in text

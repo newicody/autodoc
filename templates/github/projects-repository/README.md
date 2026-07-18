@@ -47,46 +47,56 @@ liée à un `specialist_ref` stable. Il peut signaler les preuves et contrats en
 manquants, mais il ne peut ni approuver une révision, ni autoriser le Scheduler :
 la décision opérateur reste locale.
 
-Le workflow GitHub reste un producteur d'artefacts en lecture seule. Il ne
-s'auto-autorise ni à publier l'avis Copilot, ni à modifier ProjectV2 :
+Le workflow GitHub est installé uniquement dans `newicody/projects`.
+Chaque nouvelle Issue créée avec le formulaire `Nouvelle recherche` porte le
+préfixe `[Recherche] ` (avec les deux sections obligatoires du formulaire comme
+solution de repli) et déclenche automatiquement son propre run Actions :
 
 ```text
-workflow_dispatch
-→ demande autoritative
-→ avis Copilot facultatif
+issues.opened dans newicody/projects
+→ qualification par le préfixe [Recherche]
+→ demande autoritative propre à l'Issue
+→ avis Copilot requis pour ce run initial
 → manifeste corrélé
-→ artefacts Actions
+→ trois artefacts Actions distincts par Issue et par run
+→ premier commentaire Copilot publié par newicody/projects
 ```
 
-Après validation opérateur, deux adaptateurs indépendants rendent le retour
-visible :
+Les vues ProjectV2 préparées restent la surface de classement et de suivi. Elles
+ne servent pas de condition au webhook initial, car les champs ProjectV2 peuvent
+être renseignés après l'événement `issues.opened`.
 
-```text
-Autodoc 0281
-→ commentaire d'Issue contrôlé et idempotent
+Le déclenchement manuel `workflow_dispatch` reste disponible pour les reprises,
+continuations et traitements explicitement opérés. Dans ce mode manuel, la
+variable `AUTODOC_COPILOT_ADVISORY_ENABLED` conserve son rôle.
 
-bundle copié dans newicody/projects
-→ projection contrôlée du dernier état dans les champs ProjectV2
-```
+Le token automatique du job reste en lecture sur les Issues. Seules les étapes
+bornées de publication du premier avis reçoivent le secret
+`AUTODOC_ISSUE_COMMENT_TOKEN`. Autodoc local récupère ensuite les artefacts sans
+republier ce premier commentaire, puis contrôle l'admissibilité avant de remettre
+une commande au Scheduler et au laboratoire.
 
 La configuration `projectv2_views.json` décrit les champs et les vues
 `Recherches`, `Résultats`, `Copilot`, `Connaissances serveur`,
 `Boîtes de thèmes`, `Historique` et `Tous`.
 
-Le déclencheur automatique reste côté serveur local :
+Le serveur local ne crée pas les artefacts initiaux. Il effectue le fetch des
+runs produits par `newicody/projects`, vérifie leur corrélation
+`repository/issue_number/run_id/digests`, puis déclenche le laboratoire seulement
+si la demande est admissible. Le chemin historique
+`ProjectV2 query-only → diff local` reste réservé aux transitions et reprises
+explicites ; il ne crée pas le triplet initial des nouvelles recherches.
 
-```text
-ProjectV2 query-only → diff local → transition vers En cours
-→ workflow_dispatch explicite dans newicody/projects
-```
-
-Pour activer Copilot dans `newicody/projects` :
+Pour les nouvelles Issues de recherche, l'avis Copilot initial est requis et ne
+dépend plus de la variable optionnelle. Pour les seuls dispatchs manuels, cette
+variable conserve son rôle :
 
 ```text
 AUTODOC_COPILOT_ADVISORY_ENABLED=true
 ```
 
-Aucun secret Copilot durable n'est attendu. La création des champs/vues et la
+Aucun secret Copilot durable n'est attendu. Le premier commentaire utilise le
+secret borné `AUTODOC_ISSUE_COMMENT_TOKEN`; la création des champs/vues et la
 projection ProjectV2 utilisent un PAT classique distinct, uniquement lors
 d'une opération explicitement approuvée.
 

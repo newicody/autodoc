@@ -376,3 +376,4 @@ Le mode opératoire de publication est dans
 
 - `publish_github_advisory_issue_comment_0281.py` reste le repère de publication historique.
 - `verify_specialists_laboratories_live_path_evidence_0284.py` reste le repère de preuve du chemin vivant.
+Mise à jour `0287-r16-r4-r3-r4` : chaque nouvelle Issue `[Recherche]` de `newicody/projects` crée son triplet propre ; voir `README.md` et vérifier avec `gh run list --repo newicody/projects --workflow autodoc-controlled-research.yml --event issues`, avec le secret borné `AUTODOC_ISSUE_COMMENT_TOKEN`.
