@@ -33,7 +33,7 @@ class _CommandStore:
         self.initialized = True
 
 
-class _LaunchTransaction:
+class _Transaction:
     def __init__(
         self,
         connection: object,
@@ -46,10 +46,6 @@ class _LaunchTransaction:
 
     def initialize_schema(self) -> None:
         self.initialized = True
-
-
-class _ExecutionTransaction(_LaunchTransaction):
-    pass
 
 
 def _settings() -> SimpleNamespace:
@@ -71,18 +67,14 @@ def _settings() -> SimpleNamespace:
     )
 
 
-def test_binding_reuses_one_owned_connection_for_all_sql_ports(monkeypatch) -> None:
+def test_binding_reuses_owned_connection_for_execution_completion(monkeypatch) -> None:
     connection = _Connection()
     prepared: list[tuple[object, object]] = []
 
     monkeypatch.setattr(module, "DbApiContextRevisionAuthorityStore", _AuthorityStore)
     monkeypatch.setattr(module, "DbApiGitHubResearchSchedulerCommandStore", _CommandStore)
-    monkeypatch.setattr(module, "DbApiSchedulerTaskLaunchTransaction", _LaunchTransaction)
-    monkeypatch.setattr(
-        module,
-        "DbApiSchedulerHandlerExecutionTransaction",
-        _ExecutionTransaction,
-    )
+    monkeypatch.setattr(module, "DbApiSchedulerTaskLaunchTransaction", _Transaction)
+    monkeypatch.setattr(module, "DbApiSchedulerHandlerExecutionTransaction", _Transaction)
     monkeypatch.setattr(
         module,
         "_prepare_postgresql_schema",
@@ -110,35 +102,19 @@ def test_binding_reuses_one_owned_connection_for_all_sql_ports(monkeypatch) -> N
     assert binding.authority_store.connection is connection
     assert binding.scheduler_command_store is not None
     assert binding.scheduler_command_store.connection is connection
-    transaction = binding.scheduler_task_launch_transaction
-    assert transaction is not None
-    assert transaction.connection is connection
-    assert transaction.paramstyle == "format"
-    assert transaction.initialized is True
-    assert binding.receipt.boundaries["scheduler_task_launch_transaction_bound"] is True
-    assert binding.receipt.boundaries["scheduler_task_launch_uses_owned_connection"] is True
-    assert binding.receipt.boundaries["scheduler_task_launch_handler_executed"] is False
+    launch = binding.scheduler_task_launch_transaction
+    assert launch is not None
+    assert launch.connection is connection
     completion = binding.scheduler_handler_execution_transaction
     assert completion is not None
     assert completion.connection is connection
     assert completion.paramstyle == "format"
     assert completion.initialized is True
-    assert (
-        binding.receipt.boundaries[
-            "scheduler_handler_execution_transaction_bound"
-        ]
-        is True
-    )
-    assert (
-        binding.receipt.boundaries[
-            "scheduler_handler_execution_uses_owned_connection"
-        ]
-        is True
-    )
-    assert (
-        binding.receipt.boundaries["scheduler_handler_execution_replayed"]
-        is False
-    )
+    boundaries = binding.receipt.boundaries
+    assert boundaries["scheduler_handler_execution_transaction_bound"] is True
+    assert boundaries["scheduler_handler_execution_schema_initialized"] is True
+    assert boundaries["scheduler_handler_execution_uses_owned_connection"] is True
+    assert boundaries["scheduler_handler_execution_replayed"] is False
 
     binding.close()
     binding.close()

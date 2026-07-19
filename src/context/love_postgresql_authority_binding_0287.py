@@ -34,6 +34,9 @@ from context.github_research_scheduler_command_sql_authority_0287 import (
 from context.scheduler_task_launch_sql_authority_0287 import (
     DbApiSchedulerTaskLaunchTransaction,
 )
+from context.scheduler_handler_execution_sql_authority_0287 import (
+    DbApiSchedulerHandlerExecutionTransaction,
+)
 from context.love_manual_runtime_configuration_0287 import (
     ManualInstalledRuntimeSettings,
     PostgreSqlRuntimeSettings,
@@ -171,6 +174,9 @@ class LovePostgreSqlAuthorityBinding:
     scheduler_task_launch_transaction: (
         DbApiSchedulerTaskLaunchTransaction | None
     ) = None
+    scheduler_handler_execution_transaction: (
+        DbApiSchedulerHandlerExecutionTransaction | None
+    ) = None
     _closed: bool = field(default=False, init=False, repr=False)
     _lock: RLock = field(
         default_factory=RLock,
@@ -299,6 +305,13 @@ def open_love_postgresql_authority(
             paramstyle="format",
         )
         scheduler_task_launch_transaction.initialize_schema()
+        scheduler_handler_execution_transaction = (
+            DbApiSchedulerHandlerExecutionTransaction(
+                connection,  # type: ignore[arg-type]
+                paramstyle="format",
+            )
+        )
+        scheduler_handler_execution_transaction.initialize_schema()
         seed = ensure_love_base_revision(authority_store, settings)
     except LovePostgreSqlAuthorityBindingError:
         _close_connection_quietly(connection)
@@ -333,6 +346,10 @@ def open_love_postgresql_authority(
             "scheduler_task_launch_schema_initialized": True,
             "scheduler_task_launch_uses_owned_connection": True,
             "scheduler_task_launch_handler_executed": False,
+            "scheduler_handler_execution_transaction_bound": True,
+            "scheduler_handler_execution_schema_initialized": True,
+            "scheduler_handler_execution_uses_owned_connection": True,
+            "scheduler_handler_execution_replayed": False,
             "secret_value_serialized": False,
             "scheduler_constructed": False,
             "openvino_inference_performed": False,
@@ -344,6 +361,9 @@ def open_love_postgresql_authority(
         scheduler_command_store=scheduler_command_store,
         scheduler_task_launch_transaction=(
             scheduler_task_launch_transaction
+        ),
+        scheduler_handler_execution_transaction=(
+            scheduler_handler_execution_transaction
         ),
         receipt=receipt,
     )
