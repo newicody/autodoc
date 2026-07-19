@@ -81,10 +81,37 @@ def test_prepare_writes_digest_and_closes_runtime(
     )
     monkeypatch.setattr(
         tool,
+        "_resolve_prepare_project_target",
+        lambda **kwargs: {
+            "schema": (
+                "missipy.github.research_projectv2_target_resolution.v1"
+            ),
+            "status": "resolved",
+            "project_item_id": "PVTI_test",
+            "project_field_ref": "PVTF_test",
+            "project_field_name": "Résumé",
+            "target": {
+                "project_id": "PVT_test",
+                "project_owner": "newicody",
+                "project_number": 3,
+                "project_item_id": "PVTI_test",
+                "field_ref": "PVTF_test",
+                "field_name": "Résumé",
+            },
+            "boundaries": {
+                "read_only_graphql_resolution": True,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        tool,
         "_acquire_runtime",
         lambda **kwargs: lease,
     )
+    captured = {}
+
     async def fake_prepare(command):
+        captured["command"] = command
         return prepared
 
     monkeypatch.setattr(
@@ -104,10 +131,12 @@ def test_prepare_writes_digest_and_closes_runtime(
             "runtime_factory:create",
             "--policy-decision-id",
             "policy:github-love-operational-test",
-            "--project-item-id",
-            "PVTI_test",
-            "--project-field-ref",
-            "PVTF_test",
+            "--issue-number",
+            "15",
+            "--project-owner",
+            "newicody",
+            "--project-number",
+            "3",
             "--output",
             str(output),
         )
@@ -120,8 +149,80 @@ def test_prepare_writes_digest_and_closes_runtime(
         "sha256:" + "1" * 64
     )
     assert payload["boundaries"]["remote_publication_performed"] is False
+    assert payload["boundaries"]["project_target_resolved_read_only"] is True
+    assert payload["input"]["project_target"]["project_item_id"] == "PVTI_test"
+    assert captured["command"].project_item_id == "PVTI_test"
+    assert captured["command"].project_field_ref == "PVTF_test"
     assert payload["runtime_close"]["receipt"]["action"] == "closed"
     assert lease.closed is True
+
+
+def test_prepare_blocks_target_resolution_before_runtime_acquisition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output = tmp_path / "prepared.json"
+    monkeypatch.setattr(
+        tool,
+        "_load_one_fetched_ready_run",
+        lambda **kwargs: (
+            {
+                "repository": "newicody/projects",
+                "run_id": "29622831972",
+            },
+            (object(), object(), object()),
+        ),
+    )
+    monkeypatch.setattr(
+        tool.project_target_tool,
+        "resolve_project_target_report",
+        lambda **kwargs: {
+            "schema": (
+                "missipy.github.research_projectv2_target_resolution.v1"
+            ),
+            "valid": False,
+            "status": "failed",
+            "issues": ["Issue is not attached to the requested ProjectV2"],
+            "target": None,
+            "boundaries": {
+                "read_only_graphql_resolution": True,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        tool,
+        "_acquire_runtime",
+        lambda **kwargs: pytest.fail(
+            "runtime must not open after target resolution failure"
+        ),
+    )
+
+    exit_code = tool.main(
+        (
+            "prepare",
+            "--fetch-cycle-report",
+            str(tmp_path / "fetch.json"),
+            "--run-id",
+            "29622831972",
+            "--runtime-factory",
+            "runtime_factory:create",
+            "--policy-decision-id",
+            "policy:github-love-operational-test",
+            "--issue-number",
+            "15",
+            "--project-owner",
+            "newicody",
+            "--project-number",
+            "3",
+            "--output",
+            str(output),
+        )
+    )
+    payload = json.loads(output.read_text(encoding="utf-8"))
+
+    assert exit_code == 2
+    assert payload["valid"] is False
+    assert "Issue is not attached" in payload["issues"][0]
 
 
 def test_complete_reuses_prepared_json_without_recomputing_local_stages(
@@ -347,6 +448,8 @@ def test_tool_reuses_existing_adapters_and_creates_no_runtime_infrastructure() -
     assert "lease.ports.projection_port" in source
     assert '"policy_decision_id": _policy_decision_id(' in source
     assert "AUTODOC_LOVE_INSTALLED_RUNTIME_CONFIG" in source
+    assert "project_target_tool.resolve_project_target_report(" in source
+    assert "project_target_resolved_read_only" in source
 
     for forbidden in (
         "Scheduler(",

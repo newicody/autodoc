@@ -62,6 +62,7 @@ from context.love_imported_actions_runtime_contract_0287 import (  # noqa: E402
 )
 from tools import assemble_fetched_github_research_admissibility_0287 as artifact_loader  # noqa: E402
 from tools import publish_love_final_deliverable_0287 as publication_tool  # noqa: E402
+from tools import resolve_github_research_project_target_0287 as project_target_tool  # noqa: E402
 
 REPORT_SCHEMA = "missipy.github.research_love_operational_closed_loop.v1"
 _PREPARED_SCHEMA = "missipy.github.research_love_closed_loop_prepared.v1"
@@ -100,9 +101,14 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         default=5 * 1024 * 1024,
     )
-    prepare.add_argument("--project-item-id", required=True)
-    prepare.add_argument("--project-field-ref", required=True)
+    prepare.add_argument("--issue-number", type=int, required=True)
+    prepare.add_argument("--project-owner", required=True)
+    prepare.add_argument("--project-number", type=int, required=True)
     prepare.add_argument("--project-field-name", default="Résumé")
+    prepare.add_argument("--project-item-id-override", default="")
+    prepare.add_argument("--project-field-ref-override", default="")
+    prepare.add_argument("--gh-command", default="gh")
+    prepare.add_argument("--token-env", default="AUTODOC_PROJECT_TOKEN")
     prepare.add_argument(
         "--project-status-value",
         default="Livrable final prêt",
@@ -194,6 +200,10 @@ def _run_prepare(args: argparse.Namespace) -> dict[str, Any]:
     )
     repository = _required_text(ready_run, "repository")
     run_id = _required_text(ready_run, "run_id")
+    project_target = _resolve_prepare_project_target(
+        args=args,
+        repository=repository,
+    )
     runtime_context = {
         "schema": "missipy.github.research_love_operational_runtime_context.v1",
         "mode": "prepare",
@@ -209,8 +219,9 @@ def _run_prepare(args: argparse.Namespace) -> dict[str, Any]:
             else str(_absolute_input(args.runtime_config))
         ),
         "output": str(_absolute_output(args.output)),
-        "project_item_id": str(args.project_item_id),
-        "project_field_ref": str(args.project_field_ref),
+        "project_item_id": project_target["project_item_id"],
+        "project_field_ref": project_target["project_field_ref"],
+        "project_target_resolution": project_target["target"],
         "filesystem_adapter": (
             "tools.assemble_fetched_github_research_admissibility_0287"
         ),
@@ -253,9 +264,15 @@ def _run_prepare(args: argparse.Namespace) -> dict[str, Any]:
                     projected_at=created_at,
                     final_created_at=created_at,
                     recall_query_text=str(args.recall_query),
-                    project_item_id=str(args.project_item_id),
-                    project_field_ref=str(args.project_field_ref),
-                    project_field_name=str(args.project_field_name),
+                    project_item_id=project_target[
+                        "project_item_id"
+                    ],
+                    project_field_ref=project_target[
+                        "project_field_ref"
+                    ],
+                    project_field_name=project_target[
+                        "project_field_name"
+                    ],
                     project_status_value=str(args.project_status_value),
                     conversation_ref=str(args.conversation_ref),
                     return_route_ref=str(args.return_route_ref),
@@ -297,6 +314,7 @@ def _run_prepare(args: argparse.Namespace) -> dict[str, Any]:
             ],
             "runtime_factory": str(args.runtime_factory),
             "runtime_config": runtime_context["runtime_config"],
+            "project_target": project_target,
         },
         "prepared": prepared_mapping,
         "publication_plan_digest": (
@@ -312,6 +330,7 @@ def _run_prepare(args: argparse.Namespace) -> dict[str, Any]:
         "boundaries": {
             **_common_boundaries(),
             "local_artifact_files_read": True,
+            "project_target_resolved_read_only": True,
             "existing_complete_composition_reused": True,
             "remote_publication_performed": False,
             "cycle_closed": False,
@@ -476,6 +495,57 @@ def _run_complete(args: argparse.Namespace) -> dict[str, Any]:
             "cycle_closed": closure.valid,
             "remote_publication_reexecuted_by_closure": False,
         },
+    }
+
+
+def _resolve_prepare_project_target(
+    *,
+    args: argparse.Namespace,
+    repository: str,
+) -> dict[str, Any]:
+    result = project_target_tool.resolve_project_target_report(
+        repository=repository,
+        issue_number=int(args.issue_number),
+        project_owner=str(args.project_owner),
+        project_number=int(args.project_number),
+        field_name=str(args.project_field_name),
+        project_item_id_override=str(
+            args.project_item_id_override
+        ),
+        field_ref_override=str(
+            args.project_field_ref_override
+        ),
+        gh_command=str(args.gh_command),
+        token_env=str(args.token_env),
+    )
+    if result.get("valid") is not True:
+        issues = result.get("issues")
+        if isinstance(issues, list):
+            detail = "; ".join(str(item) for item in issues)
+        else:
+            detail = "project target resolution failed"
+        raise OperationalClosedLoopError(detail)
+    return {
+        "schema": result.get("schema"),
+        "status": result.get("status"),
+        "project_item_id": _required_text(
+            result,
+            "project_item_id",
+        ),
+        "project_field_ref": _required_text(
+            result,
+            "project_field_ref",
+        ),
+        "project_field_name": _required_text(
+            result,
+            "project_field_name",
+        ),
+        "target": dict(
+            _required_mapping(result, "target")
+        ),
+        "boundaries": dict(
+            _required_mapping(result, "boundaries")
+        ),
     }
 
 
@@ -810,6 +880,7 @@ def _common_boundaries() -> dict[str, object]:
         "new_openvino_runtime_created": False,
         "new_laboratory_provider_created": False,
         "existing_github_cli_adapter_reused": True,
+        "project_target_resolution_read_only": True,
         "secret_value_serialized": False,
     }
 
