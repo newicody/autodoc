@@ -41,10 +41,9 @@ def test_issue_event_resolves_initial_research_inputs() -> None:
     for marker in (
         "AUTODOC_ISSUE_NUMBER:",
         "github.event.issue.number",
-        "AUTODOC_REQUESTED_STATUS_RESOLVED:",
-        "&& 'Recherche'",
-        "AUTODOC_REQUEST_MODE_RESOLVED:",
-        "&& 'initial'",
+        'AUTODOC_REQUESTED_STATUS_RESOLVED: "Recherche"',
+        'AUTODOC_REQUEST_MODE_RESOLVED: "initial"',
+        'AUTODOC_PARENT_EVENT_REF_RESOLVED: ""',
         "ISSUE_NUMBER: ${{ env.AUTODOC_ISSUE_NUMBER }}",
         "AUTODOC_REQUESTED_STATUS: ${{ env.AUTODOC_REQUESTED_STATUS_RESOLVED }}",
         "AUTODOC_REQUEST_MODE: ${{ env.AUTODOC_REQUEST_MODE_RESOLVED }}",
@@ -60,8 +59,7 @@ def test_automatic_research_run_requires_three_correlated_artifacts() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
     for marker in (
-        "AUTODOC_COPILOT_REQUIRED_RESOLVED:",
-        "github.event_name == 'issues' && 'true' || 'false'",
+        'AUTODOC_COPILOT_REQUIRED_RESOLVED: "true"',
         "AUTODOC_COPILOT_REQUIRED: ${{ env.AUTODOC_COPILOT_REQUIRED_RESOLVED }}",
         "- name: Upload authoritative request",
         "- name: Upload optional Copilot advisory",
@@ -74,7 +72,11 @@ def test_automatic_research_run_requires_three_correlated_artifacts() -> None:
     ):
         assert marker in workflow
 
-    assert workflow.count("github.event_name == 'issues'") >= 6
+    # r16-r22 centralizes the automatic Issue route in the job gate.
+    # Step-level repetitions are no longer required or desirable.
+    assert workflow.count("github.event_name == 'issues'") == 1
+    assert "github.event_name == 'workflow_dispatch'" not in workflow
+    assert "inputs." not in workflow
 
 
 def test_artifact_identity_separates_issues_and_runs() -> None:

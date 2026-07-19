@@ -4,33 +4,6 @@ on:
   issues:
     types:
       - opened
-  workflow_dispatch:
-    inputs:
-      issue_number:
-        description: Numéro de l'issue à traiter
-        required: true
-        type: string
-      requested_status:
-        description: Intention correspondant à la colonne Status
-        required: true
-        type: choice
-        options:
-          - Recherche
-          - Développement
-          - Production
-      request_mode:
-        description: Nature du cycle
-        required: true
-        type: choice
-        options:
-          - initial
-          - continuation
-          - transversal
-      parent_event_ref:
-        description: Événement parent ou précédent, si applicable
-        required: false
-        type: string
-
 permissions:
   contents: read
   issues: read
@@ -42,18 +15,13 @@ jobs:
     if: >-
       ${{
         github.repository == 'newicody/projects'
+        && github.event_name == 'issues'
+        && github.event.action == 'opened'
         && (
-          github.event_name == 'workflow_dispatch'
+          startsWith(github.event.issue.title, '[Recherche] ')
           || (
-            github.event_name == 'issues'
-            && github.event.action == 'opened'
-            && (
-              startsWith(github.event.issue.title, '[Recherche] ')
-              || (
-                contains(github.event.issue.body, '### Question ou objectif')
-                && contains(github.event.issue.body, '### Résultat attendu')
-              )
-            )
+            contains(github.event.issue.body, '### Question ou objectif')
+            && contains(github.event.issue.body, '### Résultat attendu')
           )
         )
       }}
@@ -61,25 +29,11 @@ jobs:
     env:
       AUTODOC_COPILOT_CLI_VERSION: "1.0.70"
       AUTODOC_COPILOT_CLI_PREFIX: ${{ github.workspace }}/.cache/copilot-cli
-      AUTODOC_ISSUE_NUMBER: >-
-        ${{ github.event_name == 'issues'
-        && github.event.issue.number
-        || inputs.issue_number }}
-      AUTODOC_REQUESTED_STATUS_RESOLVED: >-
-        ${{ github.event_name == 'issues'
-        && 'Recherche'
-        || inputs.requested_status }}
-      AUTODOC_REQUEST_MODE_RESOLVED: >-
-        ${{ github.event_name == 'issues'
-        && 'initial'
-        || inputs.request_mode }}
-      AUTODOC_PARENT_EVENT_REF_RESOLVED: >-
-        ${{ github.event_name == 'workflow_dispatch'
-        && inputs.parent_event_ref
-        || '' }}
-      # Compatibilité du dispatch manuel : AUTODOC_COPILOT_REQUIRED: "false"
-      AUTODOC_COPILOT_REQUIRED_RESOLVED: >-
-        ${{ github.event_name == 'issues' && 'true' || 'false' }}
+      AUTODOC_ISSUE_NUMBER: ${{ github.event.issue.number }}
+      AUTODOC_REQUESTED_STATUS_RESOLVED: "Recherche"
+      AUTODOC_REQUEST_MODE_RESOLVED: "initial"
+      AUTODOC_PARENT_EVENT_REF_RESOLVED: ""
+      AUTODOC_COPILOT_REQUIRED_RESOLVED: "true"
 
     steps:
       - name: Checkout Autodoc runtime
@@ -138,9 +92,6 @@ jobs:
 
       - name: Restore pinned Copilot CLI
         id: autodoc-copilot-cli-cache
-        if: >-
-          ${{ github.event_name == 'issues'
-          || vars.AUTODOC_COPILOT_ADVISORY_ENABLED == 'true' }}
         uses: actions/cache@v4
         with:
           path: ${{ env.AUTODOC_COPILOT_CLI_PREFIX }}
@@ -151,9 +102,7 @@ jobs:
       - name: Install pinned Copilot CLI on cache miss
         if: >-
           ${{
-            (github.event_name == 'issues'
-            || vars.AUTODOC_COPILOT_ADVISORY_ENABLED == 'true')
-            && steps.autodoc-copilot-cli-cache.outputs.cache-hit != 'true'
+            steps.autodoc-copilot-cli-cache.outputs.cache-hit != 'true'
           }}
         shell: bash
         run: |
@@ -161,9 +110,6 @@ jobs:
           npm install             --prefix "$AUTODOC_COPILOT_CLI_PREFIX"             --no-audit             --no-fund             --omit=dev             "@github/copilot@$AUTODOC_COPILOT_CLI_VERSION"
 
       - name: Verify pinned Copilot CLI
-        if: >-
-          ${{ github.event_name == 'issues'
-          || vars.AUTODOC_COPILOT_ADVISORY_ENABLED == 'true' }}
         env:
           COPILOT_AUTO_UPDATE: "false"
         shell: bash
@@ -177,9 +123,6 @@ jobs:
           "$AUTODOC_COPILOT_CLI_PREFIX/node_modules/.bin/copilot"             --version
 
       - name: Build optional Copilot advisory
-        if: >-
-          ${{ github.event_name == 'issues'
-          || vars.AUTODOC_COPILOT_ADVISORY_ENABLED == 'true' }}
         env:
           GITHUB_TOKEN: ${{ github.token }}
           COPILOT_AUTO_UPDATE: "false"

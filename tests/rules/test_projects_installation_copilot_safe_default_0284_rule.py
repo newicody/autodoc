@@ -49,7 +49,8 @@ def test_installation_and_workflow_use_ephemeral_authentication() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     assert "copilot-requests: write" in workflow
     assert "GITHUB_TOKEN: ${{ github.token }}" in workflow
-    assert 'AUTODOC_COPILOT_REQUIRED: "false"' in workflow
+    assert 'AUTODOC_COPILOT_REQUIRED_RESOLVED: "true"' in workflow
+    assert "AUTODOC_COPILOT_ADVISORY_ENABLED" not in workflow
     assert "secrets.AUTODOC_COPILOT_TOKEN" not in workflow
     assert "Ne pas créer de secret `AUTODOC_COPILOT_TOKEN`" in installation
 

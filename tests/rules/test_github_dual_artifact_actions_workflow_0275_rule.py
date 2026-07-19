@@ -17,11 +17,9 @@ def test_workflows_use_scoped_copilot_token_and_separate_uploads() -> None:
             "issues: read",
             "copilot-requests: write",
             "GITHUB_TOKEN: ${{ github.token }}",
-            'AUTODOC_COPILOT_REQUIRED: "false"',
             "autodoc-authoritative-request",
             "autodoc-copilot-advisory",
             "autodoc-dual-artifact-manifest",
-            "AUTODOC_COPILOT_ADVISORY_ENABLED",
         ):
             assert marker in text
         for forbidden in (
@@ -31,6 +29,14 @@ def test_workflows_use_scoped_copilot_token_and_separate_uploads() -> None:
             "secrets.AUTODOC_COPILOT_TOKEN",
         ):
             assert forbidden not in text
+
+    generic = WORKFLOWS[0].read_text(encoding="utf-8")
+    assert 'AUTODOC_COPILOT_REQUIRED: "false"' in generic
+    assert "AUTODOC_COPILOT_ADVISORY_ENABLED" in generic
+
+    automatic = WORKFLOWS[1].read_text(encoding="utf-8")
+    assert 'AUTODOC_COPILOT_REQUIRED_RESOLVED: "true"' in automatic
+    assert "AUTODOC_COPILOT_ADVISORY_ENABLED" not in automatic
 
 
 def test_controlled_research_builds_the_issue_event_before_the_request() -> None:
