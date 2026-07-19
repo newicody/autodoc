@@ -429,7 +429,7 @@ class SchedulerCanonicalBoundedCycle:
             _require_typed_ref(
                 "outcome.outcome_ref",
                 outcome_ref,
-                "scheduler-handler-outcome:",
+                "handler-outcome:",
             )
             outcomes.append(outcome_ref)
             reloaded_at = self._clock()

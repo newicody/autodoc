@@ -153,7 +153,7 @@ class _Runner:
             graph=graph,
             source_transaction_ref="scheduler-handler-execution-transaction:test",
         )
-        return _Outcome("scheduler-handler-outcome:test")
+        return _Outcome("handler-outcome:test")
 
 
 def test_bounded_cycle_promotes_executes_reloads_and_stops_on_completion() -> None:

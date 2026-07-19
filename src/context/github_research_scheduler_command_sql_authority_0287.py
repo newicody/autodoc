@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+import re
 from typing import Protocol
 
 from context.github_research_scheduler_command_0287 import (
@@ -26,7 +27,9 @@ from context.sql_context_store import SqlContextStorePolicy
 from runtime.scheduler_route_adapter import SchedulerRouteRequest
 
 SCHEDULER_COMMAND_SQL_AUTHORITY_VERSION = "0287.r16.r25"
+SCHEDULER_COMMAND_SQL_CLAIM_VERSION = "0287.r16.r26-restored-r16-r48-r49-r1"
 SCHEDULER_COMMAND_STATE_SCHEMA = "missipy.scheduler.command_sql_state.v1"
+SCHEDULER_COMMAND_CLAIM_SCHEMA = "missipy.scheduler.command_sql_claim.v1"
 DEFAULT_SCHEDULER_COMMAND_AUTHORITY_REF = (
     "sql-authority:github-research-scheduler-commands"
 )
@@ -90,6 +93,41 @@ class SchedulerCommandSqlState:
         if self.state_version < 1:
             raise GitHubResearchSchedulerCommandSqlAuthorityError(
                 "state_version must be positive"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class SchedulerCommandSqlClaim:
+    """Atomic SQL claim returned only to the running canonical Scheduler."""
+
+    schema: str
+    scheduler_ref: str
+    claimed_at: str
+    command: GitHubResearchSchedulerCommand
+    state: SchedulerCommandSqlState
+
+    def __post_init__(self) -> None:
+        if self.schema != SCHEDULER_COMMAND_CLAIM_SCHEMA:
+            raise GitHubResearchSchedulerCommandSqlAuthorityError(
+                "unsupported Scheduler command claim schema"
+            )
+        _require_scheduler_ref(self.scheduler_ref)
+        _require_utc("claimed_at", self.claimed_at)
+        if self.state.command_ref != self.command.command_ref:
+            raise GitHubResearchSchedulerCommandSqlAuthorityError(
+                "claim command and state references differ"
+            )
+        if self.state.state != "claimed":
+            raise GitHubResearchSchedulerCommandSqlAuthorityError(
+                "claim state must be claimed"
+            )
+        if self.state.claimed_by != self.scheduler_ref:
+            raise GitHubResearchSchedulerCommandSqlAuthorityError(
+                "claim owner mismatch"
+            )
+        if self.state.claimed_at != self.claimed_at:
+            raise GitHubResearchSchedulerCommandSqlAuthorityError(
+                "claim timestamp mismatch"
             )
 
 
@@ -422,6 +460,120 @@ class DbApiGitHubResearchSchedulerCommandStore(
             last_error_code=str(row[10]),
         )
 
+    def claim_next_pending(
+        self,
+        *,
+        scheduler_ref: str,
+        claimed_at: str,
+    ) -> SchedulerCommandSqlClaim | None:
+        """Atomically claim the highest-priority pending command."""
+
+        _require_scheduler_ref(scheduler_ref)
+        _require_utc("claimed_at", claimed_at)
+        try:
+            row = (
+                self._claim_next_pending_qmark(
+                    scheduler_ref=scheduler_ref,
+                    claimed_at=claimed_at,
+                )
+                if self._policy.paramstyle == "qmark"
+                else self._claim_next_pending_postgresql(
+                    scheduler_ref=scheduler_ref,
+                    claimed_at=claimed_at,
+                )
+            )
+            if row is None:
+                self._commit_if_needed()
+                return None
+            command_ref = str(row[0])
+            command = self.get_command(command_ref)
+            state = self.get_state(command_ref)
+            if command is None or state is None:
+                raise GitHubResearchSchedulerCommandSqlAuthorityError(
+                    "claimed Scheduler command could not be reconstructed"
+                )
+            claim = SchedulerCommandSqlClaim(
+                schema=SCHEDULER_COMMAND_CLAIM_SCHEMA,
+                scheduler_ref=scheduler_ref,
+                claimed_at=claimed_at,
+                command=command,
+                state=state,
+            )
+            self._commit_if_needed()
+            return claim
+        except GitHubResearchSchedulerCommandSqlAuthorityError:
+            self._rollback_if_possible()
+            raise
+        except Exception as exc:
+            self._rollback_if_possible()
+            raise GitHubResearchSchedulerCommandSqlAuthorityError(
+                "Scheduler command SQL claim failed "
+                f"({type(exc).__name__})"
+            ) from None
+
+    def _claim_next_pending_postgresql(
+        self,
+        *,
+        scheduler_ref: str,
+        claimed_at: str,
+    ) -> Sequence[object] | None:
+        return self._fetchone(
+            "WITH candidate AS ("
+            "SELECT c.command_ref FROM scheduler_commands c "
+            "JOIN scheduler_command_states s "
+            "ON s.command_ref = c.command_ref "
+            "WHERE s.state = %s "
+            "ORDER BY c.priority DESC, c.issued_at, c.command_ref "
+            "FOR UPDATE OF s SKIP LOCKED LIMIT 1"
+            ") "
+            "UPDATE scheduler_command_states s SET "
+            "state = %s, state_version = s.state_version + 1, "
+            "updated_at = %s, claimed_by = %s, claimed_at = %s "
+            "FROM candidate "
+            "WHERE s.command_ref = candidate.command_ref "
+            "AND s.state = %s "
+            "RETURNING s.command_ref, s.state_version",
+            (
+                "pending",
+                "claimed",
+                claimed_at,
+                scheduler_ref,
+                claimed_at,
+                "pending",
+            ),
+        )
+
+    def _claim_next_pending_qmark(
+        self,
+        *,
+        scheduler_ref: str,
+        claimed_at: str,
+    ) -> Sequence[object] | None:
+        return self._fetchone(
+            "WITH candidate AS ("
+            "SELECT c.command_ref FROM scheduler_commands c "
+            "JOIN scheduler_command_states s "
+            "ON s.command_ref = c.command_ref "
+            "WHERE s.state = ? "
+            "ORDER BY c.priority DESC, c.issued_at, c.command_ref "
+            "LIMIT 1"
+            ") "
+            "UPDATE scheduler_command_states SET "
+            "state = ?, state_version = state_version + 1, "
+            "updated_at = ?, claimed_by = ?, claimed_at = ? "
+            "WHERE command_ref = (SELECT command_ref FROM candidate) "
+            "AND state = ? "
+            "RETURNING command_ref, state_version",
+            (
+                "pending",
+                "claimed",
+                claimed_at,
+                scheduler_ref,
+                claimed_at,
+                "pending",
+            ),
+        )
+
     def list_pending_command_refs(self, *, limit: int = 100) -> tuple[str, ...]:
         if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
             raise GitHubResearchSchedulerCommandSqlAuthorityError(
@@ -711,11 +863,31 @@ class DbApiGitHubResearchSchedulerCommandStore(
             rollback()
 
 
+_SCHEDULER_REF_RE = re.compile(r"^scheduler:[^\s]+$")
+
+
+def _require_scheduler_ref(value: str) -> None:
+    if not isinstance(value, str) or not _SCHEDULER_REF_RE.fullmatch(value):
+        raise GitHubResearchSchedulerCommandSqlAuthorityError(
+            "scheduler_ref must be a typed scheduler: reference"
+        )
+
+
+def _require_utc(name: str, value: str) -> None:
+    if not isinstance(value, str) or "T" not in value or not value.endswith("Z"):
+        raise GitHubResearchSchedulerCommandSqlAuthorityError(
+            f"{name} must be a UTC timestamp ending with Z"
+        )
+
+
 __all__ = (
     "DEFAULT_SCHEDULER_COMMAND_AUTHORITY_REF",
     "SCHEDULER_COMMAND_SQL_AUTHORITY_VERSION",
+    "SCHEDULER_COMMAND_SQL_CLAIM_VERSION",
+    "SCHEDULER_COMMAND_CLAIM_SCHEMA",
     "SCHEDULER_COMMAND_STATE_SCHEMA",
     "DbApiGitHubResearchSchedulerCommandStore",
     "GitHubResearchSchedulerCommandSqlAuthorityError",
+    "SchedulerCommandSqlClaim",
     "SchedulerCommandSqlState",
 )
