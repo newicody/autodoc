@@ -127,3 +127,12 @@
 - distribution multi-serveurs coordonnée ;
 - observateur/accélérateur FPGA ou ASIC passif ;
 - consolidation documentaire et dictionnaire français final.
+
+### r16-r41 — mémoire temporelle PassiveSupervisor / VisPy
+
+- conserver la trace des apparitions et disparitions d'objets temporaires ;
+- permettre une conservation individuelle ou une agrégation/dénombrement ;
+- indexer par type, handler, tâche, laboratoire, spécialiste, cycle et période ;
+- afficher durée de vie, répétitions, pics et objets disparus ;
+- persister un read model d'observation sans transformer VisPy en autorité ;
+- ne jamais permettre à cette mémoire de modifier l'ordonnancement.
