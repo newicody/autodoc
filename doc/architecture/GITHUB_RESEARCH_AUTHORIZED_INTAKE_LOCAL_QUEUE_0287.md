@@ -1,5 +1,10 @@
 # Remise locale d’un intake GitHub autorisé au Scheduler canonique — 0287 r16-r24
 
+> **Statut r16-r24-r1 : chemin non canonique.** La file JSONL reste une
+> compatibilité historique, mais la recherche GitHub doit désormais construire
+> une commande typée puis la persister dans PostgreSQL. Ne pas utiliser cette
+> file comme autorité ou comme chemin serveur réel.
+
 ## Décision
 
 Autodoc conserve **un seul Scheduler local canonique**, possédé par le processus serveur.

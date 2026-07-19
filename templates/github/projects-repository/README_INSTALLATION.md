@@ -254,36 +254,54 @@ python tools/run_github_actions_artifact_fetch_once_0287.py \
 
 ## Remise locale au Scheduler canonique — r16-r24
 
-Le chemin opérationnel serveur ne démarre plus un Scheduler `tool-bounded` dans
-la commande `prepare`. Après validation du triplet et construction de l’intake
-autorisé, la commande locale remet exactement une `SchedulerRouteRequest` à la
-file existante :
+### Transition r16-r24-r1 — commande Scheduler typée
+
+La remise GitHub spécifique dans `scheduler.route_requests.jsonl` introduite en
+r16-r24 n’est plus le chemin canonique. Elle reste présente uniquement pour la
+compatibilité historique et sa CLI refuse désormais l’exécution par défaut.
+
+Ne plus lancer sur le chemin serveur réel :
+
+```text
+tools/queue_authorized_github_research_scheduler_intake_0287.py
+```
+
+L’ancienne remise ne peut être utilisée qu’avec
+`--allow-legacy-filesystem-handoff`, exclusivement pour un test de compatibilité.
+
+Construire d’abord la commande métier typée, sans écriture disque ni SQL, avec
+un budget explicite :
 
 ```bash
-python tools/queue_authorized_github_research_scheduler_intake_0287.py \
+python tools/build_typed_github_research_scheduler_command_0287.py \
   --input /tmp/autodoc-i54-run-29673341210-scheduler-intake.json \
-  --runtime-root .var/runtime/github-research \
-  --policy-decision-id \
-    policy-decision:github-research-auto:bc375aafe1206a60e39b1e9e \
-  --repository newicody/projects \
-  --run-id 29673341210 \
-  --format json
+  --max-scheduler-steps 16 \
+  --max-specialist-visits 2 \
+  --max-wall-time-s 1800 \
+  --format summary
 ```
 
-La sortie doit indiquer soit :
+La sortie attendue contient :
 
 ```text
-status=queued-for-canonical-scheduler action=queued queued_count=1
+valid=true
+status=typed-command-ready-for-sql
+legacy_filesystem_handoff_is_canonical=false
+sql_write_performed=false
 ```
 
-soit, lors d’un rejeu strictement identique :
+Le rapport JSON d’entrée est seulement une projection de frontière provenant du
+fetch GitHub. Dans Autodoc, la demande devient une
+`GitHubResearchSchedulerCommand`, sous-classe de
+`AuthorizedSchedulerCommand`, elle-même sous-classe de `SchedulerCommand`.
+L’autorisation, la corrélation, les références de recherche, le budget et la
+route sont des objets composés et validés.
 
-```text
-status=already-queued action=replay replayed_count=1
-```
+Le `command_ref` est stable pour un même intake et un même budget : son identité
+utilise l’horodatage déjà présent dans la demande de route autorisée, pas l’heure
+de relance de la CLI.
 
-Cette commande n’exécute ni Scheduler, ni Dispatcher, ni EventBus, ni handler,
-ni laboratoire. Le processus serveur Autodoc, propriétaire du Scheduler local
-canonique, consommera `scheduler.route_requests.jsonl` dans l’unité suivante.
-Le câblage `tool-bounded` r16-r20-r1 reste disponible pour les contrôles bornés,
-mais ne constitue pas la frontière interprocessus du cycle serveur réel.
+L’unité suivante implémentera le port
+`GitHubResearchSchedulerCommandStore` sur PostgreSQL, avec unicité et rejeu
+idempotent. Le Scheduler canonique réclamera ensuite la commande SQL ; aucune
+file JSONL GitHub spécifique ne sera consommée.

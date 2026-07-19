@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""Queue one authorized GitHub research intake for the canonical Scheduler."""
+"""Legacy filesystem handoff for one authorized GitHub research intake."""
 
 from __future__ import annotations
 
@@ -30,8 +30,9 @@ def _load_mapping(path: Path) -> Mapping[str, Any]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Queue one authorized GitHub research Scheduler request without "
-            "starting Scheduler, Dispatcher, EventBus, handler, or laboratory."
+            "Legacy compatibility only: append one authorized GitHub research "
+            "route request to the historical filesystem handoff. The canonical "
+            "path is the typed command followed by PostgreSQL persistence."
         )
     )
     parser.add_argument("--input", required=True, help="Authorized Scheduler intake JSON report.")
@@ -44,8 +45,24 @@ def main(argv: list[str] | None = None) -> int:
         default="scheduler.route_requests.jsonl",
         help="Local JSONL queue filename.",
     )
+    parser.add_argument(
+        "--allow-legacy-filesystem-handoff",
+        action="store_true",
+        help=(
+            "Explicitly opt into the non-canonical r16-r24 compatibility path."
+        ),
+    )
     parser.add_argument("--format", choices=("json", "summary"), default="summary")
     args = parser.parse_args(argv)
+
+    if not args.allow_legacy_filesystem_handoff:
+        print(
+            "legacy filesystem handoff is non-canonical; build a typed "
+            "GitHubResearchSchedulerCommand and persist it through the "
+            "PostgreSQL adapter",
+            file=sys.stderr,
+        )
+        return 2
 
     report = append_authorized_github_research_scheduler_intake(
         scheduler_intake_report=_load_mapping(Path(args.input)),

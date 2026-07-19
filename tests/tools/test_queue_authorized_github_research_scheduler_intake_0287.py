@@ -64,6 +64,7 @@ def test_cli_queues_explicit_intake_report(tmp_path: Path, capsys) -> None:
             "newicody/projects",
             "--run-id",
             "29673341210",
+            "--allow-legacy-filesystem-handoff",
             "--format",
             "json",
         ]
@@ -74,3 +75,29 @@ def test_cli_queues_explicit_intake_report(tmp_path: Path, capsys) -> None:
     assert payload["status"] == "queued-for-canonical-scheduler"
     assert payload["dispatcher_used"] is False
     assert payload["scheduler_started"] is False
+
+
+def test_cli_rejects_non_canonical_handoff_by_default(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    runtime_root = tmp_path / "runtime"
+
+    returncode = main(
+        [
+            "--input",
+            str(tmp_path / "not-read.json"),
+            "--runtime-root",
+            str(runtime_root),
+            "--policy-decision-id",
+            "policy-decision:github-research-auto:unused",
+            "--repository",
+            "newicody/projects",
+            "--run-id",
+            "29673341210",
+        ]
+    )
+
+    assert returncode == 2
+    assert "non-canonical" in capsys.readouterr().err
+    assert not runtime_root.exists()

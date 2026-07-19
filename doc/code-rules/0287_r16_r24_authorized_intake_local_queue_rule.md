@@ -1,5 +1,9 @@
 # Code rule — 0287 r16-r24 — file locale d’intake autorisé
 
+> **Supplantée pour la recherche GitHub par r16-r24-r1.** Ces règles restent
+> l’évidence historique du patch appliqué. Elles ne doivent plus orienter le
+> chemin canonique, qui utilise des classes typées et PostgreSQL.
+
 1. Réutiliser `src/context/authorized_route_request_queue.py` et
    `scheduler.route_requests.jsonl` avant d’introduire une nouvelle file.
 2. Exiger `repository`, `run_id` et `policy_decision_id` explicitement.
