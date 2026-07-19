@@ -63,6 +63,9 @@ from context.love_imported_actions_runtime_contract_0287 import (  # noqa: E402
 from tools import assemble_fetched_github_research_admissibility_0287 as artifact_loader  # noqa: E402
 from tools import publish_love_final_deliverable_0287 as publication_tool  # noqa: E402
 from tools import resolve_github_research_project_target_0287 as project_target_tool  # noqa: E402
+from tools.github_projectv2_repository_owner_adapter_0287 import (  # noqa: E402
+    RepositoryOwnerGitHubCliFinalDeliverablePublicationAdapter,
+)
 
 REPORT_SCHEMA = "missipy.github.research_love_operational_closed_loop.v1"
 _PREPARED_SCHEMA = "missipy.github.research_love_closed_loop_prepared.v1"
@@ -406,7 +409,7 @@ def _run_complete(args: argparse.Namespace) -> dict[str, Any]:
                 "prepared publication plan digest changed"
             )
 
-        adapter = publication_tool.GitHubCliFinalDeliverablePublicationAdapter(
+        adapter = RepositoryOwnerGitHubCliFinalDeliverablePublicationAdapter(
             gh_command=str(args.gh_command),
             token_env=str(args.token_env),
         )

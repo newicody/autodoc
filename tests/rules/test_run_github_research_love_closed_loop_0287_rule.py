@@ -311,8 +311,8 @@ def test_complete_reuses_prepared_json_without_recomputing_local_stages(
         lambda value: wrapped_plan,
     )
     monkeypatch.setattr(
-        tool.publication_tool,
-        "GitHubCliFinalDeliverablePublicationAdapter",
+        tool,
+        "RepositoryOwnerGitHubCliFinalDeliverablePublicationAdapter",
         lambda **kwargs: SimpleNamespace(),
     )
     monkeypatch.setattr(
@@ -443,7 +443,10 @@ def test_tool_reuses_existing_adapters_and_creates_no_runtime_infrastructure() -
     assert "execute_github_research_love_final_publication(" in source
     assert "close_github_research_love_cycle(" in source
     assert "acquire_imported_actions_runtime_lease(" in source
-    assert "GitHubCliFinalDeliverablePublicationAdapter(" in source
+    assert (
+        "RepositoryOwnerGitHubCliFinalDeliverablePublicationAdapter("
+        in source
+    )
     assert "artifact_loader._load_ready_run_contents(" in source
     assert "lease.ports.projection_port" in source
     assert '"policy_decision_id": _policy_decision_id(' in source

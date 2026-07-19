@@ -159,8 +159,14 @@ def test_partial_overrides_are_rejected_before_remote_read() -> None:
 def test_tool_creates_no_second_transport_or_mutation_surface() -> None:
     source = Path(tool.__file__).read_text(encoding="utf-8")
 
-    assert "GitHubCliFinalDeliverablePublicationAdapter" in source
-    assert "] = GitHubCliFinalDeliverablePublicationAdapter" in source
+    assert (
+        "RepositoryOwnerGitHubCliFinalDeliverablePublicationAdapter"
+        in source
+    )
+    assert (
+        "] = RepositoryOwnerGitHubCliFinalDeliverablePublicationAdapter"
+        in source
+    )
     assert "adapter = adapter_factory(" in source
     assert "LoveProjectV2TargetRequest(" in source
     assert "resolve_project_target(request)" in source

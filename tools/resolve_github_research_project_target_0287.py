@@ -26,8 +26,8 @@ if str(_REPO_ROOT) not in sys.path:
 from context.love_actions_closed_loop_resolution_0287 import (  # noqa: E402
     LoveProjectV2TargetRequest,
 )
-from tools.publish_love_final_deliverable_0287 import (  # noqa: E402
-    GitHubCliFinalDeliverablePublicationAdapter,
+from tools.github_projectv2_repository_owner_adapter_0287 import (  # noqa: E402
+    RepositoryOwnerGitHubCliFinalDeliverablePublicationAdapter,
 )
 
 SCHEMA = "missipy.github.research_projectv2_target_resolution.v1"
@@ -103,8 +103,8 @@ def resolve_project_target_report(
     gh_command: str = "gh",
     token_env: str = "AUTODOC_PROJECT_TOKEN",
     adapter_factory: type[
-        GitHubCliFinalDeliverablePublicationAdapter
-    ] = GitHubCliFinalDeliverablePublicationAdapter,
+        RepositoryOwnerGitHubCliFinalDeliverablePublicationAdapter
+    ] = RepositoryOwnerGitHubCliFinalDeliverablePublicationAdapter,
 ) -> dict[str, Any]:
     request = LoveProjectV2TargetRequest(
         repository=repository.strip(),
