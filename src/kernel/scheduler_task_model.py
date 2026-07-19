@@ -585,6 +585,7 @@ class SchedulerTask:
         deadline_at: str,
         actor_ref: str,
         cause_ref: str,
+        effective_priority: int | None = None,
     ) -> SchedulerTaskAttemptStart:
         if self.state is not SchedulerTaskState.READY:
             raise SchedulerTaskModelError("seule une tâche ready peut démarrer")
@@ -594,6 +595,14 @@ class SchedulerTask:
             raise SchedulerTaskModelError(
                 "la version du handler doit correspondre à la version de capacité de la tâche"
             )
+        next_effective_priority = (
+            self.effective_priority
+            if effective_priority is None
+            else effective_priority
+        )
+        _require_int_range(
+            "effective_priority", next_effective_priority, 0, 100
+        )
         next_attempt_count = self.attempt_count + 1
         transition = SchedulerTaskTransition.create(
             task_ref=self.task_ref,
@@ -607,6 +616,7 @@ class SchedulerTask:
         task = self._rebuild(
             state=SchedulerTaskState.RUNNING,
             state_version=self.state_version + 1,
+            effective_priority=next_effective_priority,
             attempt_count=next_attempt_count,
             updated_at=started_at,
         )
