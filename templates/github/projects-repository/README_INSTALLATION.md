@@ -208,3 +208,46 @@ factory = context.love_tool_bounded_installed_runtime_composer_0287:build_tool_b
 [scheduler]
 lifecycle = tool-bounded
 ```
+
+
+## Configuration dédiée au scan Actions — r16-r20-r2
+
+Ne pas modifier `github_project_v2_query_only.ini` pour le fetch d’artefacts.
+Générer une configuration distincte :
+
+```bash
+python tools/build_github_actions_artifact_scan_config_0287.py \
+  --project-config .var/config/github_project_v2_query_only.ini \
+  --fetch-config .var/config/github_artifact_server_fetch.ini \
+  --output .var/config/github_actions_artifact_scan.ini \
+  --working-directory /home/eric/projet/git/autodoc \
+  --python-executable /home/eric/python/bin/python \
+  --execute \
+  --format summary
+```
+
+Vérifier :
+
+```bash
+grep -n '^scan_command' \
+  .var/config/github_actions_artifact_scan.ini
+```
+
+La valeur doit être :
+
+```text
+tools/run_github_actions_artifact_scan_once_live_0272.py
+```
+
+Le fetch utilise ensuite :
+
+```bash
+python tools/run_github_actions_artifact_fetch_once_0287.py \
+  --project-config .var/config/github_actions_artifact_scan.ini \
+  --fetch-config .var/config/github_artifact_server_fetch.ini \
+  --policy-decision-id policy:0287:issue-15-artifact-fetch \
+  --max-runs 50 \
+  --max-artifacts 150 \
+  --execute \
+  --format json
+```
