@@ -305,3 +305,59 @@ L’unité suivante implémentera le port
 `GitHubResearchSchedulerCommandStore` sur PostgreSQL, avec unicité et rejeu
 idempotent. Le Scheduler canonique réclamera ensuite la commande SQL ; aucune
 file JSONL GitHub spécifique ne sera consommée.
+
+### Persistance PostgreSQL relationnelle — r16-r25
+
+La commande typée est maintenant persistée par le binding PostgreSQL installé.
+La connexion existante est réutilisée : aucun runtime complet, Scheduler,
+Dispatcher, EventBus, laboratoire, OpenVINO ou Qdrant n'est démarré.
+
+Le stockage interne est relationnel. Aucune commande n'est stockée comme JSON ou
+JSONL. Le fichier JSON fourni à la CLI reste uniquement le rapport de frontière
+issu du fetch GitHub.
+
+Vérifier sans écrire :
+
+```bash
+python tools/persist_typed_github_research_scheduler_command_0287.py \
+  --input /tmp/autodoc-i54-run-29673341210-scheduler-intake.json \
+  --runtime-config .var/config/love_installed_runtime.ini \
+  --max-scheduler-steps 16 \
+  --max-specialist-visits 2 \
+  --max-wall-time-s 1800 \
+  --format summary
+```
+
+Résultat attendu :
+
+```text
+valid=true mode=dry-run status=typed-command-ready-for-sql
+```
+
+Persister réellement dans PostgreSQL :
+
+```bash
+python tools/persist_typed_github_research_scheduler_command_0287.py \
+  --input /tmp/autodoc-i54-run-29673341210-scheduler-intake.json \
+  --runtime-config .var/config/love_installed_runtime.ini \
+  --max-scheduler-steps 16 \
+  --max-specialist-visits 2 \
+  --max-wall-time-s 1800 \
+  --execute \
+  --format summary
+```
+
+Premier passage :
+
+```text
+status=scheduler-command-persisted inserted=true state=pending
+```
+
+Rejeu identique :
+
+```text
+status=scheduler-command-already-persisted idempotent_replay=true state=pending
+```
+
+Cette unité s'arrête à `pending`. La réclamation atomique et la remise au
+Scheduler local canonique appartiennent à r16-r26.

@@ -28,6 +28,9 @@ from context.context_revision_sql_authority_0287 import (
     ContextSqlWriteResult,
     DbApiContextRevisionAuthorityStore,
 )
+from context.github_research_scheduler_command_sql_authority_0287 import (
+    DbApiGitHubResearchSchedulerCommandStore,
+)
 from context.love_manual_runtime_configuration_0287 import (
     ManualInstalledRuntimeSettings,
     PostgreSqlRuntimeSettings,
@@ -159,6 +162,9 @@ class LovePostgreSqlAuthorityBinding:
 
     authority_store: DbApiContextRevisionAuthorityStore
     receipt: LovePostgreSqlAuthorityBindingReceipt
+    scheduler_command_store: (
+        DbApiGitHubResearchSchedulerCommandStore | None
+    ) = None
     _closed: bool = field(default=False, init=False, repr=False)
     _lock: RLock = field(
         default_factory=RLock,
@@ -277,6 +283,11 @@ def open_love_postgresql_authority(
             SqlContextStorePolicy(paramstyle="format", auto_commit=True),
         )
         authority_store.initialize_schema()
+        scheduler_command_store = DbApiGitHubResearchSchedulerCommandStore(
+            connection,  # type: ignore[arg-type]
+            SqlContextStorePolicy(paramstyle="format", auto_commit=True),
+        )
+        scheduler_command_store.initialize_schema()
         seed = ensure_love_base_revision(authority_store, settings)
     except LovePostgreSqlAuthorityBindingError:
         _close_connection_quietly(connection)
@@ -304,6 +315,9 @@ def open_love_postgresql_authority(
             "postgresql_connection_owned": True,
             "schema_initialized_idempotently": True,
             "base_revision_seeded_idempotently": True,
+            "scheduler_command_store_bound": True,
+            "scheduler_command_storage_is_relational": True,
+            "scheduler_command_json_storage_used": False,
             "secret_value_serialized": False,
             "scheduler_constructed": False,
             "openvino_inference_performed": False,
@@ -312,6 +326,7 @@ def open_love_postgresql_authority(
     )
     return LovePostgreSqlAuthorityBinding(
         authority_store=authority_store,
+        scheduler_command_store=scheduler_command_store,
         receipt=receipt,
     )
 
