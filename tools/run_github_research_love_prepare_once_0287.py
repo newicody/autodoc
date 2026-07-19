@@ -69,6 +69,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--policy-decision-id", required=True)
     parser.add_argument("--run-id", required=True)
+    parser.add_argument(
+        "--existing-fetch-cycle-report",
+        type=Path,
+        help=(
+            "Reuse one explicit previously fetched cycle report and skip "
+            "the incremental GitHub artifact fetch."
+        ),
+    )
     parser.add_argument("--issue-number", type=int, required=True)
     parser.add_argument("--project-owner", required=True)
     parser.add_argument("--project-number", type=int, required=True)
@@ -146,6 +154,19 @@ def prepare_once_report(
     scan_config = _absolute_output(args.scan_config)
     runtime_config = _absolute_input(args.runtime_config)
     prepared_output = _absolute_output(args.prepared_output)
+    existing_fetch_cycle_report = (
+        _absolute_input(args.existing_fetch_cycle_report)
+        if args.existing_fetch_cycle_report is not None
+        else None
+    )
+    if (
+        existing_fetch_cycle_report is not None
+        and not existing_fetch_cycle_report.is_file()
+    ):
+        raise GitHubResearchLovePrepareOnceError(
+            "existing fetch cycle report does not exist: "
+            f"{existing_fetch_cycle_report}"
+        )
 
     scan = scan_builder.build_artifact_scan_config_report(
         project_config=project_config,
@@ -191,6 +212,16 @@ def prepare_once_report(
             "scan_configuration": scan,
             "runtime_readiness": runtime,
             "fetch_cycle": None,
+            "fetch_cycle_report": (
+                str(existing_fetch_cycle_report)
+                if existing_fetch_cycle_report is not None
+                else ""
+            ),
+            "fetch_strategy": (
+                "reuse-existing"
+                if existing_fetch_cycle_report is not None
+                else "incremental-fetch"
+            ),
             "prepared_cycle": None,
             "publication_plan_digest": "",
             "prepared_output": str(prepared_output),
@@ -206,11 +237,6 @@ def prepare_once_report(
 
     _require_effect_gate(_QDRANT_WRITE_GATE)
     _require_effect_gate(_QDRANT_SEARCH_GATE)
-    token_env = _required_text(scan, "token_env")
-    if not os.environ.get(token_env, "").strip():
-        raise GitHubResearchLovePrepareOnceError(
-            f"missing GitHub artifact token environment {token_env}"
-        )
     if not os.environ.get(
         str(args.project_token_env),
         "",
@@ -220,48 +246,76 @@ def prepare_once_report(
             f"{args.project_token_env}"
         )
 
-    fetch = _invoke_json_main(
-        fetch_tool.main,
-        (
-            "--project-config",
-            str(scan_config),
-            "--fetch-config",
-            str(fetch_config),
-            "--policy-decision-id",
-            policy_decision_id + ":fetch",
-            "--max-runs",
-            str(int(args.max_runs)),
-            "--max-artifacts",
-            str(int(args.max_artifacts)),
-            "--execute",
-            "--format",
-            "json",
-        ),
-        label="artifact fetch",
-    )
-    if fetch.get("valid") is not True:
-        return _blocked(
-            mode="execute",
-            status="artifact-fetch-failed",
-            issues=_issues(fetch),
-            scan=scan,
-            runtime=runtime,
-            fetch=fetch,
+    fetch_reused = existing_fetch_cycle_report is not None
+    if existing_fetch_cycle_report is not None:
+        fetch_cycle_report = str(existing_fetch_cycle_report)
+        fetch = {
+            "schema": (
+                "missipy.github.research_love."
+                "existing_fetch_cycle_selection.v1"
+            ),
+            "valid": True,
+            "status": "existing-fetch-cycle-selected",
+            "issues": [],
+            "reports": {
+                "cycle": fetch_cycle_report,
+            },
+            "boundaries": {
+                "operator_selected_exact_report": True,
+                "incremental_fetch_skipped": True,
+                "report_validation_delegated_to_closed_loop_loader": True,
+                "secret_value_serialized": False,
+            },
+        }
+    else:
+        token_env = _required_text(scan, "token_env")
+        if not os.environ.get(token_env, "").strip():
+            raise GitHubResearchLovePrepareOnceError(
+                "missing GitHub artifact token environment "
+                f"{token_env}"
+            )
+        fetch = _invoke_json_main(
+            fetch_tool.main,
+            (
+                "--project-config",
+                str(scan_config),
+                "--fetch-config",
+                str(fetch_config),
+                "--policy-decision-id",
+                policy_decision_id + ":fetch",
+                "--max-runs",
+                str(int(args.max_runs)),
+                "--max-artifacts",
+                str(int(args.max_artifacts)),
+                "--execute",
+                "--format",
+                "json",
+            ),
+            label="artifact fetch",
         )
-    if fetch.get("status") != "artifacts-fetched":
-        return _blocked(
-            mode="execute",
-            status="artifact-fetch-incomplete",
-            issues=[
-                "artifact fetch status must be artifacts-fetched"
-            ],
-            scan=scan,
-            runtime=runtime,
-            fetch=fetch,
-        )
+        if fetch.get("valid") is not True:
+            return _blocked(
+                mode="execute",
+                status="artifact-fetch-failed",
+                issues=_issues(fetch),
+                scan=scan,
+                runtime=runtime,
+                fetch=fetch,
+            )
+        if fetch.get("status") != "artifacts-fetched":
+            return _blocked(
+                mode="execute",
+                status="artifact-fetch-incomplete",
+                issues=[
+                    "artifact fetch status must be artifacts-fetched"
+                ],
+                scan=scan,
+                runtime=runtime,
+                fetch=fetch,
+            )
 
-    reports = _required_mapping(fetch, "reports")
-    fetch_cycle_report = _required_text(reports, "cycle")
+        reports = _required_mapping(fetch, "reports")
+        fetch_cycle_report = _required_text(reports, "cycle")
 
     prepared = _invoke_json_main(
         closed_loop_tool.main,
@@ -332,6 +386,9 @@ def prepare_once_report(
         "runtime_readiness": runtime,
         "fetch_cycle": fetch,
         "fetch_cycle_report": fetch_cycle_report,
+        "fetch_strategy": (
+            "reuse-existing" if fetch_reused else "incremental-fetch"
+        ),
         "prepared_cycle": prepared,
         "prepared_output": str(prepared_output),
         "publication_plan_digest": digest,
@@ -345,8 +402,9 @@ def prepare_once_report(
         ),
         "boundaries": _boundaries(
             execute=True,
-            fetch_performed=True,
+            fetch_performed=not fetch_reused,
             prepare_performed=True,
+            existing_fetch_cycle_reused=fetch_reused,
         ),
     }
 
@@ -510,6 +568,7 @@ def _boundaries(
     execute: bool,
     fetch_performed: bool,
     prepare_performed: bool,
+    existing_fetch_cycle_reused: bool = False,
 ) -> dict[str, object]:
     return {
         "operator_entrypoint_only": True,
@@ -526,6 +585,8 @@ def _boundaries(
         "remote_issue_mutation_performed": False,
         "project_v2_mutation_performed": False,
         "artifact_fetch_performed": fetch_performed,
+        "existing_fetch_cycle_reused": existing_fetch_cycle_reused,
+        "automatic_historical_fallback_performed": False,
         "local_prepare_performed": prepare_performed,
         "sql_write_possible": execute and prepare_performed,
         "qdrant_write_possible": execute and prepare_performed,

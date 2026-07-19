@@ -18,6 +18,7 @@ def _args(tmp_path: Path, *, execute: bool) -> argparse.Namespace:
         runtime_factory="runtime_factory:create",
         policy_decision_id="policy:test:prepare-once",
         run_id="29622831972",
+        existing_fetch_cycle_report=None,
         issue_number=15,
         project_owner="newicody",
         project_number=3,
@@ -170,6 +171,84 @@ def test_execute_fetches_then_prepares_and_stops_at_digest(
     assert result["boundaries"]["operator_confirmation_required"] is True
 
 
+def test_execute_reuses_explicit_fetch_cycle_without_new_fetch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = _args(tmp_path, execute=True)
+    existing = tmp_path / "existing-fetch-cycle.json"
+    existing.write_text("{}\n", encoding="utf-8")
+    args.existing_fetch_cycle_report = existing
+    digest = "sha256:" + "8" * 64
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("AUTODOC_PROJECT_TOKEN", "secret")
+    monkeypatch.setenv(
+        "AUTODOC_QDRANT_POINT_WRITE_ALLOWED",
+        "true",
+    )
+    monkeypatch.setenv(
+        "AUTODOC_QDRANT_SEARCH_ALLOWED",
+        "true",
+    )
+    monkeypatch.setattr(
+        tool.scan_builder,
+        "build_artifact_scan_config_report",
+        lambda **kwargs: _scan_report(tmp_path, execute=True),
+    )
+    monkeypatch.setattr(
+        tool,
+        "_runtime_readiness",
+        lambda *args, **kwargs: _runtime_report(),
+    )
+
+    def invoke(function, argv, *, label):
+        calls.append((label, tuple(argv)))
+        assert label == "closed-loop prepare"
+        assert function is tool.closed_loop_tool.main
+        return {
+            "valid": True,
+            "status": "publication-confirmation-required",
+            "issues": [],
+            "publication_plan_digest": digest,
+        }
+
+    monkeypatch.setattr(tool, "_invoke_json_main", invoke)
+
+    result = tool.prepare_once_report(args)
+
+    assert result["valid"] is True
+    assert result["fetch_strategy"] == "reuse-existing"
+    assert result["fetch_cycle_report"] == str(existing)
+    assert result["fetch_cycle"]["status"] == (
+        "existing-fetch-cycle-selected"
+    )
+    assert len(calls) == 1
+    assert "--fetch-cycle-report" in calls[0][1]
+    report_index = calls[0][1].index("--fetch-cycle-report") + 1
+    assert calls[0][1][report_index] == str(existing)
+    assert result["boundaries"]["artifact_fetch_performed"] is False
+    assert result["boundaries"]["existing_fetch_cycle_reused"] is True
+    assert (
+        result["boundaries"]["automatic_historical_fallback_performed"]
+        is False
+    )
+
+
+def test_missing_existing_fetch_cycle_fails_before_runtime(
+    tmp_path: Path,
+) -> None:
+    args = _args(tmp_path, execute=True)
+    args.existing_fetch_cycle_report = tmp_path / "missing.json"
+
+    with pytest.raises(
+        tool.GitHubResearchLovePrepareOnceError,
+        match="existing fetch cycle report does not exist",
+    ):
+        tool.prepare_once_report(args)
+
+
 def test_missing_effect_gate_blocks_before_fetch(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -316,6 +395,8 @@ def test_tool_is_only_an_operator_composition_surface() -> None:
     assert "inspect_manual_runtime_readiness(" in source
     assert "fetch_tool.main" in source
     assert "closed_loop_tool.main" in source
+    assert "--existing-fetch-cycle-report" in source
+    assert "automatic_historical_fallback_performed" in source
     assert "publication-confirmation-required" in source
 
     for forbidden in (
