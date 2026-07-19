@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -37,6 +38,13 @@ from runtime.scheduler_route_adapter import SchedulerRouteRequest
 
 
 AUTHORIZED_ROUTE_REQUEST_QUEUE_SCHEMA = "missipy.scheduler.authorized_route_request_queue.v1"
+GITHUB_RESEARCH_SCHEDULER_INTAKE_REPORT_SCHEMA = (
+    "missipy.github.research_scheduler_intake_report.v1"
+)
+GITHUB_RESEARCH_SCHEDULER_INTAKE_SCHEMA = "missipy.github.research_scheduler_intake.v1"
+GITHUB_RESEARCH_SCHEDULER_QUEUE_HANDOFF_SCHEMA = (
+    "missipy.github.research_scheduler_intake_queue_handoff.v1"
+)
 DEFAULT_ROUTE_REQUEST_QUEUE_NAME = "scheduler.route_requests.jsonl"
 
 
@@ -68,6 +76,166 @@ class AuthorizedRouteRequestQueueReport:
             "handler_called": self.handler_called,
             "frames_written": self.frames_written,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorizedGitHubResearchSchedulerQueueReport:
+    """Result of one explicit GitHub research intake queue handoff."""
+
+    schema: str
+    valid: bool
+    status: str
+    queue_path: str
+    request_id: str
+    route_id: str
+    task_id: str
+    policy_decision_id: str
+    repository: str
+    run_id: str
+    action: str
+    queued_count: int
+    replayed_count: int
+    authorized_only: bool
+    scheduler_modified: bool
+    scheduler_started: bool
+    dispatcher_used: bool
+    eventbus_used: bool
+    handler_called: bool
+    frames_written: bool
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {
+            "schema": self.schema,
+            "valid": self.valid,
+            "status": self.status,
+            "queue_path": self.queue_path,
+            "request_id": self.request_id,
+            "route_id": self.route_id,
+            "task_id": self.task_id,
+            "policy_decision_id": self.policy_decision_id,
+            "repository": self.repository,
+            "run_id": self.run_id,
+            "action": self.action,
+            "queued_count": self.queued_count,
+            "replayed_count": self.replayed_count,
+            "authorized_only": self.authorized_only,
+            "scheduler_modified": self.scheduler_modified,
+            "scheduler_started": self.scheduler_started,
+            "dispatcher_used": self.dispatcher_used,
+            "eventbus_used": self.eventbus_used,
+            "handler_called": self.handler_called,
+            "frames_written": self.frames_written,
+        }
+
+
+def append_authorized_github_research_scheduler_intake(
+    *,
+    scheduler_intake_report: Mapping[str, Any],
+    runtime_root: Path | str,
+    policy_decision_id: str,
+    repository: str,
+    run_id: str | int,
+    queue_name: str = DEFAULT_ROUTE_REQUEST_QUEUE_NAME,
+) -> AuthorizedGitHubResearchSchedulerQueueReport:
+    """Queue exactly one authorized GitHub research Scheduler request.
+
+    This is the process-boundary handoff from the artifact intake command to
+    the canonical local Scheduler server. It validates and durably appends one
+    existing ``SchedulerRouteRequest`` mapping. It does not start a Scheduler,
+    use the kernel Dispatcher, publish an EventBus command, call a handler, or
+    start a laboratory.
+    """
+
+    if not isinstance(scheduler_intake_report, Mapping):
+        raise AuthorizedRouteRequestQueueError(
+            "scheduler_intake_report must be an object"
+        )
+
+    policy = _require_policy_decision_id(policy_decision_id)
+    expected_repository = _require_repository(repository)
+    expected_run_id = _require_run_id(run_id)
+    report = dict(scheduler_intake_report)
+
+    if report.get("schema") != GITHUB_RESEARCH_SCHEDULER_INTAKE_REPORT_SCHEMA:
+        raise AuthorizedRouteRequestQueueError(
+            "unsupported GitHub research Scheduler intake report schema"
+        )
+    if report.get("valid") is not True:
+        raise AuthorizedRouteRequestQueueError(
+            "GitHub research Scheduler intake report must be valid"
+        )
+    if report.get("status") != "scheduler-requests-ready":
+        raise AuthorizedRouteRequestQueueError(
+            "GitHub research Scheduler intake report is not ready"
+        )
+
+    results = report.get("results")
+    if not isinstance(results, list) or len(results) != 1:
+        raise AuthorizedRouteRequestQueueError(
+            "exactly one GitHub research Scheduler intake result is required"
+        )
+    result = results[0]
+    if not isinstance(result, Mapping):
+        raise AuthorizedRouteRequestQueueError(
+            "GitHub research Scheduler intake result must be an object"
+        )
+
+    _validate_authorized_github_research_intake_result(result)
+    route_candidate = result.get("research_route_candidate")
+    assert isinstance(route_candidate, Mapping)
+    if route_candidate.get("repository") != expected_repository:
+        raise AuthorizedRouteRequestQueueError("repository mismatch")
+    if str(route_candidate.get("run_id", "")) != expected_run_id:
+        raise AuthorizedRouteRequestQueueError("run_id mismatch")
+
+    policy_decision = result.get("policy_decision")
+    assert isinstance(policy_decision, Mapping)
+    if policy_decision.get("policy_decision_id") != policy:
+        raise AuthorizedRouteRequestQueueError("policy_decision_id mismatch")
+
+    route_raw = result.get("scheduler_route_request")
+    assert isinstance(route_raw, Mapping)
+    request = SchedulerRouteRequest.from_mapping(route_raw)
+    if not request.authorized:
+        raise AuthorizedRouteRequestQueueError(
+            "only authorized SchedulerRouteRequest items may be queued"
+        )
+    if request.policy_decision_id != policy:
+        raise AuthorizedRouteRequestQueueError(
+            "queued policy_decision_id mismatch"
+        )
+
+    queue_path = _resolve_queue_path(Path(runtime_root), queue_name)
+    action = _append_request_idempotently(queue_path, request)
+    queued_count = 1 if action == "queued" else 0
+    replayed_count = 1 if action == "replay" else 0
+
+    return AuthorizedGitHubResearchSchedulerQueueReport(
+        schema=GITHUB_RESEARCH_SCHEDULER_QUEUE_HANDOFF_SCHEMA,
+        valid=True,
+        status=(
+            "queued-for-canonical-scheduler"
+            if action == "queued"
+            else "already-queued"
+        ),
+        queue_path=str(queue_path),
+        request_id=request.request_id,
+        route_id=request.route_id,
+        task_id=request.task_id,
+        policy_decision_id=policy,
+        repository=expected_repository,
+        run_id=expected_run_id,
+        action=action,
+        queued_count=queued_count,
+        replayed_count=replayed_count,
+        authorized_only=True,
+        scheduler_modified=False,
+        scheduler_started=False,
+        dispatcher_used=False,
+        eventbus_used=False,
+        handler_called=False,
+        frames_written=False,
+    )
 
 
 def append_authorized_route_requests_from_context_bus(
@@ -143,6 +311,96 @@ def iter_authorized_route_request_queue(path: Path | str) -> Iterable[SchedulerR
             if not request.authorized:
                 raise AuthorizedRouteRequestQueueError("route request queue contains unauthorized item")
             yield request
+
+
+def _validate_authorized_github_research_intake_result(
+    value: Mapping[str, Any],
+) -> None:
+    if value.get("schema") != GITHUB_RESEARCH_SCHEDULER_INTAKE_SCHEMA:
+        raise AuthorizedRouteRequestQueueError(
+            "unsupported GitHub research Scheduler intake schema"
+        )
+    if value.get("valid") is not True:
+        raise AuthorizedRouteRequestQueueError(
+            "GitHub research Scheduler intake must be valid"
+        )
+    if value.get("authorized") is not True:
+        raise AuthorizedRouteRequestQueueError(
+            "GitHub research Scheduler intake must be authorized"
+        )
+    if value.get("status") != "scheduler-request-ready":
+        raise AuthorizedRouteRequestQueueError(
+            "GitHub research Scheduler intake is not ready"
+        )
+    if value.get("scheduler_dispatch_started") is not False:
+        raise AuthorizedRouteRequestQueueError(
+            "Scheduler dispatch must not have started before queue handoff"
+        )
+    if value.get("laboratory_execution_started") is not False:
+        raise AuthorizedRouteRequestQueueError(
+            "laboratory execution must not have started before queue handoff"
+        )
+
+    for field_name in (
+        "research_route_candidate",
+        "policy_decision",
+        "scheduler_route_request",
+    ):
+        if not isinstance(value.get(field_name), Mapping):
+            raise AuthorizedRouteRequestQueueError(
+                f"{field_name} must be an object"
+            )
+
+
+def _append_request_idempotently(
+    queue_path: Path,
+    request: SchedulerRouteRequest,
+) -> str:
+    expected = request.to_mapping()
+    if queue_path.exists():
+        for current in iter_authorized_route_request_queue(queue_path):
+            if current.request_id != request.request_id:
+                continue
+            if current.to_mapping() != expected:
+                raise AuthorizedRouteRequestQueueError(
+                    "request_id collision with a different queued payload"
+                )
+            return "replay"
+
+    queue_path.parent.mkdir(parents=True, exist_ok=True)
+    with queue_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(expected, sort_keys=True, separators=(",", ":")))
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    return "queued"
+
+
+def _require_repository(value: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise AuthorizedRouteRequestQueueError("repository is required")
+    stripped = value.strip()
+    parts = stripped.split("/")
+    if len(parts) != 2 or not all(parts):
+        raise AuthorizedRouteRequestQueueError(
+            "repository must use owner/name format"
+        )
+    for part in parts:
+        allowed = part.replace("_", "").replace(".", "").replace("-", "")
+        if not allowed.isalnum():
+            raise AuthorizedRouteRequestQueueError(
+                "repository contains invalid characters"
+            )
+    return stripped
+
+
+def _require_run_id(value: str | int) -> str:
+    if isinstance(value, bool):
+        raise AuthorizedRouteRequestQueueError("run_id must be numeric")
+    stripped = str(value).strip()
+    if not stripped.isdigit():
+        raise AuthorizedRouteRequestQueueError("run_id must be numeric")
+    return stripped
 
 
 def _resolve_queue_path(runtime_root: Path, queue_name: str) -> Path:

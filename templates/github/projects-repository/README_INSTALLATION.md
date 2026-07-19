@@ -251,3 +251,39 @@ python tools/run_github_actions_artifact_fetch_once_0287.py \
   --execute \
   --format json
 ```
+
+## Remise locale au Scheduler canonique — r16-r24
+
+Le chemin opérationnel serveur ne démarre plus un Scheduler `tool-bounded` dans
+la commande `prepare`. Après validation du triplet et construction de l’intake
+autorisé, la commande locale remet exactement une `SchedulerRouteRequest` à la
+file existante :
+
+```bash
+python tools/queue_authorized_github_research_scheduler_intake_0287.py \
+  --input /tmp/autodoc-i54-run-29673341210-scheduler-intake.json \
+  --runtime-root .var/runtime/github-research \
+  --policy-decision-id \
+    policy-decision:github-research-auto:bc375aafe1206a60e39b1e9e \
+  --repository newicody/projects \
+  --run-id 29673341210 \
+  --format json
+```
+
+La sortie doit indiquer soit :
+
+```text
+status=queued-for-canonical-scheduler action=queued queued_count=1
+```
+
+soit, lors d’un rejeu strictement identique :
+
+```text
+status=already-queued action=replay replayed_count=1
+```
+
+Cette commande n’exécute ni Scheduler, ni Dispatcher, ni EventBus, ni handler,
+ni laboratoire. Le processus serveur Autodoc, propriétaire du Scheduler local
+canonique, consommera `scheduler.route_requests.jsonl` dans l’unité suivante.
+Le câblage `tool-bounded` r16-r20-r1 reste disponible pour les contrôles bornés,
+mais ne constitue pas la frontière interprocessus du cycle serveur réel.
