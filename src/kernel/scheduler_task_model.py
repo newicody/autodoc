@@ -282,6 +282,26 @@ class SchedulerTaskAttempt:
             finished_at=finished_at,
         )
 
+    def cancelled(self, *, finished_at: str) -> SchedulerTaskAttempt:
+        if self.state is not SchedulerTaskAttemptState.RUNNING:
+            raise SchedulerTaskModelError(
+                "seule une tentative running peut être annulée"
+            )
+        return replace(
+            self,
+            state=SchedulerTaskAttemptState.CANCELLED,
+            finished_at=finished_at,
+        )
+
+    def timed_out(self, *, finished_at: str) -> SchedulerTaskAttempt:
+        if self.state is not SchedulerTaskAttemptState.RUNNING:
+            raise SchedulerTaskModelError("seule une tentative running peut expirer")
+        return replace(
+            self,
+            state=SchedulerTaskAttemptState.TIMED_OUT,
+            finished_at=finished_at,
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class SchedulerTaskResult:
@@ -702,6 +722,68 @@ class SchedulerTask:
             transition=mutation.transition,
         )
 
+    def cancel_attempt(
+        self,
+        *,
+        attempt: SchedulerTaskAttempt,
+        occurred_at: str,
+        actor_ref: str,
+        cause_ref: str,
+    ) -> SchedulerTaskAttemptInterruption:
+        return self._interrupt_attempt(
+            attempt=attempt,
+            to_state=SchedulerTaskState.CANCELLED,
+            occurred_at=occurred_at,
+            actor_ref=actor_ref,
+            cause_ref=cause_ref,
+        )
+
+    def timeout_attempt(
+        self,
+        *,
+        attempt: SchedulerTaskAttempt,
+        occurred_at: str,
+        actor_ref: str,
+        cause_ref: str,
+    ) -> SchedulerTaskAttemptInterruption:
+        return self._interrupt_attempt(
+            attempt=attempt,
+            to_state=SchedulerTaskState.TIMED_OUT,
+            occurred_at=occurred_at,
+            actor_ref=actor_ref,
+            cause_ref=cause_ref,
+        )
+
+    def _interrupt_attempt(
+        self,
+        *,
+        attempt: SchedulerTaskAttempt,
+        to_state: SchedulerTaskState,
+        occurred_at: str,
+        actor_ref: str,
+        cause_ref: str,
+    ) -> SchedulerTaskAttemptInterruption:
+        _validate_running_attempt(self, attempt)
+        if to_state is SchedulerTaskState.CANCELLED:
+            terminal_attempt = attempt.cancelled(finished_at=occurred_at)
+        elif to_state is SchedulerTaskState.TIMED_OUT:
+            terminal_attempt = attempt.timed_out(finished_at=occurred_at)
+        else:
+            raise SchedulerTaskModelError(
+                "interruption de tentative non prise en charge"
+            )
+        mutation = self._transition(
+            to_state=to_state,
+            occurred_at=occurred_at,
+            actor_ref=actor_ref,
+            cause_ref=cause_ref,
+        )
+        return SchedulerTaskAttemptInterruption(
+            task=mutation.task,
+            attempt=terminal_attempt,
+            transition=mutation.transition,
+        )
+
     def move_to(
         self,
         *,
@@ -815,6 +897,36 @@ class SchedulerTaskAttemptCompletion:
             raise SchedulerTaskModelError("la tentative doit être succeeded")
         if self.attempt.result_ref != self.result.result_ref:
             raise SchedulerTaskModelError("la tentative ne référence pas son résultat")
+
+
+@dataclass(frozen=True, slots=True)
+class SchedulerTaskAttemptInterruption:
+    task: SchedulerTask
+    attempt: SchedulerTaskAttempt
+    transition: SchedulerTaskTransition
+
+    def __post_init__(self) -> None:
+        _validate_attempt_bundle(self.task, self.attempt, self.transition)
+        if self.task.state not in {
+            SchedulerTaskState.CANCELLED,
+            SchedulerTaskState.TIMED_OUT,
+        }:
+            raise SchedulerTaskModelError(
+                "une interruption doit produire cancelled ou timed-out"
+            )
+        expected_attempt_state = (
+            SchedulerTaskAttemptState.CANCELLED
+            if self.task.state is SchedulerTaskState.CANCELLED
+            else SchedulerTaskAttemptState.TIMED_OUT
+        )
+        if self.attempt.state is not expected_attempt_state:
+            raise SchedulerTaskModelError(
+                "l'état de tentative ne correspond pas à l'interruption"
+            )
+        if self.attempt.result_ref or self.attempt.failure_ref:
+            raise SchedulerTaskModelError(
+                "une interruption ne porte ni résultat ni échec métier"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1065,6 +1177,7 @@ __all__ = (
     "SchedulerTaskAttempt",
     "SchedulerTaskAttemptCompletion",
     "SchedulerTaskAttemptFailureOutcome",
+    "SchedulerTaskAttemptInterruption",
     "SchedulerTaskAttemptStart",
     "SchedulerTaskAttemptState",
     "SchedulerTaskDependency",
