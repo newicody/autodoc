@@ -41,6 +41,8 @@ if str(_REPO_ROOT) not in sys.path:
 
 from context.github_research_love_complete_closed_loop_0287 import (  # noqa: E402
     GitHubResearchLoveClosedLoopPrepareCommand,
+)
+from context.love_tool_bounded_scheduler_owner_0287 import (  # noqa: E402
     prepare_github_research_love_closed_loop,
 )
 from context.github_research_love_final_remote_publication_0287 import (  # noqa: E402
