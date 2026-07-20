@@ -481,9 +481,14 @@ def _validated_lineage(
     mutualization = _required_mapping(liaison, "mutualization")
 
     packet = _required_mapping(final_plan, "packet")
-    packet_synthesis = _required_mapping(packet, "synthesis")
     authority_object = _required_mapping(final_plan, "authority_object")
     artifact = _required_mapping(final_plan, "artifact")
+    packet_synthesis = _publication_ready_packet_synthesis(
+        packet=packet,
+        liaison=liaison,
+        final_plan=final_plan,
+        authority_object=authority_object,
+    )
 
     work_package_ref = _required_text(final_plan, "work_package_ref")
     if liaison_plan.get("work_package_ref") != work_package_ref:
@@ -557,6 +562,100 @@ def _validated_lineage(
         "mutualization": mutualization,
     }
 
+
+def _publication_ready_packet_synthesis(
+    *,
+    packet: Mapping[str, Any],
+    liaison: Mapping[str, Any],
+    final_plan: Mapping[str, Any],
+    authority_object: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """Resolve the ready synthesis without expanding the durable packet schema.
+
+    ``FinalSynthesisPacket.to_mapping()`` intentionally stores a compact
+    ``synthesis_ref`` rather than duplicating the complete liaison object.
+    The final SQL plan and authority metadata prove that the cloned packet was
+    marked publication-ready.  Rehydrate the immutable liaison projection,
+    verify the exact reference and readiness lineage, then return a copied
+    publication-boundary view.
+    """
+
+    embedded = packet.get("synthesis")
+    if embedded is not None:
+        if not isinstance(embedded, Mapping):
+            raise GitHubResearchLoveFinalRemotePublicationError(
+                "packet synthesis must be an object when embedded"
+            )
+        candidate = dict(embedded)
+        embedded_synthesis_ref = _required_text(candidate, "synthesis_ref")
+        compact_synthesis_ref = packet.get("synthesis_ref")
+        if compact_synthesis_ref is not None:
+            if (
+                not isinstance(compact_synthesis_ref, str)
+                or not compact_synthesis_ref.strip()
+            ):
+                raise GitHubResearchLoveFinalRemotePublicationError(
+                    "synthesis_ref must not be empty"
+                )
+            if compact_synthesis_ref.strip() != embedded_synthesis_ref:
+                raise GitHubResearchLoveFinalRemotePublicationError(
+                    "embedded packet synthesis_ref mismatch"
+                )
+        if candidate.get("final_publication_ready") is not True:
+            raise GitHubResearchLoveFinalRemotePublicationError(
+                "embedded packet synthesis is not publication-ready"
+            )
+        if candidate.get("provenance_hidden") is not True:
+            raise GitHubResearchLoveFinalRemotePublicationError(
+                "embedded packet synthesis exposes specialist provenance"
+            )
+        return candidate
+
+    packet_synthesis_ref = _required_text(packet, "synthesis_ref")
+    source = _required_mapping(liaison, "synthesis")
+    if source.get("synthesis_ref") != packet_synthesis_ref:
+        raise GitHubResearchLoveFinalRemotePublicationError(
+            "liaison synthesis_ref differs from final packet"
+        )
+    if source.get("request_ref") != _required_text(
+        final_plan,
+        "work_package_ref",
+    ):
+        raise GitHubResearchLoveFinalRemotePublicationError(
+            "liaison synthesis request_ref differs from final work package"
+        )
+    if source.get("final_publication_ready") is not False:
+        raise GitHubResearchLoveFinalRemotePublicationError(
+            "source liaison synthesis must remain non-publication-ready"
+        )
+    if source.get("provenance_hidden") is not True:
+        raise GitHubResearchLoveFinalRemotePublicationError(
+            "source liaison synthesis exposes specialist provenance"
+        )
+
+    final_boundaries = _required_mapping(final_plan, "boundaries")
+    if final_boundaries.get("final_publication_ready") is not True:
+        raise GitHubResearchLoveFinalRemotePublicationError(
+            "final SQL plan does not prove publication readiness"
+        )
+
+    authority_metadata = _required_mapping(authority_object, "metadata")
+    if authority_metadata.get("synthesis_ref") != packet_synthesis_ref:
+        raise GitHubResearchLoveFinalRemotePublicationError(
+            "final authority synthesis_ref mismatch"
+        )
+    if authority_metadata.get("final_publication_ready") is not True:
+        raise GitHubResearchLoveFinalRemotePublicationError(
+            "final authority does not prove publication readiness"
+        )
+    if authority_metadata.get("specialist_provenance_hidden") is not True:
+        raise GitHubResearchLoveFinalRemotePublicationError(
+            "final authority does not prove hidden specialist provenance"
+        )
+
+    ready = dict(source)
+    ready["final_publication_ready"] = True
+    return ready
 
 def _legacy_compatible_synthesis_result(
     lineage: Mapping[str, Mapping[str, Any]],
