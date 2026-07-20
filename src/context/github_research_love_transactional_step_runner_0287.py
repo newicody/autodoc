@@ -90,8 +90,8 @@ class GitHubResearchLoveReadyTaskExecutionInput:
             raise TypeError("catalog doit être SchedulerHandlerCatalog")
         if not isinstance(self.handler_factory, SchedulerHandlerFactory):
             raise TypeError("handler_factory doit implémenter le port attendu")
-        if not isinstance(self.information_sink, HandlerInformationSink):
-            raise TypeError("information_sink doit implémenter le port attendu")
+        if not callable(getattr(self.information_sink, "publish", None)):
+            raise TypeError("information_sink doit exposer publish")
         if not isinstance(self.result_projector, SchedulerHandlerResultProjector):
             raise TypeError("result_projector doit implémenter le port attendu")
         if not isinstance(self.failure_classifier, SchedulerHandlerFailureClassifier):
