@@ -352,6 +352,11 @@ def build_github_research_love_sql_persistence_plan(
         ).encode("utf-8")
     ).hexdigest()
     suffix = pair_digest[:20]
+    persistence_created_at = _resolve_persistence_created_at(
+        authority_store,
+        suffix=suffix,
+        requested_created_at=created_at,
+    )
 
     first_object = _authority_object(
         stage="first",
@@ -380,7 +385,7 @@ def build_github_research_love_sql_persistence_plan(
         result=first_result,
         task=first_task,
         visit=first_visit,
-        created_at=created_at,
+        created_at=persistence_created_at,
         work_package_ref=work_package_ref,
     )
     second_artifact = _artifact_descriptor(
@@ -390,7 +395,7 @@ def build_github_research_love_sql_persistence_plan(
         result=second_result,
         task=second_task,
         visit=second_visit,
-        created_at=created_at,
+        created_at=persistence_created_at,
         work_package_ref=work_package_ref,
     )
     memberships = tuple(
@@ -418,7 +423,7 @@ def build_github_research_love_sql_persistence_plan(
             first_artifact.artifact_ref,
             second_artifact.artifact_ref,
         ),
-        created_at=created_at,
+        created_at=persistence_created_at,
         metadata={
             "purpose": "github-research-two-specialist-analysis-persistence",
             "work_package_ref": work_package_ref,
@@ -862,6 +867,48 @@ def _authority_store(value: object) -> GitHubResearchLoveSqlAuthorityStore:
             "authority_store does not expose object/artifact/revision SQL methods"
         )
     return value
+
+
+def _resolve_persistence_created_at(
+    authority_store: GitHubResearchLoveSqlAuthorityStore,
+    *,
+    suffix: str,
+    requested_created_at: str,
+) -> str:
+    """Preserve the first immutable SQL timestamp during an exact replay."""
+
+    store = _authority_store(authority_store)
+    requested = _utc_text("requested_created_at", requested_created_at)
+    existing = (
+        (
+            "first_artifact",
+            store.get_artifact(f"artifact:github-love-first-{suffix}"),
+        ),
+        (
+            "second_artifact",
+            store.get_artifact(f"artifact:github-love-second-{suffix}"),
+        ),
+        (
+            "revision",
+            store.get_revision(f"context-revision:github-love-pair-{suffix}"),
+        ),
+    )
+    timestamps = tuple(
+        (name, _utc_text(f"existing {name} created_at", item.created_at))
+        for name, item in existing
+        if item is not None
+    )
+    if not timestamps:
+        return requested
+
+    distinct = tuple(dict.fromkeys(value for _, value in timestamps))
+    if len(distinct) != 1:
+        details = ", ".join(f"{name}={value}" for name, value in timestamps)
+        raise GitHubResearchLoveSqlPersistenceError(
+            "existing immutable analysis entities disagree on created_at: "
+            + details
+        )
+    return distinct[0]
 
 
 def _immutable_state(existing: object | None, expected: object) -> str:
