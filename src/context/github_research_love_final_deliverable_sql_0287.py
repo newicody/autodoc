@@ -489,7 +489,14 @@ def build_github_research_love_final_deliverable_plan(
     ).hexdigest()[:20]
     object_ref = f"context-object:github-love-final-{suffix}"
     artifact_ref = f"artifact:github-love-final-{suffix}"
+    revision_ref = f"context-revision:github-love-final-{suffix}"
     task_ref = f"task:github-love-finalize-{suffix}"
+    persistence_created_at = _resolve_final_deliverable_created_at(
+        store,
+        artifact_ref=artifact_ref,
+        revision_ref=revision_ref,
+        requested_created_at=command.created_at,
+    )
 
     authority_object = ContextAuthorityObject(
         schema=CONTEXT_AUTHORITY_OBJECT_SCHEMA,
@@ -524,7 +531,7 @@ def build_github_research_love_final_deliverable_plan(
         media_type="application/json",
         byte_count=len(body.encode("utf-8")),
         producer_task_ref=task_ref,
-        created_at=command.created_at,
+        created_at=persistence_created_at,
         metadata={
             "packet_ref": packet.packet_ref,
             "target_ref": packet.target_ref,
@@ -558,7 +565,7 @@ def build_github_research_love_final_deliverable_plan(
     )
     revision = ContextRevision(
         schema=CONTEXT_REVISION_SCHEMA,
-        revision_ref=f"context-revision:github-love-final-{suffix}",
+        revision_ref=revision_ref,
         context_ref=parent.context_ref,
         parent_revision_refs=(parent_revision_ref,),
         memberships=memberships,
@@ -566,7 +573,7 @@ def build_github_research_love_final_deliverable_plan(
         significance="material",
         evidence_refs=evidence_refs,
         producer_task_ref=task_ref,
-        created_at=command.created_at,
+        created_at=persistence_created_at,
         metadata={
             "purpose": "github-research-final-deliverable",
             "packet_ref": packet.packet_ref,
@@ -775,6 +782,64 @@ def _authority_store(
             "authority_store does not expose object/artifact/revision methods"
         )
     return value
+
+
+def _resolve_final_deliverable_created_at(
+    authority_store: GitHubResearchLoveFinalAuthorityStore,
+    *,
+    artifact_ref: str,
+    revision_ref: str,
+    requested_created_at: str,
+) -> str:
+    """Preserve the first immutable final-deliverable timestamp on replay."""
+
+    store = _authority_store(authority_store)
+    requested = _validated_utc_timestamp(
+        "requested_created_at",
+        requested_created_at,
+    )
+    existing = (
+        ("artifact", store.get_artifact(artifact_ref)),
+        ("revision", store.get_revision(revision_ref)),
+    )
+    timestamps = tuple(
+        (
+            name,
+            _validated_utc_timestamp(
+                f"existing {name} created_at",
+                item.created_at,
+            ),
+        )
+        for name, item in existing
+        if item is not None
+    )
+    if not timestamps:
+        return requested
+
+    distinct = tuple(dict.fromkeys(value for _, value in timestamps))
+    if len(distinct) != 1:
+        details = ", ".join(
+            f"{name}={value}"
+            for name, value in timestamps
+        )
+        raise GitHubResearchLoveFinalDeliverableError(
+            "existing immutable final-deliverable entities disagree "
+            "on created_at: " + details
+        )
+    return distinct[0]
+
+
+def _validated_utc_timestamp(name: str, value: object) -> str:
+    if not isinstance(value, str):
+        raise GitHubResearchLoveFinalDeliverableError(
+            f"{name} must be a UTC timestamp ending with Z"
+        )
+    timestamp = value.strip()
+    if "T" not in timestamp or not timestamp.endswith("Z"):
+        raise GitHubResearchLoveFinalDeliverableError(
+            f"{name} must be a UTC timestamp ending with Z"
+        )
+    return timestamp
 
 
 def _immutable_state(
