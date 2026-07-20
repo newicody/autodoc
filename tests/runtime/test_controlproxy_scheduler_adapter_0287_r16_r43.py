@@ -19,7 +19,11 @@ from runtime.scheduler_route_adapter import scheduler_route_request_mapping
 import runtime.controlproxy_scheduler_adapter as adapter
 
 
-def _request(*, task_id: str = "task:github-research:abc") -> dict[str, object]:
+def _request(
+    *,
+    task_id: str = "task:github-research:abc",
+    requested_at: str = "2026-07-20T04:00:00Z",
+) -> dict[str, object]:
     return scheduler_route_request_mapping(
         request_id="request:scheduler-candidate-github-research-abc",
         route_id="github-research-laboratory-abc",
@@ -29,7 +33,7 @@ def _request(*, task_id: str = "task:github-research:abc") -> dict[str, object]:
         policy_decision_id="policy-decision:github-research-auto:abc",
         ttl_seconds=300,
         activate=True,
-        requested_at="2026-07-20T04:00:00Z",
+        requested_at=requested_at,
     )
 
 
@@ -98,6 +102,49 @@ def test_desired_manifest_replay_is_idempotent(
     )
 
     assert second == first
+
+
+def test_replay_with_new_request_timestamp_preserves_first_manifest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controlfs_root = tmp_path / "controlfs"
+    first = ensure_desired_scheduler_route_manifest(
+        controlfs_root=controlfs_root,
+        request=_request(requested_at="2026-07-20T04:00:00Z"),
+    )
+
+    def refuse_rewrite(path: Path, manifest: RouteManifest) -> None:
+        raise AssertionError("timestamp-only replay must not rewrite the manifest")
+
+    monkeypatch.setattr(adapter, "_write_manifest_create_only", refuse_rewrite)
+    replay = ensure_desired_scheduler_route_manifest(
+        controlfs_root=controlfs_root,
+        request=_request(requested_at="2026-07-20T05:30:00Z"),
+    )
+
+    assert replay == first
+    assert replay.created_at == "2026-07-20T04:00:00Z"
+
+
+def test_replay_with_changed_ttl_still_fails_closed(tmp_path: Path) -> None:
+    controlfs_root = tmp_path / "controlfs"
+    request = _request()
+    ensure_desired_scheduler_route_manifest(
+        controlfs_root=controlfs_root,
+        request=request,
+    )
+    changed = dict(request)
+    changed["ttl_seconds"] = 600
+
+    with pytest.raises(
+        ControlProxySchedulerAdapterError,
+        match="conflicts with authorized request: ttl_seconds",
+    ):
+        ensure_desired_scheduler_route_manifest(
+            controlfs_root=controlfs_root,
+            request=changed,
+        )
 
 
 def test_conflicting_existing_manifest_fails_closed(tmp_path: Path) -> None:

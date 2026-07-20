@@ -7,8 +7,11 @@ sécurité, ni la priorité.
 
 La racine ControlFS doit être explicite et absolue. Le plan de données de route
 doit utiliser l'adaptateur `/dev/shm` existant sans fallback implicite. Un
-manifeste déjà présent n'est réutilisé que s'il correspond exactement à la
-commande autorisée; toute collision échoue fermée.
+manifeste déjà présent n'est réutilisé que si son identité de route, sa portée,
+son TTL, son transport et son dimensionnement correspondent à la commande
+autorisée. Le champ `created_at` conserve l'horodatage de la première
+matérialisation et ne doit pas rendre invalide un replay ultérieur de la même
+route. Toute autre collision échoue fermée.
 
 Le JSON du manifeste ControlFS est une projection de frontière temporaire. Il
 est interdit de l'utiliser comme stockage interne canonique, graphe durable,

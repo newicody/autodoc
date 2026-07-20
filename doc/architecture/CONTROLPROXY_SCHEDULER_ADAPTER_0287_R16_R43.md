@@ -60,7 +60,10 @@ soumet pas les tâches et ne devient pas un orchestrateur métier.
 
 - aucun Scheduler, Dispatcher, EventBus, thread, processus ou daemon ajouté;
 - aucune décision d'admission ou de sécurité dans ControlProxy;
-- manifeste incompatible rejeté au lieu d'être écrasé;
+- replay de la même route autorisé avec un nouvel horodatage de requête, en
+  conservant le `created_at` de la première matérialisation;
+- manifeste incompatible sur identité, capacité, portée ou TTL rejeté au lieu
+  d'être écrasé;
 - racine ControlFS relative ou implicite interdite;
 - runtime de route strictement préparé par l'adaptateur `/dev/shm` existant;
 - aucune mutation de `Scheduler.run()`, `PolicyEngine`, `PriorityQueue` ou

@@ -49,6 +49,7 @@ _CONTROL_ROUTE_ZONE = "scheduler"
 _CONTROL_ROUTE_PRODUCER = "scheduler"
 _CONTROL_ROUTE_CONSUMER = "love_laboratory"
 _CONTROL_ROUTE_MIN_FRAME_BYTES = 4096
+_CONTROLFS_REPLAY_VOLATILE_FIELDS = frozenset({"created_at"})
 
 
 class ControlProxySchedulerAdapterError(RuntimeError):
@@ -260,10 +261,37 @@ def _load_existing_manifest(
 
 
 def _ensure_same_manifest(actual: RouteManifest, expected: RouteManifest) -> None:
-    if actual != expected:
+    actual_replay = _manifest_replay_mapping(actual)
+    expected_replay = _manifest_replay_mapping(expected)
+    if actual_replay != expected_replay:
+        differing_fields = sorted(
+            key
+            for key in set(actual_replay) | set(expected_replay)
+            if actual_replay.get(key) != expected_replay.get(key)
+        )
+        suffix = (
+            ": " + ", ".join(differing_fields)
+            if differing_fields
+            else ""
+        )
         raise ControlProxySchedulerAdapterError(
             "existing ControlFS desired manifest conflicts with authorized request"
+            + suffix
         )
+
+
+def _manifest_replay_mapping(manifest: RouteManifest) -> dict[str, Any]:
+    """Return the stable route declaration used for replay comparison.
+
+    ``created_at`` records the first successful materialization of the route.
+    A later authorized replay may carry a new request timestamp without
+    changing route identity, capacity or policy-relevant declarations.
+    """
+
+    payload = manifest.to_mapping()
+    for field in _CONTROLFS_REPLAY_VOLATILE_FIELDS:
+        payload.pop(field, None)
+    return payload
 
 
 def _write_manifest_create_only(path: Path, manifest: RouteManifest) -> None:
