@@ -1,14 +1,14 @@
 """Compose the durable OpenRC components around the shared SQL boundary.
 
 The PostgreSQL observation store is built by the r16-r62 boundary on the
-connection already owned by the installed foundation.  One explicit
-execution-component factory supplies the six remaining ports: durable
-continuation, ready-task step runner builder and the four typed handler
-input providers.
+connection already owned by the installed foundation.  The r16-r64 execution
+core builds durable continuation on that same port and binds the ready-task
+runner to the launch and completion transactions already owned by the
+foundation.  The explicit r16-r63 factory then supplies the four typed handler
+input providers around those imposed execution objects.
 
-This module opens no backend and owns no process.  It only verifies that the
-supplied components reuse the same foundation and returns the r16-r61 typed
-durable component bundle.
+This module opens no backend and owns no process.  It verifies exact object
+reuse and returns the r16-r61 typed durable component bundle.
 """
 
 from __future__ import annotations
@@ -28,6 +28,10 @@ from context.github_research_love_externally_managed_durable_port_factory_0287 i
 from context.github_research_love_externally_managed_postgresql_adapter_boundary_0287 import (
     GitHubResearchLoveExternallyManagedPostgreSqlAdapterBoundary,
     build_github_research_love_externally_managed_postgresql_adapter_boundary,
+)
+from context.github_research_love_externally_managed_postgresql_execution_core_0287 import (
+    GitHubResearchLovePostgreSqlExecutionCore,
+    build_github_research_love_postgresql_execution_core,
 )
 from context.love_externally_managed_installed_backend_foundation_0287 import (
     LoveExternallyManagedInstalledBackendFoundation,
@@ -136,7 +140,7 @@ def build_github_research_love_externally_managed_durable_components(
     config_path: str | os.PathLike[str] | None = None,
     environment: Mapping[str, str] | None = None,
 ) -> GitHubResearchLoveExternallyManagedDurableComponents:
-    """Build all seven durable ports while reusing the r16-r62 SQL store."""
+    """Build seven durable ports around the shared r16-r64 SQL core."""
 
     if not isinstance(settings, InstalledRuntimeFactorySettings):
         raise TypeError("settings doit être InstalledRuntimeFactorySettings")
@@ -160,14 +164,19 @@ def build_github_research_love_externally_managed_durable_components(
             )
         )
 
+    env = os.environ if environment is None else environment
     postgresql = (
         build_github_research_love_externally_managed_postgresql_adapter_boundary(
             foundation=foundation,
         )
     )
     _validate_postgresql_boundary(foundation, postgresql)
+    execution_core = build_github_research_love_postgresql_execution_core(
+        foundation=foundation,
+        environment=env,
+    )
+    _validate_execution_core(foundation, postgresql, execution_core)
 
-    env = os.environ if environment is None else environment
     factory_ref = str(env.get(EXECUTION_COMPONENT_FACTORY_ENV, "")).strip()
     if not factory_ref:
         raise (
@@ -185,6 +194,9 @@ def build_github_research_love_externally_managed_durable_components(
                 "foundation": foundation,
                 "postgresql_boundary": postgresql,
                 "postgresql_adapter_port": postgresql.adapter_port,
+                "postgresql_execution_core": execution_core,
+                "continuation_store": execution_core.continuation_store,
+                "step_runner_builder": execution_core.step_runner_builder,
                 "config_path": Path(config_path or settings.config_path),
                 "environment": env,
             },
@@ -199,11 +211,12 @@ def build_github_research_love_externally_managed_durable_components(
                 "la fabrique configurée doit retourner le bundle typé r16-r63"
             )
         )
+    _validate_execution_component_alignment(provided, execution_core)
 
     return GitHubResearchLoveExternallyManagedDurableComponents(
         schema=EXTERNALLY_MANAGED_DURABLE_COMPONENTS_SCHEMA,
-        continuation_store=provided.continuation_store,
-        step_runner_builder=provided.step_runner_builder,
+        continuation_store=execution_core.continuation_store,
+        step_runner_builder=execution_core.step_runner_builder,
         first_visit_input_provider=provided.first_visit_input_provider,
         grouped_input_provider=provided.grouped_input_provider,
         downstream_input_provider=provided.downstream_input_provider,
@@ -211,9 +224,10 @@ def build_github_research_love_externally_managed_durable_components(
         observation_store=postgresql.observation_store,
         evidence_refs=_unique_refs(
             postgresql.evidence_refs
+            + execution_core.evidence_refs
             + provided.evidence_refs
             + (
-                "evidence:externally-managed-durable-component-composition-r16-r63",
+                "evidence:externally-managed-durable-component-composition-r16-r64",
             )
         ),
     )
@@ -234,6 +248,55 @@ def _validate_postgresql_boundary(
         raise (
             GitHubResearchLoveExternallyManagedDurableComponentCompositionError(
                 "la frontière PostgreSQL n'utilise pas le port de la fondation"
+            )
+        )
+
+
+def _validate_execution_core(
+    foundation: LoveExternallyManagedInstalledBackendFoundation,
+    postgresql: GitHubResearchLoveExternallyManagedPostgreSqlAdapterBoundary,
+    execution_core: GitHubResearchLovePostgreSqlExecutionCore,
+) -> None:
+    if not isinstance(execution_core, GitHubResearchLovePostgreSqlExecutionCore):
+        raise TypeError("execution_core doit être le bundle typé r16-r64")
+    if execution_core.adapter_port is not postgresql.adapter_port:
+        raise (
+            GitHubResearchLoveExternallyManagedDurableComponentCompositionError(
+                "le noyau d'exécution n'utilise pas le port PostgreSQL partagé"
+            )
+        )
+    if execution_core.task_launch_transaction is not (
+        foundation.task_launch_transaction
+    ):
+        raise (
+            GitHubResearchLoveExternallyManagedDurableComponentCompositionError(
+                "la transaction de lancement ne provient pas de la fondation"
+            )
+        )
+    if execution_core.handler_execution_transaction is not (
+        foundation.handler_execution_transaction
+    ):
+        raise (
+            GitHubResearchLoveExternallyManagedDurableComponentCompositionError(
+                "la transaction de fin ne provient pas de la fondation"
+            )
+        )
+
+
+def _validate_execution_component_alignment(
+    provided: GitHubResearchLoveExternallyManagedExecutionComponents,
+    execution_core: GitHubResearchLovePostgreSqlExecutionCore,
+) -> None:
+    if provided.continuation_store is not execution_core.continuation_store:
+        raise (
+            GitHubResearchLoveExternallyManagedDurableComponentCompositionError(
+                "la fabrique r16-r63 a remplacé le store de continuation r16-r64"
+            )
+        )
+    if provided.step_runner_builder is not execution_core.step_runner_builder:
+        raise (
+            GitHubResearchLoveExternallyManagedDurableComponentCompositionError(
+                "la fabrique r16-r63 a remplacé le step runner r16-r64"
             )
         )
 
