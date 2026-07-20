@@ -60,6 +60,7 @@ RESULT_SCHEMA = "missipy.github.research_love_cycle_closure_result.v1"
 _ALLOWED_REMOTE_ACTIONS = frozenset(
     {"created_and_projected", "created_issue", "projected", "replay"}
 )
+_SHA256_HEX_LENGTH = 64
 
 
 class GitHubResearchLovePublicationEvidenceError(RuntimeError):
@@ -794,6 +795,10 @@ def _validated_remote_publication(
         raise GitHubResearchLovePublicationEvidenceError(
             "publication plan digest mismatch"
         )
+    typed_plan_digest = _typed_sha256_digest(
+        plan_digest,
+        name="publication_plan_digest",
+    )
     readback = _required_mapping(remote, "readback")
     if readback.get("valid") is not True:
         raise GitHubResearchLovePublicationEvidenceError(
@@ -839,7 +844,7 @@ def _validated_remote_publication(
         "remote": remote,
         "readback": readback,
         "project_snapshot": project_snapshot,
-        "plan_digest": plan_digest,
+        "plan_digest": typed_plan_digest,
         "lineage_digest": _required_text(value, "lineage_digest"),
     }
 
@@ -897,6 +902,31 @@ def _required_text(
             f"{name} must not be empty"
         )
     return candidate.strip()
+
+
+def _typed_sha256_digest(
+    value: object,
+    *,
+    name: str,
+) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise GitHubResearchLovePublicationEvidenceError(
+            f"{name} must not be empty"
+        )
+    normalized = value.strip()
+    hexadecimal = (
+        normalized.removeprefix("sha256:")
+        if normalized.startswith("sha256:")
+        else normalized
+    )
+    if (
+        len(hexadecimal) != _SHA256_HEX_LENGTH
+        or any(character not in "0123456789abcdef" for character in hexadecimal)
+    ):
+        raise GitHubResearchLovePublicationEvidenceError(
+            f"{name} must be a lowercase sha256 digest"
+        )
+    return "sha256:" + hexadecimal
 
 
 def _positive_int(
