@@ -42,6 +42,10 @@ from context.love_manual_runtime_configuration_0287 import (
     PostgreSqlRuntimeSettings,
 )
 from context.sql_context_store import SqlContextStorePolicy
+from context.love_postgresql_shared_adapter_port_0287 import (
+    LOVE_POSTGRESQL_SHARED_ADAPTER_PORT_SCHEMA,
+    LovePostgreSqlSharedAdapterPort,
+)
 
 
 LOVE_POSTGRESQL_AUTHORITY_BINDING_SCHEMA = (
@@ -167,6 +171,7 @@ class LovePostgreSqlAuthorityBinding:
     """Owned live authority store and its public binding evidence."""
 
     authority_store: DbApiContextRevisionAuthorityStore
+    shared_adapter_port: LovePostgreSqlSharedAdapterPort
     receipt: LovePostgreSqlAuthorityBindingReceipt
     scheduler_command_store: (
         DbApiGitHubResearchSchedulerCommandStore | None
@@ -350,14 +355,23 @@ def open_love_postgresql_authority(
             "scheduler_handler_execution_schema_initialized": True,
             "scheduler_handler_execution_uses_owned_connection": True,
             "scheduler_handler_execution_replayed": False,
+            "shared_adapter_port_bound": True,
+            "shared_adapter_port_uses_owned_connection": True,
             "secret_value_serialized": False,
             "scheduler_constructed": False,
             "openvino_inference_performed": False,
             "qdrant_write_performed": False,
         },
     )
+    shared_adapter_port = LovePostgreSqlSharedAdapterPort(
+        schema=LOVE_POSTGRESQL_SHARED_ADAPTER_PORT_SCHEMA,
+        sql_authority_ref=settings.sql_authority_ref,
+        paramstyle="format",
+        _connection=connection,
+    )
     return LovePostgreSqlAuthorityBinding(
         authority_store=authority_store,
+        shared_adapter_port=shared_adapter_port,
         scheduler_command_store=scheduler_command_store,
         scheduler_task_launch_transaction=(
             scheduler_task_launch_transaction
@@ -440,6 +454,7 @@ __all__ = (
     "LovePostgreSqlAuthorityBinding",
     "LovePostgreSqlAuthorityBindingError",
     "LovePostgreSqlAuthorityBindingReceipt",
+    "LovePostgreSqlSharedAdapterPort",
     "LovePostgreSqlBaseRevisionSeedReceipt",
     "build_love_base_revision",
     "ensure_love_base_revision",

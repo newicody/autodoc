@@ -31,6 +31,9 @@ from context.love_postgresql_authority_binding_0287 import (
     LovePostgreSqlAuthorityBinding,
     open_love_postgresql_authority,
 )
+from context.love_postgresql_shared_adapter_port_0287 import (
+    LovePostgreSqlSharedAdapterPort,
+)
 from context.love_qdrant_hybrid_query_adapter_0287 import (
     build_love_qdrant_hybrid_query_adapter,
 )
@@ -92,6 +95,10 @@ class LoveExternallyManagedInstalledBackendFoundation:
     dispatcher: Dispatcher = field(repr=False, compare=False)
     scheduler_ref: str
     authority_store: object = field(repr=False, compare=False)
+    postgresql_adapter_port: LovePostgreSqlSharedAdapterPort = field(
+        repr=False,
+        compare=False,
+    )
     command_store: object = field(repr=False, compare=False)
     task_launch_transaction: object = field(repr=False, compare=False)
     handler_execution_transaction: object = field(repr=False, compare=False)
@@ -118,6 +125,13 @@ class LoveExternallyManagedInstalledBackendFoundation:
             raise TypeError("dispatcher doit être le Dispatcher canonique")
         _typed_ref("scheduler_ref", self.scheduler_ref, "scheduler:")
         _typed_ref("base_revision_ref", self.base_revision_ref, "context-revision:")
+        if not isinstance(
+            self.postgresql_adapter_port,
+            LovePostgreSqlSharedAdapterPort,
+        ):
+            raise TypeError(
+                "postgresql_adapter_port doit être le port PostgreSQL partagé"
+            )
         _method(self.command_store, "claim_next_pending")
         if self.task_launch_transaction is None:
             raise TypeError("task_launch_transaction est requis")
@@ -150,6 +164,7 @@ class LoveExternallyManagedInstalledBackendFoundation:
                 "close_callback_count": len(self.close_callbacks),
                 "evidence_refs": self.evidence_refs,
                 "postgresql_durable_authority": True,
+                "postgresql_shared_adapter_port": True,
                 "qdrant_projection_and_recall": True,
                 "openvino_e5_real": True,
                 "scheduler_lifecycle": "externally-managed",
@@ -309,6 +324,7 @@ def build_love_externally_managed_installed_backend_foundation(
             dispatcher=dispatcher,
             scheduler_ref=settings.scheduler_ref,
             authority_store=postgres_binding.authority_store,
+            postgresql_adapter_port=postgres_binding.shared_adapter_port,
             command_store=postgres_binding.scheduler_command_store,
             task_launch_transaction=(
                 postgres_binding.scheduler_task_launch_transaction
