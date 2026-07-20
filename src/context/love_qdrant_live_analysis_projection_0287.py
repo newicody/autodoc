@@ -102,6 +102,81 @@ class LoveQdrantLiveAnalysisProjectionSettings:
             )
 
 
+@dataclass(frozen=True, slots=True)
+class LoveQdrantLiveProjectionIdentity:
+    """Deterministic SQL/Qdrant identity for one live projection."""
+
+    projection_ref: str
+    point_id: str
+
+    def __post_init__(self) -> None:
+        _require_typed_ref("projection_ref", self.projection_ref)
+        _require_typed_ref("point_id", self.point_id)
+
+
+def build_love_qdrant_live_projection_identity_from_refs(
+    *,
+    object_ref: str,
+    content_digest: str,
+    revision_ref: str,
+    collection_name: str,
+) -> LoveQdrantLiveProjectionIdentity:
+    """Build immutable identities from already-authorized typed references."""
+
+    _require_typed_ref("object_ref", object_ref)
+    _require_typed_ref("revision_ref", revision_ref)
+    if (
+        not isinstance(content_digest, str)
+        or not content_digest.startswith("sha256:")
+        or len(content_digest) != 71
+    ):
+        raise LoveQdrantLiveAnalysisProjectionError(
+            "content_digest must be a sha256:* digest"
+        )
+    if not isinstance(collection_name, str) or not collection_name.strip():
+        raise LoveQdrantLiveAnalysisProjectionError(
+            "collection_name must not be empty"
+        )
+    collection = collection_name.strip()
+    projection_ref = _digest_ref(
+        "vector-projection:",
+        object_ref,
+        content_digest,
+        revision_ref,
+        collection,
+    )
+    point_id = _digest_ref("qdrant-point:", projection_ref, collection)
+    return LoveQdrantLiveProjectionIdentity(
+        projection_ref=projection_ref,
+        point_id=point_id,
+    )
+
+
+def build_love_qdrant_live_projection_identity(
+    authority_object: ContextAuthorityObject,
+    *,
+    revision: ContextRevision,
+    collection_name: str,
+) -> LoveQdrantLiveProjectionIdentity:
+    """Build the same immutable identities used by the live writer."""
+
+    if not isinstance(authority_object, ContextAuthorityObject):
+        raise LoveQdrantLiveAnalysisProjectionError(
+            "authority_object must be a ContextAuthorityObject"
+        )
+    if not isinstance(revision, ContextRevision):
+        raise LoveQdrantLiveAnalysisProjectionError(
+            "revision must be a ContextRevision"
+        )
+    _require_active_membership(authority_object, revision)
+    return build_love_qdrant_live_projection_identity_from_refs(
+        object_ref=authority_object.object_ref,
+        content_digest=authority_object.content_digest,
+        revision_ref=revision.revision_ref,
+        collection_name=collection_name,
+    )
+
+
 class LoveQdrantLiveAnalysisProjection:
     """Project one already-persisted SQL authority object through real ports."""
 
@@ -178,16 +253,13 @@ class LoveQdrantLiveAnalysisProjection:
                 "live analysis projection requires SQL-authoritative text body"
             )
 
-        projection_ref = _digest_ref(
-            "vector-projection:",
-            authority_object.object_ref,
-            authority_object.content_digest,
-            revision.revision_ref,
-            self._settings.collection_name,
+        identity = build_love_qdrant_live_projection_identity(
+            authority_object,
+            revision=revision,
+            collection_name=self._settings.collection_name,
         )
-        point_id = _digest_ref(
-            "qdrant-point:", projection_ref, self._settings.collection_name
-        )
+        projection_ref = identity.projection_ref
+        point_id = identity.point_id
         plain_text = f"{authority_object.title.strip()}\n\n{authority_object.body.strip()}"
         passage_text = _prefixed_passage(
             plain_text, self._settings.passage_prefix
@@ -373,5 +445,8 @@ __all__ = (
     "LoveQdrantLiveAnalysisProjection",
     "LoveQdrantLiveAnalysisProjectionError",
     "LoveQdrantLiveAnalysisProjectionSettings",
+    "LoveQdrantLiveProjectionIdentity",
     "NamedHybridProjectionWriter",
+    "build_love_qdrant_live_projection_identity",
+    "build_love_qdrant_live_projection_identity_from_refs",
 )

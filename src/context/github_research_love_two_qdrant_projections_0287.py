@@ -33,6 +33,10 @@ from context.love_imported_actions_runtime_contract_0287 import (
     ImportedActionsRuntimePorts,
     validate_imported_actions_runtime_ports,
 )
+from context.love_qdrant_live_analysis_projection_0287 import (
+    LoveQdrantLiveProjectionIdentity,
+    build_love_qdrant_live_projection_identity_from_refs,
+)
 from context.love_live_qdrant_projection_probe_0287 import (
     ReferencePointReader,
     LoveLiveProjectionProbeGate,
@@ -336,6 +340,58 @@ def build_github_research_love_two_projection_plan(
             "SQL analysis objects or revision cannot be rehydrated"
         )
 
+    attestation = ports.attestation
+    if int(attestation.embedding_dimension) != 384:
+        raise GitHubResearchLoveTwoProjectionError(
+            "runtime attestation embedding dimension must be 384"
+        )
+    collection_name = str(attestation.qdrant_collection).strip()
+    model_ref = str(attestation.model_ref).strip()
+    model_revision = str(attestation.model_revision).strip()
+
+    first_identity = build_love_qdrant_live_projection_identity_from_refs(
+        object_ref=first_object_ref,
+        content_digest=str(first_object.content_digest),
+        revision_ref=revision_ref,
+        collection_name=collection_name,
+    )
+    second_identity = build_love_qdrant_live_projection_identity_from_refs(
+        object_ref=second_object_ref,
+        content_digest=str(second_object.content_digest),
+        revision_ref=revision_ref,
+        collection_name=collection_name,
+    )
+    projected_at = _resolve_pair_projected_at(
+        ports.authority_store,
+        requested_projected_at=command.projected_at,
+        first_identity=first_identity,
+        second_identity=second_identity,
+        first_expected={
+            "source_ref": first_object.object_ref,
+            "source_content_digest": first_object.content_digest,
+            "model_ref": model_ref,
+            "model_revision": model_revision,
+            "dimension": 384,
+            "normalized": True,
+            "vector_name": command.dense_vector_name,
+            "collection_name": collection_name,
+            "point_id": first_identity.point_id,
+            "projection_state": "active",
+        },
+        second_expected={
+            "source_ref": second_object.object_ref,
+            "source_content_digest": second_object.content_digest,
+            "model_ref": model_ref,
+            "model_revision": model_revision,
+            "dimension": 384,
+            "normalized": True,
+            "vector_name": command.dense_vector_name,
+            "collection_name": collection_name,
+            "point_id": second_identity.point_id,
+            "projection_state": "active",
+        },
+    )
+
     first_metadata = dict(first_object.metadata)
     second_metadata = dict(second_object.metadata)
     first_request = LoveLiveProjectionProbeRequest(
@@ -353,7 +409,7 @@ def build_github_research_love_two_projection_plan(
             "laboratory_ref",
         ),
         security_scope=command.security_scope,
-        projected_at=command.projected_at,
+        projected_at=projected_at,
     )
     second_request = LoveLiveProjectionProbeRequest(
         object_ref=second_object_ref,
@@ -370,16 +426,8 @@ def build_github_research_love_two_projection_plan(
             "laboratory_ref",
         ),
         security_scope=command.security_scope,
-        projected_at=command.projected_at,
+        projected_at=projected_at,
     )
-    attestation = ports.attestation
-    if int(attestation.embedding_dimension) != 384:
-        raise GitHubResearchLoveTwoProjectionError(
-            "runtime attestation embedding dimension must be 384"
-        )
-    collection_name = str(attestation.qdrant_collection).strip()
-    model_ref = str(attestation.model_ref).strip()
-    model_revision = str(attestation.model_revision).strip()
     first_projection = build_love_live_projection_probe_plan(
         first_request,
         collection_name=collection_name,
@@ -531,6 +579,80 @@ async def project_github_research_love_analyses(
             valid=False,
             status="failed",
             issues=(f"{type(exc).__name__}: {exc}",),
+        )
+
+
+def _resolve_pair_projected_at(
+    authority_store: Any,
+    *,
+    requested_projected_at: str,
+    first_identity: LoveQdrantLiveProjectionIdentity,
+    second_identity: LoveQdrantLiveProjectionIdentity,
+    first_expected: Mapping[str, object],
+    second_expected: Mapping[str, object],
+) -> str:
+    """Preserve the first SQL-authoritative projection timestamp on replay."""
+
+    get_projection = getattr(authority_store, "get_projection", None)
+    if get_projection is None:
+        # The validated production authority store exposes this read port.
+        # Legacy isolated tests replace port validation with lightweight
+        # doubles; absence therefore means that no replay state is available.
+        return requested_projected_at
+    if not callable(get_projection):
+        raise GitHubResearchLoveTwoProjectionError(
+            "authority_store.get_projection must be callable"
+        )
+
+    existing = (
+        (
+            "first",
+            get_projection(first_identity.projection_ref),
+            first_expected,
+        ),
+        (
+            "second",
+            get_projection(second_identity.projection_ref),
+            second_expected,
+        ),
+    )
+    timestamps: list[tuple[str, str]] = []
+    for name, projection, expected in existing:
+        if projection is None:
+            continue
+        _require_existing_projection_matches(
+            name=name,
+            projection=projection,
+            expected=expected,
+        )
+        timestamps.append((name, str(projection.projected_at or "")))
+
+    if not timestamps:
+        return requested_projected_at
+    distinct = tuple(dict.fromkeys(value for _, value in timestamps))
+    if len(distinct) != 1:
+        details = ", ".join(f"{name}={value!r}" for name, value in timestamps)
+        raise GitHubResearchLoveTwoProjectionError(
+            "existing immutable projections disagree on projected_at: " + details
+        )
+    return distinct[0]
+
+
+def _require_existing_projection_matches(
+    *,
+    name: str,
+    projection: object,
+    expected: Mapping[str, object],
+) -> None:
+    conflicts = tuple(
+        field_name
+        for field_name, expected_value in expected.items()
+        if getattr(projection, field_name, object()) != expected_value
+    )
+    if conflicts:
+        raise GitHubResearchLoveTwoProjectionError(
+            f"existing {name} projection conflicts with deterministic plan: "
+            + ", ".join(conflicts)
         )
 
 
