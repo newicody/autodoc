@@ -1,5 +1,8 @@
 # Autodoc / MissiPy
 
+> **État documentaire 2026-11-26 :** ce README conserve l'entrée opérateur stable et des repères historiques. Pour l'état réellement observé dans l'archive actuelle, la prochaine étape et les limites de validation, la référence prioritaire est [`doc/README_CURRENT.md`](doc/README_CURRENT.md). Voir aussi [`doc/027X_REUSE_AUDIT.md`](doc/027X_REUSE_AUDIT.md) et [`doc/DOCUMENTATION_INDEX.md`](doc/DOCUMENTATION_INDEX.md). Les descriptions 0260–0270 ci-dessous sont des repères historiques et ne remplacent pas le point d'état courant.
+
+
 Autodoc / MissiPy is a local-first engineering workspace for turning files,
 notes, artifacts and operator decisions into explicit, auditable context.
 
@@ -123,6 +126,8 @@ Use these documents as the current map:
 doc/architecture/CURRENT_ARCHITECTURE_STATE_0154.md
 doc/architecture/OPERATIONAL_DOCUMENTATION_CONSOLIDATION_0270.md
 doc/README_CURRENT.md
+doc/027X_REUSE_AUDIT.md
+doc/DOCUMENTATION_INDEX.md
 doc/ARCHITECTURE_LAYERS.md
 doc/docs/architecture/00_global.dot
 doc/code-rules/code_rule.md
@@ -150,22 +155,25 @@ operational architecture local-first, inspectable and hardware-conscious.
 
 ## Current boundary
 
-The project currently avoids:
+The project keeps the following defaults and boundaries:
 
 ```text
-remote mutation by default
+remote mutation by default is disabled
 network dependency in local gates
-GitHub API writes
-tokens committed to the repository
+GitHub API writes only through explicit local controlled adapters
+tokens committed to the repository are forbidden
 implicit Qdrant durable authority
 hidden OpenVINO execution inside Scheduler
 Scheduler-owned external service lifecycle
 ```
 
 External systems must be approached through explicit contracts, dry-runs,
-reports and gates. GitHub remote mutation remains forbidden in the validated
-0260-0269 baseline. Scheduler.run is not modified by the 0270 documentation
-consolidation.
+reports and gates. The statement "GitHub remote mutation remains forbidden"
+describes the validated 0260-0269 baseline; later controlled publication
+adapters are separate, explicit, operator-approved paths. The 0270
+documentation-only consolidation recorded that Scheduler.run is not modified;
+that historical statement is not a claim that later Scheduler surfaces were
+never extended.
 
 ## Roadmap orientation
 

@@ -1,3 +1,182 @@
+# Autodoc / MissiPy — état courant
+
+**État documentaire actualisé : 2026-11-26**  
+**Source examinée :** archive `autodoc-master.zip` fournie pour audit.  
+**Référence détaillée :** [`027X_REUSE_AUDIT.md`](027X_REUSE_AUDIT.md).
+
+> Ce document décrit ce qui est présent et vérifiable dans l'archive. Il ne certifie pas l'historique Git : le répertoire `.git` est absent de l'archive.
+
+## 1. Définition du projet
+
+Autodoc / MissiPy est un environnement local-first de recherche, d'analyse et de travail assisté. Il transforme des demandes, fichiers, artefacts et décisions opérateur en contexte explicite, durable et auditable. Il peut mobiliser des laboratoires et des spécialistes spécialisés, puis préparer des livrables et des projections vers des systèmes externes.
+
+GitHub Actions et ProjectV2 sont des surfaces d'entrée, de workflow, de revue et de projection. Le contexte local et SQL restent sous contrôle local. L'avis Copilot est consultatif et non autoritaire.
+
+## 2. Invariants architecturaux
+
+```text
+Scheduler canonique = seule autorité d'orchestration
+SQL / PostgreSQL = autorité durable
+Qdrant = projection et rappel de références
+OpenVINO / multilingual-e5-small = embeddings E5 de 384 dimensions exactement
+EventBus = observation uniquement
+PassiveSupervisor / VisPy = observation uniquement
+ControlProxy = transport autorisé, pas d'orchestration ni de connaissance
+GitHub / Actions / ProjectV2 = surfaces externes de workflow et projection
+OpenRC / OS / administrateur = autorité de cycle de vie des processus
+```
+
+Les laboratoires ne possèdent ni Scheduler, ni orchestrateur, ni queue, ni bus parallèle, ni registre parallèle. Les spécialistes ne se lancent pas directement entre eux : leurs demandes et résultats repassent par les contrats et l'autorité du Scheduler.
+
+## 3. Capacités présentes dans les sources
+
+### 3.1 Ingestion et artefacts GitHub
+
+- Artefacts Actions corrélés : `authoritative_request`, `copilot_advisory`, `dual_artifact_manifest` / `run_manifest` selon les générations de workflow.
+- Copilot advisory v2 avec quatre champs : `concrete_objective`, `expected_result`, `provided_constraints`, `success_criteria`.
+- Compatibilité de lecture v1/v2.
+- Fetch local de runs et artefacts, assemblage de `ready_run` et package de recherche corrélé.
+- Prévisualisations et adaptateurs contrôlés de projection ProjectV2 et de publication Issue.
+- Distinction entre publication de l'avis Copilot et publication du livrable final.
+
+### 3.2 Recherche, laboratoire et spécialistes
+
+- Package `missipy.research.correlated_work_package.v1`.
+- Contrats de message laboratoire/spécialiste v2, conversation, demande d'analyse profonde et contribution d'analyse profonde.
+- Modèle multitâche versionné.
+- Laboratoire natif prototype `laboratory:love-studies-local`.
+- Spécialistes `love-concept-and-affect-analyst` et `love-relational-dynamics-analyst`.
+- Visites séparées, résultats corrélés, continuité et synthèse de liaison.
+- Enveloppe de livrable final et plan de publication.
+
+### 3.3 Mémoire et récupération
+
+- Autorité SQL/PostgreSQL pour les objets durables, révisions, analyses, tâches et preuves.
+- Projection Qdrant de références rattachées aux objets SQL.
+- Embedding E5/OpenVINO de dimension 384.
+- Recherche hybride dense/sparse, fusion des candidats et réhydratation depuis SQL.
+- Adaptateurs et compositions pour runtime installé, avec frontière de lease et fermeture des ressources.
+
+### 3.4 Scheduler et handlers
+
+La progression r16 étend la chaîne de recherche à un modèle de commandes, tâches, admission, catalogue de handlers, exécution contrôlée, observations temporelles, persistance et reprise. Les documents présents couvrent notamment r16-r26 à r16-r66-r1.
+
+Le dernier document de progression identifié, `GITHUB_RESEARCH_LOVE_CANONICAL_READY_TASK_BINDING_R16_R66_R1.md`, indique **r16-r67** comme étape suivante. Cette unité doit fournir les lectures PostgreSQL concrètes de l'admission et les ports d'exécution génériques, puis raccorder la frontière à la composition OpenRC.
+
+## 4. État réel : implémentation n'est pas preuve d'exploitation
+
+Les contrats, services, adaptateurs et tests de nombreux maillons sont présents. Cela ne prouve pas à lui seul que le chemin réel complet a été exécuté.
+
+La porte d'acceptation r16-r50 exige, pour un même triplet `repository / issue_number / run_id` :
+
+1. fetch exécuté avec `artifacts-fetched` ;
+2. les trois artefacts corrélés ;
+3. les onze étapes locales dans l'ordre ;
+4. digest de publication confirmé ;
+5. publication distante `published` ou `published-replay` ;
+6. preuve de clôture SQL `cycle_closed=true` ;
+7. observations temporelles des handlers, de `CREATED` à `CLOSED`.
+
+Aucun rapport d'acceptation réelle `accepted` ni ensemble des preuves de production correspondantes n'a été trouvé dans l'archive. La clôture réelle reste donc **à démontrer**, même si la porte et le runbook sont présents.
+
+Le rapport r16-r65 et celui de r16-r66-r1 précisent que la validation fonctionnelle complète doit être effectuée sur le checkout réel ; ils ne revendiquent pas la réussite de la suite globale.
+
+## 5. Vérifications effectuées pour cette actualisation
+
+Sur l'archive extraite :
+
+| Contrôle | Résultat |
+|---|---|
+| `compileall -q src tests tools` sous Python 3.13.5 | Code retour 0 |
+| Tests ciblés r16-r57 à r16-r65 | 37 passed (34 tests de règles/fonctionnels ciblés + 3 tests fonctionnels r16-r65) |
+| Tests r16-r66-r1 | 6 passed |
+| Total ciblé non redondant | 43 passed |
+| `pytest -q tests/rules --ignore=tests/rules/test_generated_artifacts_rule.py` | 1 863 passed |
+| `pytest -q tests/rules` | 1 863 passed, 3 failed faute de `.git` pour `git ls-files` |
+| Suite globale | Non exécutée |
+
+Les trois échecs sont limités aux contrôles d'index Git de `test_generated_artifacts_rule.py` (SVG, PYO, `.patchqueue.local.json`). Ils ne peuvent pas être évalués dans une archive sans `.git`. La suite de règles n'est donc pas déclarée entièrement verte.
+
+## 6. Roadmap active selon les preuves présentes
+
+La roadmap de dix patches fournie séparément est désormais antérieure à l'état du dépôt. Elle ne doit pas être reprise telle quelle.
+
+La séquence documentaire plus récente couvre :
+
+- r7-r2 à r7-r9 : Copilot v2, package corrélé, contrats spécialistes et descripteurs de laboratoire ;
+- r7-r10 à r7-r14 : laboratoire natif, deux spécialistes, mémoire/synthèse, plan de publication et smoke local ;
+- r7-r15 : publication distante contrôlée et composition du runtime installé ;
+- r16 : fetch, Scheduler/handlers, PostgreSQL, continuité et exécution bornée jusqu'à r16-r66-r1.
+
+**Prochaine unité indiquée par la documentation r16-r66-r1 : `r16-r67`.** Son périmètre exact doit être repris du plan de phase et de son patch avant tout développement.
+
+La clôture réelle reste subordonnée au runbook r16-r50 et à une preuve `accepted`, ainsi qu'aux validations sur la machine de référence.
+
+## 7. Règles de développement
+
+- Un patch à la fois ; audit préalable de l'existant.
+- Étendre les surfaces canoniques avant d'ajouter un module.
+- Aucun nouveau manager, orchestrateur, Scheduler, worker, queue, bus ou registre parallèle si une surface existante peut être étendue.
+- Le Scheduler est l'unique autorité de sélection et d'exécution.
+- Les composants rendent des commandes, résultats ou événements ; pas d'action métier directe hors des frontières autorisées.
+- SQL est l'autorité durable ; Qdrant est une projection/rappel.
+- E5 reste exactement à 384 dimensions.
+- Copilot reste non autoritaire.
+- Les workflows Actions restent producteurs d'artefacts ; les mutations distantes sont contrôlées localement.
+- Chaque patch comporte revue des règles et tests exécutables sous `tests/rules`.
+- Les rapports distinguent explicitement tests générés, tests exécutés et preuves d'exploitation réelle.
+
+### 7.1 Style Python documenté
+
+`doc/code-rules/code_rule.md` impose la bibliothèque standard en priorité, Python 3.14, le typage statique exhaustif, les structures immuables (`dataclass(frozen=True)`), `yield Event(...)`, la composition, le chargement paresseux, les politiques explicites, les frontières d'effets de bord et les tests de règles. Les CLI restent des adaptateurs et ne portent pas la logique métier.
+
+Le dépôt ne fournit pas de configuration explicite Ruff/Black/Mypy/Pyright/Flake8 ni de règle de longueur de ligne/formatage automatique. Aucun standard générique supplémentaire ne doit être inventé pendant un patch : vérifier la règle canonique et les conventions des modules voisins. Les vérifications de cette actualisation ont été exécutées sous Python 3.13.5, et ne certifient pas Python 3.14.
+
+## 8. Documents de référence
+
+- [`027X_REUSE_AUDIT.md`](027X_REUSE_AUDIT.md) — audit détaillé des surfaces et limites de preuve.
+- [`DOCUMENTATION_INDEX.md`](DOCUMENTATION_INDEX.md) — hiérarchie et navigation documentaire.
+- [`architecture/SCHEDULER_HANDLER_ROADMAP_0287_R16_R26_R1.md`](architecture/SCHEDULER_HANDLER_ROADMAP_0287_R16_R26_R1.md) — progression Scheduler/handlers.
+- [`architecture/GITHUB_RESEARCH_LOVE_END_TO_END_ACCEPTANCE_0287_R16_R50.md`](architecture/GITHUB_RESEARCH_LOVE_END_TO_END_ACCEPTANCE_0287_R16_R50.md) — critères d'acceptation bout en bout.
+- [`runbooks/GITHUB_RESEARCH_LOVE_END_TO_END_ACCEPTANCE_0287_R16_R50.md`](runbooks/GITHUB_RESEARCH_LOVE_END_TO_END_ACCEPTANCE_0287_R16_R50.md) — procédure de preuve réelle.
+- [`architecture/GITHUB_RESEARCH_LOVE_CANONICAL_READY_TASK_BINDING_R16_R66_R1.md`](architecture/GITHUB_RESEARCH_LOVE_CANONICAL_READY_TASK_BINDING_R16_R66_R1.md) — dernier raccord documenté dans l'archive.
+
+Les documents et patches de phase antérieurs restent conservés comme historique et preuve locale. Ils ne remplacent pas ce point d'entrée courant.
+
+
+## 9. Historical compatibility anchors — non-authoritative
+
+This section retains exact vocabulary consumed by older executable documentation
+rules. These phrases identify historical milestones and compatibility surfaces;
+they do not override sections 1–8 or schedule retired phases.
+
+- The old architecture index was described as `canonical index refreshed by 0270` and later `canonical index refreshed by 0282-r4`. These are historical compatibility anchors.
+- Historical role vocabulary: `SQL owns durable context`; `Qdrant owns recall projections`; `OpenVINO/E5 owns vector generation`; `RouteProxy owns fast frames`.
+- Historical SQL references retained for traceability: `DbApiSqlContextStore.upsert_record` and `AUTODOC_SQL_CONTEXT_DB`.
+- The older 0270 baseline used the chain `0260 SQL write -> 0261 -> 0262 -> 0263 -> 0264 -> 0265 -> 0266 -> 0267 -> 0268 -> 0269`; its no-remote-mutation and no-service-start constraints describe that baseline.
+- The 0270 documentation-only consolidation recorded `Scheduler.run is not modified`. This is not a claim that later Scheduler task/handler surfaces were never extended.
+- The 0281 post-Copilot refresh retained these artifact names:
+  - `autodoc-authoritative-request/authoritative_request.json`;
+  - `autodoc-copilot-advisory/copilot_advisory.json`;
+  - `autodoc-dual-artifact-manifest/dual_artifact_manifest.json`.
+- Historical 0281 milestones: `0281-r2 — dual-artifact run assembly contract`, `0281-r3 — fetch-once run-group integration`, `0281-r4 — pinned and cached Copilot CLI runtime`, `0281-r5 — operator and laboratory advisory projection`, `0281-r6 — controlled Issue publication`, `0281-r7 — real closed-loop smoke`.
+- The compatibility phrase `Chalouf as the final integrator scenario` is `retired from the active roadmap`. There is no phase 0288 and no Chalouf
+integrator phase.
+- Historical marker `### 0287-r7-r10 — generic operational closure` is retained only to satisfy earlier documentation compatibility. The active r7-r10 unit is the concrete native laboratory and first specialist.
+- `0287-r7-r7 — correlated research work package` documents `missipy.research.correlated_work_package.v1`; the package preserves the request and excludes raw bytes and local paths.
+- `0287-r7-r8 — specialist/laboratory message v2` documents the v2 message/conversation and deep-analysis contracts; the historical v1 message remains readable.
+- The sequence `0287-r7-r8-r1 — extensible multitask specialist model`, `0287-r7-r8-r2`, `0287-r7-r8-r3`, `0287-r7-r8-r4`, `0287-r7-r8-r5`, and `0287-r7-r8-r6` remains part of the implementation history. ControlProxy transport of authorized notifications remains transport-only.
+- Historical product sequence: `0287-r7-r9 — love-study contracts and specialist descriptors`, r7-r10 native first specialist, r7-r11 second specialist and Scheduler-controlled collaboration, r7-r12 memory/evidence/liaison synthesis, r7-r13 final deliverable publication plan, and r7-r16 recovery/installation/prototype closure.
+- Specialists primarily produce deep analyses; global synthesis remains a later liaison step.
+- Historical boundary wording: `no new Scheduler or parallel orchestrator for laboratories`.
+
+The original 2026-07-15 `README_CURRENT.md` snapshot is reproduced in section 10
+below for executable-rule compatibility; it is not the current status document.
+
+## 10. Historical snapshot 2026-07-15 — archived, not active
+
+> The following is the verbatim former current-state document, retained only for compatibility and historical traceability. Its roadmap/status statements are superseded by sections 1–8 above.
+
 # Autodoc / MissiPy — current state and active roadmap
 
 Status date: 2026-07-15.
