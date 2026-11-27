@@ -1,10 +1,10 @@
 # Autodoc / MissiPy — état courant
 
-**État documentaire actualisé : 2026-11-26**  
-**Source examinée :** archive `autodoc-master.zip` fournie pour audit.  
+**État documentaire actualisé : 2026-11-27**  
+**Base Git vérifiée :** branche `docs/unification-027x`, commit `74043d9795dad79adb6597eb81f46a26d33b67ef`.  
 **Référence détaillée :** [`027X_REUSE_AUDIT.md`](027X_REUSE_AUDIT.md).
 
-> Ce document décrit ce qui est présent et vérifiable dans l'archive. Il ne certifie pas l'historique Git : le répertoire `.git` est absent de l'archive.
+> Les constats d'inventaire chiffrés de l'audit initial restent explicitement rattachés à l'archive `autodoc-master.zip`. Les statuts Git ci-dessus et les ajouts 0288 ont, eux, été vérifiés sur la branche publiée.
 
 ## 1. Définition du projet
 
@@ -61,7 +61,14 @@ Les laboratoires ne possèdent ni Scheduler, ni orchestrateur, ni queue, ni bus 
 
 La progression r16 étend la chaîne de recherche à un modèle de commandes, tâches, admission, catalogue de handlers, exécution contrôlée, observations temporelles, persistance et reprise. Les documents présents couvrent notamment r16-r26 à r16-r66-r1.
 
-Le dernier document de progression identifié, `GITHUB_RESEARCH_LOVE_CANONICAL_READY_TASK_BINDING_R16_R66_R1.md`, indique **r16-r67** comme étape suivante. Cette unité doit fournir les lectures PostgreSQL concrètes de l'admission et les ports d'exécution génériques, puis raccorder la frontière à la composition OpenRC.
+Le raccord r16-r66-r1 est présent dans `src/context/github_research_love_canonical_ready_task_binding_0287.py` avec son test dédié. Il réhydrate une tâche `READY` déjà sélectionnée depuis le command store PostgreSQL et l'admission, en injectant le catalogue et la fabrique de handlers ; il ne crée ni Scheduler, ni routeur, ni Dispatcher. Le document `GITHUB_RESEARCH_LOVE_CANONICAL_READY_TASK_BINDING_R16_R66_R1.md` indique **r16-r67** comme étape suivante. Son périmètre doit être repris de ses contrats et rapports avant développement.
+
+### 3.5 Contrats d'observation matérielle — Phase 6.3 / 0288
+
+- `HardwareSample` et `HardwareCell` sont des contrats immuables et versionnés (`missipy.hardware_sample.v1`, `missipy.hardware_cell.v1`).
+- Les métriques physiques et l'instantané de capacité Scheduler sont deux plans distincts.
+- Fraîcheur, disponibilité et valeurs inconnues restent distinctes ; une valeur inconnue n'est jamais ramenée à zéro.
+- Cette unité ajoute uniquement les contrats et leurs tests : aucun collecteur OS, polling, service OpenRC, raccord VisPy/Copilot ou changement Scheduler/EventBus n'est introduit.
 
 ## 4. État réel : implémentation n'est pas preuve d'exploitation
 
@@ -83,17 +90,18 @@ Le rapport r16-r65 et celui de r16-r66-r1 précisent que la validation fonctionn
 
 ## 5. Vérifications effectuées pour cette actualisation
 
-Sur l'archive extraite :
+Les résultats ci-dessous mélangent volontairement deux périmètres qui ne doivent pas être confondus : les chiffres historiques de l'archive auditée, et le test ciblé 0288 exécuté sur le checkout de travail.
 
 | Contrôle | Résultat |
 |---|---|
-| `compileall -q src tests tools` sous Python 3.13.5 | Code retour 0 |
+| `compileall -q src tests tools` sous Python 3.13.5 — archive auditée | Code retour 0 |
 | Tests ciblés r16-r57 à r16-r65 | 37 passed (34 tests de règles/fonctionnels ciblés + 3 tests fonctionnels r16-r65) |
 | Tests r16-r66-r1 | 6 passed |
 | Total ciblé non redondant | 43 passed |
 | `pytest -q tests/rules --ignore=tests/rules/test_generated_artifacts_rule.py` | 1 863 passed |
 | `pytest -q tests/rules` | 1 863 passed, 3 failed faute de `.git` pour `git ls-files` |
-| Suite globale | Non exécutée |
+| Tests `tests/contracts/test_hardware.py` + `tests/contracts/` — checkout de travail 0288 | 18 passed |
+| Suite globale du checkout courant | Non exécutée dans cette actualisation |
 
 Les trois échecs sont limités aux contrôles d'index Git de `test_generated_artifacts_rule.py` (SVG, PYO, `.patchqueue.local.json`). Ils ne peuvent pas être évalués dans une archive sans `.git`. La suite de règles n'est donc pas déclarée entièrement verte.
 
@@ -108,7 +116,7 @@ La séquence documentaire plus récente couvre :
 - r7-r15 : publication distante contrôlée et composition du runtime installé ;
 - r16 : fetch, Scheduler/handlers, PostgreSQL, continuité et exécution bornée jusqu'à r16-r66-r1.
 
-**Prochaine unité indiquée par la documentation r16-r66-r1 : `r16-r67`.** Son périmètre exact doit être repris du plan de phase et de son patch avant tout développement.
+**Prochaine unité Scheduler indiquée : `r16-r67`.** Son périmètre exact doit être repris du plan de phase et de ses contrats avant tout développement. En parallèle, la Phase 6.3 / 0288 ajoute les contrats d'observation matérielle sans collecteur ni intégration runtime. Ces deux axes ne changent pas les autorités architecturales.
 
 La clôture réelle reste subordonnée au runbook r16-r50 et à une preuve `accepted`, ainsi qu'aux validations sur la machine de référence.
 
@@ -139,7 +147,8 @@ Le dépôt ne fournit pas de configuration explicite Ruff/Black/Mypy/Pyright/Fla
 - [`architecture/SCHEDULER_HANDLER_ROADMAP_0287_R16_R26_R1.md`](architecture/SCHEDULER_HANDLER_ROADMAP_0287_R16_R26_R1.md) — progression Scheduler/handlers.
 - [`architecture/GITHUB_RESEARCH_LOVE_END_TO_END_ACCEPTANCE_0287_R16_R50.md`](architecture/GITHUB_RESEARCH_LOVE_END_TO_END_ACCEPTANCE_0287_R16_R50.md) — critères d'acceptation bout en bout.
 - [`runbooks/GITHUB_RESEARCH_LOVE_END_TO_END_ACCEPTANCE_0287_R16_R50.md`](runbooks/GITHUB_RESEARCH_LOVE_END_TO_END_ACCEPTANCE_0287_R16_R50.md) — procédure de preuve réelle.
-- [`architecture/GITHUB_RESEARCH_LOVE_CANONICAL_READY_TASK_BINDING_R16_R66_R1.md`](architecture/GITHUB_RESEARCH_LOVE_CANONICAL_READY_TASK_BINDING_R16_R66_R1.md) — dernier raccord documenté dans l'archive.
+- [`architecture/GITHUB_RESEARCH_LOVE_CANONICAL_READY_TASK_BINDING_R16_R66_R1.md`](architecture/GITHUB_RESEARCH_LOVE_CANONICAL_READY_TASK_BINDING_R16_R66_R1.md) — raccord r16-r66-r1.
+- [`../patch/0288-hardware-contracts/README.md`](../patch/0288-hardware-contracts/README.md) et [`changelogs/CHANGELOG_PHASE6_3_HARDWARE_CONTRACTS.md`](changelogs/CHANGELOG_PHASE6_3_HARDWARE_CONTRACTS.md) — contrats d'observation matérielle.
 
 Les documents et patches de phase antérieurs restent conservés comme historique et preuve locale. Ils ne remplacent pas ce point d'entrée courant.
 

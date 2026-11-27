@@ -21,7 +21,9 @@ Le `README.md` racine est un sommaire d'entrée. Il ne constitue pas une source 
 | `027X_REUSE_AUDIT.md` | Audit de réutilisation, preuves, règles de programmation et limites |
 | `code-rules/code_rule.md` | Référence normative de programmation et d'architecture |
 | `DOCUMENTATION_INDEX.md` | Présent index et politique de lecture |
-| `architecture/SCHEDULER_HANDLER_ROADMAP_0287_R16_R26_R1.md` | Roadmap Scheduler/handlers |
+| `architecture/SCHEDULER_HANDLER_ROADMAP_0287_R16_R26_R1.md` | Roadmap historique Scheduler/handlers, à lire avec les unités r16 récentes |
+| `architecture/GITHUB_RESEARCH_LOVE_CANONICAL_READY_TASK_BINDING_R16_R66_R1.md` | Raccord d'une tâche READY déjà décidée au runtime installé |
+| `../patch/0288-hardware-contracts/README.md` | Contrats d'observation matérielle Phase 6.3 / 0288 |
 | `architecture/GITHUB_RESEARCH_LOVE_END_TO_END_ACCEPTANCE_0287_R16_R50.md` | Contrat d'acceptation réelle |
 | `runbooks/GITHUB_RESEARCH_LOVE_END_TO_END_ACCEPTANCE_0287_R16_R50.md` | Exécution et collecte des preuves |
 | `architecture/GITHUB_RESEARCH_LOVE_POSTGRESQL_EXECUTION_CORE_0287_R16_R64.md` | Noyau d'exécution PostgreSQL |
@@ -48,6 +50,7 @@ Le `README.md` racine est un sommaire d'entrée. Il ne constitue pas une source 
 - Ne pas supprimer les documents historiques simplement parce qu'ils ne sont plus courants.
 - Ne pas maintenir plusieurs fichiers « current state » concurrents.
 - Toute actualisation de l'état courant doit modifier `README_CURRENT.md`.
+- Les contrats matériels 0288 ne constituent pas un collecteur : ne pas documenter de polling, d'intégration Scheduler ou de visualisation comme déjà livrés.
 - Toute modification des surfaces canoniques doit mettre à jour `027X_REUSE_AUDIT.md` si les décisions de réutilisation changent.
 - Chaque nouveau domaine important doit être référencé ici plutôt que de créer un nouvel index parallèle.
 - Les rapports doivent préciser le commit de base, la commande exacte, le code retour, le nombre de tests et si le résultat est local, mocké ou réel.

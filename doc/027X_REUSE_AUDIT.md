@@ -1,9 +1,13 @@
 # Audit de réutilisation MissiPy — 027X
 
-**Date de l'audit : 2026-11-26**  
-**Base examinée :** archive `autodoc-master.zip` fournie dans cette conversation.  
-**Périmètre :** code source, patches présents dans l'archive, documentation, rapports et tests.  
-**Nature :** audit documentaire et de réutilisation ; aucun code fonctionnel n'a été modifié.
+**Date de l'audit initial : 2026-11-26**  
+**Base de l'inventaire initial :** archive `autodoc-master.zip` fournie dans cette conversation.  
+**Périmètre :** code source, patches, documentation, rapports et tests.  
+**Nature :** audit documentaire et de réutilisation initial, complété le 2026-11-27 par une vérification de la branche Git publiée. Les nombres issus de l'archive ne sont pas présentés comme un inventaire recalculé du checkout.
+
+## Mise à jour Git complémentaire — 2026-11-27
+
+La branche `docs/unification-027x` a été relue directement sur GitHub. Son état avant intégration 0288 était `c9f829f75a2b35c88bf9033fbf1b3536bfc864bd` (`fix: validate typed hardware references correctly`). Le raccord r16-r66-r1 est déjà présent dans les sources et tests de cette branche. Le bundle `patch/0288-hardware-contracts` était présent, mais ses fichiers fonctionnels (`src/contracts/hardware.py` et `tests/contracts/test_hardware.py`) n'étaient pas encore matérialisés dans l'arbre Git. Ils ont été ajoutés dans le commit `74043d9795dad79adb6597eb81f46a26d33b67ef`, avec le changelog, le manifeste et la mise à jour des métadonnées du bundle. Le test ciblé 0288 avait été exécuté localement : 18 tests passés. La suite globale n'est pas déclarée exécutée.
 
 ## 1. Limites de preuve
 
