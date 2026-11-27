@@ -24,6 +24,9 @@ Le `README.md` racine est un sommaire d'entrée. Il ne constitue pas une source 
 | `architecture/SCHEDULER_HANDLER_ROADMAP_0287_R16_R26_R1.md` | Roadmap historique Scheduler/handlers, à lire avec les unités r16 récentes |
 | `architecture/GITHUB_RESEARCH_LOVE_CANONICAL_READY_TASK_BINDING_R16_R66_R1.md` | Raccord d'une tâche READY déjà décidée au runtime installé |
 | `../patch/0288-hardware-contracts/README.md` | Contrats d'observation matérielle Phase 6.3 / 0288 |
+| `architecture/GLOBAL_ARCHITECTURE_CURRENT_0292.md` | Vue consolidée des autorités, des flux ProjectV2 et des frontières runtime |
+| `architecture/GITHUB_COPILOT_SERVER_ROUTING_CONTEXT_0292.md` | Spécification documentaire du snapshot serveur de routage Copilot |
+| `../patch/0292-current-architecture-and-copilot-routing/README.md` | Unité de réconciliation construite sur le HEAD Git 56dc340 |
 | `architecture/GITHUB_RESEARCH_LOVE_END_TO_END_ACCEPTANCE_0287_R16_R50.md` | Contrat d'acceptation réelle |
 | `runbooks/GITHUB_RESEARCH_LOVE_END_TO_END_ACCEPTANCE_0287_R16_R50.md` | Exécution et collecte des preuves |
 | `architecture/GITHUB_RESEARCH_LOVE_POSTGRESQL_EXECUTION_CORE_0287_R16_R64.md` | Noyau d'exécution PostgreSQL |

@@ -1,10 +1,10 @@
 # Autodoc / MissiPy — état courant
 
 **État documentaire actualisé : 2026-11-27**  
-**Base Git vérifiée :** branche `docs/unification-027x`, commit `74043d9795dad79adb6597eb81f46a26d33b67ef`.  
+**Base Git du présent patch :** branche `docs/unification-027x`, commit `56dc340a8f5c8b88295d35888b13a2d12e03c0cf`.  
 **Référence détaillée :** [`027X_REUSE_AUDIT.md`](027X_REUSE_AUDIT.md).
 
-> Les constats d'inventaire chiffrés de l'audit initial restent explicitement rattachés à l'archive `autodoc-master.zip`. Les statuts Git ci-dessus et les ajouts 0288 ont, eux, été vérifiés sur la branche publiée.
+> Les constats d'inventaire chiffrés de l'audit initial restent rattachés à l'archive `autodoc-master.zip`. Le présent état est réconcilié avec le HEAD Git `56dc340` ; 0288 est intégré dans son parent `74043d9`.
 
 ## 1. Définition du projet
 
@@ -724,3 +724,30 @@ prove installation from a clean checkout.
 The prototype is complete only when the full real chain is repeatable,
 observable, recoverable and idempotent. There is no phase 0288 and no Chalouf
 integrator phase.
+
+
+## 11. Réconciliation architecturale 0292 — base Git 56dc340
+
+La présente actualisation est construite sur le HEAD publié `56dc340a8f5c8b88295d35888b13a2d12e03c0cf` de `docs/unification-027x`. Ce commit descend de `74043d9795dad79adb6597eb81f46a26d33b67ef`, qui intègre les contrats matériels 0288. Il ne faut donc ni rejouer 0288, ni considérer `c9f829f` comme la base courante.
+
+### État ProjectV2 et routage Copilot
+
+- Le ProjectV2 `newicody/2` est la source query-only du snapshot local : lecture GraphQL uniquement, sans mutation distante.
+- Le ProjectV2 `newicody/3` est la cible de recherche/projection ; il ne remplace ni PostgreSQL ni la décision locale.
+- L'avis Copilot v2 reste un artefact consultatif. Il ne décide ni de l'admission, ni du handler, ni de la priorité, ni de la publication.
+- Le contrat `missipy.server.routing_context_snapshot.v1` est défini comme une spécification documentaire dans `architecture/GITHUB_COPILOT_SERVER_ROUTING_CONTEXT_0292.md`. Aucun fournisseur runtime de ce snapshot n'est déclaré livré par cette unité.
+
+### Données de routage et frontières
+
+Le contexte proposé pour Copilot doit être construit côté serveur à partir de vues déjà autorisées : projets/expériences actifs, capacités réellement disponibles, laboratoires/spécialistes déclarés et état de charge/cellules fourni par le Scheduler canonique. Les informations de cellules (quantité, localisation, charge prédite) sont des données de lecture ; elles ne donnent aucun pouvoir d'ordonnancement à Copilot.
+
+Les contrats 0288 (`HardwareSample`, `HardwareCell`) restent des contrats d'observation sans collecteur. Les métriques physiques ne remplacent jamais l'état de capacité du Scheduler et ne permettent pas de déduire une admission. EventBus, PassiveSupervisor et VisPy restent observation-only ; ControlProxy reste un transport autorisé.
+
+### Statut de l'unité 0292
+
+- Documentation et contrats conceptuels uniquement.
+- Aucun changement de code runtime, Scheduler, handler, EventBus, ControlProxy, stockage ou dépendance.
+- Aucun collecteur matériel, polling, worker, manager, queue, registre ou orchestrateur parallèle.
+- Aucun test déclaré exécuté par cette unité ; les validations antérieures restent attachées à leurs propres commits et rapports.
+
+La prochaine étape de développement doit commencer par l'audit des lecteurs et producteurs existants de ces données. Elle ne doit pas créer un second catalogue de capacités ni contourner la sélection du Scheduler.
