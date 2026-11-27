@@ -15,3 +15,11 @@ tests/context/test_source_candidate_review_live_path.py
 tests/context/test_source_candidate_review_cli.py
 tests/rules/test_source_candidate_review_live_path_rule.py
 ```
+
+# Manifest — Phase 6.3 — Hardware observation contracts
+
+```text
+src/contracts/hardware.py
+tests/contracts/test_hardware.py
+doc/changelogs/CHANGELOG_PHASE6_3_HARDWARE_CONTRACTS.md
+```

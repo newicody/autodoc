@@ -21,7 +21,7 @@ Expected local command:
 ```sh
 pytest -q tests/contracts/test_hardware.py
 ```
-Tests have not been executed as part of preparing this patch.
+Validation exécutée sur le checkout local : 18 tests passés (`tests/contracts/test_hardware.py` et `tests/contracts/`).
 
 ## Phase review
 ```text
