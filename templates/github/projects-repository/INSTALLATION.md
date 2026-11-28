@@ -89,6 +89,17 @@ AUTODOC_COPILOT_ADVISORY_ENABLED=false
 
 Cette valeur est le défaut d'installation. Ne pas créer de secret `AUTODOC_COPILOT_TOKEN` : le workflow actuel utilise le token éphémère GitHub.
 
+Le transport append-only du cadrage utilise un secret distinct :
+`AUTODOC_EXCHANGE_GIT_TOKEN`. Créer un fine-grained PAT limité au seul dépôt
+`newicody/projects`, avec **Contents: read and write**. Le secret sert
+uniquement aux étapes bornées qui publient les artefacts Copilot dans Git ;
+les lectures ordinaires utilisent le token de lecture du workflow. Ne jamais
+placer sa valeur dans le dépôt, les fichiers de configuration ou les artefacts.
+
+Le commentaire historique sur l'Issue conserve son secret séparé
+`AUTODOC_ISSUE_COMMENT_TOKEN`. Ces deux secrets ont des droits et des usages
+distincts.
+
 ## 3. Authentification locale
 
 | Nom | Usage |
@@ -251,6 +262,7 @@ Fichiers principaux :
 
 ```text
 .github/workflows/autodoc-controlled-research.yml
+.github/workflows/autodoc-copilot-refinement.yml
 .github/ISSUE_TEMPLATE/specialist-capability-growth.yml
 projectv2_views.json
 ```
@@ -378,6 +390,33 @@ Le mode opératoire de publication est dans
 - `verify_specialists_laboratories_live_path_evidence_0284.py` reste le repère de preuve du chemin vivant.
 Mise à jour `0287-r16-r4-r3-r4` : chaque nouvelle Issue `[Recherche]` de `newicody/projects` crée son triplet propre ; voir `README.md` et vérifier avec `gh run list --repo newicody/projects --workflow autodoc-controlled-research.yml --event issues`, avec le secret borné `AUTODOC_ISSUE_COMMENT_TOKEN`.
 
+
+## 10. Échange scientifique asynchrone par Git
+
+Le workflow `autodoc-controlled-research.yml` publie l'avis initial dans
+`autodoc/exchanges/issues/<issue>/cycles/1/copilot-initial.json`. Il faut
+configurer `AUTODOC_EXCHANGE_GIT_TOKEN` avant de créer une Issue de recherche.
+
+Le serveur doit récupérer cet artefact, construire un fichier d'évaluation
+structuré à partir de données qu'il a réellement vérifiées, puis appeler
+`tools/publish_git_exchange_server_response.py`. Le fichier d'évaluation
+contient exactement les champs `coherence_status`, `assessment`,
+`supported_representations`, `unsupported_representations`, `available_data`,
+`missing_data`, `verified_capabilities`, `constraints`, `report_outline`
+et `provenance`. Ce script ne collecte pas lui-même l'état des composants : il
+valide l'évaluation fournie, lie la réponse à l'avis initial et la pousse.
+
+Le push de `server-response.json` déclenche
+`autodoc-copilot-refinement.yml`. Ce workflow récupère les deux artefacts,
+demande une seule reformulation à Copilot et pousse `copilot-refined.json`.
+Son filtre ne surveille que `server-response.json`, donc le push final ne
+relance pas la reformulation.
+
+L'assembleur local accepte ensuite `--git-exchange-branch` et
+`--require-scientific-framing-exchange`. Lorsqu'ils sont utilisés, il vérifie
+la chaîne complète et intègre la demande reformulée comme indication
+non autoritative au work package existant. Ce chemin n'est pas encore activé
+automatiquement par la transition ProjectV2 vers `En cours`.
 
 ## 10. Cadrage Copilot initial et lancement d'un cycle
 
