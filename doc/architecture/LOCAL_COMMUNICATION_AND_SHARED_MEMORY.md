@@ -131,6 +131,14 @@ Le cycle futur des « vannes » doit donc contrôler l'accès réel : acquisitio
 
 Le terme montage/démontage ne doit pas être interprété comme un appel Linux `mount(2)` / `umount(2)` : le code examiné prépare un répertoire sous un `/dev/shm` déjà monté en tmpfs et crée/supprime des fichiers ou générations. Aucun montage de namespace ou de système de fichiers n'est démontré.
 
+### Incompatibilité précise entre les deux cycles d'accès
+
+Le `RouteRuntimeManager` actuel expose `materialize_generation`, `activate_generation`, `mark_draining`, `mark_closed` et `cleanup_closed`, mais il ne pilote pas `RouteLease`. À l'inverse, `prepare_route_for_scheduler()` crée ou réutilise un `RouteLease` à partir de `active_status_path` produit par l'ancien materializer. Les fichiers d'état, les références de route et les transitions ne sont donc pas interchangeables.
+
+Le futur raccordement doit définir un contrat d'accès par génération (ou adapter explicitement le bail existant pour qu'il référence une génération déterminée). Une route logique peut avoir plusieurs générations ; un unique `lease.json` indexé seulement par `route_id` ne suffit pas à démontrer quels consommateurs détiennent encore quelle génération. Le drainage doit être associé à la génération exacte et empêcher les nouvelles acquisitions avant d'attendre la libération des accès existants.
+
+Le handler `ControlProxyRouteRuntimeHandler` actuel reçoit une `RouteDispatchFilterEnvelope` et une `RoutePrepareDecision` déjà construites. Il ne convertit pas lui-même le `SchedulerRouteRequest` historique en ces contrats. Cette conversion, la décision de sizing et la validation de la génération doivent être définies comme une seule frontière d'adaptation, sans appeler l'ancien handshake qui matérialise déjà une autre route.
+
 ### Ordre de raccordement retenu
 
 1. Exposer le point de raccordement au Dispatcher canonique déjà créé par la fondation OpenRC, sans créer un autre Dispatcher.
