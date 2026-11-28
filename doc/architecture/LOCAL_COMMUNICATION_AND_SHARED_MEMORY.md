@@ -97,6 +97,50 @@ Dans cette architecture, « ouvrir/fermer une vanne » désigne l'autorisation e
 ### Suite de raccordement
 
 La suite doit rapprocher les responsabilités déjà présentes : demande autorisée du Scheduler, état désiré ControlFS, matérialisation passive de route, bail/permission d'accès, drainage, fermeture et nettoyage. Il faut notamment choisir et raccorder le chemin de génération comme cycle de vie canonique, sans créer un autre manager, watcher, bus ou ordonnanceur. L'implémentation memfd/SCM_RIGHTS sera intégrée à ce chemin de données lorsque ses contrats et ses garanties de propriété, de durée de vie et de révocation seront définis.
+## Audit du raccordement à la composition OpenRC actuelle
+
+L'audit de la branche `docs/unification-027x` distingue désormais les briques de route historiques de la composition réellement installée.
+
+### Fondation OpenRC
+
+- `LoveExternallyManagedInstalledBackendFoundation` construit un seul `Scheduler`, un seul `Dispatcher` et un seul `EventBus` dans `_build_scheduler_stack()`.
+- Le `Dispatcher` est créé vide à cet endroit. La fondation conserve une référence vers lui, mais le bundle final `GitHubResearchLoveExternallyManagedInstalledComponents` ne porte pas de port `dispatcher` explicite.
+- La composition finale transmet le Scheduler au service OpenRC et compose les dix handlers du cycle de recherche via `SchedulerCanonicalBoundedCycle` et `SchedulerReadyTaskStepRunner`. Ces dix handlers ne sont pas les handlers d'événements du `Dispatcher` historique.
+- Le contrat `CanonicalSchedulerProcess` n'expose que `running`, `run()` et `shutdown()`. Le service OpenRC ne possède donc pas, par son contrat, de point d'enregistrement de handler.
+- Les tests de la composition installée vérifient le Scheduler, le cycle durable et les dix handlers métier ; ils ne vérifient pas l'enregistrement de `ControlProxySchedulerRouteRequestHandler` ni un parcours de route depuis le Scheduler OpenRC.
+
+En conséquence, la présence de `EventType.SCHEDULER_ROUTE_REQUEST`, du handler ControlProxy et de l'adaptateur dans le dépôt ne prouve pas qu'ils sont enregistrés dans le Dispatcher de la composition OpenRC installée.
+
+### Deux chemins de route coexistent encore
+
+1. **Chemin Scheduler/ControlProxy historique :** `ControlProxySchedulerRouteRequestHandler` résout `runtime.controlproxy_scheduler_adapter`, qui écrit le manifeste désiré puis appelle `scheduler_route_adapter.prepare_route_for_scheduler()`. Le handshake déclenche `ControlProxyPump`, matérialise l'ancienne route mmap à slots fixes, puis crée/active un `RouteLease`.
+2. **Chemin de générations :** `RouteRuntimeManager` utilise `RouteGenerationTable`, le verrou interprocessus, `RouteGenerationLifecycle` et le materializer de génération. `ControlProxyRouteRuntimeHandler` sait déléguer une décision déjà préparée au manager, mais ce handler n'est pas raccordé à la composition OpenRC auditée.
+
+Ces deux chemins ne doivent pas être considérés comme un parcours unique. Le handshake historique ne passe pas par `RouteRuntimeManager`; le handler du manager attend un payload contenant une enveloppe de dispatch et une `RoutePrepareDecision`. La composition doit choisir le chemin de générations comme cycle de vie canonique, puis raccorder l'entrée Scheduler à ce chemin. Il ne faut pas simplement ajouter un second appel au manager après le handshake historique.
+
+### Ouverture, fermeture et « vannes »
+
+Les états `leased`, `active`, `draining` et `closed` sont des états logiques persistés. Le cycle de génération autorise le nettoyage des fichiers après fermeture logique. Ils ne prouvent pas à eux seuls :
+
+- la révocation d'un descripteur déjà transmis à un processus consommateur ;
+- l'arrêt ou la synchronisation de tous les lecteurs/écrivains actifs ;
+- la fermeture effective de chaque mapping détenu par les processus ;
+- l'absence de course entre drainage, fermeture et nettoyage.
+
+Le cycle futur des « vannes » doit donc contrôler l'accès réel : acquisition, activation, interdiction de nouvelles acquisitions pendant le drainage, attente/constat de fin d'utilisation, fermeture des accès, puis nettoyage. Les baux et états existants sont des éléments de ce protocole, pas sa preuve complète.
+
+Le terme montage/démontage ne doit pas être interprété comme un appel Linux `mount(2)` / `umount(2)` : le code examiné prépare un répertoire sous un `/dev/shm` déjà monté en tmpfs et crée/supprime des fichiers ou générations. Aucun montage de namespace ou de système de fichiers n'est démontré.
+
+### Ordre de raccordement retenu
+
+1. Exposer le point de raccordement au Dispatcher canonique déjà créé par la fondation OpenRC, sans créer un autre Dispatcher.
+2. Construire une seule instance de `RouteRuntimeManager` à partir des racines ControlFS et `/dev/shm` explicites, sous contrôle des politiques existantes.
+3. Adapter le handler ControlProxy existant pour transformer la demande Scheduler déjà autorisée en enveloppe et décision typées, puis déléguer au chemin de générations canonique.
+4. Définir et raccorder les transitions de drainage/fermeture avec preuve qu'aucun consommateur n'utilise encore la route avant révocation et nettoyage.
+5. Ajouter des tests de composition OpenRC couvrant l'enregistrement, l'ouverture, l'utilisation, le drainage, la fermeture, la reprise après erreur et le nettoyage.
+6. Remplacer ensuite le fichier mmap à slots fixes par les buffers `memfd` et le transfert `SCM_RIGHTS`, sans changer l'autorité Scheduler ni inventer un nouveau bus.
+
+Ce raccordement doit rester dans la composition process-local déjà existante. Il ne nécessite ni nouveau manager global, ni watcher permanent, ni boucle d'orchestration supplémentaire.
 ## Limites et points à valider avant implémentation
 
 L'orientation `AF_UNIX / SOCK_SEQPACKET + memfd / SCM_RIGHTS` est une décision d'architecture, pas une preuve d'implémentation. L'audit et les développements futurs devront vérifier et définir :
