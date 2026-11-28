@@ -143,7 +143,7 @@ class ServerComponentStateSnapshot:
 
 
 def _typed_ref(name: str, value: object, prefix: str) -> None:
-    if not isinstance(value, str) or not value.startswith(prefix) or any(ch.isspace() for ch in value):
+    if not isinstance(value, str) or not value.startswith(prefix) or len(value) <= len(prefix) or any(ch.isspace() for ch in value):
         raise ComponentStateContractError(f"{name} must use {prefix} typed reference")
 
 
