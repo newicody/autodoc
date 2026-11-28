@@ -7,7 +7,7 @@ from physical utilization and never authorizes execution.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 import math
 from types import MappingProxyType
@@ -38,7 +38,7 @@ class ServerComponentStateSnapshot:
     capabilities: tuple[str, ...] = ()
     reservations: tuple[str, ...] = ()
     interfaces: tuple[str, ...] = ()
-    usage_statistics: Mapping[str, int | float] = MappingProxyType({})
+    usage_statistics: Mapping[str, int | float] = field(default_factory=dict)
     supported_representations: tuple[str, ...] = ()
     unsupported_representations: tuple[str, ...] = ()
     available_data: tuple[str, ...] = ()
