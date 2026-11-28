@@ -1,90 +1,368 @@
-# Roadmap complète — automate cellulaire
+# Roadmap de développement — parcours d'une requête GitHub jusqu'au retour Git
 
-Cette roadmap fusionne les développements existants, les travaux encore pertinents des anciennes trajectoires et les orientations discutées récemment. Les identifiants de patch/phase sont des repères historiques, pas l'ordre obligatoire des travaux.
+Cette roadmap est l'axe de développement de MissiPy. Elle décrit un seul parcours fonctionnel, depuis une nouvelle entrée sur un board GitHub jusqu'à la livraison finale dans Git. Les rapports opérationnels périodiques constituent un second flux Git permanent, distinct du livrable de la requête.
 
-## Invariants
-Le code de la branche courante est la référence de l'état implémenté. Un contrat ne prouve pas qu'un producteur existe. Les projections d'observation ne commandent pas. PostgreSQL est l'autorité durable ; Qdrant est une projection reconstruisible. Le Scheduler est l'autorité unique d'admission et d'orchestration. Les labs/spécialistes n'ont pas d'orchestrateur parallèle. Les objectifs de roadmap ne sont pas des fonctionnalités livrées.
-- Une cellule logique n'est pas un processus OS, une machine ou un thread.
-- Charge physique et capacité logique du Scheduler restent séparées ; l'une ne permet pas de déduire l'autre.
+Les étapes peuvent nécessiter plusieurs patches intermédiaires. Une étape n'est déclarée terminée qu'après raccordement et validation du parcours concerné. Le manuel sera construit progressivement : un chapitre par étape effectivement terminée.
 
-## 1. Socle déjà présent
-- Kernel : Scheduler, PriorityQueue, Dispatcher, Registry, PolicyEngine, ContextEngine et EventBus.
-- Recherche/contexte : ingestion, revue, mémoire, rehydratation, provenance, labs/spécialistes et intégrations selon composition.
-- Données : chemins PostgreSQL, OpenVINO/E5 et Qdrant ; SQL reste l'autorité, Qdrant projection/rappel.
-- GitHub : adaptateurs Actions/Projects v2, avis Copilot et publications consultatives présents.
-- Observation : EventBus→Cell Lens bridge, journal append-only, projection et read-model visuel passif présents.
-- Hardware : contrats versionnés `missipy.hardware_sample.v1` et `missipy.hardware_cell.v1` présents ; pas de collecteur OS livré par 0288.
+## Invariants d'architecture
 
-Limites : le noyau n'est pas encore le moteur complet de recherche cellulaire adaptative ; le read-model ne prouve pas un renderer VisPy complet ; le snapshot serveur Copilot 0292 reste une spécification ; les contrats hardware ne collectent rien par eux-mêmes.
+- Le Scheduler est l'unique autorité d'admission, de sélection, de priorité et d'orchestration des tâches.
+- Le Scheduler ne possède pas une connaissance omnisciente ou automatiquement actualisée de tous les systèmes. Chaque composant est responsable de son état et peut transmettre, à la demande, les informations utiles au Scheduler.
+- Les informations communicables comprennent la disponibilité, les capacités, les réservations, les compétences, les interfaces, l'état des communications et les statistiques d'utilisation.
+- Les statistiques décrivent séparément l'utilisation des composants et l'évolution des recherches/cellules.
+- Les mécanismes de sécurité et de politique prévus doivent encadrer les demandes, les communications, l'admission et les mutations. Ils sont réutilisés ; aucun système de sécurité parallèle n'est créé.
+- PostgreSQL est l'autorité durable. Qdrant est une projection de recherche/rappel reconstructible ; il ne remplace pas PostgreSQL.
+- Les laboratoires et spécialistes sont des capacités appelées par les handlers sous l'autorité du Scheduler. Ils ne possèdent pas de Scheduler, queue, bus, registre ou orchestrateur parallèle.
+- Les laboratoires peuvent collaborer en échangeant des résultats et en lisant les données persistées dans PostgreSQL. Ces données peuvent être moins fraîches que l'état courant d'un autre laboratoire ; leur date, version et provenance doivent rester explicites.
+- EventBus, Cell Lens, PassiveSupervisor et VisPy sont des mécanismes d'observation, pas des autorités de décision.
+- La charge physique et la capacité logique du Scheduler restent distinctes. Une mesure CPU/GPU/RAM ne permet pas de déduire une capacité d'admission.
+- La présence d'un module, d'un contrat ou d'un adaptateur ne prouve pas que le flux complet est raccordé ou exploitable.
 
-## 2. Consolidation actuelle — priorité immédiate
-- Réduire la racine de doc à moins de dix références stables.
-- Déplacer patches, changelogs, manifests, audits et graphes historiques dans `history/`.
-- Maintenir une documentation par unité architecturale principale.
-- Réconcilier les graphes .dot avec les seuls composants et flux fonctionnels.
-- Contrôler liens, rendu Graphviz et synchronisation docs/code.
+## 01. Entrée du board, déclenchement Copilot et premier artefact
 
-## 3. Modèle de l'automate cellulaire
-- Définir identité, type, état, cycle de vie, provenance, relations et version des cellules.
-- Distinguer cellule, tâche, handler, composant, ressource physique et projection visuelle.
-- Définir transitions, événements, invariants et reconstruction depuis le durable.
-- Relier `missipy.cell.v1` aux futurs contrats sans rupture de compatibilité.
+**Déclencheur :** une nouvelle entrée sur le board GitHub ProjectV2.
 
-## 4. Scheduler orienté recherche
-- Représenter les recherches comme graphes de tâches dépendantes sous autorité du Scheduler existant.
-- Les handlers rapportent résultats, état, preuves, coût et incertitude à l'instant t.
-- Le Scheduler réévalue les branches et les tâches selon les observations.
-- Mesurer couverture, fréquence, nouveauté, rendement et incertitude des cellules.
-- Favoriser l'exploration des cellules/régions sous-représentées sans éliminer trop tôt une piste rare prometteuse.
-- Abandonner une recherche de faible intérêt par transition explicite, sans annuler les tâches indépendantes.
-- Persister décisions, justification, reprise et provenance dans PostgreSQL.
-- Calculer la charge logique à partir des tâches, files, budgets et réservations du Scheduler.
+Composants :
+- GitHub ProjectV2
+- Déclencheur Copilot
+- Copilot
+- Premier artefact
+- Publication GitHub
 
-## 5. Observation et visualisation
-- Enrichir les événements avec identifiants de cellules, tâches, recherches, handlers et ressources.
-- Consolider journal append-only, snapshots, replay et projections.
-- Définir un read-model stable ; raccorder un renderer VisPy après validation.
-- Montrer données absentes, périmées et incertaines ; le visualiseur reste passif et facultatif.
+Flux attendu :
 
-## 6. Collecte matérielle
-- Créer un collecteur explicite et testable produisant HardwareSample 0288.
-- Construire HardwareCell en séparant mesures physiques et snapshots logiques Scheduler.
-- Conserver fraîcheur, provenance, erreurs et statut partiel ; inconnu n'est jamais zéro.
-- Ne jamais inférer admission/capacité Scheduler depuis CPU/GPU/RAM seuls.
+```text
+Nouvelle entrée sur le board
+    → Déclenchement Copilot
+    → Copilot
+    → Premier artefact
+    → Publication de l'artefact
+```
 
-## 7. Copilot contextualisé serveur
-- Conserver Copilot consultatif et les adaptateurs existants.
-- Produire le snapshot `missipy.server.routing_context_snapshot.v1` décrit en 0292.
-- Agréger projets/expériences, outils, laboratoires, cellules, état et charge logique depuis des lecteurs autorisés.
-- Prédire la charge depuis le Scheduler, pas depuis l'utilisation matérielle seule.
-- Snapshot borné, daté, traçable et sans secrets ; le Scheduler décide toujours.
+La création de l'entrée ne constitue pas encore une tâche d'exécution distribuée par le Scheduler. Elle déclenche d'abord Copilot, qui produit et publie un premier artefact associé à la demande.
 
-## 8. Données, retrieval et intégrité
-- Consolider migrations/contrats PostgreSQL comme autorité durable.
-- Vérifier SQL→E5→Qdrant et rappel→références→réhydratation SQL.
-- Rendre les projections vectorielles reconstructibles et versionner explicitement profils/collections.
-- Préserver 384 dimensions pour le profil E5 canonique.
+En parallèle, le serveur prépare et publie périodiquement dans le dépôt Git un rapport de fonctionnement et d'utilisation. Ce rapport est distinct du premier artefact Copilot et du livrable final.
 
-## 9. Labs, spécialistes et intégrations
-- Réutiliser catalogue, fabrique et handlers du Scheduler.
-- Aucun scheduler, queue, bus, registre ou manager parallèle dans les labs.
-- Séparer lecture, proposition, approbation humaine et mutation GitHub.
-- Clarifier les surfaces ProjectV2 source/read et cible/projection selon configuration déployée.
+**Résultat attendu :** une demande initialisée sur le board et un premier artefact Copilot publié.
 
-## 10. Installation et validation
-- Ajouter un manifeste Python séparant runtime, dev et tests, avec versions compatibles.
-- Définir installation minimale puis extras PostgreSQL, Qdrant, OpenVINO, GitHub et visualisation.
-- Décrire secrets, migrations, modèles, services et OpenRC.
-- Exécuter une acceptance end-to-end sur environnement réel.
+## 02. Communication à la demande et état propre des composants
 
-## Ordre recommandé
-1. Finir la documentation et les graphes fonctionnels.
-2. Formaliser cellules et invariants.
-3. Spécifier les graphes de recherche et transitions Scheduler.
-4. Implémenter mesure de couverture et réévaluation contrôlée.
-5. Compléter observation et visualisation passive.
-6. Ajouter collecte matérielle.
-7. Produire le snapshot serveur Copilot.
-8. Stabiliser installation et acceptance end-to-end.
+**Objectif :** permettre au Scheduler d'interroger les composants sans leur imposer un registre central omniscient.
 
-Les anciennes étapes r16-r67 sont conservées dans l'historique et ne sont reprises que si leur besoin demeure pertinent et n'est pas déjà satisfait.
+Composants :
+- Scheduler
+- Composants interrogés
+- Interfaces de communication
+- ControlProxy, lorsque le transport l'exige
+- Message Journal, lorsque la traçabilité du transport l'exige
+
+À la demande du Scheduler, chaque composant peut transmettre les informations qu'il détient sur son propre fonctionnement :
+
+- disponibilité et état de préparation ;
+- capacités et limites ;
+- capacités déjà réservées ou engagées ;
+- compétences et types de traitement supportés ;
+- interfaces et modes de communication ;
+- état des échanges, erreurs, délais et fraîcheur des informations ;
+- statistiques d'utilisation et résultats opérationnels.
+
+Le Scheduler ne suppose pas qu'une information est connue si le composant ne l'a pas fournie. Une information absente, inconnue ou périmée reste explicitement inconnue ou périmée.
+
+Le serveur peut agréger les informations reçues pour ses rapports opérationnels, sans transformer cette agrégation en autorité concurrente du Scheduler.
+
+**Résultat attendu :** chaque composant expose une interface de réponse exploitable ; le Scheduler peut demander les informations nécessaires au moment où il en a besoin.
+
+## 03. Sécurité, politiques et autorisations
+
+**Objectif :** intégrer les mécanismes de sécurité prévus au parcours réel.
+
+Composants :
+- Policy Engine
+- Policy Engine Runtime
+- Policy Contracts
+- Admission Control
+- Authorized Adapters
+- Audit et Provenance
+
+Les règles de sécurité encadrent les opérations selon les contrats et frontières déjà prévus : accès aux systèmes, opérations permises, admission, lecture, proposition, approbation et mutation externe.
+
+Cette étape doit auditer et raccorder les mécanismes présents dans le dépôt. Elle ne doit pas inventer une seconde autorité de permissions ni permettre à Copilot, à un laboratoire ou à un handler de contourner le Scheduler et les contrôles d'accès.
+
+**Résultat attendu :** chaque opération sensible passe par les contrôles prévus et laisse les traces nécessaires.
+
+## 04. Admission et distribution par le Scheduler
+
+**Objectif :** transformer la demande en tâches exécutables et les affecter sous l'autorité unique du Scheduler.
+
+Composants :
+- PostgreSQL
+- Scheduler
+- Task Admission
+- Task Graph
+- Handler Catalog
+- Dispatcher
+- Handler Factory
+
+Le Scheduler :
+1. reçoit une demande ou une tâche durable ;
+2. applique les politiques et contrôles d'admission ;
+3. interroge les composants concernés pour obtenir leurs informations utiles ;
+4. compare les compétences requises aux capacités annoncées ;
+5. tient compte des réservations et des statistiques disponibles ;
+6. décide de l'admission, de la priorité et de l'affectation ;
+7. distribue la tâche au handler choisi.
+
+Les composants décrivent leur état ; le Scheduler prend les décisions d'orchestration. Aucun registre ou orchestrateur parallèle n'est introduit.
+
+**Résultat attendu :** une tâche admise et affectée à un handler compatible, avec une décision durable et traçable.
+
+## 05. Exécution et communication entre composants
+
+**Objectif :** exécuter les tâches, transmettre les demandes et récupérer les résultats ou les erreurs.
+
+Composants :
+- Dispatcher
+- Handlers
+- Handler Execution
+- Step Runner
+- Continuation Store
+- Adaptateurs
+- ControlProxy
+- Runtime
+- PostgreSQL
+
+Flux attendu :
+
+```text
+Scheduler
+    → Dispatcher
+    → Handler
+    → Adaptateur / interface
+    → Système cible
+    → Résultat ou erreur
+    → Handler
+    → PostgreSQL
+    → Scheduler
+```
+
+Les échanges doivent rendre identifiables le destinataire, l'interface utilisée, l'état de transmission, le résultat, les erreurs, les délais et les possibilités de reprise. ControlProxy transporte les messages autorisés ; il ne choisit pas les tâches et ne prend aucune décision d'orchestration.
+
+**Résultat attendu :** les tâches peuvent être exécutées, suivies, persistées et reprises sans perdre l'autorité du Scheduler.
+
+## 06. Recherche, contexte et collaboration des laboratoires
+
+**Objectif :** faire travailler ensemble les capacités de recherche, les spécialistes et les laboratoires.
+
+Composants :
+- Context Engine
+- PostgreSQL
+- E5
+- OpenVINO
+- Qdrant
+- Research Tools
+- Laboratory Framework
+- Laboratories
+- Specialists
+- Handler Catalog
+
+Les laboratoires sont appelés par les handlers et collaborent au moyen de leurs interfaces et contrats. Ils peuvent partager des résultats par PostgreSQL : un laboratoire peut donc lire une version persistée qui n'est pas le tout dernier état en mémoire ou en cours de production chez un autre laboratoire.
+
+Les échanges doivent conserver :
+- l'identité de la donnée ;
+- sa date et sa version ;
+- sa provenance ;
+- son état de fraîcheur ;
+- les références permettant de retrouver la donnée durable.
+
+La fraîcheur requise dépend de la tâche. Une donnée persistée plus ancienne peut être acceptable pour une synthèse ou une collaboration asynchrone ; elle ne doit pas être présentée comme l'état instantané d'un autre laboratoire.
+
+PostgreSQL demeure l'autorité durable. Qdrant fournit une projection de recherche/rappel ; les éléments retenus sont réhydratés depuis SQL lorsque nécessaire. Le profil E5 canonique reste en 384 dimensions.
+
+**Résultat attendu :** les laboratoires et spécialistes collaborent sans orchestrateur parallèle, avec une fraîcheur et une provenance explicites des données échangées.
+
+## 07. Résultats, preuves et synthèse
+
+**Objectif :** consolider les résultats produits pendant la recherche.
+
+Composants :
+- Evidence Aggregation
+- Provenance
+- Digest Deduplication
+- Contradiction Detection
+- Liaison Synthesis
+- PostgreSQL
+- Qdrant
+
+Les résultats des handlers et des laboratoires sont rassemblés, reliés à leur provenance, dédupliqués et confrontés. Les preuves et décisions durables sont conservées dans PostgreSQL ; Qdrant peut en fournir une projection de rappel.
+
+Le périmètre exact du passage obligatoire par chacun de ces composants reste à confirmer par l'audit des parcours existants. La roadmap ne présume pas que toutes les requêtes nécessitent systématiquement toutes les formes d'agrégation.
+
+**Résultat attendu :** des résultats traçables et une synthèse exploitable, avec les contradictions et incertitudes conservées au lieu d'être masquées.
+
+## 08. Recherche adaptative pilotée par le Scheduler
+
+**Objectif :** permettre au Scheduler de faire évoluer le graphe de recherche selon les observations et les résultats.
+
+Composants :
+- Scheduler
+- Task Graph
+- Context Engine
+- Research Statistics
+- Cell Statistics
+- Component Usage Statistics
+- Resource Reservations
+- PostgreSQL
+
+Le Scheduler exploite les retours des tâches pour :
+- mesurer couverture, fréquence, nouveauté, rendement et incertitude des cellules ;
+- repérer les cellules ou régions sous-représentées ;
+- réévaluer l'intérêt des branches de recherche ;
+- réviser les priorités ;
+- abandonner explicitement une branche devenue peu intéressante ;
+- préserver les tâches indépendantes ;
+- réaffecter les travaux selon les capacités et réservations disponibles.
+
+Deux familles de statistiques restent distinctes :
+- **statistiques de recherche/cellules** : couverture, fréquence, nouveauté, résultats, incertitude et évolution des branches ;
+- **statistiques d'utilisation des composants** : tâches traitées, durée, occupation, attente, succès, échecs, indisponibilités et erreurs de communication.
+
+Les décisions, justifications, états et possibilités de reprise sont persistés dans PostgreSQL. La charge logique est calculée à partir des tâches, files, budgets et réservations du Scheduler, et non déduite des seules mesures matérielles.
+
+**Résultat attendu :** un graphe de recherche évolutif dont le Scheduler reste l'unique autorité.
+
+## 09. Observation, statistiques et rapport opérationnel périodique
+
+**Objectif :** observer le fonctionnement réel des composants et publier régulièrement leur état d'utilisation dans Git.
+
+Composants :
+- EventBus
+- EventBus Cell Lens Bridge
+- Cell Observation Journal
+- Cell Snapshot
+- Cell Lens
+- PassiveSupervisor
+- VisPy
+- Hardware Collector
+- Hardware Contracts
+- Component Usage Statistics
+- Operational Report
+- Git Publisher
+
+Les événements, états et statistiques peuvent alimenter l'observation et le rapport. EventBus, Cell Lens, PassiveSupervisor et VisPy restent passifs : ils ne commandent ni le Scheduler ni les composants.
+
+Le rapport opérationnel doit notamment présenter :
+- les composants actifs, prêts, occupés, indisponibles ou inconnus ;
+- les capacités et réservations communiquées par les composants ;
+- les statistiques d'utilisation et d'exécution ;
+- les durées, attentes, succès, échecs et indisponibilités ;
+- les erreurs et états de communication ;
+- les observations matérielles, séparées de la charge logique du Scheduler ;
+- les horodatages, la fraîcheur et les lacunes de collecte.
+
+**Cadence cible :** le serveur pousse dans le dépôt Git un nouvel état de rapport toutes les 30 secondes. Ce flux périodique est indépendant des branches, commits et pull requests utilisés pour livrer le résultat d'une requête.
+
+Les contrats HardwareSample et HardwareCell existent, mais ils ne constituent pas à eux seuls un collecteur matériel. Le collecteur et son raccordement restent à réaliser et à valider.
+
+**Résultat attendu :** un historique Git périodique du fonctionnement et de l'utilisation du serveur, sans transformer les outils d'observation en contrôleurs.
+
+## 10. Copilot contextualisé par l'état du système
+
+**Objectif :** permettre à Copilot de produire des propositions et artefacts en tenant compte du contexte opérationnel disponible.
+
+Composants :
+- GitHub ProjectV2
+- Copilot
+- Server Routing Context
+- Scheduler
+- Task Graph
+- Laboratories
+- Specialists
+- Research Statistics
+- Component Usage Statistics
+- Operational Report
+
+Après le premier artefact de l'étape 01, Copilot peut être alimenté par un contexte serveur borné, daté et traçable : projets et expériences actifs, tâches, outils, laboratoires, spécialistes, capacités communiquées, réservations, statistiques et charge logique.
+
+Copilot reste consultatif. Il ne peut ni admettre une tâche, ni sélectionner un handler, ni modifier les priorités durables, ni lancer directement un laboratoire ou un processus. Le Scheduler conserve toutes les décisions d'exécution.
+
+**Résultat attendu :** Copilot dispose d'un contexte réel et actualisé selon les informations disponibles, sans devenir une autorité d'orchestration.
+
+## 11. Construction du livrable final
+
+**Objectif :** assembler le résultat final de la requête à partir des résultats et preuves disponibles.
+
+Composants :
+- Evidence Aggregation
+- Liaison Synthesis
+- Final Deliverable
+- Publication Evidence
+- Publication Plan
+- PostgreSQL
+
+Le livrable conserve les références aux résultats, preuves, sources, versions et décisions qui le justifient. Il est préparé pour validation et publication.
+
+**Résultat attendu :** un livrable durable, traçable et prêt à être soumis à la revue prévue.
+
+## 12. Validation et retour final dans Git
+
+**Objectif :** livrer le résultat de la requête dans le dépôt Git et reporter son état final sur le board.
+
+Composants :
+- Publication Plan
+- Human Review
+- Git Adapter
+- Git Writer
+- Git Branch
+- Git Commit
+- Pull Request
+- GitHub ProjectV2
+- PostgreSQL
+- Scheduler
+
+Flux attendu :
+
+```text
+Final Deliverable
+    → Publication Plan
+    → Human Review
+    → Git Adapter
+    → Git Writer
+    → Branch / Commit / Pull Request
+    → GitHub ProjectV2
+    → État final durable
+```
+
+La validation humaine et les autorisations requises précèdent les mutations externes. Le retour dans GitHub ProjectV2 reflète l'état du travail ; PostgreSQL conserve l'état durable de la requête.
+
+Le Git Writer et le parcours complet de livraison doivent être démontrés de bout en bout. La présence d'un plan, d'un adaptateur ou d'un contrat de publication ne suffit pas à prouver que le résultat est effectivement livré.
+
+**Résultat attendu :** le livrable est publié dans Git, et la requête dispose d'un état final traçable dans PostgreSQL et sur le board.
+
+## Ordre de réalisation
+
+1. Entrée du board, déclenchement Copilot, premier artefact et définition du flux de rapport périodique.
+2. Interfaces de communication à la demande et remontée des informations propres aux composants.
+3. Raccordement des politiques, contrôles de sécurité et autorisations.
+4. Admission, sélection et distribution des tâches par le Scheduler.
+5. Exécution, communication, retours d'état et reprise durable.
+6. Recherche, contexte et collaboration des laboratoires avec fraîcheur explicite des données.
+7. Consolidation des résultats et des preuves, après confirmation du périmètre réellement nécessaire.
+8. Recherche adaptative et statistiques de recherche/composants sous autorité du Scheduler.
+9. Observation, collecte, statistiques et Git Push du rapport toutes les 30 secondes.
+10. Contexte serveur consultatif de Copilot.
+11. Construction du livrable final.
+12. Validation, publication et retour final dans Git.
+
+## Règle de clôture d'une étape et manuel
+
+Une étape est clôturée lorsque :
+- ses composants producteurs et consommateurs sont identifiés ;
+- les interfaces et échanges sont raccordés ;
+- les autorités et contrôles de sécurité sont respectés ;
+- les états, erreurs, fraîcheurs et reprises sont traités ;
+- les données durables et les statistiques nécessaires sont traçables ;
+- le parcours est validé par des preuves adaptées.
+
+Une étape finale peut regrouper plusieurs patches. Les patches intermédiaires ne créent pas de chapitre prématuré. Une fois l'étape validée, son chapitre est ajouté au manuel organisé dans le même ordre que le parcours d'une requête.
+
+Les noms de composants de cette roadmap désignent des responsabilités logiques. Ils ne certifient pas que chaque responsabilité est déjà implémentée ou raccordée. L'état réel est établi par audit du code courant et par les preuves d'exécution, pas par la seule présence des noms dans ce document.
