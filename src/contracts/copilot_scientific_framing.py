@@ -6,18 +6,16 @@ Those actions remain at their existing server and adapter boundaries.
 """
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 import hashlib
 import json
-import re
 from typing import Any
 
 INITIAL_SCHEMA = "missipy.github.copilot_advisory.v2"
 SERVER_RESPONSE_SCHEMA = "missipy.github.server_scientific_framing_response.v1"
 REFINED_REQUEST_SCHEMA = "missipy.github.copilot_refined_research_request.v1"
 HANDSHAKE_SCHEMA = "missipy.github.copilot_scientific_framing_handshake.v1"
-_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _ALLOWED_STATUSES = {"coherent", "partially_coherent", "incoherent"}
 
 
