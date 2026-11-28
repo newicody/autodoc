@@ -30,6 +30,17 @@ from context.github_research_work_package_admissibility_0287 import (
     GitHubResearchWorkPackageAdmissibilityCommand,
     evaluate_github_research_work_package_admissibility,
 )
+from contracts.copilot_scientific_framing import (
+    canonical_digest,
+    validate_initial_advisory,
+    validate_refined_request,
+    validate_server_response,
+)
+from contracts.git_artifact_exchange import (
+    canonical_payload_digest,
+    validate_git_exchange_chain,
+    validate_git_exchange_artifact,
+)
 
 SCHEMA = "missipy.github.ready_run_research_admissibility_assembly.v1"
 _READY_RUN_STATUS = "ready"
@@ -91,11 +102,15 @@ class GitHubReadyRunResearchAdmissibilityCommand:
     context_generation: int = 0
     context_refs: tuple[str, ...] = ()
     evidence_refs: tuple[str, ...] = ()
+    framing_exchange: Mapping[str, Any] = field(default_factory=dict)
+    require_scientific_framing_exchange: bool = False
     execute: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.ready_run, Mapping):
             raise TypeError("ready_run must be a mapping")
+        if not isinstance(self.framing_exchange, Mapping):
+            raise TypeError("framing_exchange must be a mapping")
         if not isinstance(self.artifact_contents, tuple):
             object.__setattr__(
                 self,
@@ -154,6 +169,7 @@ class GitHubReadyRunResearchAdmissibilityResult:
             "existing_admissibility_gate_reused": True,
             "request_authoritative": True,
             "advisory_used_as_hint_only": True,
+            "scientific_framing_exchange_required": False,
             "filesystem_write_performed": False,
             "sql_write_performed": False,
             "qdrant_write_performed": False,
@@ -296,6 +312,64 @@ def assemble_ready_run_and_evaluate_research_admissibility(
             run_assembly=assembly_mapping,
         )
 
+    refined_request: Mapping[str, Any] = {}
+    framing_refs: tuple[str, ...] = ()
+    if command.require_scientific_framing_exchange and not command.framing_exchange:
+        return _result(
+            valid=False,
+            admissible=False,
+            status="scientific-framing-missing",
+            issues=["the one-shot Git scientific framing exchange is required"],
+            repository=repository,
+            run_id=run_id,
+            handoff_ref=handoff_ref,
+            run_assembly=assembly_mapping,
+        )
+    if command.framing_exchange:
+        exchange = command.framing_exchange
+        initial_envelope = _mapping(exchange.get("copilot_initial"))
+        response_envelope = _mapping(exchange.get("server_response"))
+        refined_envelope = _mapping(exchange.get("copilot_refined"))
+        try:
+            validate_git_exchange_chain(
+                (initial_envelope, response_envelope, refined_envelope)
+            )
+            for envelope in (initial_envelope, response_envelope, refined_envelope):
+                validate_git_exchange_artifact(envelope)
+            initial_payload = _mapping(initial_envelope.get("payload"))
+            response_payload = _mapping(response_envelope.get("payload"))
+            refined_payload = _mapping(refined_envelope.get("payload"))
+            advisory = _mapping(intake.get("advisory"))
+            if canonical_payload_digest(initial_payload) != canonical_payload_digest(advisory):
+                raise ValueError("Git initial Copilot artifact differs from Actions advisory")
+            if initial_envelope.get("repository") != repository:
+                raise ValueError("Git framing repository does not match ready run")
+            if initial_envelope.get("issue_number") != issue_number:
+                raise ValueError("Git framing Issue does not match ready run")
+            request_ref = _text(request.get("artifact_ref"))
+            handshake = validate_initial_advisory(
+                {"artifact_ref": request_ref},
+                initial_payload,
+            )
+            validate_server_response(handshake, response_payload)
+            validate_refined_request(handshake, response_payload, refined_payload)
+            refined_request = refined_payload
+            framing_refs = tuple(
+                str(envelope["artifact_ref"])
+                for envelope in (initial_envelope, response_envelope, refined_envelope)
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            return _result(
+                valid=False,
+                admissible=False,
+                status="scientific-framing-invalid",
+                issues=[str(exc)],
+                repository=repository,
+                run_id=run_id,
+                handoff_ref=handoff_ref,
+                run_assembly=assembly_mapping,
+            )
+
     repository_slug = repository.replace("/", "-")
     conversation_ref = (
         command.conversation_ref.strip()
@@ -306,12 +380,13 @@ def assemble_ready_run_and_evaluate_research_admissibility(
         or f"github-issue-return:{repository_slug}:{issue_number}"
     )
     context_refs = tuple(
-        dict.fromkeys((handoff_ref, *command.context_refs))
+        dict.fromkeys((handoff_ref, *command.context_refs, *framing_refs))
     )
     evidence_refs = tuple(
         dict.fromkeys(
             (
                 *command.evidence_refs,
+                *(f"git-scientific-framing:{ref}" for ref in framing_refs),
                 *(
                     f"github-actions-artifact:{repository_slug}:{run_id}:"
                     f"{_text(_mapping(artifacts[role]).get('artifact_id'))}"
@@ -331,6 +406,7 @@ def assemble_ready_run_and_evaluate_research_admissibility(
             evidence_refs=evidence_refs,
             require_advisory=True,
             require_fetched_attachments=False,
+            copilot_refined_request=refined_request,
         )
     )
     package_mapping = package_build.to_mapping()
