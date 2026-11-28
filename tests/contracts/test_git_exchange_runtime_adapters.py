@@ -61,3 +61,17 @@ def test_refinement_parser_rejects_extra_authority_or_route_fields():
             "scientific_representations": ["Table"],
             "scheduler_command": "run",
         }))
+
+
+def test_refinement_parser_extracts_object_from_copilot_cli_envelope():
+    from tools.run_autodoc_copilot_refinement import _extract
+
+    refinement = {
+        "concrete_objective": "Study",
+        "expected_result": "Report",
+        "provided_constraints": [],
+        "success_criteria": ["Evidence"],
+        "scientific_representations": ["Table"],
+    }
+    cli_envelope = {"data": {"content": json.dumps(refinement)}}
+    assert _extract(json.dumps(cli_envelope)) == refinement
