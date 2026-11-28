@@ -152,6 +152,10 @@ def main(argv: list[str] | None = None) -> int:
         if response_envelope.get("role") != "server_response":
             raise ValueError("server response artifact role mismatch")
         response = response_envelope["payload"]
+        if response_envelope.get("predecessor_ref") != initial.get("artifact_ref"):
+            raise ValueError("server response does not reference the initial artifact")
+        if response_envelope.get("predecessor_digest") != initial.get("payload_digest"):
+            raise ValueError("server response predecessor digest does not match initial artifact")
         validate_refined_request(handshake, response, payload)
         predecessor_ref = str(response_envelope["artifact_ref"])
         predecessor_digest = str(response_envelope["payload_digest"])
