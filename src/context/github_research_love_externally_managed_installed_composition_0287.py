@@ -125,6 +125,7 @@ class GitHubResearchLoveExternallyManagedInstalledComponents:
         compare=False,
     )
     evidence_refs: tuple[str, ...] = ()
+    component_state_provider: object | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.schema != EXTERNALLY_MANAGED_COMPONENTS_SCHEMA:
@@ -190,7 +191,8 @@ class GitHubResearchLoveExternallyManagedInstalledComponents:
                 "evidence_refs": self.evidence_refs,
                 "postgresql_durable_authority": True,
                 "qdrant_projection_and_recall": True,
-                "openvino_e5_injected": True,\n                "component_state_provider_injected": self.component_state_provider is not None,
+                "openvino_e5_injected": True,
+                "component_state_provider_injected": self.component_state_provider is not None,
                 "internal_json_storage_created": False,
                 "jsonl_queue_created": False,
             }
