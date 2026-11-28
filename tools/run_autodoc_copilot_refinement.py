@@ -113,6 +113,13 @@ def main(argv: list[str] | None = None) -> int:
     validate_git_exchange_artifact(response_envelope)
     if initial.get("role") != "copilot_initial" or response_envelope.get("role") != "server_response":
         raise ValueError("unexpected predecessor artifact roles")
+    for identity_field in ("repository", "issue_number", "cycle_ordinal"):
+        if initial.get(identity_field) != response_envelope.get(identity_field):
+            raise ValueError("server response research-cycle identity mismatch")
+    if response_envelope.get("predecessor_ref") != initial.get("artifact_ref"):
+        raise ValueError("server response does not reference the initial artifact")
+    if response_envelope.get("predecessor_digest") != initial.get("payload_digest"):
+        raise ValueError("server response predecessor digest mismatch")
     advisory = initial["payload"]
     request = {"artifact_ref": advisory.get("request_artifact_ref")}
     handshake = validate_initial_advisory(request, advisory)
