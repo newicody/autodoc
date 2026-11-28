@@ -304,6 +304,7 @@ class GitHubResearchLoveExternallyManagedRuntime:
     observation_sink: BufferedPersistentHandlerInformationSink
     observation_store: SchedulerTemporalObservationStore
     clock: Callable[[], str]
+    component_state_provider: object | None = None
 
     def __post_init__(self) -> None:
         if not self.scheduler_ref.startswith("scheduler:"):
