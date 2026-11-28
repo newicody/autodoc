@@ -327,3 +327,51 @@ def test_command_is_read_only_and_rejects_string_reference_collections() -> None
         assert "sequence of strings" in str(exc)
     else:
         raise AssertionError("string context_refs must fail")
+
+
+def test_includes_validated_refined_request_as_non_authoritative_hint():
+    refined = {
+        "schema": "missipy.github.copilot_refined_research_request.v1",
+        "handshake_ref": "copilot-framing:handshake-17",
+        "request_artifact_ref": "github-request:req-17",
+        "initial_advisory_ref": "github-advisory:adv-17",
+        "server_response_digest": "6" * 64,
+        "concrete_objective": "Analyse les dimensions relationnelles.",
+        "expected_result": "Deux analyses et une synthèse.",
+        "provided_constraints": ["Rester fondé sur les preuves."],
+        "success_criteria": ["Conserver les incertitudes."],
+        "scientific_representations": ["Tableau", "Courbe"],
+        "trusted": False,
+        "usable_as_authority": False,
+    }
+    result = build_correlated_research_work_package(
+        _command(copilot_refined_request=refined)
+    )
+    assert result.valid is True
+    package = result.work_package
+    assert package["copilot_refined_request"] == refined
+    assert package["refined_request_present"] is True
+    assert package["refined_request_used_as_hint_only"] is True
+    assert package["request_authoritative"] is True
+
+
+def test_rejects_refined_request_bound_to_another_authoritative_request():
+    refined = {
+        "schema": "missipy.github.copilot_refined_research_request.v1",
+        "handshake_ref": "copilot-framing:handshake-17",
+        "request_artifact_ref": "github-request:other",
+        "initial_advisory_ref": "github-advisory:adv-17",
+        "server_response_digest": "6" * 64,
+        "concrete_objective": "Analyse.",
+        "expected_result": "Rapport.",
+        "provided_constraints": [],
+        "success_criteria": ["Evidence"],
+        "scientific_representations": ["Tableau"],
+        "trusted": False,
+        "usable_as_authority": False,
+    }
+    result = build_correlated_research_work_package(
+        _command(copilot_refined_request=refined)
+    )
+    assert result.valid is False
+    assert "refined request request_artifact_ref mismatch" in result.issues
