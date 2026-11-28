@@ -39,6 +39,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--assessment", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, default=Path(".var/git_exchange"))
     args = parser.parse_args(argv)
+    args.assessment = args.assessment.resolve()
+    args.work_dir = args.work_dir.resolve()
 
     args.work_dir.mkdir(parents=True, exist_ok=True)
     initial_path = args.work_dir / f"issue-{args.issue_number}-cycle-{args.cycle_ordinal}-initial.json"
