@@ -60,7 +60,7 @@ def _gh(args: list[str], *, allow_404: bool = False) -> dict[str, Any] | None:
 
 def _read_remote(repository: str, branch: str, path: str) -> dict[str, Any] | None:
     result = _gh(
-        ["repos/" + repository + "/contents/" + path, "-f", "ref=" + branch],
+        ["-X", "GET", "repos/" + repository + "/contents/" + path, "-f", "ref=" + branch],
         allow_404=True,
     )
     if result is None:
@@ -85,14 +85,13 @@ def _publish(repository: str, branch: str, envelope: Mapping[str, Any]) -> str:
     content = json.dumps(
         dict(envelope), ensure_ascii=False, sort_keys=True, indent=2
     ) + "\n"
-    encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
     _gh([
         "-X", "PUT",
         "repos/" + repository + "/contents/" + path,
         "-f", "message=autodoc: publish " + str(envelope["role"])
              + " issue " + str(envelope["issue_number"])
              + " cycle " + str(envelope["cycle_ordinal"]),
-        "-f", "content=" + encoded,
+        "-f", "content=" + content,
         "-f", "branch=" + branch,
     ])
     readback = _read_remote(repository, branch, path)
