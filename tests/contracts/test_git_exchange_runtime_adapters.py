@@ -52,7 +52,7 @@ def test_refinement_parser_accepts_only_explicit_scientific_fields():
 def test_refinement_parser_rejects_extra_authority_or_route_fields():
     from tools.run_autodoc_copilot_refinement import _extract
 
-    with pytest.raises(ValueError, match="strict schema"):
+    with pytest.raises(ValueError, match="exact refinement object"):
         _extract(json.dumps({
             "concrete_objective": "Study",
             "expected_result": "Report",
