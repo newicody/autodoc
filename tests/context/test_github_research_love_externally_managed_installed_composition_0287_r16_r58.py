@@ -106,7 +106,7 @@ def _settings(lifecycle: str = "externally-managed") -> InstalledRuntimeFactoryS
     )
 
 
-def _components() -> GitHubResearchLoveExternallyManagedInstalledComponents:
+def _components(state_provider=None) -> GitHubResearchLoveExternallyManagedInstalledComponents:
     provider = Provider()
     observation = ObservationStore()
 
@@ -183,3 +183,39 @@ def test_scheduler_reference_mismatch_is_rejected() -> None:
         assert "scheduler_ref" in str(exc)
     else:
         raise AssertionError("divergent Scheduler identity should fail closed")
+
+
+class ComponentStateProvider:
+    def collect_component_state_snapshots(self):
+        return [{
+            "component_ref": "component:openvino",
+            "source_ref": "component-state-source:openvino-status",
+            "observed_at": "2026-11-28T12:00:00Z",
+            "status": "complete",
+            "availability": "available",
+            "freshness": "fresh",
+            "communication_status": "connected",
+            "capabilities": ["embedding.e5.384"],
+            "supported_representations": ["vector embeddings"],
+            "coherence_status": "coherent",
+            "usage_statistics": {"requests": 4},
+        }]
+
+
+def test_installed_runtime_exposes_component_owned_scientific_assessment() -> None:
+    components = _components(ComponentStateProvider())
+    bundle = compose_github_research_love_externally_managed_service(
+        settings=_settings(),
+        components=components,
+        service_settings=OpenRcSchedulerServiceSettings(
+            scheduler_ref="scheduler:main"
+        ),
+        clock=lambda: "2026-11-28T12:01:00Z",
+    )
+
+    assessment = bundle.service.runtime.build_scientific_framing_assessment()
+
+    assert assessment["coherence_status"] == "coherent"
+    assert assessment["verified_capabilities"] == ["embedding.e5.384"]
+    assert assessment["component_usage_statistics"]["component:openvino"]["requests"] == 4
+    assert assessment["scheduler_capacity_inferred_from_hardware"] is False
