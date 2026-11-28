@@ -27,7 +27,10 @@ from kernel.scheduler_canonical_continuation import (
     SchedulerCanonicalCycleBound,
     SchedulerCanonicalCycleReport,
 )
-from context.server_scientific_framing_assessment_0287 import (\n    build_server_scientific_framing_assessment,\n)\nfrom kernel.scheduler_handler_contract import (
+from context.server_scientific_framing_assessment_0287 import (
+    build_server_scientific_framing_assessment,
+)
+from kernel.scheduler_handler_contract import (
     HandlerInformationSink,
     HandlerLifecycleNotice,
 )
