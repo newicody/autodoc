@@ -54,6 +54,8 @@ En parallèle, le serveur prépare et publie périodiquement dans le dépôt Git
 
 **Résultat attendu :** une recherche durable configurée dans Projects, un cadrage initial effectué en un seul échange serveur/Copilot et un artefact précis publié, sans admission implicite d'une tâche.
 
+**Avancement 0293 :** le contrat typé du cadrage scientifique initial est ajouté (`missipy.github.copilot_advisory.v2` → `missipy.github.server_scientific_framing_response.v1` → `missipy.github.copilot_refined_research_request.v1`). Les validations de corrélation, de digest, de provenance et de non-autorité sont définies. Ce patch ne fournit pas encore le producteur de la réponse serveur, le second appel Copilot, la persistance append-only ni leur raccordement au workflow ; l'étape 01 reste donc ouverte.
+
 ## 02. Communication à la demande et état propre des composants
 
 **Objectif :** permettre au Scheduler d'interroger les composants sans leur imposer un registre central omniscient.
