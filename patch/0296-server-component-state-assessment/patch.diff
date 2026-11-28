@@ -1,0 +1,690 @@
+diff --git a/doc/README.md b/doc/README.md
+--- a/doc/README.md
++++ b/doc/README.md
+@@ -7,6 +7,7 @@ Autodoc/MissiPy évolue vers un **automate cellulaire de recherche** : cellules
+ - [Noyau et Scheduler](architecture/KERNEL_AND_SCHEDULER.md)
+ - [Cadrage scientifique Copilot–serveur](architecture/COPILOT_SCIENTIFIC_FRAMING.md)
+ - [Transport Git des artefacts Copilot–serveur](architecture/GIT_ARTIFACT_EXCHANGE.md)
++- [État des composants et cadrage serveur](architecture/SERVER_COMPONENT_STATE.md)
+ - [Recherche et contexte](architecture/RESEARCH_AND_CONTEXT.md)
+ - [Données, inférence et observation](architecture/DATA_INFERENCE_OBSERVABILITY.md)
+ - [Dépendances](DEPENDENCIES.md) · [Licences](LICENSES.md) · [Installation](INSTALLATION.md) · [Roadmap](ROADMAP.md)
+diff --git a/doc/ROADMAP.md b/doc/ROADMAP.md
+--- a/doc/ROADMAP.md
++++ b/doc/ROADMAP.md
+@@ -60,8 +60,12 @@ En parallèle, le serveur prépare et publie périodiquement dans le dépôt Git
+ 
+ **Avancement 0295 :** le workflow initial publie maintenant l'avis Copilot v2 dans Git avec un secret d'écriture limité ; un workflow séparé réagit uniquement au push de `server-response.json` et publie la reformulation Copilot une seule fois. Les adaptateurs de récupération/publication Git sont ajoutés. Le serveur dispose d'un adaptateur pour publier sa réponse à partir d'une évaluation JSON vérifiée, et l'assembleur d'admissibilité peut exiger la chaîne complète puis intégrer la reformulation comme indication non autoritative au work package existant. Ce raccordement est disponible en option CLI, pas encore activé dans le parcours vivant `En cours`. L'adaptateur serveur ne collecte pas lui-même l'état des composants : son alimentation par les interfaces réelles et son appel dans le traitement serveur restent à raccorder. Les workflows et le secret doivent encore être installés dans `newicody/projects` et le parcours de bout en bout validé. L'étape 01 reste ouverte.
+ 
++**Avancement 0296 :** un contrat d'instantané d'état propre à chaque composant (`missipy.server.component_state_snapshot.v1`) et un agrégateur d'évaluation scientifique sont ajoutés. Ils conservent disponibilité, fraîcheur, état de communication, capacités, réservations, interfaces, statistiques d'utilisation, données et provenance. Les états inconnus, partiels et périmés ne sont pas transformés en zéros ; les statistiques d'utilisation restent distinctes de la capacité logique du Scheduler et des mesures matérielles. Le runtime installé peut recevoir un fournisseur d'instantanés injecté et produire l'évaluation utilisée par l'adaptateur de réponse Git. Le fournisseur concret doit encore être implémenté par la fabrique de composants installée, puis appelé par le traitement Git serveur lorsqu'un artefact initial arrive. Aucun poller, registre, manager ou orchestrateur parallèle n'est ajouté. L'étape 01 reste ouverte.
++
+ ## 02. Communication à la demande et état propre des composants
+ 
++**Avancement 0296 :** le contrat d'instantané et l'agrégateur scientifique établissent la forme des informations fournies par les composants. Le raccordement au runtime passe par un fournisseur injecté par la composition installée ; chaque composant reste responsable de ses propres observations. Le registre déclaratif 0242 et le plan de registre Scheduler 0257 ne sont pas transformés en sources d'état dynamique ni en autorités omniscientes.
++
+ **Objectif :** permettre au Scheduler d'interroger les composants sans leur imposer un registre central omniscient.
+ 
+ Composants :
+diff --git a/doc/architecture/SERVER_COMPONENT_STATE.md b/doc/architecture/SERVER_COMPONENT_STATE.md
+new file mode 100644
+--- /dev/null
++++ b/doc/architecture/SERVER_COMPONENT_STATE.md
+@@ -0,0 +1,63 @@
++# État des composants et cadrage scientifique serveur
++
++## Responsabilité des composants
++
++Chaque composant reste propriétaire de son état et expose, par son interface
++existante, un instantané à la demande. Le Scheduler et le serveur ne déduisent
++pas un état absent à partir d'une liste de composants configurés.
++
++Le contrat `missipy.server.component_state_snapshot.v1` porte notamment :
++
++- disponibilité et état de collecte ;
++- fraîcheur et date d'observation ;
++- état de communication ;
++- capacités déclarées et vérifiées par le composant ;
++- réservations et interfaces ;
++- statistiques d'utilisation propres au composant ;
++- données disponibles et manquantes ;
++- représentations scientifiques prises en charge ou non ;
++- contraintes, erreurs et provenance.
++
++Les valeurs inconnues, indisponibles, partielles ou périmées restent explicites.
++Une information absente n'est jamais transformée en zéro ni présentée comme
++une capacité vérifiée.
++
++## Agrégation pour Copilot
++
++`build_server_scientific_framing_assessment` agrège uniquement les
++instantanés qui lui sont fournis. Il ne consulte aucun backend et n'invente
++aucune observation. Il conserve les références de source et les dates,
++sépare les statistiques d'utilisation, et dégrade la cohérence globale si un
++état est partiel, inconnu, périmé, indisponible ou en erreur.
++
++L'agrégateur ne déduit jamais la capacité d'admission du Scheduler depuis les
++mesures CPU/GPU/RAM. La capacité logique relève du Scheduler et ses propres
++données ; la télémétrie matérielle demeure une observation distincte.
++
++## Raccordement au runtime
++
++La composition OpenRC existante accepte un fournisseur d'instantanés injecté
++dans le bundle des composants installés. Le runtime expose une opération
++d'évaluation qui appelle ce fournisseur puis agrège les résultats. Aucun
++nouveau registre, manager, poller, EventBus ou Scheduler n'est créé.
++
++Le fournisseur concret appartient à la fabrique de composants installée.
++Il doit interroger les interfaces des composants déjà composés et retourner
++leurs observations typées. Le contrat ne remplace pas ces interfaces et ne
++déclare pas qu'elles sont déjà implémentées.
++
++L'adaptateur `publish_git_exchange_server_response.py` accepte soit une
++évaluation structurée, soit un fichier d'instantanés de composants. Il valide
++la réponse, la corrèle à l'artefact initial Copilot et la publie dans Git.
++Le traitement vivant qui détecte l'arrivée de l'artefact initial, appelle
++l'évaluation du runtime et lance cet adaptateur reste à raccorder.
++
++## Limites d'autorité
++
++- L'avis Copilot et sa reformulation restent non autoritatifs.
++- La réponse serveur décrit cohérence, données, capacités, contraintes et
++  provenance ; elle n'autorise jamais l'exécution.
++- La transition ProjectV2 vers `En cours` et les contrôles d'admissibilité
++  existants restent les portes d'entrée vers le Scheduler.
++- EventBus et les projections d'observation ne deviennent pas des canaux de
++  commande.
+diff --git a/src/context/github_research_love_externally_managed_installed_composition_0287.py b/src/context/github_research_love_externally_managed_installed_composition_0287.py
+--- a/src/context/github_research_love_externally_managed_installed_composition_0287.py
++++ b/src/context/github_research_love_externally_managed_installed_composition_0287.py
+@@ -166,6 +166,11 @@ def __post_init__(self) -> None:
+         )
+         for name in ("initialize_schema", "append_many"):
+             _method(self.observation_store, name)
++        if self.component_state_provider is not None:
++            _method(
++                self.component_state_provider,
++                "collect_component_state_snapshots",
++            )
+         for callback in self.close_callbacks:
+             if not callable(callback):
+                 raise TypeError("chaque close_callback doit être callable")
+@@ -185,7 +190,7 @@ def to_mapping(self) -> Mapping[str, object]:
+                 "evidence_refs": self.evidence_refs,
+                 "postgresql_durable_authority": True,
+                 "qdrant_projection_and_recall": True,
+-                "openvino_e5_injected": True,
++                "openvino_e5_injected": True,\n                "component_state_provider_injected": self.component_state_provider is not None,
+                 "internal_json_storage_created": False,
+                 "jsonl_queue_created": False,
+             }
+@@ -262,6 +267,7 @@ def compose_github_research_love_externally_managed_service(
+         observation_sink=information_sink,
+         observation_store=components.observation_store,
+         clock=runtime_clock,
++        component_state_provider=components.component_state_provider,
+     )
+     service = GitHubResearchLoveOpenRcSchedulerService(
+         scheduler=components.scheduler,
+diff --git a/src/context/github_research_love_externally_managed_runtime_0287.py b/src/context/github_research_love_externally_managed_runtime_0287.py
+--- a/src/context/github_research_love_externally_managed_runtime_0287.py
++++ b/src/context/github_research_love_externally_managed_runtime_0287.py
+@@ -27,7 +27,7 @@
+     SchedulerCanonicalCycleBound,
+     SchedulerCanonicalCycleReport,
+ )
+-from kernel.scheduler_handler_contract import (
++from context.server_scientific_framing_assessment_0287 import (\n    build_server_scientific_framing_assessment,\n)\nfrom kernel.scheduler_handler_contract import (
+     HandlerInformationSink,
+     HandlerLifecycleNotice,
+ )
+@@ -323,6 +323,27 @@ def __post_init__(self) -> None:
+                 "le sink d'observation appartient à un autre Scheduler"
+             )
+ 
++    def build_scientific_framing_assessment(self) -> dict[str, Any]:
++        """Collect component-owned snapshots through the injected installed provider."""
++        provider = self.component_state_provider
++        if provider is None or not callable(
++            getattr(provider, "collect_component_state_snapshots", None)
++        ):
++            raise GitHubResearchLoveExternallyManagedRuntimeError(
++                "aucun fournisseur d'état des composants n'est injecté dans le runtime"
++            )
++        snapshots = provider.collect_component_state_snapshots()
++        if hasattr(snapshots, "__await__"):
++            raise GitHubResearchLoveExternallyManagedRuntimeError(
++                "le fournisseur d'état doit être synchrone et non bloquant"
++            )
++        try:
++            return build_server_scientific_framing_assessment(snapshots)
++        except (TypeError, ValueError) as exc:
++            raise GitHubResearchLoveExternallyManagedRuntimeError(
++                f"état des composants invalide: {exc}"
++            ) from exc
++
+     async def run_tick(
+         self,
+         *,
+diff --git a/src/context/server_scientific_framing_assessment_0287.py b/src/context/server_scientific_framing_assessment_0287.py
+new file mode 100644
+--- /dev/null
++++ b/src/context/server_scientific_framing_assessment_0287.py
+@@ -0,0 +1,149 @@
++"""Build the one-shot server framing assessment from component-owned snapshots.
++
++The caller supplies snapshots collected through existing component interfaces.
++This module is a pure aggregation adapter: it creates no registry, poller,
++manager, EventBus, Scheduler, or backend connection.
++"""
++from __future__ import annotations
++
++from collections.abc import Iterable, Mapping
++from datetime import datetime, timezone
++from typing import Any
++
++from contracts.server_component_state import ServerComponentStateSnapshot
++
++ASSESSMENT_SCHEMA = "missipy.server.scientific_framing_assessment.v1"
++
++
++class ServerScientificFramingAssessmentError(ValueError):
++    """Invalid or insufficient component state for a server assessment."""
++
++
++def build_server_scientific_framing_assessment(
++    snapshots: Iterable[ServerComponentStateSnapshot | Mapping[str, Any]],
++    *,
++    observed_at: str | None = None,
++) -> dict[str, Any]:
++    values = tuple(
++        item if isinstance(item, ServerComponentStateSnapshot)
++        else ServerComponentStateSnapshot.from_mapping(item)
++        for item in snapshots
++    )
++    if not values:
++        raise ServerScientificFramingAssessmentError(
++            "at least one component-owned state snapshot is required"
++        )
++    refs = [item.component_ref for item in values]
++    if len(refs) != len(set(refs)):
++        raise ServerScientificFramingAssessmentError(
++            "component state snapshots must have unique component_ref values"
++        )
++    timestamp = observed_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
++    # Validate the aggregation timestamp with the same timezone-aware rule.
++    ServerComponentStateSnapshot(
++        component_ref="component:assessment-aggregator",
++        source_ref="component-state-source:assessment-aggregator",
++        observed_at=timestamp,
++        status="complete",
++        availability="available",
++        freshness="fresh",
++        communication_status="connected",
++    )
++
++    def merge(name: str) -> list[str]:
++        result: list[str] = []
++        for snapshot in values:
++            for item in getattr(snapshot, name):
++                if item not in result:
++                    result.append(item)
++        return result
++
++    statuses = {item.coherence_status for item in values}
++    if "incoherent" in statuses:
++        coherence = "incoherent"
++    elif (
++        statuses == {"coherent"}
++        and all(
++            item.status == "complete"
++            and item.availability == "available"
++            and item.freshness == "fresh"
++            and item.communication_status == "connected"
++            for item in values
++        )
++        and not merge("unsupported_representations")
++        and not merge("missing_data")
++    ):
++        coherence = "coherent"
++    else:
++        coherence = "partially_coherent"
++
++    assessments = [
++        f"{item.component_ref}: {item.assessment.strip()}"
++        for item in values if item.assessment.strip()
++    ]
++    if not assessments:
++        assessments = [
++            "Évaluation limitée aux états déclarés par les composants ; "
++            "les informations absentes ou non fraîches restent inconnues."
++        ]
++
++    component_observations = [item.to_mapping() for item in values]
++    provenance = [
++        {
++            "source_ref": item.source_ref,
++            "observed_at": item.observed_at,
++            "freshness": item.freshness,
++        }
++        for item in values
++    ]
++    constraints = merge("constraints")
++    for item in values:
++        if item.availability != "available":
++            constraints.append(
++                f"{item.component_ref}: disponibilité {item.availability}"
++            )
++        if item.communication_status != "connected":
++            constraints.append(
++                f"{item.component_ref}: communication {item.communication_status}"
++            )
++        if item.status != "complete":
++            constraints.append(
++                f"{item.component_ref}: état de collecte {item.status}"
++            )
++        if item.freshness != "fresh":
++            constraints.append(
++                f"{item.component_ref}: fraîcheur {item.freshness}"
++            )
++        constraints.extend(
++            f"{item.component_ref}: réservation {value}"
++            for value in item.reservations
++        )
++        constraints.extend(
++            f"{item.component_ref}: interface {value}"
++            for value in item.interfaces
++        )
++        constraints.extend(
++            f"{item.component_ref}: erreur {value}"
++            for value in item.errors
++        )
++
++    return {
++        "schema": ASSESSMENT_SCHEMA,
++        "coherence_status": coherence,
++        "assessment": " ".join(assessments),
++        "supported_representations": merge("supported_representations"),
++        "unsupported_representations": merge("unsupported_representations"),
++        "available_data": merge("available_data"),
++        "missing_data": merge("missing_data"),
++        "verified_capabilities": merge("capabilities"),
++        "constraints": list(dict.fromkeys(constraints)),
++        "report_outline": merge("report_outline"),
++        "provenance": provenance,
++        "component_observations": component_observations,
++        "component_usage_statistics": {
++            item.component_ref: dict(item.usage_statistics) for item in values
++        },
++        "observed_at": timestamp,
++        "scheduler_capacity_inferred_from_hardware": False,
++        "unknown_values_defaulted_to_zero": False,
++    }
+diff --git a/src/contracts/server_component_state.py b/src/contracts/server_component_state.py
+new file mode 100644
+--- /dev/null
++++ b/src/contracts/server_component_state.py
+@@ -0,0 +1,158 @@
++"""Immutable component-owned state snapshots for server scientific framing.
++
++Snapshots describe only facts returned by their owning components. Unknown and
++stale values remain explicit; this contract never derives Scheduler capacity
++from physical utilization and never authorizes execution.
++"""
++from __future__ import annotations
++
++from collections.abc import Mapping
++from dataclasses import dataclass, field
++from datetime import datetime
++import math
++from types import MappingProxyType
++from typing import Any
++
++COMPONENT_STATE_SCHEMA = "missipy.server.component_state_snapshot.v1"
++
++_STATUSES = {"complete", "partial", "unavailable", "error"}
++_AVAILABILITY = {"available", "constrained", "unavailable", "unknown"}
++_FRESHNESS = {"fresh", "stale", "unknown"}
++_COMMUNICATION = {"connected", "degraded", "unavailable", "unknown"}
++_COHERENCE = {"coherent", "partially_coherent", "incoherent"}
++
++
++class ComponentStateContractError(ValueError):
++    """Invalid component-owned state snapshot."""
++
++
++@dataclass(frozen=True, slots=True)
++class ServerComponentStateSnapshot:
++    component_ref: str
++    source_ref: str
++    observed_at: str
++    status: str
++    availability: str
++    freshness: str
++    communication_status: str
++    capabilities: tuple[str, ...] = ()
++    reservations: tuple[str, ...] = ()
++    interfaces: tuple[str, ...] = ()
++    usage_statistics: Mapping[str, int | float] = field(default_factory=dict)
++    supported_representations: tuple[str, ...] = ()
++    unsupported_representations: tuple[str, ...] = ()
++    available_data: tuple[str, ...] = ()
++    missing_data: tuple[str, ...] = ()
++    constraints: tuple[str, ...] = ()
++    report_outline: tuple[str, ...] = ()
++    assessment: str = ""
++    coherence_status: str = "partially_coherent"
++    errors: tuple[str, ...] = ()
++    schema: str = COMPONENT_STATE_SCHEMA
++
++    def __post_init__(self) -> None:
++        if self.schema != COMPONENT_STATE_SCHEMA:
++            raise ComponentStateContractError("unsupported component state schema")
++        _typed_ref("component_ref", self.component_ref, "component:")
++        _typed_ref("source_ref", self.source_ref, "component-state-source:")
++        _timestamp(self.observed_at)
++        for name, value, allowed in (
++            ("status", self.status, _STATUSES),
++            ("availability", self.availability, _AVAILABILITY),
++            ("freshness", self.freshness, _FRESHNESS),
++            ("communication_status", self.communication_status, _COMMUNICATION),
++            ("coherence_status", self.coherence_status, _COHERENCE),
++        ):
++            if value not in allowed:
++                raise ComponentStateContractError(f"{name} is unsupported")
++        for name in (
++            "capabilities", "reservations", "interfaces",
++            "supported_representations", "unsupported_representations",
++            "available_data", "missing_data", "constraints", "report_outline", "errors",
++        ):
++            values = tuple(getattr(self, name))
++            if any(not isinstance(item, str) or not item.strip() for item in values):
++                raise ComponentStateContractError(f"{name} must contain non-empty strings")
++            object.__setattr__(self, name, values)
++        if self.status == "complete" and self.errors:
++            raise ComponentStateContractError("complete snapshot cannot contain errors")
++        if self.status == "error" and not self.errors:
++            raise ComponentStateContractError("error snapshot requires an error")
++        if not isinstance(self.assessment, str):
++            raise ComponentStateContractError("assessment must be text")
++        statistics = dict(self.usage_statistics)
++        for key, value in statistics.items():
++            if not isinstance(key, str) or not key.strip():
++                raise ComponentStateContractError("usage statistic names must be non-empty")
++            if isinstance(value, bool) or not isinstance(value, (int, float)):
++                raise ComponentStateContractError("usage statistics must be numeric")
++            if not math.isfinite(value) or value < 0:
++                raise ComponentStateContractError("usage statistics must be finite and non-negative")
++        object.__setattr__(self, "usage_statistics", MappingProxyType(statistics))
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": self.schema,
++            "component_ref": self.component_ref,
++            "source_ref": self.source_ref,
++            "observed_at": self.observed_at,
++            "status": self.status,
++            "availability": self.availability,
++            "freshness": self.freshness,
++            "communication_status": self.communication_status,
++            "capabilities": list(self.capabilities),
++            "reservations": list(self.reservations),
++            "interfaces": list(self.interfaces),
++            "usage_statistics": dict(self.usage_statistics),
++            "supported_representations": list(self.supported_representations),
++            "unsupported_representations": list(self.unsupported_representations),
++            "available_data": list(self.available_data),
++            "missing_data": list(self.missing_data),
++            "constraints": list(self.constraints),
++            "report_outline": list(self.report_outline),
++            "assessment": self.assessment,
++            "coherence_status": self.coherence_status,
++            "errors": list(self.errors),
++        }
++
++    @classmethod
++    def from_mapping(cls, value: Mapping[str, Any]) -> "ServerComponentStateSnapshot":
++        return cls(
++            component_ref=value["component_ref"],
++            source_ref=value["source_ref"],
++            observed_at=value["observed_at"],
++            status=value["status"],
++            availability=value["availability"],
++            freshness=value["freshness"],
++            communication_status=value["communication_status"],
++            capabilities=tuple(value.get("capabilities", ())),
++            reservations=tuple(value.get("reservations", ())),
++            interfaces=tuple(value.get("interfaces", ())),
++            usage_statistics=value.get("usage_statistics", {}),
++            supported_representations=tuple(value.get("supported_representations", ())),
++            unsupported_representations=tuple(value.get("unsupported_representations", ())),
++            available_data=tuple(value.get("available_data", ())),
++            missing_data=tuple(value.get("missing_data", ())),
++            constraints=tuple(value.get("constraints", ())),
++            report_outline=tuple(value.get("report_outline", ())),
++            assessment=value.get("assessment", ""),
++            coherence_status=value.get("coherence_status", "partially_coherent"),
++            errors=tuple(value.get("errors", ())),
++            schema=value.get("schema", COMPONENT_STATE_SCHEMA),
++        )
++
++
++def _typed_ref(name: str, value: object, prefix: str) -> None:
++    if not isinstance(value, str) or not value.startswith(prefix) or any(ch.isspace() for ch in value):
++        raise ComponentStateContractError(f"{name} must use {prefix} typed reference")
++
++
++def _timestamp(value: object) -> None:
++    if not isinstance(value, str) or not value.strip():
++        raise ComponentStateContractError("observed_at must be an ISO-8601 timestamp")
++    try:
++        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
++    except ValueError as exc:
++        raise ComponentStateContractError("observed_at must be an ISO-8601 timestamp") from exc
++    if parsed.tzinfo is None:
++        raise ComponentStateContractError("observed_at must include a timezone")
+diff --git a/tests/context/test_github_research_love_externally_managed_installed_composition_0287_r16_r58.py b/tests/context/test_github_research_love_externally_managed_installed_composition_0287_r16_r58.py
+--- a/tests/context/test_github_research_love_externally_managed_installed_composition_0287_r16_r58.py
++++ b/tests/context/test_github_research_love_externally_managed_installed_composition_0287_r16_r58.py
+@@ -106,7 +106,7 @@ def _settings(lifecycle: str = "externally-managed") -> InstalledRuntimeFactoryS
+     )
+ 
+ 
+-def _components() -> GitHubResearchLoveExternallyManagedInstalledComponents:
++def _components(state_provider=None) -> GitHubResearchLoveExternallyManagedInstalledComponents:
+     provider = Provider()
+     observation = ObservationStore()
+ 
+@@ -183,3 +183,39 @@ def test_scheduler_reference_mismatch_is_rejected() -> None:
+         assert "scheduler_ref" in str(exc)
+     else:
+         raise AssertionError("divergent Scheduler identity should fail closed")
++
++
++class ComponentStateProvider:
++    def collect_component_state_snapshots(self):
++        return [{
++            "component_ref": "component:openvino",
++            "source_ref": "component-state-source:openvino-status",
++            "observed_at": "2026-11-28T12:00:00Z",
++            "status": "complete",
++            "availability": "available",
++            "freshness": "fresh",
++            "communication_status": "connected",
++            "capabilities": ["embedding.e5.384"],
++            "supported_representations": ["vector embeddings"],
++            "coherence_status": "coherent",
++            "usage_statistics": {"requests": 4},
++        }]
++
++
++def test_installed_runtime_exposes_component_owned_scientific_assessment() -> None:
++    components = _components(ComponentStateProvider())
++    bundle = compose_github_research_love_externally_managed_service(
++        settings=_settings(),
++        components=components,
++        service_settings=OpenRcSchedulerServiceSettings(
++            scheduler_ref="scheduler:main"
++        ),
++        clock=lambda: "2026-11-28T12:01:00Z",
++    )
++
++    assessment = bundle.service.runtime.build_scientific_framing_assessment()
++
++    assert assessment["coherence_status"] == "coherent"
++    assert assessment["verified_capabilities"] == ["embedding.e5.384"]
++    assert assessment["component_usage_statistics"]["component:openvino"]["requests"] == 4
++    assert assessment["scheduler_capacity_inferred_from_hardware"] is False
+diff --git a/tests/contracts/test_server_component_state.py b/tests/contracts/test_server_component_state.py
+new file mode 100644
+--- /dev/null
++++ b/tests/contracts/test_server_component_state.py
+@@ -0,0 +1,95 @@
++from __future__ import annotations
++
++import pytest
++
++from contracts.server_component_state import (
++    ComponentStateContractError,
++    ServerComponentStateSnapshot,
++)
++from context.server_scientific_framing_assessment_0287 import (
++    build_server_scientific_framing_assessment,
++)
++
++
++def _snapshot(**overrides):
++    value = {
++        "component_ref": "component:openvino",
++        "source_ref": "component-state-source:openvino-status",
++        "observed_at": "2026-11-28T12:00:00Z",
++        "status": "complete",
++        "availability": "available",
++        "freshness": "fresh",
++        "communication_status": "connected",
++        "capabilities": ["embedding.e5.384"],
++        "reservations": [],
++        "interfaces": ["embedding.query"],
++        "usage_statistics": {"requests": 12, "latency_ms": 8.5},
++        "supported_representations": ["vector embeddings"],
++        "unsupported_representations": [],
++        "available_data": ["dataset:embeddings:v2"],
++        "missing_data": [],
++        "constraints": [],
++        "report_outline": ["Embedding coverage"],
++        "assessment": "E5 is available.",
++        "coherence_status": "coherent",
++        "errors": [],
++    }
++    value.update(overrides)
++    return value
++
++
++def test_component_snapshot_round_trips_and_keeps_provenance():
++    snapshot = ServerComponentStateSnapshot.from_mapping(_snapshot())
++    assert snapshot.to_mapping()["source_ref"] == "component-state-source:openvino-status"
++    assert snapshot.to_mapping()["usage_statistics"]["requests"] == 12
++
++
++def test_component_snapshot_rejects_timezone_free_observation():
++    with pytest.raises(ComponentStateContractError, match="timezone"):
++        ServerComponentStateSnapshot.from_mapping(
++            _snapshot(observed_at="2026-11-28T12:00:00")
++        )
++
++
++def test_assessment_aggregates_capabilities_and_keeps_usage_separate():
++    result = build_server_scientific_framing_assessment(
++        [ServerComponentStateSnapshot.from_mapping(_snapshot())],
++        observed_at="2026-11-28T12:01:00Z",
++    )
++    assert result["coherence_status"] == "coherent"
++    assert result["verified_capabilities"] == ["embedding.e5.384"]
++    assert result["component_usage_statistics"]["component:openvino"]["requests"] == 12
++    assert result["scheduler_capacity_inferred_from_hardware"] is False
++    assert result["unknown_values_defaulted_to_zero"] is False
++
++
++def test_stale_or_partial_component_makes_assessment_partial():
++    snapshot = ServerComponentStateSnapshot.from_mapping(
++        _snapshot(
++            status="partial",
++            freshness="stale",
++            availability="constrained",
++            communication_status="degraded",
++            errors=["last sample incomplete"],
++            missing_data=["dataset:calibration"],
++            coherence_status="coherent",
++        )
++    )
++    result = build_server_scientific_framing_assessment([snapshot])
++    assert result["coherence_status"] == "partially_coherent"
++    assert any("fraîcheur stale" in item for item in result["constraints"])
++    assert "dataset:calibration" in result["missing_data"]
++
++
++def test_incoherent_component_is_not_hidden_by_aggregation():
++    snapshot = ServerComponentStateSnapshot.from_mapping(
++        _snapshot(coherence_status="incoherent")
++    )
++    result = build_server_scientific_framing_assessment([snapshot])
++    assert result["coherence_status"] == "incoherent"
++
++
++def test_duplicate_component_snapshots_are_rejected():
++    snapshot = ServerComponentStateSnapshot.from_mapping(_snapshot())
++    with pytest.raises(ValueError, match="unique component_ref"):
++        build_server_scientific_framing_assessment([snapshot, snapshot])
+diff --git a/tools/publish_git_exchange_server_response.py b/tools/publish_git_exchange_server_response.py
+--- a/tools/publish_git_exchange_server_response.py
++++ b/tools/publish_git_exchange_server_response.py
+@@ -26,6 +26,10 @@
+     validate_server_response,
+ )
+ from contracts.git_artifact_exchange import validate_git_exchange_artifact
++from context.server_scientific_framing_assessment_0287 import (
++    build_server_scientific_framing_assessment,
++)
++from contracts.server_component_state import ServerComponentStateSnapshot
+ 
+ 
+ def _load(path: Path) -> dict[str, Any]:
+@@ -41,7 +45,9 @@ def main(argv: list[str] | None = None) -> int:
+     parser.add_argument("--branch", required=True)
+     parser.add_argument("--issue-number", type=int, required=True)
+     parser.add_argument("--cycle-ordinal", type=int, required=True)
+-    parser.add_argument("--assessment", type=Path, required=True)
++    assessment_group = parser.add_mutually_exclusive_group(required=True)
++    assessment_group.add_argument("--assessment", type=Path)
++    assessment_group.add_argument("--component-snapshots", type=Path)
+     parser.add_argument("--work-dir", type=Path, default=Path(".var/git_exchange"))
+     args = parser.parse_args(argv)
+     args.assessment = args.assessment.resolve()
+@@ -75,15 +81,25 @@ def main(argv: list[str] | None = None) -> int:
+         advisory,
+     )
+ 
+-    assessment = _load(args.assessment)
++    if args.component_snapshots is not None:
++        snapshot_payload = json.loads(args.component_snapshots.resolve().read_text(encoding="utf-8"))
++        if isinstance(snapshot_payload, Mapping):
++            snapshot_payload = snapshot_payload.get("snapshots")
++        if not isinstance(snapshot_payload, list):
++            raise ValueError("component snapshot file must contain an array or {snapshots: [...]}")
++        snapshots = tuple(ServerComponentStateSnapshot.from_mapping(item) for item in snapshot_payload)
++        assessment = build_server_scientific_framing_assessment(snapshots)
++    else:
++        assessment = _load(args.assessment)
+     required = {
+         "coherence_status", "assessment", "supported_representations",
+         "unsupported_representations", "available_data", "missing_data",
+         "verified_capabilities", "constraints", "report_outline", "provenance",
+     }
+-    if set(assessment) != required:
++    if not required.issubset(assessment):
++        missing = sorted(required.difference(assessment))
+         raise ValueError(
+-            "assessment fields must match exactly: " + ", ".join(sorted(required))
++            "assessment is missing required fields: " + ", ".join(missing)
+         )
+     response = {
+         "schema": SERVER_RESPONSE_SCHEMA,
