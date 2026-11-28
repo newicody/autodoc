@@ -26,6 +26,10 @@ from contracts.copilot_scientific_framing import (
     validate_server_response,
 )
 from contracts.git_artifact_exchange import validate_git_exchange_artifact
+from context.server_scientific_framing_assessment_0287 import (
+    build_server_scientific_framing_assessment,
+)
+from contracts.server_component_state import ServerComponentStateSnapshot
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -41,7 +45,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--branch", required=True)
     parser.add_argument("--issue-number", type=int, required=True)
     parser.add_argument("--cycle-ordinal", type=int, required=True)
-    parser.add_argument("--assessment", type=Path, required=True)
+    assessment_group = parser.add_mutually_exclusive_group(required=True)
+    assessment_group.add_argument("--assessment", type=Path)
+    assessment_group.add_argument("--component-snapshots", type=Path)
     parser.add_argument("--work-dir", type=Path, default=Path(".var/git_exchange"))
     args = parser.parse_args(argv)
     args.assessment = args.assessment.resolve()
@@ -75,7 +81,16 @@ def main(argv: list[str] | None = None) -> int:
         advisory,
     )
 
-    assessment = _load(args.assessment)
+    if args.component_snapshots is not None:
+        snapshot_payload = json.loads(args.component_snapshots.resolve().read_text(encoding="utf-8"))
+        if isinstance(snapshot_payload, Mapping):
+            snapshot_payload = snapshot_payload.get("snapshots")
+        if not isinstance(snapshot_payload, list):
+            raise ValueError("component snapshot file must contain an array or {snapshots: [...]}")
+        snapshots = tuple(ServerComponentStateSnapshot.from_mapping(item) for item in snapshot_payload)
+        assessment = build_server_scientific_framing_assessment(snapshots)
+    else:
+        assessment = _load(args.assessment)
     required = {
         "coherence_status", "assessment", "supported_representations",
         "unsupported_representations", "available_data", "missing_data",
