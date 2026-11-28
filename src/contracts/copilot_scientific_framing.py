@@ -78,7 +78,7 @@ def validate_initial_advisory(
         raise ScientificFramingContractError("initial advisory cannot be authoritative")
     digest = canonical_digest(advisory)
     identity = hashlib.sha256(
-        "\\0".join((request_ref, advisory_ref, digest)).encode("utf-8")
+        "\0".join((request_ref, advisory_ref, digest)).encode("utf-8")
     ).hexdigest()
     return FramingHandshake(
         handshake_ref=f"copilot-framing:{identity}",
