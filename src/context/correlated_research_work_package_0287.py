@@ -26,6 +26,7 @@ ATTACHMENT_FETCH_REPORT_SCHEMA = (
 )
 REQUEST_SCHEMA = "missipy.github.authoritative_request.v1"
 MANIFEST_SCHEMA = "missipy.github.dual_artifact_manifest.v1"
+REFINED_REQUEST_SCHEMA = "missipy.github.copilot_refined_research_request.v1"
 ADVISORY_SCHEMAS = frozenset(
     {
         "missipy.github.copilot_advisory.v1",
@@ -91,6 +92,7 @@ class CorrelatedResearchWorkPackageCommand:
     evidence_refs: tuple[str, ...] = ()
     require_advisory: bool = True
     require_fetched_attachments: bool = True
+    copilot_refined_request: Mapping[str, Any] = field(default_factory=dict)
     execute: bool = False
 
     def __post_init__(self) -> None:
@@ -100,6 +102,8 @@ class CorrelatedResearchWorkPackageCommand:
             raise TypeError("attachment_manifest must be a mapping")
         if not isinstance(self.attachment_fetch_report, Mapping):
             raise TypeError("attachment_fetch_report must be a mapping")
+        if not isinstance(self.copilot_refined_request, Mapping):
+            raise TypeError("copilot_refined_request must be a mapping")
         _require_text("conversation_ref", self.conversation_ref)
         _require_text("return_route_ref", self.return_route_ref)
         if isinstance(self.context_generation, bool) or self.context_generation < 0:
@@ -140,6 +144,7 @@ class CorrelatedResearchWorkPackage:
     authoritative_request: Mapping[str, Any]
     correlation_manifest: Mapping[str, Any]
     copilot_advisory: Mapping[str, Any] = field(default_factory=dict)
+    copilot_refined_request: Mapping[str, Any] = field(default_factory=dict)
     attachments: tuple[ResearchAttachmentReference, ...] = ()
     context_refs: tuple[str, ...] = ()
     evidence_refs: tuple[str, ...] = ()
@@ -183,6 +188,11 @@ class CorrelatedResearchWorkPackage:
             "copilot_advisory",
             _freeze_mapping(self.copilot_advisory),
         )
+        object.__setattr__(
+            self,
+            "copilot_refined_request",
+            _freeze_mapping(self.copilot_refined_request),
+        )
         object.__setattr__(self, "attachments", tuple(self.attachments))
         object.__setattr__(
             self,
@@ -222,6 +232,9 @@ class CorrelatedResearchWorkPackage:
             "authoritative_request": request,
             "correlation_manifest": manifest,
             "copilot_advisory": advisory,
+            "copilot_refined_request": dict(self.copilot_refined_request),
+            "refined_request_present": bool(self.copilot_refined_request),
+            "refined_request_used_as_hint_only": bool(self.copilot_refined_request),
             "advisory_present": self.advisory_present,
             "advisory_schema": advisory.get("schema", ""),
             "attachments": attachment_mappings,
@@ -394,6 +407,42 @@ def build_correlated_research_work_package(
     elif manifest.get("advisory_artifact_ref") is not None:
         issues.append("manifest references an advisory missing from intake")
 
+    refined_request = dict(command.copilot_refined_request)
+    if refined_request:
+        _expect(refined_request, "schema", REFINED_REQUEST_SCHEMA, issues)
+        _expect(refined_request, "trusted", False, issues)
+        _expect(refined_request, "usable_as_authority", False, issues)
+        _same(
+            "refined request request_artifact_ref",
+            refined_request.get("request_artifact_ref"),
+            request_artifact_ref,
+            issues,
+        )
+        _same(
+            "refined request initial_advisory_ref",
+            refined_request.get("initial_advisory_ref"),
+            advisory.get("artifact_ref"),
+            issues,
+        )
+        for field_name in ("handshake_ref", "concrete_objective", "expected_result"):
+            _text_value(refined_request, field_name, issues)
+        for field_name in (
+            "provided_constraints", "success_criteria", "scientific_representations"
+        ):
+            values = refined_request.get(field_name)
+            if not isinstance(values, list) or not all(
+                isinstance(item, str) and item.strip() for item in values
+            ):
+                issues.append(f"refined request {field_name} must be a string array")
+        if not isinstance(refined_request.get("success_criteria"), list) or not refined_request.get("success_criteria"):
+            issues.append("refined request success_criteria must not be empty")
+        _require_sha256_mapping(
+            "refined request server_response_digest",
+            refined_request,
+            "server_response_digest",
+            issues,
+        )
+
     attachments = _build_attachment_references(
         command,
         repository=request_repository,
@@ -422,6 +471,7 @@ def build_correlated_research_work_package(
         "request_sha256": manifest["request_sha256"],
         "advisory_artifact_ref": advisory.get("artifact_ref", ""),
         "advisory_sha256": manifest.get("advisory_sha256", ""),
+        "refined_request_digest": hashlib.sha256(_canonical_json(refined_request).encode("utf-8")).hexdigest() if refined_request else "",
         "attachment_sha256": [item.sha256 for item in attachments],
         "conversation_ref": command.conversation_ref,
         "return_route_ref": command.return_route_ref,
@@ -445,6 +495,7 @@ def build_correlated_research_work_package(
         authoritative_request=request,
         correlation_manifest=manifest,
         copilot_advisory=advisory,
+        copilot_refined_request=refined_request,
         attachments=attachments,
         context_refs=command.context_refs,
         evidence_refs=command.evidence_refs,
