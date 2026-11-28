@@ -140,6 +140,18 @@ def build_server_scientific_framing_assessment(
         "report_outline": merge("report_outline"),
         "provenance": provenance,
         "component_observations": component_observations,
+        "component_availability": {
+            item.component_ref: item.availability for item in values
+        },
+        "component_communication_status": {
+            item.component_ref: item.communication_status for item in values
+        },
+        "component_reservations": {
+            item.component_ref: list(item.reservations) for item in values
+        },
+        "component_interfaces": {
+            item.component_ref: list(item.interfaces) for item in values
+        },
         "component_usage_statistics": {
             item.component_ref: dict(item.usage_statistics) for item in values
         },
