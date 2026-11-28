@@ -912,7 +912,7 @@ diff --git a/tests/contracts/test_git_exchange_runtime_adapters.py b/tests/contr
 new file mode 100644
 --- /dev/null
 +++ b/tests/contracts/test_git_exchange_runtime_adapters.py
-@@ -0,0 +1,63 @@
+@@ -0,0 +1,77 @@
 +from __future__ import annotations
 +
 +import json
@@ -976,6 +976,20 @@ new file mode 100644
 +            "scientific_representations": ["Table"],
 +            "scheduler_command": "run",
 +        }))
++
++
++def test_refinement_parser_extracts_object_from_copilot_cli_envelope():
++    from tools.run_autodoc_copilot_refinement import _extract
++
++    refinement = {
++        "concrete_objective": "Study",
++        "expected_result": "Report",
++        "provided_constraints": [],
++        "success_criteria": ["Evidence"],
++        "scientific_representations": ["Table"],
++    }
++    cli_envelope = {"data": {"content": json.dumps(refinement)}}
++    assert _extract(json.dumps(cli_envelope)) == refinement
 diff --git a/tools/assemble_fetched_github_research_admissibility_0287.py b/tools/assemble_fetched_github_research_admissibility_0287.py
 --- a/tools/assemble_fetched_github_research_admissibility_0287.py
 +++ b/tools/assemble_fetched_github_research_admissibility_0287.py
@@ -1235,7 +1249,7 @@ diff --git a/tools/publish_git_exchange_artifact.py b/tools/publish_git_exchange
 new file mode 100644
 --- /dev/null
 +++ b/tools/publish_git_exchange_artifact.py
-@@ -0,0 +1,205 @@
+@@ -0,0 +1,211 @@
 +#!/usr/bin/env python3
 +"""Publish one validated exchange envelope to a GitHub repository commit.
 +
@@ -1246,6 +1260,7 @@ new file mode 100644
 +from __future__ import annotations
 +
 +import argparse
++import base64
 +from datetime import datetime, timezone
 +import json
 +import os
@@ -1312,18 +1327,18 @@ new file mode 100644
 +    return dict(value)
 +
 +
-+def _publish(repository: str, branch: str, envelope: Mapping[str, Any]) -> str:
++def _publish(repository: str, branch: str, envelope: Mapping[str, Any]) -> tuple[str, str]:
 +    path = str(envelope["artifact_path"])
 +    existing = _read_remote(repository, branch, path)
 +    action = classify_existing_path(existing, envelope)
 +    if action == "replay":
-+        return "replay-noop"
++        return "replay-noop", ""
 +    if action == "collision":
 +        raise GitArtifactExchangeError("append-only Git artifact path collision")
 +    content = json.dumps(
 +        dict(envelope), ensure_ascii=False, sort_keys=True, indent=2
 +    ) + "\n"
-+    _gh([
++    write_result = _gh([
 +        "-X", "PUT",
 +        "repos/" + repository + "/contents/" + path,
 +        "-f", "message=autodoc: publish " + str(envelope["role"])
@@ -1338,7 +1353,11 @@ new file mode 100644
 +    validate_git_exchange_artifact(readback)
 +    if readback.get("payload_digest") != envelope.get("payload_digest"):
 +        raise RuntimeError("published Git artifact readback digest mismatch")
-+    return "created"
++    commit = write_result.get("commit")
++    commit_sha = str(commit.get("sha", "")).strip() if isinstance(commit, Mapping) else ""
++    if not commit_sha:
++        raise RuntimeError("GitHub Contents API did not return the publication commit SHA")
++    return "created", commit_sha
 +
 +
 +def _load(path: Path) -> dict[str, Any]:
@@ -1425,11 +1444,12 @@ new file mode 100644
 +            predecessor_ref=predecessor_ref,
 +            predecessor_digest=predecessor_digest,
 +        ).to_mapping()
-+    result = _publish(args.repository, args.branch, envelope)
++    result, commit_sha = _publish(args.repository, args.branch, envelope)
 +    print(json.dumps({
 +        "schema": "missipy.github.git_artifact_publication_result.v1",
 +        "valid": True,
 +        "status": result,
++        "commit_sha": commit_sha,
 +        "artifact_ref": envelope["artifact_ref"],
 +        "artifact_path": envelope["artifact_path"],
 +        "payload_digest": envelope["payload_digest"],
@@ -1573,7 +1593,7 @@ diff --git a/tools/run_autodoc_copilot_refinement.py b/tools/run_autodoc_copilot
 new file mode 100644
 --- /dev/null
 +++ b/tools/run_autodoc_copilot_refinement.py
-@@ -0,0 +1,174 @@
+@@ -0,0 +1,181 @@
 +#!/usr/bin/env python3
 +"""Ask Copilot once to refine a request against one server response artifact."""
 +from __future__ import annotations
@@ -1689,6 +1709,13 @@ new file mode 100644
 +    validate_git_exchange_artifact(response_envelope)
 +    if initial.get("role") != "copilot_initial" or response_envelope.get("role") != "server_response":
 +        raise ValueError("unexpected predecessor artifact roles")
++    for identity_field in ("repository", "issue_number", "cycle_ordinal"):
++        if initial.get(identity_field) != response_envelope.get(identity_field):
++            raise ValueError("server response research-cycle identity mismatch")
++    if response_envelope.get("predecessor_ref") != initial.get("artifact_ref"):
++        raise ValueError("server response does not reference the initial artifact")
++    if response_envelope.get("predecessor_digest") != initial.get("payload_digest"):
++        raise ValueError("server response predecessor digest mismatch")
 +    advisory = initial["payload"]
 +    request = {"artifact_ref": advisory.get("request_artifact_ref")}
 +    handshake = validate_initial_advisory(request, advisory)
