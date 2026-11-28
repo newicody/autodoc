@@ -8,6 +8,7 @@ content is a collision.
 from __future__ import annotations
 
 import argparse
+import base64
 from datetime import datetime, timezone
 import json
 import os
@@ -74,18 +75,18 @@ def _read_remote(repository: str, branch: str, path: str) -> dict[str, Any] | No
     return dict(value)
 
 
-def _publish(repository: str, branch: str, envelope: Mapping[str, Any]) -> str:
+def _publish(repository: str, branch: str, envelope: Mapping[str, Any]) -> tuple[str, str]:
     path = str(envelope["artifact_path"])
     existing = _read_remote(repository, branch, path)
     action = classify_existing_path(existing, envelope)
     if action == "replay":
-        return "replay-noop"
+        return "replay-noop", ""
     if action == "collision":
         raise GitArtifactExchangeError("append-only Git artifact path collision")
     content = json.dumps(
         dict(envelope), ensure_ascii=False, sort_keys=True, indent=2
     ) + "\n"
-    _gh([
+    write_result = _gh([
         "-X", "PUT",
         "repos/" + repository + "/contents/" + path,
         "-f", "message=autodoc: publish " + str(envelope["role"])
@@ -100,7 +101,11 @@ def _publish(repository: str, branch: str, envelope: Mapping[str, Any]) -> str:
     validate_git_exchange_artifact(readback)
     if readback.get("payload_digest") != envelope.get("payload_digest"):
         raise RuntimeError("published Git artifact readback digest mismatch")
-    return "created"
+    commit = write_result.get("commit")
+    commit_sha = str(commit.get("sha", "")).strip() if isinstance(commit, Mapping) else ""
+    if not commit_sha:
+        raise RuntimeError("GitHub Contents API did not return the publication commit SHA")
+    return "created", commit_sha
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -187,11 +192,12 @@ def main(argv: list[str] | None = None) -> int:
             predecessor_ref=predecessor_ref,
             predecessor_digest=predecessor_digest,
         ).to_mapping()
-    result = _publish(args.repository, args.branch, envelope)
+    result, commit_sha = _publish(args.repository, args.branch, envelope)
     print(json.dumps({
         "schema": "missipy.github.git_artifact_publication_result.v1",
         "valid": True,
         "status": result,
+        "commit_sha": commit_sha,
         "artifact_ref": envelope["artifact_ref"],
         "artifact_path": envelope["artifact_path"],
         "payload_digest": envelope["payload_digest"],
