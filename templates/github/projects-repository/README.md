@@ -96,12 +96,19 @@ La configuration `projectv2_views.json` décrit les champs et les vues
 `Recherches`, `Résultats`, `Copilot`, `Connaissances serveur`,
 `Boîtes de thèmes`, `Historique` et `Tous`.
 
-Le serveur local ne crée pas le premier artefact Copilot. Il effectue le fetch des
-runs produits par `newicody/projects`, vérifie leur corrélation
-`repository/issue_number/run_id/digests`, puis déclenche le laboratoire seulement
-si la demande est admissible. Le chemin historique
-`ProjectV2 query-only → diff local` reste réservé aux transitions et reprises
-explicites ; il ne crée pas le triplet initial des nouvelles recherches.
+Le workflow initial publie l'avis Copilot v2 dans Git via le secret borné
+`AUTODOC_EXCHANGE_GIT_TOKEN`. Le serveur récupère cet artefact, construit une
+réponse à partir de son état vérifié et la pousse dans Git. Le workflow
+`autodoc-copilot-refinement.yml`, déclenché uniquement par le chemin
+`server-response.json`, demande ensuite une seule reformulation à Copilot et
+pousse `copilot-refined.json`. Ce dernier push ne redéclenche pas la
+reformulation.
+
+Le serveur conserve en parallèle la récupération des artefacts Actions existants.
+L'assembleur d'admissibilité peut exiger la chaîne Git complète et intégrer la
+reformulation comme indication non autoritative dans le work package. Cette
+option CLI n'est pas encore activée automatiquement dans le parcours vivant de
+transition ProjectV2 vers `En cours`.
 
 Pour les nouvelles Issues de recherche, l'avis Copilot initial est requis et ne
 dépend plus de la variable optionnelle. Pour les seuls dispatchs manuels, cette
