@@ -40,6 +40,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           repository: newicody/autodoc
+          ref: docs/unification-027x
           path: autodoc-runtime
 
       - name: Set up Python
@@ -134,6 +135,43 @@ jobs:
         run: >
           python
           autodoc-runtime/templates/github/scripts/run_autodoc_copilot_advisory.py
+
+      - name: Require Git exchange publication token
+        if: ${{ hashFiles('out/copilot_advisory.json') != '' }}
+        shell: bash
+        env:
+          AUTODOC_EXCHANGE_GIT_TOKEN: ${{ secrets.AUTODOC_EXCHANGE_GIT_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$AUTODOC_EXCHANGE_GIT_TOKEN"
+
+      - name: Build initial Git exchange envelope
+        if: ${{ hashFiles('out/copilot_advisory.json') != '' }}
+        env:
+          PYTHONPATH: autodoc-runtime/src
+        run: |
+          set -euo pipefail
+          python autodoc-runtime/tools/build_git_exchange_initial_envelope.py \
+            --advisory out/copilot_advisory.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --issue-number "$AUTODOC_ISSUE_NUMBER" \
+            --cycle-ordinal 1 \
+            --output out/copilot_initial_git_envelope.json
+
+      - name: Push initial Copilot artifact to Git
+        if: ${{ hashFiles('out/copilot_initial_git_envelope.json') != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.AUTODOC_EXCHANGE_GIT_TOKEN }}
+          PYTHONPATH: autodoc-runtime/src
+        run: |
+          set -euo pipefail
+          python autodoc-runtime/tools/publish_git_exchange_artifact.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --branch "${{ github.event.repository.default_branch }}" \
+            --issue-number "$AUTODOC_ISSUE_NUMBER" \
+            --cycle-ordinal 1 \
+            --role copilot_initial \
+            --payload out/copilot_advisory.json
 
       - name: Build linking manifest
         env:
