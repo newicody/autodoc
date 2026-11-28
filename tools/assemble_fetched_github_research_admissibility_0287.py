@@ -13,6 +13,8 @@ from __future__ import annotations
 import argparse
 from collections.abc import Mapping, Sequence
 import json
+import os
+import subprocess
 from pathlib import Path
 import sys
 from typing import Any
@@ -49,6 +51,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--run-id", action="append", default=[])
     parser.add_argument("--state-path", type=Path)
     parser.add_argument("--max-artifact-bytes", type=int, default=5 * 1024 * 1024)
+    parser.add_argument("--git-exchange-branch")
+    parser.add_argument("--git-exchange-cycle-ordinal", type=int, default=1)
+    parser.add_argument("--git-exchange-work-dir", type=Path, default=Path(".var/git_exchange/intake"))
+    parser.add_argument("--require-scientific-framing-exchange", action="store_true")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--format", choices=("json", "summary"), default="summary")
     return parser.parse_args(argv)
@@ -60,6 +66,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     issues: list[str] = []
     if args.max_artifact_bytes <= 0:
         issues.append("max-artifact-bytes must be > 0")
+    if args.git_exchange_cycle_ordinal <= 0:
+        issues.append("git-exchange-cycle-ordinal must be > 0")
+    if args.require_scientific_framing_exchange and not args.git_exchange_branch:
+        issues.append("git-exchange-branch is required when framing exchange is mandatory")
     cycle = _read_json_mapping(report_path, "fetch cycle report", issues)
     if cycle:
         if cycle.get("schema") != _FETCH_CYCLE_SCHEMA:
@@ -117,10 +127,36 @@ def main(argv: Sequence[str] | None = None) -> int:
                     }
                 )
                 continue
+            framing_exchange: dict[str, Any] = {}
+            if args.git_exchange_branch:
+                try:
+                    framing_exchange = _fetch_git_framing_exchange(
+                        ready_run=ready_run,
+                        artifact_contents=loaded,
+                        branch=args.git_exchange_branch,
+                        cycle_ordinal=args.git_exchange_cycle_ordinal,
+                        work_dir=args.git_exchange_work_dir,
+                    )
+                except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+                    results.append({
+                        "valid": False,
+                        "admissible": False,
+                        "status": "scientific-framing-fetch-invalid",
+                        "issues": [str(exc)],
+                        "repository": ready_run.get("repository", ""),
+                        "run_id": ready_run.get("run_id", ""),
+                        "scheduler_command_created": False,
+                        "laboratory_execution_started": False,
+                    })
+                    continue
             result = assemble_ready_run_and_evaluate_research_admissibility(
                 GitHubReadyRunResearchAdmissibilityCommand(
                     ready_run=ready_run,
                     artifact_contents=tuple(loaded),
+                    framing_exchange=framing_exchange,
+                    require_scientific_framing_exchange=(
+                        args.require_scientific_framing_exchange
+                    ),
                 )
             )
             results.append(result.to_mapping())
@@ -169,6 +205,64 @@ def main(argv: Sequence[str] | None = None) -> int:
     _emit(payload, args.format)
     return 0 if valid else 2
 
+
+
+def _fetch_git_framing_exchange(
+    *,
+    ready_run: Mapping[str, Any],
+    artifact_contents: Sequence[GitHubReadyRunArtifactContent],
+    branch: str,
+    cycle_ordinal: int,
+    work_dir: Path,
+) -> dict[str, Any]:
+    request_content = next(
+        item.content for item in artifact_contents
+        if item.role == "authoritative_request"
+    )
+    request = json.loads(request_content.decode("utf-8"))
+    if not isinstance(request, Mapping):
+        raise ValueError("authoritative request artifact must be a JSON object")
+    issue_number = request.get("issue_number")
+    if isinstance(issue_number, bool) or not isinstance(issue_number, int) or issue_number <= 0:
+        raise ValueError("authoritative request issue_number must be positive")
+    repository = str(ready_run.get("repository", "")).strip()
+    if not repository:
+        raise ValueError("ready_run repository is missing")
+    root = _absolute_output(work_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    roles = {
+        "copilot_initial": "copilot-initial.json",
+        "server_response": "server-response.json",
+        "copilot_refined": "copilot-refined.json",
+    }
+    result: dict[str, Any] = {}
+    for role, filename in roles.items():
+        output = root / f"{repository.replace('/', '-')}-{issue_number}-{cycle_ordinal}-{filename}"
+        command = [
+            sys.executable,
+            str(_REPO_ROOT / "tools/fetch_git_exchange_artifact.py"),
+            "--repository", repository,
+            "--branch", branch,
+            "--issue-number", str(issue_number),
+            "--cycle-ordinal", str(cycle_ordinal),
+            "--role", role,
+            "--output", str(output),
+        ]
+        child = subprocess.run(
+            command,
+            cwd=_REPO_ROOT,
+            env=dict(os.environ),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if child.returncode:
+            raise RuntimeError(f"{role} Git fetch failed: {child.stderr.strip()}")
+        envelope = json.loads(output.read_text(encoding="utf-8"))
+        if not isinstance(envelope, Mapping):
+            raise ValueError(f"{role} Git envelope must be an object")
+        result[role] = dict(envelope)
+    return result
 
 def _ready_runs(
     cycle: Mapping[str, Any],
