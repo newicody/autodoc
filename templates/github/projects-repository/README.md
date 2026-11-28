@@ -50,7 +50,8 @@ la décision opérateur reste locale.
 Le workflow GitHub est installé uniquement dans `newicody/projects`.
 Chaque nouvelle Issue créée avec le formulaire `Nouvelle recherche` porte le
 préfixe `[Recherche] ` (avec les deux sections obligatoires du formulaire comme
-solution de repli) et déclenche automatiquement son propre run Actions :
+solution de repli) et déclenche automatiquement son propre run Actions de
+cadrage initial :
 
 ```text
 issues.opened dans newicody/projects
@@ -61,6 +62,19 @@ issues.opened dans newicody/projects
 → trois artefacts Actions distincts par Issue et par run
 → premier commentaire Copilot publié par newicody/projects
 ```
+
+Ce premier artefact sert à dégrossir la demande, en particulier la forme de
+représentation scientifique nécessaire au rapport attendu. Le serveur doit
+ensuite fournir une seule réponse structurée de cohérence (données, capacités,
+contraintes, lacunes et représentations réalisables). Copilot reprend cette
+réponse et publie une demande reformulée précise. Cet échange initial ne boucle
+pas et ne lance pas l'exécution.
+
+Le lancement d'un cycle reste distinct : la transition ProjectV2 vers
+`En cours`, depuis une intention opérateur, alimente le dispatch idempotent
+local. Après consultation d'un résultat publié dans Git, Copilot peut proposer
+une amélioration ou une actualisation liée à la recherche durable ; elle devient
+un nouveau cycle et repasse par les contrôles habituels du Scheduler.
 
 Les vues ProjectV2 préparées restent la surface de classement et de suivi. Elles
 ne servent pas de condition au webhook initial, car les champs ProjectV2 peuvent
@@ -80,7 +94,7 @@ La configuration `projectv2_views.json` décrit les champs et les vues
 `Recherches`, `Résultats`, `Copilot`, `Connaissances serveur`,
 `Boîtes de thèmes`, `Historique` et `Tous`.
 
-Le serveur local ne crée pas les artefacts initiaux. Il effectue le fetch des
+Le serveur local ne crée pas le premier artefact Copilot. Il effectue le fetch des
 runs produits par `newicody/projects`, vérifie leur corrélation
 `repository/issue_number/run_id/digests`, puis déclenche le laboratoire seulement
 si la demande est admissible. Le chemin historique
@@ -108,3 +122,13 @@ d'une opération explicitement approuvée.
 Le mode opératoire complet est dans `PROJECTS_BUNDLE_DRIFT_AUDIT.md`.
 Les caches `__pycache__`, `*.pyc` et `*.pyo` sont signalés séparément dans
 `ignored_transient_files`; les autres fichiers inconnus restent soumis à revue.
+
+
+## Installation du mode Projects
+
+Le script `reconcile_projectv2_configuration.py` sait préparer ou appliquer
+explicitement une configuration de champs et de vues ; il ne constitue pas à
+lui seul un installateur complet du mode Projects. La roadmap prévoit un
+installateur idempotent qui assemble et vérifie le bundle, les formulaires,
+workflows, champs, options, vues, permissions et secrets requis. Les secrets
+restent fournis hors dépôt et ne sont jamais écrits dans les fichiers versionnés.
