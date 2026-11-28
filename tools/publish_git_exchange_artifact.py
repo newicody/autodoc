@@ -196,6 +196,8 @@ def main(argv: list[str] | None = None) -> int:
             predecessor_ref=predecessor_ref,
             predecessor_digest=predecessor_digest,
         ).to_mapping()
+    if args.role == "copilot_initial":
+        _handshake(envelope)
     result, commit_sha = _publish(args.repository, args.branch, envelope)
     print(json.dumps({
         "schema": "missipy.github.git_artifact_publication_result.v1",
