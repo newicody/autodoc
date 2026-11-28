@@ -8,7 +8,6 @@ content is a collision.
 from __future__ import annotations
 
 import argparse
-import base64
 from datetime import datetime, timezone
 import json
 import os
