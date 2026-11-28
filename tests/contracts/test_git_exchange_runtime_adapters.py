@@ -33,3 +33,30 @@ def test_initial_envelope_builder_wraps_existing_v2_advisory(tmp_path: Path):
     assert envelope["transport"] == "git_commit_push"
     assert envelope["payload"] == advisory
     assert envelope["execution_authorized"] is False
+
+
+def test_refinement_parser_accepts_only_explicit_scientific_fields():
+    from tools.run_autodoc_copilot_refinement import _extract
+
+    value = _extract(json.dumps({
+        "concrete_objective": "Study",
+        "expected_result": "Report",
+        "provided_constraints": ["No GPU"],
+        "success_criteria": ["Traceable evidence"],
+        "scientific_representations": ["Table", "Curve"],
+    }))
+    assert value["scientific_representations"] == ["Table", "Curve"]
+
+
+def test_refinement_parser_rejects_extra_authority_or_route_fields():
+    from tools.run_autodoc_copilot_refinement import _extract
+
+    with pytest.raises(ValueError, match="strict schema"):
+        _extract(json.dumps({
+            "concrete_objective": "Study",
+            "expected_result": "Report",
+            "provided_constraints": [],
+            "success_criteria": ["Evidence"],
+            "scientific_representations": ["Table"],
+            "scheduler_command": "run",
+        }))
