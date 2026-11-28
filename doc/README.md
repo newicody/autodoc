@@ -7,7 +7,7 @@ Autodoc/MissiPy évolue vers un **automate cellulaire de recherche** : cellules 
 - [Noyau et Scheduler](architecture/KERNEL_AND_SCHEDULER.md)
 - [Cadrage scientifique Copilot–serveur](architecture/COPILOT_SCIENTIFIC_FRAMING.md)
 - [Transport Git des artefacts Copilot–serveur](architecture/GIT_ARTIFACT_EXCHANGE.md)
-- [État des composants et cadrage serveur](architecture/SERVER_COMPONENT_STATE.md)
+- [État des composants et cadrage serveur](architecture/SERVER_COMPONENT_STATE.md)\n- [Communication locale et espaces mémoire partagés](architecture/LOCAL_COMMUNICATION_AND_SHARED_MEMORY.md)
 - [Recherche et contexte](architecture/RESEARCH_AND_CONTEXT.md)
 - [Données, inférence et observation](architecture/DATA_INFERENCE_OBSERVABILITY.md)
 - [Dépendances](DEPENDENCIES.md) · [Licences](LICENSES.md) · [Installation](INSTALLATION.md) · [Roadmap](ROADMAP.md)
