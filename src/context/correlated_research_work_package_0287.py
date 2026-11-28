@@ -471,7 +471,7 @@ def build_correlated_research_work_package(
         "request_sha256": manifest["request_sha256"],
         "advisory_artifact_ref": advisory.get("artifact_ref", ""),
         "advisory_sha256": manifest.get("advisory_sha256", ""),
-        "refined_request_digest": hashlib.sha256(_canonical_json(refined_request).encode("utf-8")).hexdigest() if refined_request else "",
+        "refined_request_digest": hashlib.sha256(_canonical_json(refined_request)).hexdigest() if refined_request else "",
         "attachment_sha256": [item.sha256 for item in attachments],
         "conversation_ref": command.conversation_ref,
         "return_route_ref": command.return_route_ref,
