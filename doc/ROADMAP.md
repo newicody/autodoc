@@ -56,6 +56,8 @@ En parallèle, le serveur prépare et publie périodiquement dans le dépôt Git
 
 **Avancement 0293 :** le contrat typé du cadrage scientifique initial est ajouté (`missipy.github.copilot_advisory.v2` → `missipy.github.server_scientific_framing_response.v1` → `missipy.github.copilot_refined_research_request.v1`). Les validations de corrélation, de digest, de provenance et de non-autorité sont définies. Ce patch ne fournit pas encore le producteur de la réponse serveur, le second appel Copilot, la persistance append-only ni leur raccordement au workflow ; l'étape 01 reste donc ouverte.
 
+**Avancement 0294 :** le canal de transport est maintenant formalisé séparément du contenu scientifique : trois artefacts append-only dans `newicody/projects`, publiés par commits/push Git et reliés par références et digests (`copilot-initial` → `server-response` → `copilot-refined`). Le contrat interdit l'écrasement d'un chemin, distingue rejeu identique et collision, et fixe l'absence de RPC, de boucle de clarification et d'autorisation d'exécution. Il ne réalise pas encore les producteurs/publishers Git, le workflow `push` de reformulation ni la récupération serveur ; l'étape 01 reste ouverte. Le séparateur d'identité du contrat 0293 a également été corrigé.
+
 ## 02. Communication à la demande et état propre des composants
 
 **Objectif :** permettre au Scheduler d'interroger les composants sans leur imposer un registre central omniscient.
