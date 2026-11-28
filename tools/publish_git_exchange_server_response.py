@@ -50,7 +50,10 @@ def main(argv: list[str] | None = None) -> int:
     assessment_group.add_argument("--component-snapshots", type=Path)
     parser.add_argument("--work-dir", type=Path, default=Path(".var/git_exchange"))
     args = parser.parse_args(argv)
-    args.assessment = args.assessment.resolve()
+    if args.assessment is not None:
+        args.assessment = args.assessment.resolve()
+    if args.component_snapshots is not None:
+        args.component_snapshots = args.component_snapshots.resolve()
     args.work_dir = args.work_dir.resolve()
 
     args.work_dir.mkdir(parents=True, exist_ok=True)
