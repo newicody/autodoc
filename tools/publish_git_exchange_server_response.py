@@ -96,9 +96,10 @@ def main(argv: list[str] | None = None) -> int:
         "unsupported_representations", "available_data", "missing_data",
         "verified_capabilities", "constraints", "report_outline", "provenance",
     }
-    if set(assessment) != required:
+    if not required.issubset(assessment):
+        missing = sorted(required.difference(assessment))
         raise ValueError(
-            "assessment fields must match exactly: " + ", ".join(sorted(required))
+            "assessment is missing required fields: " + ", ".join(missing)
         )
     response = {
         "schema": SERVER_RESPONSE_SCHEMA,
