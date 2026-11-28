@@ -16,7 +16,7 @@ Les étapes peuvent nécessiter plusieurs patches intermédiaires. Une étape n'
 - Les laboratoires peuvent collaborer en échangeant des résultats et en lisant les données persistées dans PostgreSQL. Ces données peuvent être moins fraîches que l'état courant d'un autre laboratoire ; leur date, version et provenance doivent rester explicites.
 - EventBus, Cell Lens, PassiveSupervisor et VisPy sont des mécanismes d'observation, pas des autorités de décision.
 - La charge physique et la capacité logique du Scheduler restent distinctes. Une mesure CPU/GPU/RAM ne permet pas de déduire une capacité d'admission.
-- La présence d'un module, d'un contrat ou d'un adaptateur ne prouve pas que le flux complet est raccordé ou exploitable.
+- La présence d'un module, d'un contrat ou d'un adaptateur ne prouve pas que le flux complet est raccordé ou exploitable.\n- Pour les échanges locaux de données volumineuses, l'orientation retenue est un canal de contrôle `AF_UNIX / SOCK_SEQPACKET` et des buffers mémoire `memfd` dont les descripteurs sont transmis par `SCM_RIGHTS`. Ces buffers constituent des points d'entrée/sortie de données du Scheduler ; ils ne sont ni un bus ni une autorité d'orchestration.\n- Le cycle de vie des espaces mémoire (création, attachement/montage, détachement/démontage, fermeture/libération et contrôle des accès ou « vannes ») relève de modules dédiés, distincts du Scheduler et du transport. Aucun canal gRPC général n'est retenu dans ce périmètre ; les autres interfaces spécialisées restent hors du chantier immédiat.
 
 ## 01. Entrée Projects, cadrage Copilot et premier artefact
 
@@ -89,7 +89,7 @@ Le Scheduler ne suppose pas qu'une information est connue si le composant ne l'a
 
 Le serveur peut agréger les informations reçues pour ses rapports opérationnels et pour sa réponse unique de cohérence au cadrage initial Copilot, sans transformer cette agrégation en autorité concurrente du Scheduler. Cette réponse doit distinguer les capacités vérifiées, les limites, les données manquantes et les représentations scientifiques réalisables ; elle ne déclenche pas l'exécution.
 
-**Résultat attendu :** chaque composant expose une interface de réponse exploitable ; le Scheduler peut demander les informations nécessaires au moment où il en a besoin.
+Le canal local de référence pour ce périmètre est `AF_UNIX / SOCK_SEQPACKET` : les messages courts transportent les demandes, réponses, références et métadonnées. Les gros volumes sont placés dans des buffers `memfd`, et les descripteurs sont transmis par `SCM_RIGHTS`. Ces buffers fournissent les points d'entrée/sortie de données du Scheduler. Les autres interfaces de communication spécialisées ne sont pas exclues, mais leur gestion n'est pas requise dans ce chantier. Le cycle de vie et le contrôle des accès aux espaces mémoire sont délégués aux modules dédiés qui pilotent les ouvertures/fermetures (« vannes »). Voir [Communication locale et espaces mémoire partagés](architecture/LOCAL_COMMUNICATION_AND_SHARED_MEMORY.md).\n\n**Résultat attendu :** chaque composant expose une interface de réponse exploitable ; le Scheduler peut demander les informations nécessaires au moment où il en a besoin, et les données volumineuses disposent de points d'entrée/sortie partagés sous contrôle.
 
 ## 03. Sécurité, politiques et autorisations
 
@@ -164,7 +164,7 @@ Scheduler
     → Scheduler
 ```
 
-Les échanges doivent rendre identifiables le destinataire, l'interface utilisée, l'état de transmission, le résultat, les erreurs, les délais et les possibilités de reprise. ControlProxy transporte les messages autorisés ; il ne choisit pas les tâches et ne prend aucune décision d'orchestration.
+Les échanges doivent rendre identifiables le destinataire, l'interface utilisée, l'état de transmission, le résultat, les erreurs, les délais et les possibilités de reprise. Pour les échanges locaux, le canal de contrôle `AF_UNIX / SOCK_SEQPACKET` transporte les messages courts et les descripteurs `memfd` via `SCM_RIGHTS` ; les espaces `memfd` servent de buffers de données et de points d'entrée/sortie du Scheduler. Les modules dédiés gèrent leur création, montage/attachement, démontage/détachement, libération et contrôle des accès (« vannes »). ControlProxy transporte les messages autorisés ; il ne choisit pas les tâches et ne prend aucune décision d'orchestration. Les autres interfaces spécialisées restent hors du périmètre immédiat, et aucun canal gRPC général n'est prévu.
 
 **Résultat attendu :** les tâches peuvent être exécutées, suivies, persistées et reprises sans perdre l'autorité du Scheduler.
 
