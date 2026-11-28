@@ -18,32 +18,41 @@ Les étapes peuvent nécessiter plusieurs patches intermédiaires. Une étape n'
 - La charge physique et la capacité logique du Scheduler restent distinctes. Une mesure CPU/GPU/RAM ne permet pas de déduire une capacité d'admission.
 - La présence d'un module, d'un contrat ou d'un adaptateur ne prouve pas que le flux complet est raccordé ou exploitable.
 
-## 01. Entrée du board, déclenchement Copilot et premier artefact
+## 01. Entrée Projects, cadrage Copilot et premier artefact
 
-**Déclencheur :** une nouvelle entrée sur le board GitHub ProjectV2.
+**Déclencheur initial actuellement décrit par le bundle :** ouverture d'une Issue `[Recherche]` dans `newicody/projects` (`issues.opened`). La carte ProjectV2 est la surface de classement et de suivi ; sa création ne vaut pas admission d'une tâche par le Scheduler.
 
 Composants :
-- GitHub ProjectV2
-- Déclencheur Copilot
+- GitHub Issues et ProjectV2
+- Formulaires et workflow du bundle Projects
 - Copilot
-- Premier artefact
-- Publication GitHub
+- Artefact initial de cadrage
+- Réponse de cohérence du serveur
+- Artefact reformulé par Copilot
+- Réconciliateur de configuration ProjectV2
+- Futur installateur complet du mode Projects
 
-Flux attendu :
+Le cadrage initial suit exactement cette séquence, sans boucle :
 
 ```text
-Nouvelle entrée sur le board
-    → Déclenchement Copilot
-    → Copilot
-    → Premier artefact
-    → Publication de l'artefact
+Nouvelle Issue de recherche
+    → Copilot dégrossit la demande
+    → Artefact initial : forme du rapport scientifique attendu
+    → Serveur examine la cohérence, les données, capacités et contraintes
+    → Une réponse structurée du serveur
+    → Copilot reformule une demande précise
+    → Publication de l'artefact reformulé
 ```
 
-La création de l'entrée ne constitue pas encore une tâche d'exécution distribuée par le Scheduler. Elle déclenche d'abord Copilot, qui produit et publie un premier artefact associé à la demande.
+Copilot identifie en particulier les représentations scientifiques nécessaires à un rapport complet : données attendues, mesures, analyses, visualisations, preuves, comparaisons et structure du livrable. Le serveur retravaille cette proposition au regard de ses capacités et contraintes réelles, puis répond une seule fois. Copilot tient compte de cette réponse et publie la demande précise. Aucun ping-pong de clarification récursif n'est prévu.
 
-En parallèle, le serveur prépare et publie périodiquement dans le dépôt Git un rapport de fonctionnement et d'utilisation. Ce rapport est distinct du premier artefact Copilot et du livrable final.
+Cette séquence de cadrage n'est pas le lancement de l'exécution. Le lancement d'un cycle reste la transition ProjectV2 vers `En cours`, issue d'une intention opérateur (`Recherche`, `Développement` ou `Production`) et traitée par le dispatch idempotent existant. L'ouverture de l'Issue et la transition `En cours` ont donc des rôles différents : cadrer, puis demander l'exécution.
 
-**Résultat attendu :** une demande initialisée sur le board et un premier artefact Copilot publié.
+Le mode Projects doit conserver les cartes durables, les vues, les champs, les thèmes et l'historique append-only des cycles déjà définis. Un installateur idempotent, simple et complet devra installer ou réconcilier formulaires, workflows, champs, options et vues, vérifier les permissions et secrets attendus sans jamais versionner les secrets, et produire un compte rendu vérifiable. Le réconciliateur de configuration existant ne doit pas être présenté comme cet installateur complet.
+
+En parallèle, le serveur prépare et publie périodiquement dans le dépôt Git un rapport de fonctionnement et d'utilisation. Ce flux est indépendant du cadrage Copilot et du livrable scientifique.
+
+**Résultat attendu :** une recherche durable configurée dans Projects, un cadrage initial effectué en un seul échange serveur/Copilot et un artefact précis publié, sans admission implicite d'une tâche.
 
 ## 02. Communication à la demande et état propre des composants
 
@@ -68,7 +77,7 @@ Composants :
 
 Le Scheduler ne suppose pas qu'une information est connue si le composant ne l'a pas fournie. Une information absente, inconnue ou périmée reste explicitement inconnue ou périmée.
 
-Le serveur peut agréger les informations reçues pour ses rapports opérationnels, sans transformer cette agrégation en autorité concurrente du Scheduler.
+Le serveur peut agréger les informations reçues pour ses rapports opérationnels et pour sa réponse unique de cohérence au cadrage initial Copilot, sans transformer cette agrégation en autorité concurrente du Scheduler. Cette réponse doit distinguer les capacités vérifiées, les limites, les données manquantes et les représentations scientifiques réalisables ; elle ne déclenche pas l'exécution.
 
 **Résultat attendu :** chaque composant expose une interface de réponse exploitable ; le Scheduler peut demander les informations nécessaires au moment où il en a besoin.
 
@@ -281,7 +290,9 @@ Composants :
 - Component Usage Statistics
 - Operational Report
 
-Après le premier artefact de l'étape 01, Copilot peut être alimenté par un contexte serveur borné, daté et traçable : projets et expériences actifs, tâches, outils, laboratoires, spécialistes, capacités communiquées, réservations, statistiques et charge logique.
+Pendant le cadrage initial de l'étape 01, le serveur fournit une seule réponse structurée, bornée, datée et traçable à l'artefact Copilot. Elle précise notamment les représentations scientifiques réalisables, les données et outils disponibles, les capacités et réservations communiquées, les contraintes, les incertitudes et les lacunes. Copilot reformule alors la demande et clôt ce cadrage : aucun nouvel échange de clarification automatique n'est engagé.
+
+Après publication du rapport scientifique dans Git, Copilot peut consulter les résultats et proposer une nouvelle itération d'amélioration. Cette proposition est un nouveau cycle de la même recherche durable (ou une actualisation liée selon le modèle Projects), conserve les références et l'historique des cycles précédents et repasse par les contrôles d'admission du Scheduler. Il s'agit d'une réaction aux résultats publiés, pas de la reprise du dialogue initial.
 
 Copilot reste consultatif. Il ne peut ni admettre une tâche, ni sélectionner un handler, ni modifier les priorités durables, ni lancer directement un laboratoire ou un processus. Le Scheduler conserve toutes les décisions d'exécution.
 
@@ -332,7 +343,7 @@ Final Deliverable
     → État final durable
 ```
 
-La validation humaine et les autorisations requises précèdent les mutations externes. Le retour dans GitHub ProjectV2 reflète l'état du travail ; PostgreSQL conserve l'état durable de la requête.
+La validation humaine et les autorisations requises précèdent les mutations externes. Le retour dans GitHub ProjectV2 reflète l'état du travail ; PostgreSQL conserve l'état durable de la requête. Une proposition Copilot née de la consultation d'un résultat publié ouvre, si elle est retenue par l'opérateur, un nouveau cycle lié à la même recherche : elle ne contourne ni la transition opérateur requise ni l'admission du Scheduler.
 
 Le Git Writer et le parcours complet de livraison doivent être démontrés de bout en bout. La présence d'un plan, d'un adaptateur ou d'un contrat de publication ne suffit pas à prouver que le résultat est effectivement livré.
 
@@ -340,7 +351,7 @@ Le Git Writer et le parcours complet de livraison doivent être démontrés de b
 
 ## Ordre de réalisation
 
-1. Entrée du board, déclenchement Copilot, premier artefact et définition du flux de rapport périodique.
+1. Entrée Projects, cadrage Copilot en un échange, artefact précis, installation/réconciliation du mode Projects et définition du flux de rapport périodique.
 2. Interfaces de communication à la demande et remontée des informations propres aux composants.
 3. Raccordement des politiques, contrôles de sécurité et autorisations.
 4. Admission, sélection et distribution des tâches par le Scheduler.
