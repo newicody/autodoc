@@ -166,6 +166,11 @@ class GitHubResearchLoveExternallyManagedInstalledComponents:
         )
         for name in ("initialize_schema", "append_many"):
             _method(self.observation_store, name)
+        if self.component_state_provider is not None:
+            _method(
+                self.component_state_provider,
+                "collect_component_state_snapshots",
+            )
         for callback in self.close_callbacks:
             if not callable(callback):
                 raise TypeError("chaque close_callback doit être callable")
@@ -185,7 +190,7 @@ class GitHubResearchLoveExternallyManagedInstalledComponents:
                 "evidence_refs": self.evidence_refs,
                 "postgresql_durable_authority": True,
                 "qdrant_projection_and_recall": True,
-                "openvino_e5_injected": True,
+                "openvino_e5_injected": True,\n                "component_state_provider_injected": self.component_state_provider is not None,
                 "internal_json_storage_created": False,
                 "jsonl_queue_created": False,
             }
@@ -262,6 +267,7 @@ def compose_github_research_love_externally_managed_service(
         observation_sink=information_sink,
         observation_store=components.observation_store,
         clock=runtime_clock,
+        component_state_provider=components.component_state_provider,
     )
     service = GitHubResearchLoveOpenRcSchedulerService(
         scheduler=components.scheduler,
