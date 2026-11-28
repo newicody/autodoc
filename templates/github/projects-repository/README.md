@@ -16,6 +16,7 @@ Le bundle contient actuellement :
 .github/ISSUE_TEMPLATE/specialist-capability-growth.yml
 .github/ISSUE_TEMPLATE/config.yml
 .github/workflows/autodoc-controlled-research.yml
+.github/workflows/autodoc-copilot-refinement.yml
 scripts/audit_projects_bundle_drift.py
 scripts/build_copilot_advisory_publication_preview.py
 scripts/build_copilot_advisory_v2_publication_preview.py
@@ -60,6 +61,7 @@ issues.opened dans newicody/projects
 → avis Copilot requis pour ce run initial
 → manifeste corrélé
 → trois artefacts Actions distincts par Issue et par run
+→ artefact initial Copilot publié dans autodoc/exchanges/.../copilot-initial.json par commit/push Git
 → premier commentaire Copilot publié par newicody/projects
 ```
 
@@ -132,3 +134,18 @@ lui seul un installateur complet du mode Projects. La roadmap prévoit un
 installateur idempotent qui assemble et vérifie le bundle, les formulaires,
 workflows, champs, options, vues, permissions et secrets requis. Les secrets
 restent fournis hors dépôt et ne sont jamais écrits dans les fichiers versionnés.
+
+
+Le serveur local ne crée pas le premier avis Copilot. Le workflow le publie aussi dans
+Git via le secret borné `AUTODOC_EXCHANGE_GIT_TOKEN`. Le serveur récupère cet
+artefact, produit une réponse structurée à partir de son propre état vérifié et
+la pousse dans Git. Le workflow `autodoc-copilot-refinement.yml`, déclenché
+uniquement par le chemin `server-response.json`, demande ensuite à Copilot une
+seule reformulation et pousse `copilot-refined.json`. Le push de cet artefact
+ne redéclenche pas le workflow de reformulation.
+
+Le serveur conserve en parallèle la récupération des artefacts Actions existants.
+L'assembleur d'admissibilité peut maintenant exiger et valider les trois artefacts
+Git, puis intégrer la reformulation comme indication non autoritative dans le
+work package. Ce raccordement est opt-in via son CLI ; il reste à relier au
+parcours vivant de transition ProjectV2 vers `En cours`.
