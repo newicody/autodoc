@@ -59,6 +59,7 @@ def test_assessment_aggregates_capabilities_and_keeps_usage_separate():
     assert result["coherence_status"] == "coherent"
     assert result["verified_capabilities"] == ["embedding.e5.384"]
     assert result["component_usage_statistics"]["component:openvino"]["requests"] == 12
+    assert result["component_interfaces"]["component:openvino"] == ["embedding.query"]
     assert result["scheduler_capacity_inferred_from_hardware"] is False
     assert result["unknown_values_defaulted_to_zero"] is False
 
