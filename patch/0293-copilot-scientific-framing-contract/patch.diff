@@ -1,0 +1,379 @@
+diff --git a/src/contracts/copilot_scientific_framing.py b/src/contracts/copilot_scientific_framing.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/src/contracts/copilot_scientific_framing.py
+@@ -0,0 +1,179 @@
++"""Typed contract for the one-shot Copilot/server scientific-framing exchange.
++
++This module validates immutable artifacts only. It does not evaluate component
++capabilities, invoke Copilot, publish to GitHub, admit work, or orchestrate tasks.
++Those actions remain at their existing server and adapter boundaries.
++"""
++from __future__ import annotations
++
++from collections.abc import Mapping
++from dataclasses import dataclass
++import hashlib
++import json
++from typing import Any
++
++INITIAL_SCHEMA = "missipy.github.copilot_advisory.v2"
++SERVER_RESPONSE_SCHEMA = "missipy.github.server_scientific_framing_response.v1"
++REFINED_REQUEST_SCHEMA = "missipy.github.copilot_refined_research_request.v1"
++HANDSHAKE_SCHEMA = "missipy.github.copilot_scientific_framing_handshake.v1"
++_ALLOWED_STATUSES = {"coherent", "partially_coherent", "incoherent"}
++
++
++class ScientificFramingContractError(ValueError):
++    """Raised when an artifact violates the one-shot framing contract."""
++
++
++@dataclass(frozen=True, slots=True)
++class FramingHandshake:
++    handshake_ref: str
++    request_artifact_ref: str
++    initial_advisory_ref: str
++    initial_advisory_digest: str
++
++    def to_mapping(self) -> dict[str, str]:
++        return {
++            "schema": HANDSHAKE_SCHEMA,
++            "handshake_ref": self.handshake_ref,
++            "request_artifact_ref": self.request_artifact_ref,
++            "initial_advisory_ref": self.initial_advisory_ref,
++            "initial_advisory_digest": self.initial_advisory_digest,
++            "exchange_limit": "one_server_response_and_one_copilot_refinement",
++            "recursive_clarification_allowed": "false",
++            "execution_authorized": "false",
++        }
++
++
++def canonical_digest(value: Mapping[str, Any]) -> str:
++    payload = json.dumps(
++        dict(value), ensure_ascii=False, sort_keys=True, separators=(",", ":")
++    )
++    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
++
++
++def validate_initial_advisory(
++    request: Mapping[str, Any], advisory: Mapping[str, Any]
++) -> FramingHandshake:
++    """Bind the existing Copilot v2 first opinion to its authoritative request."""
++    if advisory.get("schema") != INITIAL_SCHEMA:
++        raise ScientificFramingContractError("unexpected initial advisory schema")
++    request_ref = _required_text("request artifact_ref", request.get("artifact_ref"))
++    advisory_request_ref = _required_text(
++        "advisory request_artifact_ref", advisory.get("request_artifact_ref")
++    )
++    if advisory_request_ref != request_ref:
++        raise ScientificFramingContractError("initial advisory/request mismatch")
++    advisory_ref = _required_text("advisory artifact_ref", advisory.get("artifact_ref"))
++    for name in (
++        "concrete_objective",
++        "expected_result",
++    ):
++        _required_text(name, advisory.get(name))
++    for name in ("provided_constraints", "success_criteria"):
++        _string_list(name, advisory.get(name))
++    if not _string_list("success_criteria", advisory.get("success_criteria")):
++        raise ScientificFramingContractError("success_criteria must not be empty")
++    if advisory.get("trusted") is not False:
++        raise ScientificFramingContractError("initial advisory must remain untrusted")
++    if advisory.get("usable_as_authority") is not False:
++        raise ScientificFramingContractError("initial advisory cannot be authoritative")
++    digest = canonical_digest(advisory)
++    identity = hashlib.sha256(
++        "\\0".join((request_ref, advisory_ref, digest)).encode("utf-8")
++    ).hexdigest()
++    return FramingHandshake(
++        handshake_ref=f"copilot-framing:{identity}",
++        request_artifact_ref=request_ref,
++        initial_advisory_ref=advisory_ref,
++        initial_advisory_digest=digest,
++    )
++
++
++def validate_server_response(
++    handshake: FramingHandshake, response: Mapping[str, Any]
++) -> dict[str, Any]:
++    """Validate the server's single coherence response; do not infer its content."""
++    if response.get("schema") != SERVER_RESPONSE_SCHEMA:
++        raise ScientificFramingContractError("unexpected server response schema")
++    if response.get("handshake_ref") != handshake.handshake_ref:
++        raise ScientificFramingContractError("server response handshake mismatch")
++    if response.get("request_artifact_ref") != handshake.request_artifact_ref:
++        raise ScientificFramingContractError("server response request mismatch")
++    if response.get("initial_advisory_ref") != handshake.initial_advisory_ref:
++        raise ScientificFramingContractError("server response advisory mismatch")
++    if response.get("initial_advisory_digest") != handshake.initial_advisory_digest:
++        raise ScientificFramingContractError("server response advisory digest mismatch")
++    status = _required_text("coherence_status", response.get("coherence_status"))
++    if status not in _ALLOWED_STATUSES:
++        raise ScientificFramingContractError("unsupported coherence_status")
++    _required_text("assessment", response.get("assessment"))
++    _string_list("supported_representations", response.get("supported_representations"))
++    _string_list("unsupported_representations", response.get("unsupported_representations"))
++    _string_list("available_data", response.get("available_data"))
++    _string_list("missing_data", response.get("missing_data"))
++    _string_list("verified_capabilities", response.get("verified_capabilities"))
++    _string_list("constraints", response.get("constraints"))
++    _string_list("report_outline", response.get("report_outline"))
++    provenance = response.get("provenance")
++    if not isinstance(provenance, list):
++        raise ScientificFramingContractError("provenance must be an array")
++    for index, item in enumerate(provenance):
++        if not isinstance(item, Mapping):
++            raise ScientificFramingContractError(f"provenance[{index}] must be an object")
++        _required_text(f"provenance[{index}].source_ref", item.get("source_ref"))
++        _required_text(f"provenance[{index}].observed_at", item.get("observed_at"))
++        _required_text(f"provenance[{index}].freshness", item.get("freshness"))
++    if response.get("execution_authorized") is not False:
++        raise ScientificFramingContractError("server response cannot authorize execution")
++    if response.get("recursive_clarification_allowed") is not False:
++        raise ScientificFramingContractError("recursive clarification must be disabled")
++    return dict(response)
++
++
++def validate_refined_request(
++    handshake: FramingHandshake,
++    server_response: Mapping[str, Any],
++    refined: Mapping[str, Any],
++) -> dict[str, Any]:
++    """Validate Copilot's single reformulation against the exact server response."""
++    response = validate_server_response(handshake, server_response)
++    if refined.get("schema") != REFINED_REQUEST_SCHEMA:
++        raise ScientificFramingContractError("unexpected refined request schema")
++    for field, expected in (
++        ("handshake_ref", handshake.handshake_ref),
++        ("request_artifact_ref", handshake.request_artifact_ref),
++        ("initial_advisory_ref", handshake.initial_advisory_ref),
++        ("server_response_digest", canonical_digest(response)),
++    ):
++        if refined.get(field) != expected:
++            raise ScientificFramingContractError(f"refined request {field} mismatch")
++    _required_text("concrete_objective", refined.get("concrete_objective"))
++    _required_text("expected_result", refined.get("expected_result"))
++    _string_list("provided_constraints", refined.get("provided_constraints"))
++    criteria = _string_list("success_criteria", refined.get("success_criteria"))
++    if not criteria:
++        raise ScientificFramingContractError("refined success_criteria must not be empty")
++    _string_list("scientific_representations", refined.get("scientific_representations"))
++    if refined.get("trusted") is not False:
++        raise ScientificFramingContractError("refined request must remain untrusted")
++    if refined.get("usable_as_authority") is not False:
++        raise ScientificFramingContractError("refined request cannot be authoritative")
++    return dict(refined)
++
++
++def _required_text(name: str, value: object) -> str:
++    if not isinstance(value, str) or not value.strip():
++        raise ScientificFramingContractError(f"{name} must be a non-empty string")
++    return value.strip()
++
++
++def _string_list(name: str, value: object) -> list[str]:
++    if not isinstance(value, list):
++        raise ScientificFramingContractError(f"{name} must be an array")
++    normalized: list[str] = []
++    for index, item in enumerate(value):
++        if not isinstance(item, str) or not item.strip():
++            raise ScientificFramingContractError(
++                f"{name}[{index}] must be a non-empty string"
++            )
++        normalized.append(item.strip())
++    return normalized
+diff --git a/tests/contracts/test_copilot_scientific_framing.py b/tests/contracts/test_copilot_scientific_framing.py
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/tests/contracts/test_copilot_scientific_framing.py
+@@ -0,0 +1,131 @@
++from __future__ import annotations
++
++import pytest
++
++from contracts.copilot_scientific_framing import (
++    REFINED_REQUEST_SCHEMA,
++    SERVER_RESPONSE_SCHEMA,
++    ScientificFramingContractError,
++    canonical_digest,
++    validate_initial_advisory,
++    validate_refined_request,
++    validate_server_response,
++)
++
++
++def _request():
++    return {"artifact_ref": "github-request:42"}
++
++
++def _advisory():
++    return {
++        "schema": "missipy.github.copilot_advisory.v2",
++        "artifact_ref": "github-advisory:42",
++        "request_artifact_ref": "github-request:42",
++        "concrete_objective": "Produire une analyse scientifique.",
++        "expected_result": "Un rapport complet avec représentations adaptées.",
++        "provided_constraints": ["Ne pas inventer de données."],
++        "success_criteria": ["Résultats sourcés et reproductibles."],
++        "trusted": False,
++        "usable_as_authority": False,
++    }
++
++
++def _server_response(handshake):
++    return {
++        "schema": SERVER_RESPONSE_SCHEMA,
++        "handshake_ref": handshake.handshake_ref,
++        "request_artifact_ref": handshake.request_artifact_ref,
++        "initial_advisory_ref": handshake.initial_advisory_ref,
++        "initial_advisory_digest": handshake.initial_advisory_digest,
++        "coherence_status": "partially_coherent",
++        "assessment": "Les représentations proposées sont réalisables sous réserves.",
++        "supported_representations": ["tableaux", "courbes temporelles"],
++        "unsupported_representations": ["carte thermique sans données spatiales"],
++        "available_data": ["dataset:measurements:v3"],
++        "missing_data": ["metadata:calibration"],
++        "verified_capabilities": ["laboratory:analysis"],
++        "constraints": ["Les mesures doivent être datées."],
++        "report_outline": ["Méthode", "Résultats", "Limites"],
++        "provenance": [{
++            "source_ref": "sql:dataset:measurements:v3",
++            "observed_at": "2026-11-28T12:00:00Z",
++            "freshness": "current",
++        }],
++        "execution_authorized": False,
++        "recursive_clarification_allowed": False,
++    }
++
++
++def test_initial_advisory_creates_stable_handshake_identity():
++    handshake = validate_initial_advisory(_request(), _advisory())
++    again = validate_initial_advisory(_request(), _advisory())
++    assert handshake == again
++    assert handshake.handshake_ref.startswith("copilot-framing:")
++
++
++def test_server_response_is_correlated_and_cannot_authorize_execution():
++    handshake = validate_initial_advisory(_request(), _advisory())
++    response = _server_response(handshake)
++    assert validate_server_response(handshake, response) == response
++
++    invalid = {**response, "execution_authorized": True}
++    with pytest.raises(ScientificFramingContractError, match="cannot authorize"):
++        validate_server_response(handshake, invalid)
++
++
++def test_server_response_rejects_stale_or_unrelated_handshake():
++    handshake = validate_initial_advisory(_request(), _advisory())
++    response = _server_response(handshake)
++    invalid = {**response, "initial_advisory_digest": "0" * 64}
++    with pytest.raises(ScientificFramingContractError, match="digest mismatch"):
++        validate_server_response(handshake, invalid)
++
++
++def test_refined_request_is_bound_to_the_single_server_response():
++    handshake = validate_initial_advisory(_request(), _advisory())
++    response = _server_response(handshake)
++    refined = {
++        "schema": REFINED_REQUEST_SCHEMA,
++        "handshake_ref": handshake.handshake_ref,
++        "request_artifact_ref": handshake.request_artifact_ref,
++        "initial_advisory_ref": handshake.initial_advisory_ref,
++        "server_response_digest": canonical_digest(response),
++        "concrete_objective": "Réaliser l'analyse sur les données disponibles.",
++        "expected_result": "Un rapport avec tableaux et courbes temporelles.",
++        "provided_constraints": ["Mesures datées."],
++        "success_criteria": ["Chaque courbe cite sa source."],
++        "scientific_representations": ["tableaux", "courbes temporelles"],
++        "trusted": False,
++        "usable_as_authority": False,
++    }
++    assert validate_refined_request(handshake, response, refined) == refined
++
++    altered = {**refined, "server_response_digest": "f" * 64}
++    with pytest.raises(ScientificFramingContractError, match="server_response_digest"):
++        validate_refined_request(handshake, response, altered)
++
++
++def test_refined_request_rejects_authority_or_empty_criteria():
++    handshake = validate_initial_advisory(_request(), _advisory())
++    response = _server_response(handshake)
++    refined = {
++        "schema": REFINED_REQUEST_SCHEMA,
++        "handshake_ref": handshake.handshake_ref,
++        "request_artifact_ref": handshake.request_artifact_ref,
++        "initial_advisory_ref": handshake.initial_advisory_ref,
++        "server_response_digest": canonical_digest(response),
++        "concrete_objective": "Objectif.",
++        "expected_result": "Rapport.",
++        "provided_constraints": [],
++        "success_criteria": [],
++        "scientific_representations": ["tableaux"],
++        "trusted": False,
++        "usable_as_authority": False,
++    }
++    with pytest.raises(ScientificFramingContractError, match="success_criteria"):
++        validate_refined_request(handshake, response, refined)
++    with pytest.raises(ScientificFramingContractError, match="cannot be authoritative"):
++        validate_refined_request(
++            handshake, response, {**refined, "success_criteria": ["ok"], "usable_as_authority": True}
++        )
+diff --git a/doc/architecture/COPILOT_SCIENTIFIC_FRAMING.md b/doc/architecture/COPILOT_SCIENTIFIC_FRAMING.md
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/doc/architecture/COPILOT_SCIENTIFIC_FRAMING.md
+@@ -0,0 +1,51 @@
++# Cadrage scientifique initial Copilot–serveur
++
++## Portée
++
++Le cadrage initial est un échange borné, distinct de l'admission et de
++l'exécution. Copilot propose l'objectif, le résultat attendu et surtout les
++représentations scientifiques nécessaires au rapport (tableaux, séries,
++visualisations, comparaisons, preuves et structure). Le serveur examine cette
++proposition à partir des informations réellement détenues par les composants
++et renvoie une seule réponse de cohérence. Copilot reformule ensuite la demande
++une seule fois à partir de cette réponse.
++
++Il n'existe pas de boucle automatique de clarification. Une proposition
++ultérieure après consultation des résultats Git est une nouvelle itération de
++la recherche, avec filiation et admission normale par le Scheduler.
++
++## Contrat initial 0293
++
++Le contrat `contracts.copilot_scientific_framing` définit trois artefacts
++corrélés :
++
++1. l'avis initial existant `missipy.github.copilot_advisory.v2` ;
++2. la réponse serveur `missipy.github.server_scientific_framing_response.v1` ;
++3. la demande reformulée `missipy.github.copilot_refined_research_request.v1`.
++
++La réponse serveur expose l'état de cohérence, les représentations prises en
++charge ou non, les données disponibles/manquantes, les capacités vérifiées,
++les contraintes, le plan de rapport et la provenance/fraîcheur des informations.
++Elle ne prétend pas disposer d'informations absentes et n'autorise jamais
++l'exécution.
++
++Chaque artefact référence la demande initiale et l'empreinte de l'avis
++précédent. La demande reformulée est liée au digest exact de la réponse serveur.
++Les contenus Copilot restent non fiables et non autoritatifs.
++
++## Frontières
++
++- Ce contrat est une validation de données, pas un producteur de capacités ni
++  un moteur d'évaluation de cohérence.
++- Il ne crée ni manager, ni orchestrateur, ni queue, ni bus, ni registre.
++- Il n'appelle pas Copilot, GitHub, PostgreSQL, Qdrant ou le Scheduler.
++- La réponse serveur doit être produite par des lecteurs existants autorisés ;
++  toute donnée inconnue ou périmée doit le rester explicitement.
++- La transition ProjectV2 vers `En cours` demeure le déclencheur du cycle
++  d'exécution. Le cadrage initial ne vaut pas admission.
++
++## État de réalisation
++
++0293 établit le contrat typé et ses validations. Le producteur serveur, le
++second appel Copilot, la persistance append-only et le raccordement au parcours
++d'artefacts restent à intégrer avant de déclarer l'échange opérationnel.
