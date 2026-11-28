@@ -27,7 +27,7 @@ from kernel.scheduler_canonical_continuation import (
     SchedulerCanonicalCycleBound,
     SchedulerCanonicalCycleReport,
 )
-from kernel.scheduler_handler_contract import (
+from context.server_scientific_framing_assessment_0287 import (\n    build_server_scientific_framing_assessment,\n)\nfrom kernel.scheduler_handler_contract import (
     HandlerInformationSink,
     HandlerLifecycleNotice,
 )
@@ -322,6 +322,27 @@ class GitHubResearchLoveExternallyManagedRuntime:
             raise GitHubResearchLoveExternallyManagedRuntimeError(
                 "le sink d'observation appartient à un autre Scheduler"
             )
+
+    def build_scientific_framing_assessment(self) -> dict[str, Any]:
+        """Collect component-owned snapshots through the injected installed provider."""
+        provider = self.component_state_provider
+        if provider is None or not callable(
+            getattr(provider, "collect_component_state_snapshots", None)
+        ):
+            raise GitHubResearchLoveExternallyManagedRuntimeError(
+                "aucun fournisseur d'état des composants n'est injecté dans le runtime"
+            )
+        snapshots = provider.collect_component_state_snapshots()
+        if hasattr(snapshots, "__await__"):
+            raise GitHubResearchLoveExternallyManagedRuntimeError(
+                "le fournisseur d'état doit être synchrone et non bloquant"
+            )
+        try:
+            return build_server_scientific_framing_assessment(snapshots)
+        except (TypeError, ValueError) as exc:
+            raise GitHubResearchLoveExternallyManagedRuntimeError(
+                f"état des composants invalide: {exc}"
+            ) from exc
 
     async def run_tick(
         self,
