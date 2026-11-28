@@ -1,0 +1,1743 @@
+diff --git a/doc/ROADMAP.md b/doc/ROADMAP.md
+--- a/doc/ROADMAP.md
++++ b/doc/ROADMAP.md
+@@ -58,6 +58,8 @@ En parallèle, le serveur prépare et publie périodiquement dans le dépôt Git
+ 
+ **Avancement 0294 :** le canal de transport est maintenant formalisé séparément du contenu scientifique : trois artefacts append-only dans `newicody/projects`, publiés par commits/push Git et reliés par références et digests (`copilot-initial` → `server-response` → `copilot-refined`). Le contrat interdit l'écrasement d'un chemin, distingue rejeu identique et collision, et fixe l'absence de RPC, de boucle de clarification et d'autorisation d'exécution. Il ne réalise pas encore les producteurs/publishers Git, le workflow `push` de reformulation ni la récupération serveur ; l'étape 01 reste ouverte. Le séparateur d'identité du contrat 0293 a également été corrigé.
+ 
++**Avancement 0295 :** le workflow initial publie maintenant l'avis Copilot v2 dans Git avec un secret d'écriture limité ; un workflow séparé réagit uniquement au push de `server-response.json` et publie la reformulation Copilot une seule fois. Les adaptateurs de récupération/publication Git sont ajoutés. Le serveur dispose d'un adaptateur pour publier sa réponse à partir d'une évaluation JSON vérifiée, et l'assembleur d'admissibilité peut exiger la chaîne complète puis intégrer la reformulation comme indication non autoritative au work package existant. Ce raccordement est disponible en option CLI, pas encore activé dans le parcours vivant `En cours`. L'adaptateur serveur ne collecte pas lui-même l'état des composants : son alimentation par les interfaces réelles et son appel dans le traitement serveur restent à raccorder. Les workflows et le secret doivent encore être installés dans `newicody/projects` et le parcours de bout en bout validé. L'étape 01 reste ouverte.
++
+ ## 02. Communication à la demande et état propre des composants
+ 
+ **Objectif :** permettre au Scheduler d'interroger les composants sans leur imposer un registre central omniscient.
+diff --git a/doc/architecture/GIT_ARTIFACT_EXCHANGE.md b/doc/architecture/GIT_ARTIFACT_EXCHANGE.md
+--- a/doc/architecture/GIT_ARTIFACT_EXCHANGE.md
++++ b/doc/architecture/GIT_ARTIFACT_EXCHANGE.md
+@@ -5,73 +5,91 @@
+ Les échanges de cadrage sont réalisés exclusivement par des artefacts versionnés
+ dans le dépôt Git de gestion des recherches. Chaque producteur écrit un nouveau
+ fichier, crée un commit et pousse ce commit. L'autre côté observe/récupère le
+-nouvel artefact depuis Git. Il n'existe aucun appel RPC, webhook direct ou canal
+-de messages Copilot–serveur.
++nouvel artefact depuis Git. Il n'existe aucun appel RPC ou canal direct de
++messages Copilot–serveur.
+ 
+ Les artefacts Git constituent le canal asynchrone et la trace append-only du
+ cadrage. PostgreSQL reste l'autorité durable de l'état métier. Les artefacts
+-GitHub Actions peuvent servir aux transferts temporaires du workflow existant,
+-mais ne constituent pas le transport de cet échange.
++GitHub Actions restent un transport temporaire du workflow existant et ne
++remplacent pas le transport Git du cadrage.
+ 
+ ## Chemins canoniques
+ 
+-Pour une Issue et un cycle donnés, les trois fichiers sont :
+-
+-`autodoc/exchanges/issues/<issue>/cycles/<cycle>/copilot-initial.json`
+-`autodoc/exchanges/issues/<issue>/cycles/<cycle>/server-response.json`
+-`autodoc/exchanges/issues/<issue>/cycles/<cycle>/copilot-refined.json`
+-
+-Ils résident dans le dépôt Git de gestion Projects (actuellement `newicody/projects`).
+-Le numéro de cycle est déterminé par la filiation durable de la recherche ; il
+-n'est pas déduit du timestamp ni du numéro de run Actions.
+-
+-## Séquence d'échange
+-
+-1. Copilot produit `copilot-initial.json` et pousse un commit.
+-2. Le serveur récupère ce commit, vérifie l'artefact et les références, examine
+-   les données/capacités/contraintes qu'il peut effectivement lire, puis produit
+-   `server-response.json` et pousse un commit.
+-3. Le workflow déclenché par le push de `server-response.json` fait produire
+-   par Copilot `copilot-refined.json` et pousse un commit.
+-4. Le serveur récupère `copilot-refined.json`, vérifie la chaîne et présente
+-   la demande au contrôle d'admission existant du Scheduler.
+-
+-L'échange de cadrage initial s'arrête après le troisième artefact. Aucun push
+-de réponse serveur ne doit déclencher une nouvelle réponse serveur ; aucun push
+-de reformulation ne doit relancer le cadrage initial.
+-
+-## Intégrité et append-only
+-
+-Chaque enveloppe contient le dépôt, l'Issue, le cycle, le rôle, le producteur,
+-l'horodatage, le payload, son digest SHA-256, le chemin canonique et les
+-références/digests de l'artefact précédent. Le commit Git donne l'identité
+-immuable de la révision ; son SHA ne doit pas être inscrit dans le contenu du
+-fichier qu'il contient.
++Pour une Issue et un cycle donnés :
++
++- `autodoc/exchanges/issues/<issue>/cycles/<cycle>/copilot-initial.json`
++- `autodoc/exchanges/issues/<issue>/cycles/<cycle>/server-response.json`
++- `autodoc/exchanges/issues/<issue>/cycles/<cycle>/copilot-refined.json`
++
++Ils résident dans le dépôt de gestion Projects (actuellement
++`newicody/projects`). Le cycle est déterminé par la filiation durable de la
++recherche, jamais par un timestamp ou un numéro de run Actions.
++
++## Séquence et raccordements présents
++
++1. `issues.opened` déclenche le workflow initial existant. Après génération
++   de l'avis Copilot v2, il le publie dans Git avec
++   `AUTODOC_EXCHANGE_GIT_TOKEN`. Le commentaire Issue existant reste une
++   projection lisible, pas le canal de transport.
++2. Le serveur récupère l'artefact initial et construit une évaluation structurée
++   à partir de ses propres observations vérifiées. L'adaptateur
++   `tools/publish_git_exchange_server_response.py` valide cette évaluation,
++   la lie à l'avis initial et pousse `server-response.json`.
++3. Le workflow `autodoc-copilot-refinement.yml` ne réagit qu'au push de
++   `server-response.json`. Il récupère les deux artefacts, demande une seule
++   reformulation à Copilot, puis pousse `copilot-refined.json`. Le push de
++   l'artefact reformulé ne déclenche pas ce workflow.
++4. Le serveur peut récupérer les trois enveloppes. L'assembleur
++   `tools/assemble_fetched_github_research_admissibility_0287.py` accepte
++   `--git-exchange-branch` et
++   `--require-scientific-framing-exchange`. Il vérifie la chaîne, vérifie que
++   l'avis initial Git correspond à l'avis du run Actions et transmet la
++   reformulation au work package existant comme indication non autoritative.
++
++Le lancement d'exécution reste distinct : la transition ProjectV2 vers
++`En cours` et l'admission du Scheduler gardent leur rôle. La présence d'un
++artefact ne déclenche jamais une tâche.
++
++## Contrats, intégrité et sécurité
++
++Le contrat `missipy.github.git_artifact_exchange_envelope.v1` lie le dépôt,
++l'Issue, le cycle, le rôle, le producteur, l'horodatage, le payload, son digest
++SHA-256, le chemin canonique et les références/digests de l'artefact précédent.
++Le commit Git donne l'identité immuable de la révision ; son SHA ne doit pas
++être inscrit dans le contenu du fichier qu'il contient.
+ 
+ Un chemin existant avec le même digest est un replay idempotent. Un chemin
+ existant avec un contenu différent est une collision : il est interdit de
+ l'écraser. Une correction nécessite une nouvelle révision/cycle et une filiation
+ explicite.
+ 
+-Les artefacts Copilot restent non fiables et non autoritatifs. La réponse
+-serveur décrit ce qu'il peut vérifier, sans transformer les données manquantes
+-ou périmées en capacités disponibles. Aucun artefact ne donne le droit
+-d'exécuter une tâche.
+-
+-## Raccordements runtime encore requis
+-
+-Le contrat 0294 définit chemins, enveloppes, filiation, digest et détection de
+-rejeu/collision. Il ne pousse pas lui-même les commits et ne déclenche pas
+-encore le workflow de reformulation. Les raccordements à réaliser en réutilisant
+-les frontières existantes sont :
+-
+-- publication Git du premier artefact Copilot depuis le workflow de création ;
+-- lecture serveur du nouvel artefact Git ;
+-- production et push serveur de la réponse ;
+-- workflow `push` filtré sur `server-response.json` ;
+-- publication Git par Copilot de la demande reformulée ;
+-- récupération serveur et passage au contrôle d'admission existant.
+-
+-Les permissions d'écriture doivent être limitées au dépôt et aux chemins
+-nécessaires. Les secrets ne sont jamais inscrits dans les artefacts ou dans Git.
+-Aucun nouveau manager, queue, bus, worker résident ou orchestrateur n'est créé.
++Les artefacts Copilot restent non fiables et non autoritatifs. La demande
++GitHub d'origine reste la demande autoritative ; la reformulation est ajoutée
++au work package comme indication. La réponse serveur distingue capacités
++vérifiées, limites, données manquantes, provenance et fraîcheur. Aucun artefact
++ne donne le droit d'exécuter une tâche.
++
++Le workflow utilise un secret `AUTODOC_EXCHANGE_GIT_TOKEN` limité au dépôt
++Projects et à `Contents: read/write`. Le token automatique du workflow reste
++en lecture pour les contenus. Le secret historique
++`AUTODOC_ISSUE_COMMENT_TOKEN` conserve son usage distinct. Aucun secret n'est
++écrit dans Git.
++
++## Limites d'intégration restantes
++
++Les adaptateurs et workflows sont présents dans la branche de développement,
++mais le parcours complet n'est pas encore démontré en exploitation :
++
++- le serveur doit encore alimenter l'évaluation à partir des interfaces d'état
++  réelles des composants ; l'adaptateur de réponse reçoit actuellement un
++  JSON d'évaluation et ne collecte pas lui-même les capacités ;
++- l'appel de cet adaptateur doit être raccordé au traitement serveur vivant,
++  sans créer de worker ou d'orchestrateur parallèle ;
++- l'assembleur d'admissibilité sait exiger la chaîne Git, mais son option doit
++  être activée dans le parcours réel déclenché par `En cours` ;
++- les permissions, le secret et les workflows doivent être installés dans
++  `newicody/projects`, puis le flux doit être vérifié de bout en bout.
++
++Les tests ajoutés ne sont pas déclarés exécutés. Aucun producteur serveur
++autonome, collecteur de capacités ou dispatch Scheduler supplémentaire n'est
++revendiqué par ce patch.
+diff --git a/src/context/correlated_research_work_package_0287.py b/src/context/correlated_research_work_package_0287.py
+--- a/src/context/correlated_research_work_package_0287.py
++++ b/src/context/correlated_research_work_package_0287.py
+@@ -26,6 +26,7 @@
+ )
+ REQUEST_SCHEMA = "missipy.github.authoritative_request.v1"
+ MANIFEST_SCHEMA = "missipy.github.dual_artifact_manifest.v1"
++REFINED_REQUEST_SCHEMA = "missipy.github.copilot_refined_research_request.v1"
+ ADVISORY_SCHEMAS = frozenset(
+     {
+         "missipy.github.copilot_advisory.v1",
+@@ -91,6 +92,7 @@ class CorrelatedResearchWorkPackageCommand:
+     evidence_refs: tuple[str, ...] = ()
+     require_advisory: bool = True
+     require_fetched_attachments: bool = True
++    copilot_refined_request: Mapping[str, Any] = field(default_factory=dict)
+     execute: bool = False
+ 
+     def __post_init__(self) -> None:
+@@ -100,6 +102,8 @@ def __post_init__(self) -> None:
+             raise TypeError("attachment_manifest must be a mapping")
+         if not isinstance(self.attachment_fetch_report, Mapping):
+             raise TypeError("attachment_fetch_report must be a mapping")
++        if not isinstance(self.copilot_refined_request, Mapping):
++            raise TypeError("copilot_refined_request must be a mapping")
+         _require_text("conversation_ref", self.conversation_ref)
+         _require_text("return_route_ref", self.return_route_ref)
+         if isinstance(self.context_generation, bool) or self.context_generation < 0:
+@@ -140,6 +144,7 @@ class CorrelatedResearchWorkPackage:
+     authoritative_request: Mapping[str, Any]
+     correlation_manifest: Mapping[str, Any]
+     copilot_advisory: Mapping[str, Any] = field(default_factory=dict)
++    copilot_refined_request: Mapping[str, Any] = field(default_factory=dict)
+     attachments: tuple[ResearchAttachmentReference, ...] = ()
+     context_refs: tuple[str, ...] = ()
+     evidence_refs: tuple[str, ...] = ()
+@@ -183,6 +188,11 @@ def __post_init__(self) -> None:
+             "copilot_advisory",
+             _freeze_mapping(self.copilot_advisory),
+         )
++        object.__setattr__(
++            self,
++            "copilot_refined_request",
++            _freeze_mapping(self.copilot_refined_request),
++        )
+         object.__setattr__(self, "attachments", tuple(self.attachments))
+         object.__setattr__(
+             self,
+@@ -222,6 +232,9 @@ def to_mapping(self) -> dict[str, Any]:
+             "authoritative_request": request,
+             "correlation_manifest": manifest,
+             "copilot_advisory": advisory,
++            "copilot_refined_request": dict(self.copilot_refined_request),
++            "refined_request_present": bool(self.copilot_refined_request),
++            "refined_request_used_as_hint_only": bool(self.copilot_refined_request),
+             "advisory_present": self.advisory_present,
+             "advisory_schema": advisory.get("schema", ""),
+             "attachments": attachment_mappings,
+@@ -394,6 +407,42 @@ def build_correlated_research_work_package(
+     elif manifest.get("advisory_artifact_ref") is not None:
+         issues.append("manifest references an advisory missing from intake")
+ 
++    refined_request = dict(command.copilot_refined_request)
++    if refined_request:
++        _expect(refined_request, "schema", REFINED_REQUEST_SCHEMA, issues)
++        _expect(refined_request, "trusted", False, issues)
++        _expect(refined_request, "usable_as_authority", False, issues)
++        _same(
++            "refined request request_artifact_ref",
++            refined_request.get("request_artifact_ref"),
++            request_artifact_ref,
++            issues,
++        )
++        _same(
++            "refined request initial_advisory_ref",
++            refined_request.get("initial_advisory_ref"),
++            advisory.get("artifact_ref"),
++            issues,
++        )
++        for field_name in ("handshake_ref", "concrete_objective", "expected_result"):
++            _text_value(refined_request, field_name, issues)
++        for field_name in (
++            "provided_constraints", "success_criteria", "scientific_representations"
++        ):
++            values = refined_request.get(field_name)
++            if not isinstance(values, list) or not all(
++                isinstance(item, str) and item.strip() for item in values
++            ):
++                issues.append(f"refined request {field_name} must be a string array")
++        if not isinstance(refined_request.get("success_criteria"), list) or not refined_request.get("success_criteria"):
++            issues.append("refined request success_criteria must not be empty")
++        _require_sha256_mapping(
++            "refined request server_response_digest",
++            refined_request,
++            "server_response_digest",
++            issues,
++        )
++
+     attachments = _build_attachment_references(
+         command,
+         repository=request_repository,
+@@ -422,6 +471,7 @@ def build_correlated_research_work_package(
+         "request_sha256": manifest["request_sha256"],
+         "advisory_artifact_ref": advisory.get("artifact_ref", ""),
+         "advisory_sha256": manifest.get("advisory_sha256", ""),
++        "refined_request_digest": hashlib.sha256(_canonical_json(refined_request).encode("utf-8")).hexdigest() if refined_request else "",
+         "attachment_sha256": [item.sha256 for item in attachments],
+         "conversation_ref": command.conversation_ref,
+         "return_route_ref": command.return_route_ref,
+@@ -445,6 +495,7 @@ def build_correlated_research_work_package(
+         authoritative_request=request,
+         correlation_manifest=manifest,
+         copilot_advisory=advisory,
++        copilot_refined_request=refined_request,
+         attachments=attachments,
+         context_refs=command.context_refs,
+         evidence_refs=command.evidence_refs,
+diff --git a/src/context/github_ready_run_research_admissibility_0287.py b/src/context/github_ready_run_research_admissibility_0287.py
+--- a/src/context/github_ready_run_research_admissibility_0287.py
++++ b/src/context/github_ready_run_research_admissibility_0287.py
+@@ -30,6 +30,16 @@
+     GitHubResearchWorkPackageAdmissibilityCommand,
+     evaluate_github_research_work_package_admissibility,
+ )
++from contracts.copilot_scientific_framing import (
++    validate_initial_advisory,
++    validate_refined_request,
++    validate_server_response,
++)
++from contracts.git_artifact_exchange import (
++    canonical_payload_digest,
++    validate_git_exchange_chain,
++    validate_git_exchange_artifact,
++)
+ 
+ SCHEMA = "missipy.github.ready_run_research_admissibility_assembly.v1"
+ _READY_RUN_STATUS = "ready"
+@@ -91,11 +101,15 @@ class GitHubReadyRunResearchAdmissibilityCommand:
+     context_generation: int = 0
+     context_refs: tuple[str, ...] = ()
+     evidence_refs: tuple[str, ...] = ()
++    framing_exchange: Mapping[str, Any] = field(default_factory=dict)
++    require_scientific_framing_exchange: bool = False
+     execute: bool = False
+ 
+     def __post_init__(self) -> None:
+         if not isinstance(self.ready_run, Mapping):
+             raise TypeError("ready_run must be a mapping")
++        if not isinstance(self.framing_exchange, Mapping):
++            raise TypeError("framing_exchange must be a mapping")
+         if not isinstance(self.artifact_contents, tuple):
+             object.__setattr__(
+                 self,
+@@ -296,6 +310,64 @@ def assemble_ready_run_and_evaluate_research_admissibility(
+             run_assembly=assembly_mapping,
+         )
+ 
++    refined_request: Mapping[str, Any] = {}
++    framing_refs: tuple[str, ...] = ()
++    if command.require_scientific_framing_exchange and not command.framing_exchange:
++        return _result(
++            valid=False,
++            admissible=False,
++            status="scientific-framing-missing",
++            issues=["the one-shot Git scientific framing exchange is required"],
++            repository=repository,
++            run_id=run_id,
++            handoff_ref=handoff_ref,
++            run_assembly=assembly_mapping,
++        )
++    if command.framing_exchange:
++        exchange = command.framing_exchange
++        initial_envelope = _mapping(exchange.get("copilot_initial"))
++        response_envelope = _mapping(exchange.get("server_response"))
++        refined_envelope = _mapping(exchange.get("copilot_refined"))
++        try:
++            validate_git_exchange_chain(
++                (initial_envelope, response_envelope, refined_envelope)
++            )
++            for envelope in (initial_envelope, response_envelope, refined_envelope):
++                validate_git_exchange_artifact(envelope)
++            initial_payload = _mapping(initial_envelope.get("payload"))
++            response_payload = _mapping(response_envelope.get("payload"))
++            refined_payload = _mapping(refined_envelope.get("payload"))
++            advisory = _mapping(intake.get("advisory"))
++            if canonical_payload_digest(initial_payload) != canonical_payload_digest(advisory):
++                raise ValueError("Git initial Copilot artifact differs from Actions advisory")
++            if initial_envelope.get("repository") != repository:
++                raise ValueError("Git framing repository does not match ready run")
++            if initial_envelope.get("issue_number") != issue_number:
++                raise ValueError("Git framing Issue does not match ready run")
++            request_ref = _text(request.get("artifact_ref"))
++            handshake = validate_initial_advisory(
++                {"artifact_ref": request_ref},
++                initial_payload,
++            )
++            validate_server_response(handshake, response_payload)
++            validate_refined_request(handshake, response_payload, refined_payload)
++            refined_request = refined_payload
++            framing_refs = tuple(
++                str(envelope["artifact_ref"])
++                for envelope in (initial_envelope, response_envelope, refined_envelope)
++            )
++        except (KeyError, TypeError, ValueError) as exc:
++            return _result(
++                valid=False,
++                admissible=False,
++                status="scientific-framing-invalid",
++                issues=[str(exc)],
++                repository=repository,
++                run_id=run_id,
++                handoff_ref=handoff_ref,
++                run_assembly=assembly_mapping,
++            )
++
+     repository_slug = repository.replace("/", "-")
+     conversation_ref = (
+         command.conversation_ref.strip()
+@@ -306,12 +378,13 @@ def assemble_ready_run_and_evaluate_research_admissibility(
+         or f"github-issue-return:{repository_slug}:{issue_number}"
+     )
+     context_refs = tuple(
+-        dict.fromkeys((handoff_ref, *command.context_refs))
++        dict.fromkeys((handoff_ref, *command.context_refs, *framing_refs))
+     )
+     evidence_refs = tuple(
+         dict.fromkeys(
+             (
+                 *command.evidence_refs,
++                *(f"git-scientific-framing:{ref}" for ref in framing_refs),
+                 *(
+                     f"github-actions-artifact:{repository_slug}:{run_id}:"
+                     f"{_text(_mapping(artifacts[role]).get('artifact_id'))}"
+@@ -331,6 +404,7 @@ def assemble_ready_run_and_evaluate_research_admissibility(
+             evidence_refs=evidence_refs,
+             require_advisory=True,
+             require_fetched_attachments=False,
++            copilot_refined_request=refined_request,
+         )
+     )
+     package_mapping = package_build.to_mapping()
+diff --git a/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml b/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml
+--- a/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml
++++ b/templates/github/projects-repository/.github/workflows/autodoc-controlled-research.yml
+@@ -40,6 +40,7 @@ jobs:
+         uses: actions/checkout@v6
+         with:
+           repository: newicody/autodoc
++          ref: docs/unification-027x
+           path: autodoc-runtime
+ 
+       - name: Set up Python
+@@ -135,6 +136,43 @@ jobs:
+           python
+           autodoc-runtime/templates/github/scripts/run_autodoc_copilot_advisory.py
+ 
++      - name: Require Git exchange publication token
++        if: ${{ hashFiles('out/copilot_advisory.json') != '' }}
++        shell: bash
++        env:
++          AUTODOC_EXCHANGE_GIT_TOKEN: ${{ secrets.AUTODOC_EXCHANGE_GIT_TOKEN }}
++        run: |
++          set -euo pipefail
++          test -n "$AUTODOC_EXCHANGE_GIT_TOKEN"
++
++      - name: Build initial Git exchange envelope
++        if: ${{ hashFiles('out/copilot_advisory.json') != '' }}
++        env:
++          PYTHONPATH: autodoc-runtime/src
++        run: |
++          set -euo pipefail
++          python autodoc-runtime/tools/build_git_exchange_initial_envelope.py \
++            --advisory out/copilot_advisory.json \
++            --repository "$GITHUB_REPOSITORY" \
++            --issue-number "$AUTODOC_ISSUE_NUMBER" \
++            --cycle-ordinal 1 \
++            --output out/copilot_initial_git_envelope.json
++
++      - name: Push initial Copilot artifact to Git
++        if: ${{ hashFiles('out/copilot_initial_git_envelope.json') != '' }}
++        env:
++          GH_TOKEN: ${{ secrets.AUTODOC_EXCHANGE_GIT_TOKEN }}
++          PYTHONPATH: autodoc-runtime/src
++        run: |
++          set -euo pipefail
++          python autodoc-runtime/tools/publish_git_exchange_artifact.py \
++            --repository "$GITHUB_REPOSITORY" \
++            --branch "${{ github.event.repository.default_branch }}" \
++            --issue-number "$AUTODOC_ISSUE_NUMBER" \
++            --cycle-ordinal 1 \
++            --role copilot_initial \
++            --payload out/copilot_advisory.json
++
+       - name: Build linking manifest
+         env:
+           AUTODOC_REQUEST: out/authoritative_request.json
+diff --git a/templates/github/projects-repository/.github/workflows/autodoc-copilot-refinement.yml b/templates/github/projects-repository/.github/workflows/autodoc-copilot-refinement.yml
+new file mode 100644
+--- /dev/null
++++ b/templates/github/projects-repository/.github/workflows/autodoc-copilot-refinement.yml
+@@ -0,0 +1,226 @@
++name: Autodoc one-shot Copilot refinement
++
++on:
++  push:
++    branches:
++      - "**"
++    paths:
++      - "autodoc/exchanges/issues/**/cycles/**/server-response.json"
++
++permissions:
++  contents: read
++  copilot-requests: write
++
++concurrency:
++  group: autodoc-copilot-refinement-${{ github.event.repository.name }}-${{ github.sha }}
++  cancel-in-progress: false
++
++jobs:
++  refine-once:
++    if: ${{ github.repository == 'newicody/projects' }}
++    runs-on: ubuntu-latest
++    env:
++      AUTODOC_COPILOT_CLI_VERSION: "1.0.70"
++      AUTODOC_COPILOT_CLI_PREFIX: ${{ github.workspace }}/.cache/copilot-cli
++    steps:
++      - name: Checkout Projects repository
++        uses: actions/checkout@v6
++        with:
++          ref: ${{ github.ref_name }}
++
++      - name: Checkout Autodoc runtime
++        uses: actions/checkout@v6
++        with:
++          repository: newicody/autodoc
++          ref: docs/unification-027x
++          path: autodoc-runtime
++
++      - name: Resolve Issue and cycle from pushed path
++        id: exchange
++        shell: bash
++        run: |
++          set -euo pipefail
++          match="$(
++            jq -r '.commits[]? | (.added[]?, .modified[]?)' "$GITHUB_EVENT_PATH" \
++              | grep -E '^autodoc/exchanges/issues/[0-9]+/cycles/[0-9]+/server-response\.json
++      - name: Restore pinned Copilot CLI
++        id: copilot-cache
++        uses: actions/cache@v4
++        with:
++          path: ${{ env.AUTODOC_COPILOT_CLI_PREFIX }}
++          key: autodoc-copilot-cli-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.AUTODOC_COPILOT_CLI_VERSION }}
++
++      - name: Install pinned Copilot CLI on cache miss
++        if: ${{ steps.copilot-cache.outputs.cache-hit != 'true' }}
++        shell: bash
++        run: |
++          set -euo pipefail
++          npm install --prefix "$AUTODOC_COPILOT_CLI_PREFIX" --no-audit --no-fund --omit=dev "@github/copilot@$AUTODOC_COPILOT_CLI_VERSION"
++
++      - name: Verify pinned Copilot CLI
++        shell: bash
++        run: |
++          set -euo pipefail
++          actual_version="$(node -p "require(process.env.AUTODOC_COPILOT_CLI_PREFIX + '/node_modules/@github/copilot/package.json').version")"
++          test "$actual_version" = "$AUTODOC_COPILOT_CLI_VERSION"
++          test -x "$AUTODOC_COPILOT_CLI_PREFIX/node_modules/.bin/copilot"
++
++      - name: Require Git exchange publication token
++        shell: bash
++        env:
++          AUTODOC_EXCHANGE_GIT_TOKEN: ${{ secrets.AUTODOC_EXCHANGE_GIT_TOKEN }}
++        run: |
++          set -euo pipefail
++          test -n "$AUTODOC_EXCHANGE_GIT_TOKEN"
++
++      - name: Fetch initial Copilot artifact from Git
++        env:
++          GH_TOKEN: ${{ github.token }}
++          PYTHONPATH: autodoc-runtime/src
++        run: |
++          set -euo pipefail
++          python autodoc-runtime/tools/fetch_git_exchange_artifact.py \
++            --repository "$GITHUB_REPOSITORY" \
++            --branch "$GITHUB_REF_NAME" \
++            --issue-number "${{ steps.exchange.outputs.issue_number }}" \
++            --cycle-ordinal "${{ steps.exchange.outputs.cycle_ordinal }}" \
++            --role copilot_initial \
++            --output out/copilot-initial.json
++
++      - name: Fetch server response from Git
++        env:
++          GH_TOKEN: ${{ github.token }}
++          PYTHONPATH: autodoc-runtime/src
++        run: |
++          set -euo pipefail
++          python autodoc-runtime/tools/fetch_git_exchange_artifact.py \
++            --repository "$GITHUB_REPOSITORY" \
++            --branch "$GITHUB_REF_NAME" \
++            --issue-number "${{ steps.exchange.outputs.issue_number }}" \
++            --cycle-ordinal "${{ steps.exchange.outputs.cycle_ordinal }}" \
++            --role server_response \
++            --output out/server-response.json
++
++      - name: Ask Copilot for the single refinement
++        env:
++          PYTHONPATH: autodoc-runtime/src
++          COPILOT_AUTO_UPDATE: "false"
++          AUTODOC_COPILOT_COMMAND: ${{ env.AUTODOC_COPILOT_CLI_PREFIX }}/node_modules/.bin/copilot
++        run: |
++          set -euo pipefail
++          python autodoc-runtime/tools/run_autodoc_copilot_refinement.py \
++            --initial-envelope out/copilot-initial.json \
++            --server-response-envelope out/server-response.json \
++            --output out/copilot-refined.json
++
++      - name: Push refined Copilot artifact to Git
++        env:
++          GH_TOKEN: ${{ secrets.AUTODOC_EXCHANGE_GIT_TOKEN }}
++          PYTHONPATH: autodoc-runtime/src
++        run: |
++          set -euo pipefail
++          python autodoc-runtime/tools/publish_git_exchange_artifact.py \
++            --repository "$GITHUB_REPOSITORY" \
++            --branch "$GITHUB_REF_NAME" \
++            --issue-number "${{ steps.exchange.outputs.issue_number }}" \
++            --cycle-ordinal "${{ steps.exchange.outputs.cycle_ordinal }}" \
++            --role copilot_refined \
++            --payload out/copilot-refined.json \
++            --initial-envelope out/copilot-initial.json \
++            --server-response-envelope out/server-response.json
++ \
++              | head -n1 || true
++          )"
++          test -n "$match"
++          issue_number="$(printf '%s\n' "$match" | sed -E 's#autodoc/exchanges/issues/([0-9]+)/cycles/([0-9]+)/server-response\.json#\1#')"
++          cycle_ordinal="$(printf '%s\n' "$match" | sed -E 's#autodoc/exchanges/issues/[0-9]+/cycles/([0-9]+)/server-response\.json#\1#')"
++          test -n "$issue_number"
++          test -n "$cycle_ordinal"
++          echo "issue_number=$issue_number" >> "$GITHUB_OUTPUT"
++          echo "cycle_ordinal=$cycle_ordinal" >> "$GITHUB_OUTPUT"
++
++      - name: Restore pinned Copilot CLI
++        id: copilot-cache
++        uses: actions/cache@v4
++        with:
++          path: ${{ env.AUTODOC_COPILOT_CLI_PREFIX }}
++          key: autodoc-copilot-cli-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.AUTODOC_COPILOT_CLI_VERSION }}
++
++      - name: Install pinned Copilot CLI on cache miss
++        if: ${{ steps.copilot-cache.outputs.cache-hit != 'true' }}
++        shell: bash
++        run: |
++          set -euo pipefail
++          npm install --prefix "$AUTODOC_COPILOT_CLI_PREFIX" --no-audit --no-fund --omit=dev "@github/copilot@$AUTODOC_COPILOT_CLI_VERSION"
++
++      - name: Verify pinned Copilot CLI
++        shell: bash
++        run: |
++          set -euo pipefail
++          actual_version="$(node -p "require(process.env.AUTODOC_COPILOT_CLI_PREFIX + '/node_modules/@github/copilot/package.json').version")"
++          test "$actual_version" = "$AUTODOC_COPILOT_CLI_VERSION"
++          test -x "$AUTODOC_COPILOT_CLI_PREFIX/node_modules/.bin/copilot"
++
++      - name: Require Git exchange publication token
++        shell: bash
++        env:
++          AUTODOC_EXCHANGE_GIT_TOKEN: ${{ secrets.AUTODOC_EXCHANGE_GIT_TOKEN }}
++        run: |
++          set -euo pipefail
++          test -n "$AUTODOC_EXCHANGE_GIT_TOKEN"
++
++      - name: Fetch initial Copilot artifact from Git
++        env:
++          GH_TOKEN: ${{ github.token }}
++          PYTHONPATH: autodoc-runtime/src
++        run: |
++          set -euo pipefail
++          python autodoc-runtime/tools/fetch_git_exchange_artifact.py \
++            --repository "$GITHUB_REPOSITORY" \
++            --branch "$GITHUB_REF_NAME" \
++            --issue-number "${{ steps.exchange.outputs.issue_number }}" \
++            --cycle-ordinal "${{ steps.exchange.outputs.cycle_ordinal }}" \
++            --role copilot_initial \
++            --output out/copilot-initial.json
++
++      - name: Fetch server response from Git
++        env:
++          GH_TOKEN: ${{ github.token }}
++          PYTHONPATH: autodoc-runtime/src
++        run: |
++          set -euo pipefail
++          python autodoc-runtime/tools/fetch_git_exchange_artifact.py \
++            --repository "$GITHUB_REPOSITORY" \
++            --branch "$GITHUB_REF_NAME" \
++            --issue-number "${{ steps.exchange.outputs.issue_number }}" \
++            --cycle-ordinal "${{ steps.exchange.outputs.cycle_ordinal }}" \
++            --role server_response \
++            --output out/server-response.json
++
++      - name: Ask Copilot for the single refinement
++        env:
++          PYTHONPATH: autodoc-runtime/src
++          COPILOT_AUTO_UPDATE: "false"
++          AUTODOC_COPILOT_COMMAND: ${{ env.AUTODOC_COPILOT_CLI_PREFIX }}/node_modules/.bin/copilot
++        run: |
++          set -euo pipefail
++          python autodoc-runtime/tools/run_autodoc_copilot_refinement.py \
++            --initial-envelope out/copilot-initial.json \
++            --server-response-envelope out/server-response.json \
++            --output out/copilot-refined.json
++
++      - name: Push refined Copilot artifact to Git
++        env:
++          GH_TOKEN: ${{ secrets.AUTODOC_EXCHANGE_GIT_TOKEN }}
++          PYTHONPATH: autodoc-runtime/src
++        run: |
++          set -euo pipefail
++          python autodoc-runtime/tools/publish_git_exchange_artifact.py \
++            --repository "$GITHUB_REPOSITORY" \
++            --branch "$GITHUB_REF_NAME" \
++            --issue-number "${{ steps.exchange.outputs.issue_number }}" \
++            --cycle-ordinal "${{ steps.exchange.outputs.cycle_ordinal }}" \
++            --role copilot_refined \
++            --payload out/copilot-refined.json \
++            --initial-envelope out/copilot-initial.json \
++            --server-response-envelope out/server-response.json
+diff --git a/templates/github/projects-repository/INSTALLATION.md b/templates/github/projects-repository/INSTALLATION.md
+--- a/templates/github/projects-repository/INSTALLATION.md
++++ b/templates/github/projects-repository/INSTALLATION.md
+@@ -89,6 +89,17 @@ AUTODOC_COPILOT_ADVISORY_ENABLED=false
+ 
+ Cette valeur est le défaut d'installation. Ne pas créer de secret `AUTODOC_COPILOT_TOKEN` : le workflow actuel utilise le token éphémère GitHub.
+ 
++Le transport append-only du cadrage utilise un secret distinct :
++`AUTODOC_EXCHANGE_GIT_TOKEN`. Créer un fine-grained PAT limité au seul dépôt
++`newicody/projects`, avec **Contents: read and write**. Le secret sert
++uniquement aux étapes bornées qui publient les artefacts Copilot dans Git ;
++les lectures ordinaires utilisent le token de lecture du workflow. Ne jamais
++placer sa valeur dans le dépôt, les fichiers de configuration ou les artefacts.
++
++Le commentaire historique sur l'Issue conserve son secret séparé
++`AUTODOC_ISSUE_COMMENT_TOKEN`. Ces deux secrets ont des droits et des usages
++distincts.
++
+ ## 3. Authentification locale
+ 
+ | Nom | Usage |
+@@ -251,14 +262,15 @@ Fichiers principaux :
+ 
+ ```text
+ .github/workflows/autodoc-controlled-research.yml
++.github/workflows/autodoc-copilot-refinement.yml
+ .github/ISSUE_TEMPLATE/specialist-capability-growth.yml
+ projectv2_views.json
+ ```
+ 
+ Le workflow utilise `${{ github.token }}` comme `GITHUB_TOKEN` et ne nécessite
+ pas `AUTODOC_COPILOT_TOKEN`.
+ 
+-Le workflow ne publie pas lui-même son avis : il produit les artefacts de demande et d’avis consultatif. La publication vers une Issue reste soumise au preview, au digest et à la décision opérateur.
++Le workflow publie l'avis initial dans Git et conserve les artefacts Actions pour l'intake local. Le commentaire sur l'Issue reste une projection lisible distincte. La publication du commentaire demeure soumise au preview, au digest et aux contrôles de mutation.
+ 
+ ```bash
+ gh variable get AUTODOC_COPILOT_ADVISORY_ENABLED \
+@@ -379,7 +391,34 @@ Le mode opératoire de publication est dans
+ Mise à jour `0287-r16-r4-r3-r4` : chaque nouvelle Issue `[Recherche]` de `newicody/projects` crée son triplet propre ; voir `README.md` et vérifier avec `gh run list --repo newicody/projects --workflow autodoc-controlled-research.yml --event issues`, avec le secret borné `AUTODOC_ISSUE_COMMENT_TOKEN`.
+ 
+ 
+-## 10. Cadrage Copilot initial et lancement d'un cycle
++## 10. Échange scientifique asynchrone par Git
++
++Le workflow `autodoc-controlled-research.yml` publie l'avis initial dans
++`autodoc/exchanges/issues/<issue>/cycles/1/copilot-initial.json`. Il faut
++configurer `AUTODOC_EXCHANGE_GIT_TOKEN` avant de créer une Issue de recherche.
++
++Le serveur doit récupérer cet artefact, construire un fichier d'évaluation
++structuré à partir de données qu'il a réellement vérifiées, puis appeler
++`tools/publish_git_exchange_server_response.py`. Le fichier d'évaluation
++contient exactement les champs `coherence_status`, `assessment`,
++`supported_representations`, `unsupported_representations`, `available_data`,
++`missing_data`, `verified_capabilities`, `constraints`, `report_outline`
++et `provenance`. Ce script ne collecte pas lui-même l'état des composants : il
++valide l'évaluation fournie, lie la réponse à l'avis initial et la pousse.
++
++Le push de `server-response.json` déclenche
++`autodoc-copilot-refinement.yml`. Ce workflow récupère les deux artefacts,
++demande une seule reformulation à Copilot et pousse `copilot-refined.json`.
++Son filtre ne surveille que `server-response.json`, donc le push final ne
++relance pas la reformulation.
++
++L'assembleur local accepte ensuite `--git-exchange-branch` et
++`--require-scientific-framing-exchange`. Lorsqu'ils sont utilisés, il vérifie
++la chaîne complète et intègre la demande reformulée comme indication
++non autoritative au work package existant. Ce chemin n'est pas encore activé
++automatiquement par la transition ProjectV2 vers `En cours`.
++
++## 11. Cadrage Copilot initial et lancement d'un cycle
+ 
+ L'ouverture d'une Issue `[Recherche]` déclenche le cadrage initial Copilot et la publication de son premier artefact. Celui-ci doit dégrossir la demande en identifiant notamment la forme de représentation scientifique nécessaire au rapport attendu.
+ 
+diff --git a/templates/github/projects-repository/README.md b/templates/github/projects-repository/README.md
+--- a/templates/github/projects-repository/README.md
++++ b/templates/github/projects-repository/README.md
+@@ -16,6 +16,7 @@ Le bundle contient actuellement :
+ .github/ISSUE_TEMPLATE/specialist-capability-growth.yml
+ .github/ISSUE_TEMPLATE/config.yml
+ .github/workflows/autodoc-controlled-research.yml
++.github/workflows/autodoc-copilot-refinement.yml
+ scripts/audit_projects_bundle_drift.py
+ scripts/build_copilot_advisory_publication_preview.py
+ scripts/build_copilot_advisory_v2_publication_preview.py
+@@ -60,6 +61,7 @@ issues.opened dans newicody/projects
+ → avis Copilot requis pour ce run initial
+ → manifeste corrélé
+ → trois artefacts Actions distincts par Issue et par run
++→ artefact initial Copilot publié dans autodoc/exchanges/.../copilot-initial.json par commit/push Git
+ → premier commentaire Copilot publié par newicody/projects
+ ```
+ 
+@@ -94,12 +96,19 @@ La configuration `projectv2_views.json` décrit les champs et les vues
+ `Recherches`, `Résultats`, `Copilot`, `Connaissances serveur`,
+ `Boîtes de thèmes`, `Historique` et `Tous`.
+ 
+-Le serveur local ne crée pas le premier artefact Copilot. Il effectue le fetch des
+-runs produits par `newicody/projects`, vérifie leur corrélation
+-`repository/issue_number/run_id/digests`, puis déclenche le laboratoire seulement
+-si la demande est admissible. Le chemin historique
+-`ProjectV2 query-only → diff local` reste réservé aux transitions et reprises
+-explicites ; il ne crée pas le triplet initial des nouvelles recherches.
++Le workflow initial publie l'avis Copilot v2 dans Git via le secret borné
++`AUTODOC_EXCHANGE_GIT_TOKEN`. Le serveur récupère cet artefact, construit une
++réponse à partir de son état vérifié et la pousse dans Git. Le workflow
++`autodoc-copilot-refinement.yml`, déclenché uniquement par le chemin
++`server-response.json`, demande ensuite une seule reformulation à Copilot et
++pousse `copilot-refined.json`. Ce dernier push ne redéclenche pas la
++reformulation.
++
++Le serveur conserve en parallèle la récupération des artefacts Actions existants.
++L'assembleur d'admissibilité peut exiger la chaîne Git complète et intégrer la
++reformulation comme indication non autoritative dans le work package. Cette
++option CLI n'est pas encore activée automatiquement dans le parcours vivant de
++transition ProjectV2 vers `En cours`.
+ 
+ Pour les nouvelles Issues de recherche, l'avis Copilot initial est requis et ne
+ dépend plus de la variable optionnelle. Pour les seuls dispatchs manuels, cette
+@@ -132,3 +141,18 @@ lui seul un installateur complet du mode Projects. La roadmap prévoit un
+ installateur idempotent qui assemble et vérifie le bundle, les formulaires,
+ workflows, champs, options, vues, permissions et secrets requis. Les secrets
+ restent fournis hors dépôt et ne sont jamais écrits dans les fichiers versionnés.
++
++
++Le serveur local ne crée pas le premier avis Copilot. Le workflow le publie aussi dans
++Git via le secret borné `AUTODOC_EXCHANGE_GIT_TOKEN`. Le serveur récupère cet
++artefact, produit une réponse structurée à partir de son propre état vérifié et
++la pousse dans Git. Le workflow `autodoc-copilot-refinement.yml`, déclenché
++uniquement par le chemin `server-response.json`, demande ensuite à Copilot une
++seule reformulation et pousse `copilot-refined.json`. Le push de cet artefact
++ne redéclenche pas le workflow de reformulation.
++
++Le serveur conserve en parallèle la récupération des artefacts Actions existants.
++L'assembleur d'admissibilité peut maintenant exiger et valider les trois artefacts
++Git, puis intégrer la reformulation comme indication non autoritative dans le
++work package. Ce raccordement est opt-in via son CLI ; il reste à relier au
++parcours vivant de transition ProjectV2 vers `En cours`.
+diff --git a/templates/github/projects-repository/projects_bundle_manifest.json b/templates/github/projects-repository/projects_bundle_manifest.json
+--- a/templates/github/projects-repository/projects_bundle_manifest.json
++++ b/templates/github/projects-repository/projects_bundle_manifest.json
+@@ -1,6 +1,6 @@
+ {
+   "bundle_ref": "projects-bundle:newicody-projects",
+-  "bundle_version": "0287-r7-r15-r3-r16-r2-r2",
++  "bundle_version": "0295-git-artifact-exchange",
+   "destination_repository": "newicody/projects",
+   "digest_policy": {
+     "algorithm": "sha256",
+@@ -203,6 +203,13 @@
+       "role": "bundle-drift-cli",
+       "source_path": "scripts/audit_projects_bundle_drift.py",
+       "state": "active"
++    },
++    {
++      "destination_path": ".github/workflows/autodoc-copilot-refinement.yml",
++      "managed_by": "newicody/autodoc",
++      "role": "copilot-refinement-on-server-push",
++      "source_path": ".github/workflows/autodoc-copilot-refinement.yml",
++      "state": "active"
+     }
+   ],
+   "managed_roots": [
+diff --git a/tests/context/test_correlated_research_work_package_0287.py b/tests/context/test_correlated_research_work_package_0287.py
+--- a/tests/context/test_correlated_research_work_package_0287.py
++++ b/tests/context/test_correlated_research_work_package_0287.py
+@@ -327,3 +327,51 @@ def test_command_is_read_only_and_rejects_string_reference_collections() -> None
+         assert "sequence of strings" in str(exc)
+     else:
+         raise AssertionError("string context_refs must fail")
++
++
++def test_includes_validated_refined_request_as_non_authoritative_hint():
++    refined = {
++        "schema": "missipy.github.copilot_refined_research_request.v1",
++        "handshake_ref": "copilot-framing:handshake-17",
++        "request_artifact_ref": "github-request:req-17",
++        "initial_advisory_ref": "github-advisory:adv-17",
++        "server_response_digest": "6" * 64,
++        "concrete_objective": "Analyse les dimensions relationnelles.",
++        "expected_result": "Deux analyses et une synthèse.",
++        "provided_constraints": ["Rester fondé sur les preuves."],
++        "success_criteria": ["Conserver les incertitudes."],
++        "scientific_representations": ["Tableau", "Courbe"],
++        "trusted": False,
++        "usable_as_authority": False,
++    }
++    result = build_correlated_research_work_package(
++        _command(copilot_refined_request=refined)
++    )
++    assert result.valid is True
++    package = result.work_package
++    assert package["copilot_refined_request"] == refined
++    assert package["refined_request_present"] is True
++    assert package["refined_request_used_as_hint_only"] is True
++    assert package["request_authoritative"] is True
++
++
++def test_rejects_refined_request_bound_to_another_authoritative_request():
++    refined = {
++        "schema": "missipy.github.copilot_refined_research_request.v1",
++        "handshake_ref": "copilot-framing:handshake-17",
++        "request_artifact_ref": "github-request:other",
++        "initial_advisory_ref": "github-advisory:adv-17",
++        "server_response_digest": "6" * 64,
++        "concrete_objective": "Analyse.",
++        "expected_result": "Rapport.",
++        "provided_constraints": [],
++        "success_criteria": ["Evidence"],
++        "scientific_representations": ["Tableau"],
++        "trusted": False,
++        "usable_as_authority": False,
++    }
++    result = build_correlated_research_work_package(
++        _command(copilot_refined_request=refined)
++    )
++    assert result.valid is False
++    assert "refined request request_artifact_ref mismatch" in result.issues
+diff --git a/tests/contracts/test_git_exchange_runtime_adapters.py b/tests/contracts/test_git_exchange_runtime_adapters.py
+new file mode 100644
+--- /dev/null
++++ b/tests/contracts/test_git_exchange_runtime_adapters.py
+@@ -0,0 +1,63 @@
++from __future__ import annotations
++
++import json
++from pathlib import Path
++
++import pytest
++
++from tools.build_git_exchange_initial_envelope import main as build_initial_main
++
++
++def test_initial_envelope_builder_wraps_existing_v2_advisory(tmp_path: Path):
++    advisory = {
++        "schema": "missipy.github.copilot_advisory.v2",
++        "artifact_ref": "advisory:abc",
++        "request_artifact_ref": "request:abc",
++        "concrete_objective": "Study",
++        "expected_result": "Report",
++        "provided_constraints": [],
++        "success_criteria": ["Evidence"],
++        "trusted": False,
++        "usable_as_authority": False,
++    }
++    source = tmp_path / "advisory.json"
++    output = tmp_path / "envelope.json"
++    source.write_text(json.dumps(advisory), encoding="utf-8")
++    assert build_initial_main([
++        "--advisory", str(source),
++        "--repository", "newicody/projects",
++        "--issue-number", "7",
++        "--output", str(output),
++    ]) == 0
++    envelope = json.loads(output.read_text(encoding="utf-8"))
++    assert envelope["role"] == "copilot_initial"
++    assert envelope["transport"] == "git_commit_push"
++    assert envelope["payload"] == advisory
++    assert envelope["execution_authorized"] is False
++
++
++def test_refinement_parser_accepts_only_explicit_scientific_fields():
++    from tools.run_autodoc_copilot_refinement import _extract
++
++    value = _extract(json.dumps({
++        "concrete_objective": "Study",
++        "expected_result": "Report",
++        "provided_constraints": ["No GPU"],
++        "success_criteria": ["Traceable evidence"],
++        "scientific_representations": ["Table", "Curve"],
++    }))
++    assert value["scientific_representations"] == ["Table", "Curve"]
++
++
++def test_refinement_parser_rejects_extra_authority_or_route_fields():
++    from tools.run_autodoc_copilot_refinement import _extract
++
++    with pytest.raises(ValueError, match="exact refinement object"):
++        _extract(json.dumps({
++            "concrete_objective": "Study",
++            "expected_result": "Report",
++            "provided_constraints": [],
++            "success_criteria": ["Evidence"],
++            "scientific_representations": ["Table"],
++            "scheduler_command": "run",
++        }))
+diff --git a/tools/assemble_fetched_github_research_admissibility_0287.py b/tools/assemble_fetched_github_research_admissibility_0287.py
+--- a/tools/assemble_fetched_github_research_admissibility_0287.py
++++ b/tools/assemble_fetched_github_research_admissibility_0287.py
+@@ -13,6 +13,8 @@
+ import argparse
+ from collections.abc import Mapping, Sequence
+ import json
++import os
++import subprocess
+ from pathlib import Path
+ import sys
+ from typing import Any
+@@ -49,6 +51,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
+     parser.add_argument("--run-id", action="append", default=[])
+     parser.add_argument("--state-path", type=Path)
+     parser.add_argument("--max-artifact-bytes", type=int, default=5 * 1024 * 1024)
++    parser.add_argument("--git-exchange-branch")
++    parser.add_argument("--git-exchange-cycle-ordinal", type=int, default=1)
++    parser.add_argument("--git-exchange-work-dir", type=Path, default=Path(".var/git_exchange/intake"))
++    parser.add_argument("--require-scientific-framing-exchange", action="store_true")
+     parser.add_argument("--output", type=Path)
+     parser.add_argument("--format", choices=("json", "summary"), default="summary")
+     return parser.parse_args(argv)
+@@ -60,6 +66,10 @@ def main(argv: Sequence[str] | None = None) -> int:
+     issues: list[str] = []
+     if args.max_artifact_bytes <= 0:
+         issues.append("max-artifact-bytes must be > 0")
++    if args.git_exchange_cycle_ordinal <= 0:
++        issues.append("git-exchange-cycle-ordinal must be > 0")
++    if args.require_scientific_framing_exchange and not args.git_exchange_branch:
++        issues.append("git-exchange-branch is required when framing exchange is mandatory")
+     cycle = _read_json_mapping(report_path, "fetch cycle report", issues)
+     if cycle:
+         if cycle.get("schema") != _FETCH_CYCLE_SCHEMA:
+@@ -117,10 +127,36 @@ def main(argv: Sequence[str] | None = None) -> int:
+                     }
+                 )
+                 continue
++            framing_exchange: dict[str, Any] = {}
++            if args.git_exchange_branch:
++                try:
++                    framing_exchange = _fetch_git_framing_exchange(
++                        ready_run=ready_run,
++                        artifact_contents=loaded,
++                        branch=args.git_exchange_branch,
++                        cycle_ordinal=args.git_exchange_cycle_ordinal,
++                        work_dir=args.git_exchange_work_dir,
++                    )
++                except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
++                    results.append({
++                        "valid": False,
++                        "admissible": False,
++                        "status": "scientific-framing-fetch-invalid",
++                        "issues": [str(exc)],
++                        "repository": ready_run.get("repository", ""),
++                        "run_id": ready_run.get("run_id", ""),
++                        "scheduler_command_created": False,
++                        "laboratory_execution_started": False,
++                    })
++                    continue
+             result = assemble_ready_run_and_evaluate_research_admissibility(
+                 GitHubReadyRunResearchAdmissibilityCommand(
+                     ready_run=ready_run,
+                     artifact_contents=tuple(loaded),
++                    framing_exchange=framing_exchange,
++                    require_scientific_framing_exchange=(
++                        args.require_scientific_framing_exchange
++                    ),
+                 )
+             )
+             results.append(result.to_mapping())
+@@ -170,6 +206,64 @@ def main(argv: Sequence[str] | None = None) -> int:
+     return 0 if valid else 2
+ 
+ 
++
++def _fetch_git_framing_exchange(
++    *,
++    ready_run: Mapping[str, Any],
++    artifact_contents: Sequence[GitHubReadyRunArtifactContent],
++    branch: str,
++    cycle_ordinal: int,
++    work_dir: Path,
++) -> dict[str, Any]:
++    request_content = next(
++        item.content for item in artifact_contents
++        if item.role == "authoritative_request"
++    )
++    request = json.loads(request_content.decode("utf-8"))
++    if not isinstance(request, Mapping):
++        raise ValueError("authoritative request artifact must be a JSON object")
++    issue_number = request.get("issue_number")
++    if isinstance(issue_number, bool) or not isinstance(issue_number, int) or issue_number <= 0:
++        raise ValueError("authoritative request issue_number must be positive")
++    repository = str(ready_run.get("repository", "")).strip()
++    if not repository:
++        raise ValueError("ready_run repository is missing")
++    root = _absolute_output(work_dir)
++    root.mkdir(parents=True, exist_ok=True)
++    roles = {
++        "copilot_initial": "copilot-initial.json",
++        "server_response": "server-response.json",
++        "copilot_refined": "copilot-refined.json",
++    }
++    result: dict[str, Any] = {}
++    for role, filename in roles.items():
++        output = root / f"{repository.replace('/', '-')}-{issue_number}-{cycle_ordinal}-{filename}"
++        command = [
++            sys.executable,
++            str(_REPO_ROOT / "tools/fetch_git_exchange_artifact.py"),
++            "--repository", repository,
++            "--branch", branch,
++            "--issue-number", str(issue_number),
++            "--cycle-ordinal", str(cycle_ordinal),
++            "--role", role,
++            "--output", str(output),
++        ]
++        child = subprocess.run(
++            command,
++            cwd=_REPO_ROOT,
++            env=dict(os.environ),
++            text=True,
++            capture_output=True,
++            check=False,
++        )
++        if child.returncode:
++            raise RuntimeError(f"{role} Git fetch failed: {child.stderr.strip()}")
++        envelope = json.loads(output.read_text(encoding="utf-8"))
++        if not isinstance(envelope, Mapping):
++            raise ValueError(f"{role} Git envelope must be an object")
++        result[role] = dict(envelope)
++    return result
++
+ def _ready_runs(
+     cycle: Mapping[str, Any],
+     scan: Mapping[str, Any],
+diff --git a/tools/build_git_exchange_initial_envelope.py b/tools/build_git_exchange_initial_envelope.py
+new file mode 100644
+--- /dev/null
++++ b/tools/build_git_exchange_initial_envelope.py
+@@ -0,0 +1,44 @@
++#!/usr/bin/env python3
++"""Build the initial Git exchange envelope from the existing Copilot v2 output."""
++from __future__ import annotations
++
++import argparse
++from datetime import datetime, timezone
++import json
++from pathlib import Path
++from typing import Mapping
++
++from contracts.git_artifact_exchange import build_git_exchange_artifact
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--advisory", type=Path, required=True)
++    parser.add_argument("--repository", required=True)
++    parser.add_argument("--issue-number", type=int, required=True)
++    parser.add_argument("--cycle-ordinal", type=int, default=1)
++    parser.add_argument("--output", type=Path, required=True)
++    args = parser.parse_args(argv)
++    advisory = json.loads(args.advisory.read_text(encoding="utf-8"))
++    if not isinstance(advisory, Mapping):
++        raise ValueError("Copilot advisory must be a JSON object")
++    if advisory.get("schema") != "missipy.github.copilot_advisory.v2":
++        raise ValueError("unexpected Copilot advisory schema")
++    envelope = build_git_exchange_artifact(
++        repository=args.repository,
++        issue_number=args.issue_number,
++        cycle_ordinal=args.cycle_ordinal,
++        role="copilot_initial",
++        payload=advisory,
++        created_at=datetime.now(timezone.utc).isoformat(),
++    ).to_mapping()
++    args.output.parent.mkdir(parents=True, exist_ok=True)
++    args.output.write_text(
++        json.dumps(envelope, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
++        encoding="utf-8",
++    )
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tools/fetch_git_exchange_artifact.py b/tools/fetch_git_exchange_artifact.py
+new file mode 100644
+--- /dev/null
++++ b/tools/fetch_git_exchange_artifact.py
+@@ -0,0 +1,58 @@
++#!/usr/bin/env python3
++"""Fetch and validate one Git-backed Copilot/server exchange artifact."""
++from __future__ import annotations
++
++import argparse
++import base64
++import json
++import os
++from pathlib import Path
++import subprocess
++import sys
++from typing import Mapping
++
++from contracts.git_artifact_exchange import artifact_path, validate_git_exchange_artifact
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--repository", required=True)
++    parser.add_argument("--branch", required=True)
++    parser.add_argument("--issue-number", type=int, required=True)
++    parser.add_argument("--cycle-ordinal", type=int, required=True)
++    parser.add_argument("--role", choices=("copilot_initial", "server_response", "copilot_refined"), required=True)
++    parser.add_argument("--output", type=Path, required=True)
++    args = parser.parse_args(argv)
++    path = artifact_path(args.issue_number, args.cycle_ordinal, args.role)
++    env = dict(os.environ)
++    process = subprocess.run(
++        ["gh", "api", "repos/" + args.repository + "/contents/" + path, "-f", "ref=" + args.branch],
++        text=True, capture_output=True, env=env, check=False,
++    )
++    if process.returncode:
++        raise RuntimeError(f"Git artifact fetch failed: {process.stderr.strip()}")
++    content = json.loads(process.stdout)
++    if not isinstance(content, Mapping) or content.get("encoding") != "base64":
++        raise ValueError("GitHub Contents response has unexpected shape")
++    raw = base64.b64decode(content["content"])
++    envelope = json.loads(raw.decode("utf-8"))
++    if not isinstance(envelope, Mapping):
++        raise ValueError("Git artifact envelope must be a JSON object")
++    validate_git_exchange_artifact(envelope)
++    if envelope.get("role") != args.role:
++        raise ValueError("fetched artifact role mismatch")
++    args.output.parent.mkdir(parents=True, exist_ok=True)
++    args.output.write_bytes(raw)
++    print(json.dumps({
++        "schema": "missipy.github.git_artifact_fetch_result.v1",
++        "valid": True,
++        "artifact_ref": envelope["artifact_ref"],
++        "artifact_path": path,
++        "payload_digest": envelope["payload_digest"],
++        "output": str(args.output),
++    }, sort_keys=True))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tools/publish_git_exchange_artifact.py b/tools/publish_git_exchange_artifact.py
+new file mode 100644
+--- /dev/null
++++ b/tools/publish_git_exchange_artifact.py
+@@ -0,0 +1,205 @@
++#!/usr/bin/env python3
++"""Publish one validated exchange envelope to a GitHub repository commit.
++
++The script is a one-shot adapter around the GitHub Contents API (gh CLI).
++It never overwrites an existing path: identical content is a replay, different
++content is a collision.
++"""
++from __future__ import annotations
++
++import argparse
++from datetime import datetime, timezone
++import json
++import os
++from pathlib import Path
++import subprocess
++import sys
++from typing import Any, Mapping
++
++from contracts.copilot_scientific_framing import (
++    FramingHandshake,
++    validate_initial_advisory,
++    validate_refined_request,
++    validate_server_response,
++)
++from contracts.git_artifact_exchange import (
++    GitArtifactExchangeError,
++    build_git_exchange_artifact,
++    canonical_payload_digest,
++    classify_existing_path,
++    validate_git_exchange_artifact,
++)
++
++_REPO_ROOT = Path(__file__).resolve().parents[1]
++
++
++def _gh(args: list[str], *, allow_404: bool = False) -> dict[str, Any] | None:
++    env = dict(os.environ)
++    if env.get("GH_TOKEN"):
++        env["GH_TOKEN"] = env["GH_TOKEN"]
++    process = subprocess.run(
++        ["gh", "api", *args],
++        cwd=_REPO_ROOT,
++        env=env,
++        text=True,
++        capture_output=True,
++        check=False,
++    )
++    if process.returncode:
++        if allow_404 and ("404" in process.stderr or "Not Found" in process.stderr):
++            return None
++        raise RuntimeError(f"GitHub API request failed: {process.stderr.strip()}")
++    try:
++        payload = json.loads(process.stdout)
++    except json.JSONDecodeError as exc:
++        raise RuntimeError("GitHub API returned invalid JSON") from exc
++    if not isinstance(payload, Mapping):
++        raise RuntimeError("GitHub API response must be an object")
++    return dict(payload)
++
++
++def _read_remote(repository: str, branch: str, path: str) -> dict[str, Any] | None:
++    result = _gh(
++        ["-X", "GET", "repos/" + repository + "/contents/" + path, "-f", "ref=" + branch],
++        allow_404=True,
++    )
++    if result is None:
++        return None
++    if result.get("encoding") != "base64" or not isinstance(result.get("content"), str):
++        raise RuntimeError("GitHub Contents response is not base64 content")
++    raw = base64.b64decode(result["content"])
++    value = json.loads(raw.decode("utf-8"))
++    if not isinstance(value, Mapping):
++        raise RuntimeError("existing exchange artifact must be a JSON object")
++    return dict(value)
++
++
++def _publish(repository: str, branch: str, envelope: Mapping[str, Any]) -> str:
++    path = str(envelope["artifact_path"])
++    existing = _read_remote(repository, branch, path)
++    action = classify_existing_path(existing, envelope)
++    if action == "replay":
++        return "replay-noop"
++    if action == "collision":
++        raise GitArtifactExchangeError("append-only Git artifact path collision")
++    content = json.dumps(
++        dict(envelope), ensure_ascii=False, sort_keys=True, indent=2
++    ) + "\n"
++    _gh([
++        "-X", "PUT",
++        "repos/" + repository + "/contents/" + path,
++        "-f", "message=autodoc: publish " + str(envelope["role"])
++             + " issue " + str(envelope["issue_number"])
++             + " cycle " + str(envelope["cycle_ordinal"]),
++        "-f", "content=" + content,
++        "-f", "branch=" + branch,
++    ])
++    readback = _read_remote(repository, branch, path)
++    if readback is None:
++        raise RuntimeError("published Git artifact is missing on readback")
++    validate_git_exchange_artifact(readback)
++    if readback.get("payload_digest") != envelope.get("payload_digest"):
++        raise RuntimeError("published Git artifact readback digest mismatch")
++    return "created"
++
++
++def _load(path: Path) -> dict[str, Any]:
++    value = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(value, Mapping):
++        raise ValueError(f"{path} must contain a JSON object")
++    return dict(value)
++
++
++def _handshake(initial_envelope: Mapping[str, Any]) -> FramingHandshake:
++    validate_git_exchange_artifact(initial_envelope)
++    if initial_envelope.get("role") != "copilot_initial":
++        raise ValueError("initial artifact role mismatch")
++    advisory = initial_envelope["payload"]
++    request = {"artifact_ref": advisory.get("request_artifact_ref")}
++    return validate_initial_advisory(request, advisory)
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--repository", required=True)
++    parser.add_argument("--branch", required=True)
++    parser.add_argument("--issue-number", type=int, required=True)
++    parser.add_argument("--cycle-ordinal", type=int, required=True)
++    parser.add_argument("--role", choices=("copilot_initial", "server_response", "copilot_refined"), required=True)
++    parser.add_argument("--payload", type=Path, required=True)
++    parser.add_argument("--envelope", type=Path)
++    parser.add_argument("--initial-envelope", type=Path)
++    parser.add_argument("--server-response-envelope", type=Path)
++    parser.add_argument("--created-at", default="")
++    args = parser.parse_args(argv)
++
++    payload = _load(args.payload)
++    predecessor_ref = ""
++    predecessor_digest = ""
++    if args.role == "server_response":
++        if args.initial_envelope is None:
++            parser.error("--initial-envelope is required for server_response")
++        handshake = _handshake(_load(args.initial_envelope))
++        validate_server_response(handshake, payload)
++        initial = _load(args.initial_envelope)
++        predecessor_ref = str(initial["artifact_ref"])
++        predecessor_digest = str(initial["payload_digest"])
++    elif args.role == "copilot_refined":
++        if args.initial_envelope is None or args.server_response_envelope is None:
++            parser.error("refined role requires both predecessor envelopes")
++        initial = _load(args.initial_envelope)
++        response_envelope = _load(args.server_response_envelope)
++        handshake = _handshake(initial)
++        validate_git_exchange_artifact(response_envelope)
++        if response_envelope.get("role") != "server_response":
++            raise ValueError("server response artifact role mismatch")
++        response = response_envelope["payload"]
++        validate_server_response(handshake, response)
++        if response_envelope.get("predecessor_ref") != initial.get("artifact_ref"):
++            raise ValueError("server response does not reference the initial artifact")
++        if response_envelope.get("predecessor_digest") != initial.get("payload_digest"):
++            raise ValueError("server response predecessor digest does not match initial artifact")
++        validate_refined_request(handshake, response, payload)
++        predecessor_ref = str(response_envelope["artifact_ref"])
++        predecessor_digest = str(response_envelope["payload_digest"])
++    if args.envelope is not None:
++        if args.role != "copilot_initial":
++            parser.error("--envelope is currently reserved for the initial Copilot artifact")
++        envelope = _load(args.envelope)
++        validate_git_exchange_artifact(envelope)
++        if (
++            envelope.get("repository") != args.repository
++            or envelope.get("issue_number") != args.issue_number
++            or envelope.get("cycle_ordinal") != args.cycle_ordinal
++            or envelope.get("role") != args.role
++        ):
++            raise ValueError("provided envelope identity does not match publication arguments")
++        if envelope.get("payload_digest") != canonical_payload_digest(payload):
++            raise ValueError("provided envelope payload digest does not match payload")
++    else:
++        envelope = build_git_exchange_artifact(
++            repository=args.repository,
++            issue_number=args.issue_number,
++            cycle_ordinal=args.cycle_ordinal,
++            role=args.role,
++            payload=payload,
++            created_at=args.created_at or datetime.now(timezone.utc).isoformat(),
++            predecessor_ref=predecessor_ref,
++            predecessor_digest=predecessor_digest,
++        ).to_mapping()
++    result = _publish(args.repository, args.branch, envelope)
++    print(json.dumps({
++        "schema": "missipy.github.git_artifact_publication_result.v1",
++        "valid": True,
++        "status": result,
++        "artifact_ref": envelope["artifact_ref"],
++        "artifact_path": envelope["artifact_path"],
++        "payload_digest": envelope["payload_digest"],
++        "commit_push_transport": True,
++        "overwrite_performed": False,
++    }, ensure_ascii=False, sort_keys=True))
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tools/publish_git_exchange_server_response.py b/tools/publish_git_exchange_server_response.py
+new file mode 100644
+--- /dev/null
++++ b/tools/publish_git_exchange_server_response.py
+@@ -0,0 +1,123 @@
++#!/usr/bin/env python3
++"""Publish the server's single framing assessment after a Git initial-artifact fetch.
++
++The caller supplies an assessment assembled from server-owned component data.
++This adapter validates its shape and provenance; it does not invent capabilities,
++query components, or make Scheduler decisions.
++"""
++from __future__ import annotations
++
++import argparse
++import json
++import os
++from pathlib import Path
++import subprocess
++import sys
++from typing import Any, Mapping
++
++from contracts.copilot_scientific_framing import (
++    SERVER_RESPONSE_SCHEMA,
++    validate_initial_advisory,
++    validate_server_response,
++)
++from contracts.git_artifact_exchange import validate_git_exchange_artifact
++
++
++def _load(path: Path) -> dict[str, Any]:
++    value = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(value, Mapping):
++        raise ValueError(f"{path} must contain a JSON object")
++    return dict(value)
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--repository", required=True)
++    parser.add_argument("--branch", required=True)
++    parser.add_argument("--issue-number", type=int, required=True)
++    parser.add_argument("--cycle-ordinal", type=int, required=True)
++    parser.add_argument("--assessment", type=Path, required=True)
++    parser.add_argument("--work-dir", type=Path, default=Path(".var/git_exchange"))
++    args = parser.parse_args(argv)
++    args.assessment = args.assessment.resolve()
++    args.work_dir = args.work_dir.resolve()
++
++    args.work_dir.mkdir(parents=True, exist_ok=True)
++    initial_path = args.work_dir / f"issue-{args.issue_number}-cycle-{args.cycle_ordinal}-initial.json"
++    fetch = subprocess.run(
++        [
++            sys.executable,
++            str(Path(__file__).with_name("fetch_git_exchange_artifact.py")),
++            "--repository", args.repository,
++            "--branch", args.branch,
++            "--issue-number", str(args.issue_number),
++            "--cycle-ordinal", str(args.cycle_ordinal),
++            "--role", "copilot_initial",
++            "--output", str(initial_path),
++        ],
++        text=True,
++        capture_output=True,
++        check=False,
++        env=dict(os.environ),
++    )
++    if fetch.returncode:
++        raise RuntimeError(f"initial Git artifact fetch failed: {fetch.stderr.strip()}")
++    initial = _load(initial_path)
++    validate_git_exchange_artifact(initial)
++    advisory = initial["payload"]
++    handshake = validate_initial_advisory(
++        {"artifact_ref": advisory.get("request_artifact_ref")},
++        advisory,
++    )
++
++    assessment = _load(args.assessment)
++    required = {
++        "coherence_status", "assessment", "supported_representations",
++        "unsupported_representations", "available_data", "missing_data",
++        "verified_capabilities", "constraints", "report_outline", "provenance",
++    }
++    if set(assessment) != required:
++        raise ValueError(
++            "assessment fields must match exactly: " + ", ".join(sorted(required))
++        )
++    response = {
++        "schema": SERVER_RESPONSE_SCHEMA,
++        "handshake_ref": handshake.handshake_ref,
++        "request_artifact_ref": handshake.request_artifact_ref,
++        "initial_advisory_ref": handshake.initial_advisory_ref,
++        "initial_advisory_digest": handshake.initial_advisory_digest,
++        **assessment,
++        "execution_authorized": False,
++        "recursive_clarification_allowed": False,
++    }
++    validate_server_response(handshake, response)
++    response_path = args.work_dir / f"issue-{args.issue_number}-cycle-{args.cycle_ordinal}-server-response.json"
++    response_path.write_text(
++        json.dumps(response, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
++        encoding="utf-8",
++    )
++    publish = subprocess.run(
++        [
++            sys.executable,
++            str(Path(__file__).with_name("publish_git_exchange_artifact.py")),
++            "--repository", args.repository,
++            "--branch", args.branch,
++            "--issue-number", str(args.issue_number),
++            "--cycle-ordinal", str(args.cycle_ordinal),
++            "--role", "server_response",
++            "--payload", str(response_path),
++            "--initial-envelope", str(initial_path),
++        ],
++        text=True,
++        capture_output=True,
++        check=False,
++        env=dict(os.environ),
++    )
++    if publish.returncode:
++        raise RuntimeError(f"server response Git publication failed: {publish.stderr.strip()}")
++    sys.stdout.write(publish.stdout)
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
+diff --git a/tools/run_autodoc_copilot_refinement.py b/tools/run_autodoc_copilot_refinement.py
+new file mode 100644
+--- /dev/null
++++ b/tools/run_autodoc_copilot_refinement.py
+@@ -0,0 +1,174 @@
++#!/usr/bin/env python3
++"""Ask Copilot once to refine a request against one server response artifact."""
++from __future__ import annotations
++
++import argparse
++from datetime import datetime, timezone
++import json
++import os
++from pathlib import Path
++import subprocess
++import sys
++from typing import Any, Mapping
++
++from contracts.copilot_scientific_framing import (
++    canonical_digest,
++    validate_initial_advisory,
++    validate_refined_request,
++)
++from contracts.git_artifact_exchange import validate_git_exchange_artifact
++
++
++def _load(path: Path) -> dict[str, Any]:
++    value = json.loads(path.read_text(encoding="utf-8"))
++    if not isinstance(value, Mapping):
++        raise ValueError(f"{path} must contain a JSON object")
++    return dict(value)
++
++
++def _walk_json(value: object):
++    yield value
++    if isinstance(value, Mapping):
++        preferred = ("content", "message", "text", "response", "value")
++        for key in preferred:
++            if key in value:
++                yield from _walk_json(value[key])
++        for key, child in value.items():
++            if key not in preferred:
++                yield from _walk_json(child)
++    elif isinstance(value, list):
++        for child in value:
++            yield from _walk_json(child)
++
++
++def _candidate(value: object) -> dict[str, Any] | None:
++    if isinstance(value, str):
++        try:
++            value = json.loads(value)
++        except json.JSONDecodeError:
++            return None
++    if not isinstance(value, Mapping):
++        return None
++    expected = {
++        "concrete_objective", "expected_result", "provided_constraints",
++        "success_criteria", "scientific_representations",
++    }
++    if set(value) != expected:
++        return None
++    normalized = dict(value)
++    for field in ("concrete_objective", "expected_result"):
++        if not isinstance(normalized[field], str) or not normalized[field].strip():
++            raise ValueError(f"{field} must be non-empty")
++    for field in ("provided_constraints", "success_criteria", "scientific_representations"):
++        values = normalized[field]
++        if not isinstance(values, list) or not all(
++            isinstance(item, str) and item.strip() for item in values
++        ):
++            raise ValueError(f"{field} must be an array of non-empty strings")
++        normalized[field] = [item.strip() for item in values]
++    if not normalized["success_criteria"]:
++        raise ValueError("success_criteria must not be empty")
++    normalized["concrete_objective"] = normalized["concrete_objective"].strip()
++    normalized["expected_result"] = normalized["expected_result"].strip()
++    return normalized
++
++
++def _extract(stdout: str) -> dict[str, Any]:
++    try:
++        direct = json.loads(stdout.strip())
++    except json.JSONDecodeError:
++        direct = None
++    candidates: list[dict[str, Any]] = []
++    for item in _walk_json(direct) if direct is not None else ():
++        candidate = _candidate(item)
++        if candidate is not None:
++            candidates.append(candidate)
++    if not candidates:
++        decoder = json.JSONDecoder()
++        for offset, character in enumerate(stdout):
++            if character != "{":
++                continue
++            try:
++                embedded, _ = decoder.raw_decode(stdout[offset:])
++            except json.JSONDecodeError:
++                continue
++            for item in _walk_json(embedded):
++                candidate = _candidate(item)
++                if candidate is not None:
++                    candidates.append(candidate)
++    if not candidates:
++        raise ValueError("Copilot output contains no exact refinement object")
++    return candidates[-1]
++
++
++def main(argv: list[str] | None = None) -> int:
++    parser = argparse.ArgumentParser()
++    parser.add_argument("--initial-envelope", type=Path, required=True)
++    parser.add_argument("--server-response-envelope", type=Path, required=True)
++    parser.add_argument("--output", type=Path, required=True)
++    args = parser.parse_args(argv)
++    initial = _load(args.initial_envelope)
++    response_envelope = _load(args.server_response_envelope)
++    validate_git_exchange_artifact(initial)
++    validate_git_exchange_artifact(response_envelope)
++    if initial.get("role") != "copilot_initial" or response_envelope.get("role") != "server_response":
++        raise ValueError("unexpected predecessor artifact roles")
++    advisory = initial["payload"]
++    request = {"artifact_ref": advisory.get("request_artifact_ref")}
++    handshake = validate_initial_advisory(request, advisory)
++    response = response_envelope["payload"]
++    # Revalidate the server response against the exact first opinion.
++    from contracts.copilot_scientific_framing import validate_server_response
++    validate_server_response(handshake, response)
++
++    prompt = (
++        "Return exactly one JSON object with exactly these fields: "
++        '{"concrete_objective":"string","expected_result":"string",'
++        '"provided_constraints":["string"],"success_criteria":["string"],'
++        '"scientific_representations":["string"]}. '
++        "Reformulate the request once using the server assessment below. "
++        "Keep unsupported representations and missing data explicit; do not "
++        "invent capabilities or data. Do not call tools, modify files, publish, "
++        "or authorize execution.\n"
++        + json.dumps({
++            "initial_copilot_advisory": advisory,
++            "server_response": response,
++        }, ensure_ascii=False, sort_keys=True)
++    )
++    command = os.environ.get("AUTODOC_COPILOT_COMMAND", "copilot")
++    process = subprocess.run(
++        [
++            command, "-p", prompt, "--output-format=json", "--stream=off",
++            "--no-color", "--no-custom-instructions", "--no-ask-user",
++            "--deny-tool=read", "--deny-tool=write", "--deny-tool=shell",
++            "--deny-tool=url", "--deny-tool=memory",
++        ],
++        capture_output=True, text=True, timeout=int(os.environ.get("AUTODOC_COPILOT_TIMEOUT", "180")),
++        check=False,
++    )
++    if process.returncode:
++        raise RuntimeError(f"Copilot refinement failed with status {process.returncode}")
++    fields = _extract(process.stdout)
++    refined = {
++        "schema": "missipy.github.copilot_refined_research_request.v1",
++        "handshake_ref": handshake.handshake_ref,
++        "request_artifact_ref": handshake.request_artifact_ref,
++        "initial_advisory_ref": handshake.initial_advisory_ref,
++        "server_response_digest": canonical_digest(response),
++        **fields,
++        "created_at": datetime.now(timezone.utc).isoformat(),
++        "producer_kind": "github_copilot_cli",
++        "trusted": False,
++        "usable_as_authority": False,
++    }
++    validate_refined_request(handshake, response, refined)
++    args.output.parent.mkdir(parents=True, exist_ok=True)
++    args.output.write_text(
++        json.dumps(refined, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
++        encoding="utf-8",
++    )
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
