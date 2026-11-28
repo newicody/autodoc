@@ -6,7 +6,6 @@ import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
-import sys
 from typing import Mapping
 
 from contracts.git_artifact_exchange import build_git_exchange_artifact
