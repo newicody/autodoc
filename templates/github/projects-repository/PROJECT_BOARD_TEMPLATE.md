@@ -236,3 +236,10 @@ servent seulement à la lecture rapide et au filtrage des vues.
 La vue `Connaissances serveur` reste séparée de `Résultats` afin qu'un résultat
 visible ne soit jamais présenté implicitement comme connaissance intégrée à
 SQL/Qdrant.
+
+
+## Cadrage initial et itérations
+
+L'ouverture d'une Issue `[Recherche]` lance le cadrage initial Copilot : Copilot identifie la forme de représentation scientifique attendue, le serveur répond une seule fois sur la cohérence avec les données, capacités et contraintes disponibles, puis Copilot reformule la demande précise. Il n'y a pas de dialogue récursif.
+
+Ce cadrage ne lance pas l'exécution. Le passage vers `En cours` reste l'acte de lancement du cycle selon l'intention précédente (`Recherche`, `Développement` ou `Production`). Après lecture des résultats publiés dans Git, Copilot peut proposer une amélioration qui crée un nouveau cycle lié à la même recherche, soumis à l'admission du Scheduler.
