@@ -31,7 +31,6 @@ from context.github_research_work_package_admissibility_0287 import (
     evaluate_github_research_work_package_admissibility,
 )
 from contracts.copilot_scientific_framing import (
-    canonical_digest,
     validate_initial_advisory,
     validate_refined_request,
     validate_server_response,
@@ -169,7 +168,6 @@ class GitHubReadyRunResearchAdmissibilityResult:
             "existing_admissibility_gate_reused": True,
             "request_authoritative": True,
             "advisory_used_as_hint_only": True,
-            "scientific_framing_exchange_required": False,
             "filesystem_write_performed": False,
             "sql_write_performed": False,
             "qdrant_write_performed": False,
