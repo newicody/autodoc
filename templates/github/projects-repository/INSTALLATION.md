@@ -270,7 +270,7 @@ projectv2_views.json
 Le workflow utilise `${{ github.token }}` comme `GITHUB_TOKEN` et ne nécessite
 pas `AUTODOC_COPILOT_TOKEN`.
 
-Le workflow ne publie pas lui-même son avis : il produit les artefacts de demande et d’avis consultatif. La publication vers une Issue reste soumise au preview, au digest et à la décision opérateur.
+Le workflow publie l'avis initial dans Git et conserve les artefacts Actions pour l'intake local. Le commentaire sur l'Issue reste une projection lisible distincte. La publication du commentaire demeure soumise au preview, au digest et aux contrôles de mutation.
 
 ```bash
 gh variable get AUTODOC_COPILOT_ADVISORY_ENABLED \
@@ -418,7 +418,7 @@ la chaîne complète et intègre la demande reformulée comme indication
 non autoritative au work package existant. Ce chemin n'est pas encore activé
 automatiquement par la transition ProjectV2 vers `En cours`.
 
-## 10. Cadrage Copilot initial et lancement d'un cycle
+## 11. Cadrage Copilot initial et lancement d'un cycle
 
 L'ouverture d'une Issue `[Recherche]` déclenche le cadrage initial Copilot et la publication de son premier artefact. Celui-ci doit dégrossir la demande en identifiant notamment la forme de représentation scientifique nécessaire au rapport attendu.
 
