@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -168,7 +167,6 @@ def main(argv: list[str] | None = None) -> int:
         "initial_advisory_ref": handshake.initial_advisory_ref,
         "server_response_digest": canonical_digest(response),
         **fields,
-        "created_at": datetime.now(timezone.utc).isoformat(),
         "producer_kind": "github_copilot_cli",
         "trusted": False,
         "usable_as_authority": False,
