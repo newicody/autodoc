@@ -8,6 +8,13 @@ import json
 from pathlib import Path
 from typing import Mapping
 
+import sys
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_SRC_ROOT = _REPO_ROOT / "src"
+if str(_SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SRC_ROOT))
+
 from contracts.git_artifact_exchange import build_git_exchange_artifact
 
 
