@@ -93,6 +93,8 @@ Le serveur peut agréger les informations reçues pour ses rapports opérationne
 
 Le canal local de référence pour ce périmètre est `AF_UNIX / SOCK_SEQPACKET` : les messages courts transportent les demandes, réponses, références et métadonnées. Les gros volumes sont placés dans des buffers `memfd`, et les descripteurs sont transmis par `SCM_RIGHTS`. Ces buffers fournissent les points d'entrée/sortie de données du Scheduler. Les autres interfaces de communication spécialisées ne sont pas exclues, mais leur gestion n'est pas requise dans ce chantier. Le cycle de vie et le contrôle des accès aux espaces mémoire sont délégués aux modules dédiés qui pilotent les ouvertures/fermetures (« vannes »). Voir [Communication locale et espaces mémoire partagés](architecture/LOCAL_COMMUNICATION_AND_SHARED_MEMORY.md).
 
+Le dépôt contient déjà des briques historiques de routes (ControlFS, ControlProxy, SHM Runtime, leases et cycle de génération). Elles constituent une base à auditer et à raccorder, mais le mécanisme historique est principalement fondé sur des fichiers mmap et des manifestes ; il ne réalise pas encore le transport `memfd / SCM_RIGHTS` retenu ici. Le raccordement au runtime OpenRC actuellement installé n'est pas démontré.
+
 **Résultat attendu :** chaque composant expose une interface de réponse exploitable ; le Scheduler peut demander les informations nécessaires au moment où il en a besoin, et les données volumineuses disposent de points d'entrée/sortie partagés sous contrôle.
 
 ## 03. Sécurité, politiques et autorisations
@@ -169,6 +171,10 @@ Scheduler
 ```
 
 Les échanges doivent rendre identifiables le destinataire, l'interface utilisée, l'état de transmission, le résultat, les erreurs, les délais et les possibilités de reprise. Pour les échanges locaux, le canal de contrôle `AF_UNIX / SOCK_SEQPACKET` transporte les messages courts et les descripteurs `memfd` via `SCM_RIGHTS` ; les espaces `memfd` servent de buffers de données et de points d'entrée/sortie du Scheduler. Les modules dédiés gèrent leur création, montage/attachement, démontage/détachement, libération et contrôle des accès (« vannes »). ControlProxy transporte les messages autorisés ; il ne choisit pas les tâches et ne prend aucune décision d'orchestration. Les autres interfaces spécialisées restent hors du périmètre immédiat, et aucun canal gRPC général n'est prévu.
+
+
+
+Le dépôt contient déjà une chaîne historique de préparation des routes : état désiré ControlFS, tick explicite ControlProxyPump, matérialisation mmap, statut actif, leases et cycle de génération (`candidate → active → draining → closed → cleanup`). Cette base n'est pas encore un transport `memfd / SCM_RIGHTS`. Le reconciler RouteProxy reste un plan dry-run, le pump reporte les suppressions/mises à jour, et la composition OpenRC installée ne démontre pas le raccordement de cette chaîne. L'étape doit donc réutiliser ces modules, choisir un cycle de génération canonique et achever leur raccordement avant de considérer les ouvertures/fermetures comme opérationnelles. Voir [Communication locale et espaces mémoire partagés](architecture/LOCAL_COMMUNICATION_AND_SHARED_MEMORY.md).
 
 **Résultat attendu :** les tâches peuvent être exécutées, suivies, persistées et reprises sans perdre l'autorité du Scheduler.
 
