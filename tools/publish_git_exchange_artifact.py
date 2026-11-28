@@ -25,6 +25,7 @@ from contracts.copilot_scientific_framing import (
 from contracts.git_artifact_exchange import (
     GitArtifactExchangeError,
     build_git_exchange_artifact,
+    canonical_payload_digest,
     classify_existing_path,
     validate_git_exchange_artifact,
 )
@@ -126,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cycle-ordinal", type=int, required=True)
     parser.add_argument("--role", choices=("copilot_initial", "server_response", "copilot_refined"), required=True)
     parser.add_argument("--payload", type=Path, required=True)
+    parser.add_argument("--envelope", type=Path)
     parser.add_argument("--initial-envelope", type=Path)
     parser.add_argument("--server-response-envelope", type=Path)
     parser.add_argument("--created-at", default="")
@@ -160,16 +162,31 @@ def main(argv: list[str] | None = None) -> int:
         validate_refined_request(handshake, response, payload)
         predecessor_ref = str(response_envelope["artifact_ref"])
         predecessor_digest = str(response_envelope["payload_digest"])
-    envelope = build_git_exchange_artifact(
-        repository=args.repository,
-        issue_number=args.issue_number,
-        cycle_ordinal=args.cycle_ordinal,
-        role=args.role,
-        payload=payload,
-        created_at=args.created_at or datetime.now(timezone.utc).isoformat(),
-        predecessor_ref=predecessor_ref,
-        predecessor_digest=predecessor_digest,
-    ).to_mapping()
+    if args.envelope is not None:
+        if args.role != "copilot_initial":
+            parser.error("--envelope is currently reserved for the initial Copilot artifact")
+        envelope = _load(args.envelope)
+        validate_git_exchange_artifact(envelope)
+        if (
+            envelope.get("repository") != args.repository
+            or envelope.get("issue_number") != args.issue_number
+            or envelope.get("cycle_ordinal") != args.cycle_ordinal
+            or envelope.get("role") != args.role
+        ):
+            raise ValueError("provided envelope identity does not match publication arguments")
+        if envelope.get("payload_digest") != canonical_payload_digest(payload):
+            raise ValueError("provided envelope payload digest does not match payload")
+    else:
+        envelope = build_git_exchange_artifact(
+            repository=args.repository,
+            issue_number=args.issue_number,
+            cycle_ordinal=args.cycle_ordinal,
+            role=args.role,
+            payload=payload,
+            created_at=args.created_at or datetime.now(timezone.utc).isoformat(),
+            predecessor_ref=predecessor_ref,
+            predecessor_digest=predecessor_digest,
+        ).to_mapping()
     result = _publish(args.repository, args.branch, envelope)
     print(json.dumps({
         "schema": "missipy.github.git_artifact_publication_result.v1",
