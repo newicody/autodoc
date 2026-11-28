@@ -377,3 +377,14 @@ Le mode opératoire de publication est dans
 - `publish_github_advisory_issue_comment_0281.py` reste le repère de publication historique.
 - `verify_specialists_laboratories_live_path_evidence_0284.py` reste le repère de preuve du chemin vivant.
 Mise à jour `0287-r16-r4-r3-r4` : chaque nouvelle Issue `[Recherche]` de `newicody/projects` crée son triplet propre ; voir `README.md` et vérifier avec `gh run list --repo newicody/projects --workflow autodoc-controlled-research.yml --event issues`, avec le secret borné `AUTODOC_ISSUE_COMMENT_TOKEN`.
+
+
+## 10. Cadrage Copilot initial et lancement d'un cycle
+
+L'ouverture d'une Issue `[Recherche]` déclenche le cadrage initial Copilot et la publication de son premier artefact. Celui-ci doit dégrossir la demande en identifiant notamment la forme de représentation scientifique nécessaire au rapport attendu.
+
+Le serveur examine une seule fois cette proposition au regard des données, outils, capacités et contraintes effectivement disponibles, puis renvoie une réponse structurée. Copilot reformule alors la demande précise en tenant compte de cette réponse. Ce cadrage ne constitue pas une boucle de clarification et ne vaut pas admission d'une tâche.
+
+Le lancement d'un cycle d'exécution reste distinct : il est déclenché par la transition ProjectV2 vers `En cours`, issue d'une intention opérateur et traitée par le dispatch idempotent. Après consultation des résultats publiés dans Git, Copilot peut proposer une amélioration ; celle-ci devient un nouveau cycle lié à la recherche existante et repasse par les contrôles normaux du Scheduler.
+
+Le réconciliateur `reconcile_projectv2_configuration.py` configure les champs et vues, mais ne remplace pas l'installateur complet et idempotent du mode Projects prévu par la roadmap. Jusqu'à sa réalisation, appliquer les étapes de ce guide et vérifier séparément formulaires, workflow, permissions, secrets, champs et vues. Ne jamais versionner les secrets.
