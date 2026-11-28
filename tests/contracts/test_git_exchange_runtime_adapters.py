@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
+
+import pytest
 
 from tools.build_git_exchange_initial_envelope import main as build_initial_main
 
