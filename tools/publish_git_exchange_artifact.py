@@ -37,8 +37,6 @@ from contracts.git_artifact_exchange import (
     validate_git_exchange_artifact,
 )
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-
 
 def _gh(args: list[str], *, allow_404: bool = False) -> dict[str, Any] | None:
     env = dict(os.environ)
