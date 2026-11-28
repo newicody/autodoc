@@ -1,0 +1,506 @@
+diff --git a/src/contracts/git_artifact_exchange.py b/src/contracts/git_artifact_exchange.py
+new file mode 100644
+--- /dev/null
++++ b/src/contracts/git_artifact_exchange.py
+@@ -0,0 +1,297 @@
++"""Git-commit artifact transport contract for the one-shot Copilot framing exchange.
++
++The repository commit is the asynchronous transport boundary: Copilot writes
++its artifacts, the server writes its response, and each side reads the pushed
++artifact from Git. This module is pure and performs no Git/network operation.
++"""
++from __future__ import annotations
++
++from collections.abc import Mapping, Sequence
++from dataclasses import dataclass
++from datetime import datetime
++import hashlib
++import json
++import re
++from typing import Any
++
++SCHEMA = "missipy.github.git_artifact_exchange_envelope.v1"
++CHAIN_SCHEMA = "missipy.github.git_artifact_exchange_chain.v1"
++_REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
++_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
++_ROLE_DETAILS = {
++    "copilot_initial": ("copilot-initial.json", "copilot"),
++    "server_response": ("server-response.json", "server"),
++    "copilot_refined": ("copilot-refined.json", "copilot"),
++}
++_ROLE_ORDER = ("copilot_initial", "server_response", "copilot_refined")
++
++
++class GitArtifactExchangeError(ValueError):
++    """Raised when a Git-backed exchange artifact is invalid or conflicting."""
++
++
++@dataclass(frozen=True, slots=True)
++class GitExchangeArtifact:
++    repository: str
++    issue_number: int
++    cycle_ordinal: int
++    role: str
++    producer: str
++    created_at: str
++    payload: Mapping[str, Any]
++    payload_digest: str
++    artifact_path: str
++    artifact_ref: str
++    predecessor_ref: str = ""
++    predecessor_digest: str = ""
++
++    def to_mapping(self) -> dict[str, Any]:
++        return {
++            "schema": SCHEMA,
++            "repository": self.repository,
++            "issue_number": self.issue_number,
++            "cycle_ordinal": self.cycle_ordinal,
++            "role": self.role,
++            "producer": self.producer,
++            "created_at": self.created_at,
++            "payload": dict(self.payload),
++            "payload_digest": self.payload_digest,
++            "artifact_path": self.artifact_path,
++            "artifact_ref": self.artifact_ref,
++            "predecessor_ref": self.predecessor_ref,
++            "predecessor_digest": self.predecessor_digest,
++            "transport": "git_commit_push",
++            "append_only": True,
++            "github_actions_artifact_is_transport": False,
++            "direct_copilot_server_call": False,
++            "execution_authorized": False,
++        }
++
++
++def canonical_payload_digest(payload: Mapping[str, Any]) -> str:
++    try:
++        encoded = json.dumps(
++            dict(payload),
++            ensure_ascii=False,
++            sort_keys=True,
++            separators=(",", ":"),
++            allow_nan=False,
++        ).encode("utf-8")
++    except (TypeError, ValueError) as exc:
++        raise GitArtifactExchangeError("payload must be canonical JSON data") from exc
++    return hashlib.sha256(encoded).hexdigest()
++
++
++def artifact_path(issue_number: int, cycle_ordinal: int, role: str) -> str:
++    _validate_positive_integer("issue_number", issue_number)
++    _validate_positive_integer("cycle_ordinal", cycle_ordinal)
++    if role not in _ROLE_DETAILS:
++        raise GitArtifactExchangeError(f"unsupported exchange role: {role}")
++    filename, _ = _ROLE_DETAILS[role]
++    return (
++        f"autodoc/exchanges/issues/{issue_number}/cycles/"
++        f"{cycle_ordinal}/{filename}"
++    )
++
++
++def build_git_exchange_artifact(
++    *,
++    repository: str,
++    issue_number: int,
++    cycle_ordinal: int,
++    role: str,
++    payload: Mapping[str, Any],
++    created_at: str,
++    predecessor_ref: str = "",
++    predecessor_digest: str = "",
++) -> GitExchangeArtifact:
++    repository = _required_repository(repository)
++    _validate_positive_integer("issue_number", issue_number)
++    _validate_positive_integer("cycle_ordinal", cycle_ordinal)
++    if role not in _ROLE_DETAILS:
++        raise GitArtifactExchangeError(f"unsupported exchange role: {role}")
++    if not isinstance(payload, Mapping):
++        raise GitArtifactExchangeError("payload must be an object")
++    created_at = _required_text("created_at", created_at)
++    _validate_timestamp(created_at)
++    _, producer = _ROLE_DETAILS[role]
++    path = artifact_path(issue_number, cycle_ordinal, role)
++    expected_predecessor = _expected_predecessor(
++        repository, issue_number, cycle_ordinal, role
++    )
++    if expected_predecessor is None:
++        if predecessor_ref or predecessor_digest:
++            raise GitArtifactExchangeError(
++                "initial Copilot artifact must not have a predecessor"
++            )
++    else:
++        expected_ref, expected_role = expected_predecessor
++        if predecessor_ref != expected_ref:
++            raise GitArtifactExchangeError("predecessor_ref mismatch")
++        if not _SHA256_RE.fullmatch(predecessor_digest):
++            raise GitArtifactExchangeError("predecessor_digest must be sha256")
++    digest = canonical_payload_digest(payload)
++    ref = f"git-artifact:{repository}:{path}"
++    return GitExchangeArtifact(
++        repository=repository,
++        issue_number=issue_number,
++        cycle_ordinal=cycle_ordinal,
++        role=role,
++        producer=producer,
++        created_at=created_at,
++        payload=dict(payload),
++        payload_digest=digest,
++        artifact_path=path,
++        artifact_ref=ref,
++        predecessor_ref=predecessor_ref,
++        predecessor_digest=predecessor_digest,
++    )
++
++
++def validate_git_exchange_artifact(value: Mapping[str, Any]) -> dict[str, Any]:
++    if value.get("schema") != SCHEMA:
++        raise GitArtifactExchangeError("unexpected Git exchange schema")
++    repository = _required_repository(value.get("repository"))
++    issue_number = _positive_integer("issue_number", value.get("issue_number"))
++    cycle = _positive_integer("cycle_ordinal", value.get("cycle_ordinal"))
++    role = _required_text("role", value.get("role"))
++    if role not in _ROLE_DETAILS:
++        raise GitArtifactExchangeError("unsupported exchange role")
++    _, expected_producer = _ROLE_DETAILS[role]
++    if value.get("producer") != expected_producer:
++        raise GitArtifactExchangeError("producer does not match artifact role")
++    path = artifact_path(issue_number, cycle, role)
++    if value.get("artifact_path") != path:
++        raise GitArtifactExchangeError("artifact_path is not canonical")
++    expected_ref = f"git-artifact:{repository}:{path}"
++    if value.get("artifact_ref") != expected_ref:
++        raise GitArtifactExchangeError("artifact_ref mismatch")
++    _validate_timestamp(_required_text("created_at", value.get("created_at")))
++    payload = value.get("payload")
++    if not isinstance(payload, Mapping):
++        raise GitArtifactExchangeError("payload must be an object")
++    digest = _required_text("payload_digest", value.get("payload_digest"))
++    if not _SHA256_RE.fullmatch(digest):
++        raise GitArtifactExchangeError("payload_digest must be sha256")
++    if canonical_payload_digest(payload) != digest:
++        raise GitArtifactExchangeError("payload_digest does not match payload")
++    predecessor_ref = str(value.get("predecessor_ref", "")).strip()
++    predecessor_digest = str(value.get("predecessor_digest", "")).strip()
++    expected_predecessor = _expected_predecessor(
++        repository, issue_number, cycle, role
++    )
++    if expected_predecessor is None:
++        if predecessor_ref or predecessor_digest:
++            raise GitArtifactExchangeError("initial artifact cannot have predecessor")
++    else:
++        expected_ref, _ = expected_predecessor
++        if predecessor_ref != expected_ref:
++            raise GitArtifactExchangeError("predecessor_ref mismatch")
++        if not _SHA256_RE.fullmatch(predecessor_digest):
++            raise GitArtifactExchangeError("predecessor_digest must be sha256")
++    if value.get("transport") != "git_commit_push":
++        raise GitArtifactExchangeError("exchange transport must be git_commit_push")
++    for flag in (
++        "append_only",
++        "github_actions_artifact_is_transport",
++        "direct_copilot_server_call",
++        "execution_authorized",
++    ):
++        expected = {
++            "append_only": True,
++            "github_actions_artifact_is_transport": False,
++            "direct_copilot_server_call": False,
++            "execution_authorized": False,
++        }[flag]
++        if value.get(flag) is not expected:
++            raise GitArtifactExchangeError(f"{flag} boundary violation")
++    return dict(value)
++
++
++def validate_git_exchange_chain(
++    artifacts: Sequence[Mapping[str, Any]],
++) -> dict[str, Any]:
++    if len(artifacts) != len(_ROLE_ORDER):
++        raise GitArtifactExchangeError("initial exchange must contain exactly three artifacts")
++    validated = tuple(validate_git_exchange_artifact(item) for item in artifacts)
++    first, response, refined = validated
++    identities = {
++        (item["repository"], item["issue_number"], item["cycle_ordinal"])
++        for item in validated
++    }
++    if len(identities) != 1:
++        raise GitArtifactExchangeError("exchange artifacts must share one research cycle")
++    if tuple(item["role"] for item in validated) != _ROLE_ORDER:
++        raise GitArtifactExchangeError("exchange artifact order is invalid")
++    if response["predecessor_digest"] != first["payload_digest"]:
++        raise GitArtifactExchangeError("server response does not bind initial artifact digest")
++    if refined["predecessor_digest"] != response["payload_digest"]:
++        raise GitArtifactExchangeError("refined artifact does not bind server response digest")
++    return {
++        "schema": CHAIN_SCHEMA,
++        "valid": True,
++        "repository": first["repository"],
++        "issue_number": first["issue_number"],
++        "cycle_ordinal": first["cycle_ordinal"],
++        "artifact_refs": [item["artifact_ref"] for item in validated],
++        "artifact_digests": [item["payload_digest"] for item in validated],
++        "transport": "git_commit_push",
++        "exchange_count": 1,
++        "recursive_clarification_allowed": False,
++        "execution_authorized": False,
++    }
++
++
++def classify_existing_path(existing: Mapping[str, Any] | None, candidate: Mapping[str, Any]) -> str:
++    """Return create/replay/collision without ever authorizing an overwrite."""
++    validate_git_exchange_artifact(candidate)
++    if existing is None:
++        return "create"
++    validate_git_exchange_artifact(existing)
++    if existing.get("artifact_path") != candidate.get("artifact_path"):
++        raise GitArtifactExchangeError("existing artifact path mismatch")
++    if existing.get("payload_digest") == candidate.get("payload_digest"):
++        return "replay"
++    return "collision"
++
++
++def _expected_predecessor(
++    repository: str, issue_number: int, cycle: int, role: str
++) -> tuple[str, str] | None:
++    if role == "copilot_initial":
++        return None
++    predecessor_role = (
++        "copilot_initial" if role == "server_response" else "server_response"
++    )
++    path = artifact_path(issue_number, cycle, predecessor_role)
++    return f"git-artifact:{repository}:{path}", predecessor_role
++
++
++def _required_repository(value: object) -> str:
++    text = _required_text("repository", value)
++    if not _REPOSITORY_RE.fullmatch(text):
++        raise GitArtifactExchangeError("repository must use owner/name")
++    return text
++
++
++def _required_text(name: str, value: object) -> str:
++    if not isinstance(value, str) or not value.strip():
++        raise GitArtifactExchangeError(f"{name} must be a non-empty string")
++    return value.strip()
++
++
++def _positive_integer(name: str, value: object) -> int:
++    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
++        raise GitArtifactExchangeError(f"{name} must be a positive integer")
++    return value
++
++
++def _validate_positive_integer(name: str, value: object) -> None:
++    _positive_integer(name, value)
++
++
++def _validate_timestamp(value: str) -> None:
++    try:
++        datetime.fromisoformat(value.replace("Z", "+00:00"))
++    except ValueError as exc:
++        raise GitArtifactExchangeError("created_at must be an ISO-8601 timestamp") from exc
+diff --git a/tests/contracts/test_git_artifact_exchange.py b/tests/contracts/test_git_artifact_exchange.py
+new file mode 100644
+--- /dev/null
++++ b/tests/contracts/test_git_artifact_exchange.py
+@@ -0,0 +1,117 @@
++from __future__ import annotations
++
++import pytest
++
++from contracts.git_artifact_exchange import (
++    GitArtifactExchangeError,
++    artifact_path,
++    build_git_exchange_artifact,
++    classify_existing_path,
++    validate_git_exchange_artifact,
++    validate_git_exchange_chain,
++)
++
++
++REPOSITORY = "newicody/projects"
++CREATED_AT = "2026-11-28T17:00:00Z"
++
++
++def _chain():
++    initial = build_git_exchange_artifact(
++        repository=REPOSITORY,
++        issue_number=42,
++        cycle_ordinal=1,
++        role="copilot_initial",
++        payload={"objective": "Analyse", "representations": ["table", "curve"]},
++        created_at=CREATED_AT,
++    )
++    initial_map = initial.to_mapping()
++    response = build_git_exchange_artifact(
++        repository=REPOSITORY,
++        issue_number=42,
++        cycle_ordinal=1,
++        role="server_response",
++        payload={"coherence": "partial", "supported": ["table", "curve"]},
++        created_at=CREATED_AT,
++        predecessor_ref=initial.artifact_ref,
++        predecessor_digest=initial.payload_digest,
++    )
++    response_map = response.to_mapping()
++    refined = build_git_exchange_artifact(
++        repository=REPOSITORY,
++        issue_number=42,
++        cycle_ordinal=1,
++        role="copilot_refined",
++        payload={"objective": "Analyse les données disponibles", "criteria": ["sources"]},
++        created_at=CREATED_AT,
++        predecessor_ref=response.artifact_ref,
++        predecessor_digest=response.payload_digest,
++    )
++    return initial_map, response_map, refined.to_mapping()
++
++
++def test_paths_are_deterministic_and_scoped_to_issue_and_cycle():
++    assert artifact_path(42, 1, "copilot_initial") == (
++        "autodoc/exchanges/issues/42/cycles/1/copilot-initial.json"
++    )
++    assert artifact_path(42, 2, "server_response") != artifact_path(
++        42, 1, "server_response"
++    )
++
++
++def test_valid_git_push_exchange_has_exact_three_artifacts():
++    chain = _chain()
++    result = validate_git_exchange_chain(chain)
++    assert result["valid"] is True
++    assert result["transport"] == "git_commit_push"
++    assert result["exchange_count"] == 1
++    assert result["recursive_clarification_allowed"] is False
++    assert result["execution_authorized"] is False
++
++
++def test_exchange_rejects_broken_predecessor_digest():
++    initial, response, refined = _chain()
++    response["predecessor_digest"] = "0" * 64
++    with pytest.raises(GitArtifactExchangeError, match="does not bind"):
++        validate_git_exchange_chain((initial, response, refined))
++
++
++def test_exchange_rejects_wrong_repository_cycle_or_order():
++    initial, response, refined = _chain()
++    refined["repository"] = "attacker/other"
++    with pytest.raises(GitArtifactExchangeError, match="artifact_ref mismatch|share one"):
++        validate_git_exchange_chain((initial, response, refined))
++    with pytest.raises(GitArtifactExchangeError, match="order"):
++        validate_git_exchange_chain((response, initial, refined))
++
++
++def test_artifact_payload_digest_is_verified():
++    initial, _, _ = _chain()
++    initial["payload"]["objective"] = "tampered"
++    with pytest.raises(GitArtifactExchangeError, match="payload_digest"):
++        validate_git_exchange_artifact(initial)
++
++
++def test_same_path_is_replay_or_collision_never_overwrite():
++    initial, _, _ = _chain()
++    assert classify_existing_path(None, initial) == "create"
++    assert classify_existing_path(initial, initial) == "replay"
++    changed = dict(initial)
++    changed["payload"] = {"objective": "different"}
++    changed["payload_digest"] = "1" * 64
++    with pytest.raises(GitArtifactExchangeError, match="payload_digest"):
++        classify_existing_path(initial, changed)
++
++
++def test_actions_artifacts_and_direct_calls_are_not_the_transport():
++    initial, _, _ = _chain()
++    assert initial["transport"] == "git_commit_push"
++    assert initial["github_actions_artifact_is_transport"] is False
++    assert initial["direct_copilot_server_call"] is False
++
++
++def test_invalid_role_and_issue_path_are_rejected():
++    with pytest.raises(GitArtifactExchangeError):
++        artifact_path(0, 1, "copilot_initial")
++    with pytest.raises(GitArtifactExchangeError):
++        artifact_path(42, 1, "../server-response")
+diff --git a/doc/architecture/GIT_ARTIFACT_EXCHANGE.md b/doc/architecture/GIT_ARTIFACT_EXCHANGE.md
+new file mode 100644
+--- /dev/null
++++ b/doc/architecture/GIT_ARTIFACT_EXCHANGE.md
+@@ -0,0 +1,77 @@
++# Transport Git du cadrage scientifique Copilot–serveur
++
++## Décision
++
++Les échanges de cadrage sont réalisés exclusivement par des artefacts versionnés
++dans le dépôt Git de gestion des recherches. Chaque producteur écrit un nouveau
++fichier, crée un commit et pousse ce commit. L'autre côté observe/récupère le
++nouvel artefact depuis Git. Il n'existe aucun appel RPC, webhook direct ou canal
++de messages Copilot–serveur.
++
++Les artefacts Git constituent le canal asynchrone et la trace append-only du
++cadrage. PostgreSQL reste l'autorité durable de l'état métier. Les artefacts
++GitHub Actions peuvent servir aux transferts temporaires du workflow existant,
++mais ne constituent pas le transport de cet échange.
++
++## Chemins canoniques
++
++Pour une Issue et un cycle donnés, les trois fichiers sont :
++
++`autodoc/exchanges/issues/<issue>/cycles/<cycle>/copilot-initial.json`
++`autodoc/exchanges/issues/<issue>/cycles/<cycle>/server-response.json`
++`autodoc/exchanges/issues/<issue>/cycles/<cycle>/copilot-refined.json`
++
++Ils résident dans le dépôt Git de gestion Projects (actuellement `newicody/projects`).
++Le numéro de cycle est déterminé par la filiation durable de la recherche ; il
++n'est pas déduit du timestamp ni du numéro de run Actions.
++
++## Séquence d'échange
++
++1. Copilot produit `copilot-initial.json` et pousse un commit.
++2. Le serveur récupère ce commit, vérifie l'artefact et les références, examine
++   les données/capacités/contraintes qu'il peut effectivement lire, puis produit
++   `server-response.json` et pousse un commit.
++3. Le workflow déclenché par le push de `server-response.json` fait produire
++   par Copilot `copilot-refined.json` et pousse un commit.
++4. Le serveur récupère `copilot-refined.json`, vérifie la chaîne et présente
++   la demande au contrôle d'admission existant du Scheduler.
++
++L'échange de cadrage initial s'arrête après le troisième artefact. Aucun push
++de réponse serveur ne doit déclencher une nouvelle réponse serveur ; aucun push
++de reformulation ne doit relancer le cadrage initial.
++
++## Intégrité et append-only
++
++Chaque enveloppe contient le dépôt, l'Issue, le cycle, le rôle, le producteur,
++l'horodatage, le payload, son digest SHA-256, le chemin canonique et les
++références/digests de l'artefact précédent. Le commit Git donne l'identité
++immuable de la révision ; son SHA ne doit pas être inscrit dans le contenu du
++fichier qu'il contient.
++
++Un chemin existant avec le même digest est un replay idempotent. Un chemin
++existant avec un contenu différent est une collision : il est interdit de
++l'écraser. Une correction nécessite une nouvelle révision/cycle et une filiation
++explicite.
++
++Les artefacts Copilot restent non fiables et non autoritatifs. La réponse
++serveur décrit ce qu'il peut vérifier, sans transformer les données manquantes
++ou périmées en capacités disponibles. Aucun artefact ne donne le droit
++d'exécuter une tâche.
++
++## Raccordements runtime encore requis
++
++Le contrat 0294 définit chemins, enveloppes, filiation, digest et détection de
++rejeu/collision. Il ne pousse pas lui-même les commits et ne déclenche pas
++encore le workflow de reformulation. Les raccordements à réaliser en réutilisant
++les frontières existantes sont :
++
++- publication Git du premier artefact Copilot depuis le workflow de création ;
++- lecture serveur du nouvel artefact Git ;
++- production et push serveur de la réponse ;
++- workflow `push` filtré sur `server-response.json` ;
++- publication Git par Copilot de la demande reformulée ;
++- récupération serveur et passage au contrôle d'admission existant.
++
++Les permissions d'écriture doivent être limitées au dépôt et aux chemins
++nécessaires. Les secrets ne sont jamais inscrits dans les artefacts ou dans Git.
++Aucun nouveau manager, queue, bus, worker résident ou orchestrateur n'est créé.
