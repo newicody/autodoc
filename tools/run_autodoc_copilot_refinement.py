@@ -27,35 +27,79 @@ def _load(path: Path) -> dict[str, Any]:
     return dict(value)
 
 
-def _extract(stdout: str) -> dict[str, Any]:
-    candidate = stdout.strip()
-    if candidate.startswith("```"):
-        lines = candidate.splitlines()
-        if len(lines) < 3 or lines[-1].strip() != "```":
-            raise ValueError("Copilot output has an unterminated code fence")
-        candidate = "\n".join(lines[1:-1]).strip()
-        if candidate.startswith("json"):
-            candidate = candidate.removeprefix("json").lstrip()
-    value = json.loads(candidate)
+def _walk_json(value: object):
+    yield value
+    if isinstance(value, Mapping):
+        preferred = ("content", "message", "text", "response", "value")
+        for key in preferred:
+            if key in value:
+                yield from _walk_json(value[key])
+        for key, child in value.items():
+            if key not in preferred:
+                yield from _walk_json(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk_json(child)
+
+
+def _candidate(value: object) -> dict[str, Any] | None:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return None
     if not isinstance(value, Mapping):
-        raise ValueError("Copilot refinement must be a JSON object")
+        return None
     expected = {
         "concrete_objective", "expected_result", "provided_constraints",
         "success_criteria", "scientific_representations",
     }
     if set(value) != expected:
-        raise ValueError("Copilot refinement fields do not match the strict schema")
+        return None
+    normalized = dict(value)
     for field in ("concrete_objective", "expected_result"):
-        if not isinstance(value[field], str) or not value[field].strip():
+        if not isinstance(normalized[field], str) or not normalized[field].strip():
             raise ValueError(f"{field} must be non-empty")
     for field in ("provided_constraints", "success_criteria", "scientific_representations"):
-        if not isinstance(value[field], list) or not all(
-            isinstance(item, str) and item.strip() for item in value[field]
+        values = normalized[field]
+        if not isinstance(values, list) or not all(
+            isinstance(item, str) and item.strip() for item in values
         ):
             raise ValueError(f"{field} must be an array of non-empty strings")
-    if not value["success_criteria"]:
+        normalized[field] = [item.strip() for item in values]
+    if not normalized["success_criteria"]:
         raise ValueError("success_criteria must not be empty")
-    return dict(value)
+    normalized["concrete_objective"] = normalized["concrete_objective"].strip()
+    normalized["expected_result"] = normalized["expected_result"].strip()
+    return normalized
+
+
+def _extract(stdout: str) -> dict[str, Any]:
+    try:
+        direct = json.loads(stdout.strip())
+    except json.JSONDecodeError:
+        direct = None
+    candidates: list[dict[str, Any]] = []
+    for item in _walk_json(direct) if direct is not None else ():
+        candidate = _candidate(item)
+        if candidate is not None:
+            candidates.append(candidate)
+    if not candidates:
+        decoder = json.JSONDecoder()
+        for offset, character in enumerate(stdout):
+            if character != "{":
+                continue
+            try:
+                embedded, _ = decoder.raw_decode(stdout[offset:])
+            except json.JSONDecodeError:
+                continue
+            for item in _walk_json(embedded):
+                candidate = _candidate(item)
+                if candidate is not None:
+                    candidates.append(candidate)
+    if not candidates:
+        raise ValueError("Copilot output contains no exact refinement object")
+    return candidates[-1]
 
 
 def main(argv: list[str] | None = None) -> int:
