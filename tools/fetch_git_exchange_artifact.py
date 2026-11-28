@@ -41,6 +41,13 @@ def main(argv: list[str] | None = None) -> int:
     validate_git_exchange_artifact(envelope)
     if envelope.get("role") != args.role:
         raise ValueError("fetched artifact role mismatch")
+    if (
+        envelope.get("repository") != args.repository
+        or envelope.get("issue_number") != args.issue_number
+        or envelope.get("cycle_ordinal") != args.cycle_ordinal
+        or envelope.get("artifact_path") != path
+    ):
+        raise ValueError("fetched artifact identity does not match requested Git path")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_bytes(raw)
     print(json.dumps({
